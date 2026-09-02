@@ -1,0 +1,86 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { describe, expect, it } from "@effect/vitest";
+
+import type { GatewayRuntimePort } from "./port.ts";
+import { createMcpGateway } from "./server.ts";
+
+const port: GatewayRuntimePort = {
+  listEnvironments: async () => [
+    { environmentId: "local", label: "Local", targetKind: "primary", connectionState: "connected" },
+  ],
+  getEnvironmentStatus: async (environmentId) => ({ environmentId, connectionState: "connected" }),
+  listProjects: async () => ({ items: [], snapshotAt: "snapshot-1" }),
+  listThreads: async () => ({ items: [], snapshotAt: "snapshot-1" }),
+  getThread: async (environmentId, threadId) => ({ environmentId, id: threadId, messages: [] }),
+  createThread: async (input) => ({
+    requestId: input.requestId,
+    commandId: input.requestId,
+    status: "accepted",
+    threadId: input.threadId,
+  }),
+  sendMessage: async (input) => ({
+    requestId: input.requestId,
+    commandId: input.requestId,
+    status: "accepted",
+    threadId: input.threadId,
+    messageId: input.messageId,
+  }),
+};
+
+describe("MCP gateway server", () => {
+  it("serves structured tools over an MCP transport", async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const gateway = createMcpGateway({ port, grants: { local: ["read", "create", "send"] } });
+    const client = new Client({ name: "gateway-test", version: "1.0.0" });
+    await gateway.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const listedTools = await client.listTools();
+    expect(listedTools.tools.map((tool) => tool.name)).toContain("t3_list_threads");
+    const result = await client.callTool({
+      name: "t3_list_threads",
+      arguments: { environmentId: "local" },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toEqual({ items: [], snapshotAt: "snapshot-1" });
+
+    await client.close();
+    await gateway.close();
+  });
+
+  it("returns structured authorization errors over MCP", async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const gateway = createMcpGateway({ port, grants: { local: ["read"] } });
+    const client = new Client({ name: "gateway-test", version: "1.0.0" });
+    await gateway.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const result = await client.callTool({
+      name: "t3_send_message",
+      arguments: {
+        environmentId: "local",
+        threadId: "thread-1",
+        text: "hello",
+        idempotencyKey: "send-1",
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: JSON.stringify({
+          code: "scope_required",
+          message: "Scope send is required for environment local.",
+          retryable: false,
+          environmentId: "local",
+          requestId: undefined,
+          details: { requiredScope: "send" },
+        }),
+      },
+    ]);
+
+    await client.close();
+    await gateway.close();
+  });
+});
