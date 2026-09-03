@@ -508,6 +508,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["add pair backend host code ssh config agent tunnel saved t3 connect"],
   },
   {
+    id: "mcp-gateway",
+    title: "MCP Gateway",
+    to: "/settings/mcp-gateway",
+    searchTerms: ["model context protocol voice agent bridge companion"],
+  },
+  {
     id: "archive",
     title: "Archived threads",
     to: "/settings/archived",

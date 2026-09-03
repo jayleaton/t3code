@@ -57,7 +57,7 @@ const threadSnapshot = (environmentId: EnvironmentId, threadId: ThreadId) =>
     const registry = yield* EnvironmentRegistry;
     return yield* registry.run(
       environmentId,
-      subscribe(ORCHESTRATION_WS_METHODS.subscribeThread, { threadId, turnLimit: 100 }).pipe(
+      subscribe(ORCHESTRATION_WS_METHODS.subscribeThread, { threadId }).pipe(
         Stream.filter((item) => item.kind === "snapshot"),
         Stream.runHead,
         Effect.map(

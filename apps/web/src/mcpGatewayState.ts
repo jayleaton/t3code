@@ -9,19 +9,28 @@ export type McpGatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScop
 export type McpGatewayUiState = "disabled" | "connecting" | "running" | "degraded";
 
 const GATEWAY_SCOPES = new Set<GatewayScope>(["read", "create", "send"]);
+let currentMcpGatewayStatus: McpGatewayUiState = "disabled";
 
 export function isMcpGatewayEnabled(): boolean {
-  return window.localStorage.getItem(MCP_GATEWAY_ENABLED_KEY) === "true";
+  try {
+    return window.localStorage.getItem(MCP_GATEWAY_ENABLED_KEY) === "true";
+  } catch {
+    return false;
+  }
 }
 
 export function getMcpGatewayToken(): string {
-  return window.sessionStorage.getItem(MCP_GATEWAY_TOKEN_KEY) ?? "";
+  try {
+    return window.sessionStorage.getItem(MCP_GATEWAY_TOKEN_KEY) ?? "";
+  } catch {
+    return "";
+  }
 }
 
 export function getMcpGatewayGrants(): McpGatewayGrants {
-  const raw = window.localStorage.getItem(MCP_GATEWAY_GRANTS_KEY);
-  if (raw === null) return {};
   try {
+    const raw = window.localStorage.getItem(MCP_GATEWAY_GRANTS_KEY);
+    if (raw === null) return {};
     const value = JSON.parse(raw) as unknown;
     if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
     const grants: Record<string, ReadonlyArray<GatewayScope>> = {};
@@ -40,6 +49,35 @@ export function getMcpGatewayGrants(): McpGatewayGrants {
   } catch {
     return {};
   }
+}
+
+export function getMcpGatewayStatus(): McpGatewayUiState {
+  return currentMcpGatewayStatus;
+}
+
+export function publishMcpGatewayStatus(status: McpGatewayUiState): void {
+  currentMcpGatewayStatus = status;
+  window.dispatchEvent(
+    new CustomEvent<McpGatewayUiState>(`${MCP_GATEWAY_STATE_EVENT}:status`, { detail: status }),
+  );
+}
+
+export function subscribeMcpGatewayConfiguration(onChange: () => void): () => void {
+  const onStorage = (event: StorageEvent) => {
+    if (
+      event.key === null ||
+      event.key === MCP_GATEWAY_ENABLED_KEY ||
+      event.key === MCP_GATEWAY_GRANTS_KEY
+    ) {
+      onChange();
+    }
+  };
+  window.addEventListener(MCP_GATEWAY_STATE_EVENT, onChange);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(MCP_GATEWAY_STATE_EVENT, onChange);
+    window.removeEventListener("storage", onStorage);
+  };
 }
 
 export function setMcpGatewayToken(token: string): void {

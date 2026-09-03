@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it, vi } from "@effect/vitest";
 
 import { GatewayError, type GatewayRuntimePort } from "./port.ts";
 import { callGatewayTool } from "./tools.ts";
@@ -99,6 +99,30 @@ describe("gateway chat tools", () => {
         idempotencyKey: "send-1",
       }),
     ).rejects.toMatchObject({ code: "scope_required", environmentId: "local" });
+  });
+
+  it("namespaces command ids when create and send reuse an idempotency key", async () => {
+    const port = makePort();
+    const createThread = vi.spyOn(port, "createThread");
+    const sendMessage = vi.spyOn(port, "sendMessage");
+    const context = { port, grants };
+
+    const created = await callGatewayTool(context, "t3_create_thread", {
+      environmentId: "local",
+      projectId: "local-project",
+      title: "Gateway chat",
+      modelSelection: { instanceId: "codex", model: "gpt-5" },
+      idempotencyKey: "shared-key",
+    });
+    await callGatewayTool(context, "t3_send_message", {
+      environmentId: "local",
+      threadId: created.threadId,
+      text: "Run the checks",
+      idempotencyKey: "shared-key",
+    });
+
+    expect(createThread.mock.calls[0]?.[0].requestId).toBe("mcp-create-thread-shared-key");
+    expect(sendMessage.mock.calls[0]?.[0].requestId).toBe("mcp-send-message-shared-key");
   });
 
   it("rejects unknown environments before invoking the runtime", async () => {

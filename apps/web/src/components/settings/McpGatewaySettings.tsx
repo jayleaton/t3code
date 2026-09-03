@@ -9,6 +9,7 @@ import { Switch } from "../ui/switch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import {
   getMcpGatewayGrants,
+  getMcpGatewayStatus,
   getMcpGatewayToken,
   isMcpGatewayEnabled,
   MCP_GATEWAY_STATE_EVENT,
@@ -113,7 +114,9 @@ export function McpGatewaySettings() {
   const [enabled, setEnabled] = useState(isMcpGatewayEnabled);
   const [token, setToken] = useState(getMcpGatewayToken);
   const [grants, setGrants] = useState(getMcpGatewayGrants);
-  const [status, setStatus] = useState<McpGatewayUiState>(enabled ? "connecting" : "disabled");
+  const [status, setStatus] = useState<McpGatewayUiState>(() =>
+    enabled ? getMcpGatewayStatus() : "disabled",
+  );
 
   useEffect(() => {
     const onStatus = (event: Event) => setStatus((event as CustomEvent<McpGatewayUiState>).detail);

@@ -134,7 +134,7 @@ export async function callGatewayTool(
             ? input.runtimeMode
             : "approval-required",
         interactionMode: input.interactionMode === "plan" ? "plan" : "default",
-        requestId: idFor("request", idempotencyKey),
+        requestId: idFor("create-thread", idempotencyKey),
       });
     }
     case "t3_send_message": {
@@ -145,7 +145,7 @@ export async function callGatewayTool(
         threadId: requiredString(input, "threadId"),
         text: requiredString(input, "text"),
         messageId: idFor("message", idempotencyKey),
-        requestId: idFor("request", idempotencyKey),
+        requestId: idFor("send-message", idempotencyKey),
       });
     }
     default:

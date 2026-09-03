@@ -1,7 +1,6 @@
 import {
   connectGatewayBridge,
   createGatewayRuntimePortFromContext,
-  type GatewayBridgeState,
 } from "@t3tools/client-runtime/gateway";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/unstable/reactivity";
@@ -12,18 +11,12 @@ import {
   getMcpGatewayGrants,
   getMcpGatewayToken,
   isMcpGatewayEnabled,
-  MCP_GATEWAY_STATE_EVENT,
-  type McpGatewayUiState,
+  publishMcpGatewayStatus,
+  subscribeMcpGatewayConfiguration,
 } from "./mcpGatewayState";
 import { appAtomRegistry } from "./rpc/atomRegistry";
 
 const BRIDGE_URL = "ws://127.0.0.1:47631";
-
-function publishState(state: GatewayBridgeState) {
-  window.dispatchEvent(
-    new CustomEvent<McpGatewayUiState>(`${MCP_GATEWAY_STATE_EVENT}:status`, { detail: state }),
-  );
-}
 
 export function McpGatewayHost() {
   const [configuration, setConfiguration] = useState(() => ({
@@ -39,13 +32,12 @@ export function McpGatewayHost() {
         grants: getMcpGatewayGrants(),
         token: getMcpGatewayToken(),
       });
-    window.addEventListener(MCP_GATEWAY_STATE_EVENT, onChange);
-    return () => window.removeEventListener(MCP_GATEWAY_STATE_EVENT, onChange);
+    return subscribeMcpGatewayConfiguration(onChange);
   }, []);
 
   useEffect(() => {
     if (!configuration.enabled || configuration.token.length < 16) {
-      publishState(configuration.enabled ? "degraded" : "disabled");
+      publishMcpGatewayStatus(configuration.enabled ? "degraded" : "disabled");
       return;
     }
 
@@ -62,7 +54,7 @@ export function McpGatewayHost() {
         grants: configuration.grants,
         token: configuration.token,
         url: BRIDGE_URL,
-        onState: publishState,
+        onState: publishMcpGatewayStatus,
       });
       unsubscribe?.();
       unsubscribe = null;

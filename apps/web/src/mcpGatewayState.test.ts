@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  getMcpGatewayStatus,
+  getMcpGatewayToken,
   getMcpGatewayGrants,
+  MCP_GATEWAY_ENABLED_KEY,
   MCP_GATEWAY_GRANTS_KEY,
+  publishMcpGatewayStatus,
   setMcpGatewayGrants,
+  subscribeMcpGatewayConfiguration,
 } from "./mcpGatewayState";
 
 function storage(): Storage {
@@ -22,12 +27,16 @@ function storage(): Storage {
 
 describe("MCP gateway grants", () => {
   let localStorage: Storage;
+  let listeners: Map<string, EventListener>;
 
   beforeEach(() => {
     localStorage = storage();
+    listeners = new Map();
     vi.stubGlobal("window", {
       localStorage,
       dispatchEvent: vi.fn(),
+      addEventListener: (type: string, listener: EventListener) => listeners.set(type, listener),
+      removeEventListener: (type: string) => listeners.delete(type),
     });
   });
 
@@ -64,5 +73,36 @@ describe("MCP gateway grants", () => {
     expect(getMcpGatewayGrants()).toEqual({
       "a534b83f-a352-44d8-aedc-c4230c179390": ["read", "send"],
     });
+  });
+
+  it("returns an empty token when session storage is unavailable", () => {
+    Object.defineProperty(window, "sessionStorage", {
+      configurable: true,
+      get: () => {
+        throw new DOMException("Access denied", "SecurityError");
+      },
+    });
+
+    expect(getMcpGatewayToken()).toBe("");
+  });
+
+  it("replays the latest gateway status to settings mounted after startup", () => {
+    publishMcpGatewayStatus("running");
+
+    expect(getMcpGatewayStatus()).toBe("running");
+  });
+
+  it("observes gateway configuration changes from other tabs", () => {
+    const onChange = vi.fn();
+    const unsubscribe = subscribeMcpGatewayConfiguration(onChange);
+
+    listeners.get("storage")?.({ key: MCP_GATEWAY_ENABLED_KEY } as StorageEvent);
+    expect(onChange).toHaveBeenCalledOnce();
+
+    listeners.get("storage")?.({ key: "unrelated" } as StorageEvent);
+    expect(onChange).toHaveBeenCalledOnce();
+
+    unsubscribe();
+    expect(listeners.has("storage")).toBe(false);
   });
 });
