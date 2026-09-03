@@ -2,8 +2,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { z } from "zod";
 
-import { GatewayError, type GatewayRuntimePort, type GatewayScope } from "./port.ts";
-import { callGatewayTool, type GatewayToolContext } from "./tools.ts";
+import { GatewayError, type GatewayRuntimePort } from "./port.ts";
+import { callGatewayTool, type GatewayGrantSource, type GatewayToolContext } from "./tools.ts";
 
 const environmentId = z.string().trim().min(1);
 const threadId = z.string().trim().min(1);
@@ -30,7 +30,7 @@ function failure(error: unknown) {
 
 export function createMcpGateway(input: {
   readonly port: GatewayRuntimePort;
-  readonly grants: Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
+  readonly grants: GatewayGrantSource;
 }) {
   const server = new McpServer({ name: "t3-code", version: "0.1.0" });
   const context: GatewayToolContext = input;

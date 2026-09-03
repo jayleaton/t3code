@@ -1,8 +1,15 @@
 import { GatewayError, type GatewayRuntimePort, type GatewayScope } from "./port.ts";
 
+export type GatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
+export type GatewayGrantSource = GatewayGrants | (() => GatewayGrants);
+
 export interface GatewayToolContext {
   readonly port: GatewayRuntimePort;
-  readonly grants: Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
+  readonly grants: GatewayGrantSource;
+}
+
+function currentGrants(source: GatewayGrantSource): GatewayGrants {
+  return typeof source === "function" ? source() : source;
 }
 
 function record(input: unknown): Record<string, unknown> {
@@ -34,7 +41,7 @@ function environmentWithScope(
   scope: GatewayScope,
 ): string {
   const environmentId = requiredString(input, "environmentId");
-  const scopes = context.grants[environmentId];
+  const scopes = currentGrants(context.grants)[environmentId];
   if (scopes === undefined) {
     throw new GatewayError({
       code: "unknown_environment",
@@ -68,9 +75,10 @@ export async function callGatewayTool(
   switch (name) {
     case "t3_list_environments": {
       const environments = await context.port.listEnvironments();
+      const grants = currentGrants(context.grants);
       return {
         items: environments.filter(
-          (environment) => context.grants[environment.environmentId] !== undefined,
+          (environment) => grants[environment.environmentId] !== undefined,
         ),
         snapshotAt: "runtime",
       };

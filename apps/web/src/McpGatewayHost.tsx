@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 
 import { connectionAtomRuntime } from "./connection/runtime";
 import {
+  getMcpGatewayGrants,
   getMcpGatewayToken,
   isMcpGatewayEnabled,
   MCP_GATEWAY_STATE_EVENT,
@@ -27,12 +28,17 @@ function publishState(state: GatewayBridgeState) {
 export function McpGatewayHost() {
   const [configuration, setConfiguration] = useState(() => ({
     enabled: isMcpGatewayEnabled(),
+    grants: getMcpGatewayGrants(),
     token: getMcpGatewayToken(),
   }));
 
   useEffect(() => {
     const onChange = () =>
-      setConfiguration({ enabled: isMcpGatewayEnabled(), token: getMcpGatewayToken() });
+      setConfiguration({
+        enabled: isMcpGatewayEnabled(),
+        grants: getMcpGatewayGrants(),
+        token: getMcpGatewayToken(),
+      });
     window.addEventListener(MCP_GATEWAY_STATE_EVENT, onChange);
     return () => window.removeEventListener(MCP_GATEWAY_STATE_EVENT, onChange);
   }, []);
@@ -53,6 +59,7 @@ export function McpGatewayHost() {
       if (Option.isNone(value)) return;
       bridge = connectGatewayBridge({
         port: createGatewayRuntimePortFromContext(value.value),
+        grants: configuration.grants,
         token: configuration.token,
         url: BRIDGE_URL,
         onState: publishState,

@@ -8,9 +8,7 @@ import { createMcpGateway } from "./server.ts";
 function parseGrants(
   raw: string | undefined,
 ): Readonly<Record<string, ReadonlyArray<GatewayScope>>> {
-  if (raw === undefined || raw.trim() === "") {
-    throw new Error("T3_MCP_GRANTS must explicitly grant scopes by environment id.");
-  }
+  if (raw === undefined || raw.trim() === "") return {};
   const value = JSON.parse(raw) as Record<string, unknown>;
   const grants: Record<string, ReadonlyArray<GatewayScope>> = {};
   for (const [environmentId, scopes] of Object.entries(value)) {
@@ -35,11 +33,20 @@ if (bridgeToken === undefined || bridgeToken.length < 16) {
   throw new Error("T3_MCP_BRIDGE_TOKEN must contain at least 16 characters.");
 }
 
-const bridge = createBridgeRuntimePort({ port: bridgePort, token: bridgeToken });
+const initialGrants = parseGrants(process.env.T3_MCP_GRANTS);
+const bridge = createBridgeRuntimePort({
+  port: bridgePort,
+  token: bridgeToken,
+  initialGrants,
+});
 const gateway = createMcpGateway({
   port: bridge.port,
-  grants: parseGrants(process.env.T3_MCP_GRANTS),
+  grants: bridge.getGrants,
 });
+const startup = await bridge.ready;
+if (startup.status === "degraded") {
+  process.stderr.write(`${JSON.stringify({ component: "t3-mcp-gateway", ...startup })}\n`);
+}
 await gateway.connect(new StdioServerTransport());
 
 const shutdown = async () => {
