@@ -2,7 +2,41 @@ import * as NodeCrypto from "node:crypto";
 
 import { WebSocketServer, type WebSocket } from "ws";
 
-import type { GatewayRuntimePort } from "./port.ts";
+import type { GatewayRuntimePort, GatewayScope } from "./port.ts";
+
+export type GatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
+
+export type GatewayBridgeStartupResult =
+  | { readonly status: "running" }
+  | {
+      readonly status: "degraded";
+      readonly code: "address_in_use" | "listen_failed";
+      readonly port: number;
+      readonly message: string;
+    };
+
+const GATEWAY_SCOPES = new Set<GatewayScope>(["read", "create", "send"]);
+
+function parseGrants(value: unknown): GatewayGrants {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Gateway grants must be an object keyed by environment id.");
+  }
+  const grants: Record<string, ReadonlyArray<GatewayScope>> = {};
+  for (const [environmentId, candidate] of Object.entries(value)) {
+    if (
+      environmentId.trim() === "" ||
+      !Array.isArray(candidate) ||
+      candidate.length === 0 ||
+      candidate.some(
+        (scope) => typeof scope !== "string" || !GATEWAY_SCOPES.has(scope as GatewayScope),
+      )
+    ) {
+      throw new Error(`Invalid gateway grants for environment ${environmentId}.`);
+    }
+    grants[environmentId] = [...new Set(candidate)] as ReadonlyArray<GatewayScope>;
+  }
+  return grants;
+}
 
 interface PendingRequest {
   readonly resolve: (value: any) => void;
@@ -34,8 +68,11 @@ export function createBridgeRuntimePort(input: {
   readonly host?: string;
   readonly requestTimeoutMs?: number;
   readonly authenticationTimeoutMs?: number;
+  readonly initialGrants?: GatewayGrants;
 }): {
   readonly port: GatewayRuntimePort;
+  readonly getGrants: () => GatewayGrants;
+  readonly ready: Promise<GatewayBridgeStartupResult>;
   readonly close: () => Promise<void>;
 } {
   if (input.token.length < 16)
@@ -45,7 +82,23 @@ export function createBridgeRuntimePort(input: {
     port: input.port,
     maxPayload: 1024 * 1024,
   });
+  const ready = new Promise<GatewayBridgeStartupResult>((resolve) => {
+    server.once("listening", () => resolve({ status: "running" }));
+    server.once("error", (error: NodeJS.ErrnoException) =>
+      resolve({
+        status: "degraded",
+        code: error.code === "EADDRINUSE" ? "address_in_use" : "listen_failed",
+        port: input.port,
+        message: error.message,
+      }),
+    );
+  });
+  // WebSocketServer reports listen failures through EventEmitter. Keep an error listener
+  // installed after startup so a degraded companion cannot terminate its host process.
+  server.on("error", () => undefined);
   let client: WebSocket | null = null;
+  let latestAuthenticatedGeneration = 0;
+  let grants = input.initialGrants ?? {};
   let nextId = 1;
   const pending = new Map<number, PendingRequest>();
 
@@ -59,10 +112,12 @@ export function createBridgeRuntimePort(input: {
 
   server.on("connection", (socket) => {
     let authenticated = false;
+    let configured = false;
+    let authenticationGeneration = 0;
     const nonce = NodeCrypto.randomBytes(32).toString("hex");
     const authenticationSignal = AbortSignal.timeout(input.authenticationTimeoutMs ?? 5_000);
     const onAuthenticationTimeout = () => {
-      if (!authenticated) socket.close(1008, "Gateway bridge authentication timed out.");
+      if (!configured) socket.close(1008, "Gateway bridge authentication timed out.");
     };
     authenticationSignal.addEventListener("abort", onAuthenticationTimeout, { once: true });
     socket.send(JSON.stringify({ type: "challenge", nonce }));
@@ -81,18 +136,30 @@ export function createBridgeRuntimePort(input: {
             return;
           }
           authenticated = true;
-          authenticationSignal.removeEventListener("abort", onAuthenticationTimeout);
-          if (client !== null) {
-            rejectPending("T3 gateway client was replaced.");
-            client.close(1012, "Replaced by a new authenticated T3 client runtime.");
-          }
-          client = socket;
+          authenticationGeneration = ++latestAuthenticatedGeneration;
           socket.send(
             JSON.stringify({ type: "authenticated", proof: proof(input.token, `server:${nonce}`) }),
           );
           return;
         }
-        if (client !== socket || typeof response.id !== "number") return;
+        if (response.type === "configure") {
+          if (authenticationGeneration !== latestAuthenticatedGeneration) {
+            socket.close(1008, "Gateway bridge connection was superseded.");
+            return;
+          }
+          const nextGrants = parseGrants(response.grants);
+          if (client !== null && client !== socket) {
+            rejectPending("T3 gateway client was replaced.");
+            client.close(1012, "Replaced by a newly configured T3 client runtime.");
+          }
+          grants = nextGrants;
+          client = socket;
+          configured = true;
+          authenticationSignal.removeEventListener("abort", onAuthenticationTimeout);
+          return;
+        }
+        if (client !== socket) return;
+        if (typeof response.id !== "number") return;
         const request = pending.get(response.id);
         if (request === undefined) return;
         pending.delete(response.id);
@@ -100,7 +167,12 @@ export function createBridgeRuntimePort(input: {
         if (typeof response.error !== "string") request.resolve(response.result);
         else request.reject(new Error(response.error));
       } catch {
-        if (!authenticated) socket.close(1008, "Gateway bridge authentication failed.");
+        socket.close(
+          1008,
+          authenticated
+            ? "Gateway bridge configuration or response was invalid."
+            : "Gateway bridge authentication failed.",
+        );
       }
     });
     socket.on("close", () => {
@@ -114,7 +186,7 @@ export function createBridgeRuntimePort(input: {
   const invoke = (method: keyof GatewayRuntimePort, args: ReadonlyArray<unknown>): Promise<any> => {
     if (client === null || client.readyState !== client.OPEN) {
       return Promise.reject(
-        new Error("No authenticated T3 client is connected to the gateway bridge."),
+        new Error("No configured T3 client is connected to the gateway bridge."),
       );
     }
     const id = nextId++;
@@ -131,6 +203,8 @@ export function createBridgeRuntimePort(input: {
   };
 
   return {
+    getGrants: () => grants,
+    ready,
     port: {
       listEnvironments: () => invoke("listEnvironments", []),
       getEnvironmentStatus: (environmentId) => invoke("getEnvironmentStatus", [environmentId]),

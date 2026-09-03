@@ -1,7 +1,9 @@
 import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 
-import type { GatewayRuntimePort } from "./port.ts";
+import type { GatewayRuntimePort, GatewayScope } from "./port.ts";
+
+export type GatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
 
 export type GatewayBridgeState = "connecting" | "running" | "degraded" | "disabled";
 
@@ -46,6 +48,7 @@ async function proof(token: string, value: string): Promise<string> {
 
 export function connectGatewayBridge(input: {
   readonly port: GatewayRuntimePort;
+  readonly grants?: GatewayGrants;
   readonly url: string;
   readonly token: string;
   readonly createSocket?: (url: string) => GatewayBridgeSocket;
@@ -113,6 +116,7 @@ export function connectGatewayBridge(input: {
             }
             authenticated = true;
             expectedServerProof = null;
+            next.send(JSON.stringify({ type: "configure", grants: input.grants ?? {} }));
             input.onState?.("running");
             return;
           }

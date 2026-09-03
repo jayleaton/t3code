@@ -1,6 +1,21 @@
 import { describe, expect, it, vi } from "@effect/vitest";
 
 import { connectGatewayBridge, type GatewayBridgeSocket } from "./bridgeClient.ts";
+
+async function proof(token: string, value: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await globalThis.crypto.subtle.importKey(
+    "raw",
+    encoder.encode(token),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = new Uint8Array(
+    await globalThis.crypto.subtle.sign("HMAC", key, encoder.encode(value)),
+  );
+  return Array.from(signature, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 import type { GatewayRuntimePort } from "./port.ts";
 
 class FakeSocket implements GatewayBridgeSocket {
@@ -55,6 +70,49 @@ describe("gateway bridge client", () => {
       id: -1,
       error: "Gateway bridge is not authenticated.",
     });
+    bridge.stop();
+  });
+
+  it("sends exact persisted environment grants only after mutual authentication", async () => {
+    const socket = new FakeSocket();
+    const token = "test-token-123456789";
+    const grants = {
+      "a534b83f-a352-44d8-aedc-c4230c179390": ["read", "create", "send"] as const,
+      "2549ba75-2a91-4554-8baa-88e6ae0efa48": ["read"] as const,
+    };
+    const onState = vi.fn();
+    const bridge = connectGatewayBridge({
+      port: unusedPort,
+      token,
+      grants,
+      url: "ws://127.0.0.1:47631",
+      createSocket: () => socket,
+      onState,
+    });
+    const nonce = "a".repeat(64);
+
+    socket.emit("message", JSON.stringify({ type: "challenge", nonce }));
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    expect(socket.sent.map((message) => JSON.parse(message))).not.toContainEqual({
+      type: "configure",
+      grants,
+    });
+
+    socket.emit(
+      "message",
+      JSON.stringify({
+        type: "authenticated",
+        proof: await proof(token, `server:${nonce}`),
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(socket.sent.map((message) => JSON.parse(message))).toContainEqual({
+        type: "configure",
+        grants,
+      }),
+    );
+    expect(onState).toHaveBeenCalledWith("running");
     bridge.stop();
   });
 });

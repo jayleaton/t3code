@@ -49,6 +49,35 @@ describe("MCP gateway server", () => {
     await gateway.close();
   });
 
+  it("applies grant changes after the MCP server is already connected", async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    let grants: Readonly<Record<string, ReadonlyArray<"read" | "create" | "send">>> = {};
+    const gateway = createMcpGateway({ port, grants: () => grants });
+    const client = new Client({ name: "gateway-test", version: "1.0.0" });
+    await gateway.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const before = await client.callTool({ name: "t3_list_environments", arguments: {} });
+    expect(before.structuredContent).toEqual({ items: [], snapshotAt: "runtime" });
+
+    grants = { local: ["read", "create", "send"] };
+    const after = await client.callTool({ name: "t3_list_environments", arguments: {} });
+    expect(after.structuredContent).toEqual({
+      items: [
+        {
+          environmentId: "local",
+          label: "Local",
+          targetKind: "primary",
+          connectionState: "connected",
+        },
+      ],
+      snapshotAt: "runtime",
+    });
+
+    await client.close();
+    await gateway.close();
+  });
+
   it("returns structured authorization errors over MCP", async () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const gateway = createMcpGateway({ port, grants: { local: ["read"] } });
