@@ -199,6 +199,7 @@ const TOOL_SPECS = {
       threadId,
       approvalRequestId: z.string().trim().min(1),
       decision: z.enum(["accept", "acceptForSession", "decline", "cancel"]),
+      confirmDestructive: z.boolean().optional(),
       idempotencyKey,
       correlationId: optionalRequestContext.correlationId,
     },

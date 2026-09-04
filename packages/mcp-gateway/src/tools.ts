@@ -462,12 +462,24 @@ export async function callGatewayTool(
         bridge: "connected" as const,
         degradedReasons: [] as ReadonlyArray<string>,
       };
-      const health = runtimeHealth.bridge === "connected" ? "healthy" : "degraded";
+      const deliveryFailures = context.events?.deliveryFailureSummary(Object.keys(grants)) ?? {
+        count: 0,
+        recent: [],
+      };
+      const health =
+        runtimeHealth.bridge === "connected" && deliveryFailures.count === 0
+          ? "healthy"
+          : "degraded";
       return {
         health,
         mcpTransport: "connected",
         bridge: runtimeHealth.bridge,
-        eventStore: context.events === undefined ? "not-configured" : "ready",
+        eventStore:
+          context.events === undefined
+            ? "not-configured"
+            : deliveryFailures.count === 0
+              ? "ready"
+              : "degraded",
         environmentCount: Object.keys(grants).length,
         latestSequenceByEnvironment:
           context.events === undefined
@@ -475,7 +487,14 @@ export async function callGatewayTool(
             : Object.fromEntries(
                 Object.keys(grants).map((id) => [id, context.events?.latestSequence(id) ?? 0]),
               ),
-        degradedReasons: runtimeHealth.degradedReasons,
+        deliveryFailureCount: deliveryFailures.count,
+        degradedReasons: [
+          ...runtimeHealth.degradedReasons,
+          ...deliveryFailures.recent.map(
+            (failure) =>
+              `Webhook ${failure.webhookId} failed after ${failure.attempts} attempts: ${failure.error.slice(0, 500)}`,
+          ),
+        ],
         clock: "runtime",
       };
     }
@@ -1112,6 +1131,21 @@ export async function callGatewayTool(
         });
       }
       const decision = rawDecision as GatewayApprovalDecision;
+      if (decision === "accept" || decision === "acceptForSession") {
+        const threadId = requiredString(input, "threadId");
+        const thread = await context.port.getThread(environmentId, threadId);
+        const action = approvalPlan(thread).actions.find(
+          (candidate) => candidate.approvalActionId === requiredString(input, "approvalRequestId"),
+        );
+        if (action?.requiresDestructiveConfirmation === true && input.confirmDestructive !== true) {
+          throw new GatewayError({
+            code: "destructive_confirmation_required",
+            message: `Action ${String(action.approvalActionId)} requires confirmDestructive: true.`,
+            retryable: false,
+            environmentId,
+          });
+        }
+      }
       return withIdempotency(
         context,
         `${environmentId}::${requiredString(input, "threadId")}::${idFor("request", idempotencyKey)}`,

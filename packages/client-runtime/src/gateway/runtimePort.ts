@@ -455,6 +455,37 @@ function gatewayEventContext(
   };
 }
 
+export function enrichGatewayRuntimeEventStream<E, R, E2, R2>(input: {
+  readonly environmentId: EnvironmentId;
+  readonly machine: string;
+  readonly initialSnapshot: OrchestrationShellSnapshot;
+  readonly events: Stream.Stream<OrchestrationEvent, E, R>;
+  readonly loadSnapshot: (
+    event: OrchestrationEvent,
+  ) => Effect.Effect<OrchestrationShellSnapshot, E2, R2>;
+}): Stream.Stream<GatewayRuntimeEvent, E | E2, R | R2> {
+  return Stream.suspend(() => {
+    let latestSnapshot = input.initialSnapshot;
+    return input.events.pipe(
+      Stream.mapEffect((event) =>
+        (latestSnapshot.snapshotSequence >= event.sequence
+          ? Effect.succeed(latestSnapshot)
+          : input.loadSnapshot(event)
+        ).pipe(
+          Effect.map((snapshot) => {
+            latestSnapshot = snapshot;
+            return gatewayEventFromOrchestration(
+              input.environmentId,
+              event,
+              gatewayEventContext(input.machine, snapshot, event),
+            );
+          }),
+        ),
+      ),
+    );
+  });
+}
+
 export function createGatewayRuntimeEventSourceFromContext(
   context: Context.Context<EnvironmentRegistry | Crypto.Crypto>,
 ): GatewayRuntimeEventSource {
@@ -477,23 +508,19 @@ export function createGatewayRuntimeEventSourceFromContext(
                     return Stream.unwrap(
                       shellSnapshot(environmentId).pipe(
                         Effect.map((snapshot) =>
-                          registry
-                            .runStream(
+                          enrichGatewayRuntimeEventStream({
+                            environmentId,
+                            machine: entry.target.label,
+                            initialSnapshot: snapshot,
+                            events: registry.runStream(
                               environmentId,
                               subscribe(ORCHESTRATION_WS_METHODS.subscribeEvents, {
                                 afterSequence:
                                   subscription.afterSequenceByEnvironment[environmentId] ?? 0,
                               }),
-                            )
-                            .pipe(
-                              Stream.map((event) =>
-                                gatewayEventFromOrchestration(
-                                  environmentId,
-                                  event,
-                                  gatewayEventContext(entry.target.label, snapshot, event),
-                                ),
-                              ),
                             ),
+                            loadSnapshot: () => shellSnapshot(environmentId),
+                          }),
                         ),
                       ),
                     ).pipe(Stream.catchCause(() => Stream.empty));

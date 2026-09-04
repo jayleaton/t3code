@@ -404,23 +404,31 @@ describe("gateway chat tools", () => {
     },
   );
 
-  it("responds to an approval with a separate control scope", async () => {
+  it("requires explicit confirmation before accepting a destructive approval", async () => {
     const approvals: Array<{ requestId: string; decision: string }> = [];
-    await callGatewayTool(
+    const context = {
+      port: makePort({ approvals, pendingApprovalPlan: true }),
+      grants: { local: ["read", "approval"] },
+    } as const;
+    const request = {
+      environmentId: "local",
+      threadId: "thread-1",
+      approvalRequestId: "approval-1",
+      decision: "accept",
+      idempotencyKey: "approval-decision-1",
+    };
+
+    await expect(callGatewayTool(context, "t3_respond_to_approval", request)).rejects.toMatchObject(
       {
-        port: makePort({ approvals }),
-        grants: { local: ["read", "approval"] },
-      },
-      "t3_respond_to_approval",
-      {
-        environmentId: "local",
-        threadId: "thread-1",
-        approvalRequestId: "approval-1",
-        decision: "accept",
-        idempotencyKey: "approval-decision-1",
+        code: "destructive_confirmation_required",
       },
     );
+    expect(approvals).toEqual([]);
 
+    await callGatewayTool(context, "t3_respond_to_approval", {
+      ...request,
+      confirmDestructive: true,
+    });
     expect(approvals).toEqual([{ requestId: "approval-1", decision: "accept" }]);
   });
 
@@ -792,6 +800,38 @@ describe("gateway v3 event delivery tools", () => {
       bridge: "degraded",
       degradedReasons: ["bridge address in use"],
     });
+  });
+
+  it("reports exhausted webhook retries through degraded gateway health", async () => {
+    const events = createGatewayEventStore({ webhookRetryBaseMs: 0 });
+    const { webhook } = events.registerWebhook({
+      environmentId: "local",
+      url: "https://example.com/hook",
+    });
+    const event = events.emit({ environmentId: "local", type: "thread.completed" });
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect(events.buildDelivery(webhook.webhookId, event.eventId)).toBeDefined();
+      events.reportDeliveryAttempt(
+        webhook.webhookId,
+        event.eventId,
+        { ok: false, retryable: true },
+        "receiver unavailable",
+      );
+    }
+
+    const health = await callGatewayTool(
+      { port: makePort(), grants, events },
+      "t3_get_gateway_health",
+      {},
+    );
+
+    expect(health).toMatchObject({
+      health: "degraded",
+      eventStore: "degraded",
+      deliveryFailureCount: 1,
+      degradedReasons: [expect.stringContaining("receiver unavailable")],
+    });
+    events.close();
   });
 
   it("applies grouped approvals through one atomic runtime command", async () => {
