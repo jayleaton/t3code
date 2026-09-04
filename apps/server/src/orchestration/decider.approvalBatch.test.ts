@@ -47,6 +47,7 @@ const readModel: OrchestrationReadModel = {
         kind: "approval.requested",
         summary: "Approval required",
         payload: { requestId },
+        sequence: index + 9,
         turnId: null,
         createdAt: NOW,
       })),
@@ -84,6 +85,27 @@ it.layer(NodeServices.layer)("grouped approval decider", (it) => {
         "thread.approval-response-requested",
         "thread.approval-response-requested",
       ]);
+    }),
+  );
+
+  it.effect("rejects the whole batch when the approval plan revision is stale", () =>
+    Effect.gen(function* () {
+      const error = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.approval.batch-respond",
+          commandId: CommandId.make("cmd-stale-batch"),
+          threadId: ThreadId.make("thread-1"),
+          expectedRevision: 9,
+          responses: [{ requestId: ApprovalRequestId.make("approval-1"), decision: "decline" }],
+          createdAt: NOW,
+        },
+        readModel,
+      } as never).pipe(Effect.flip);
+
+      expect(error).toMatchObject({
+        _tag: "OrchestrationCommandInvariantError",
+        detail: expect.stringContaining("revision 10"),
+      });
     }),
   );
 

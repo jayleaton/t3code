@@ -17,8 +17,9 @@ function makePort(input?: {
   readonly creates?: Array<{
     instanceId?: string;
     model: string;
-    runtimeMode: string;
+    runtimeMode?: string;
     reasoningEffort?: string;
+    profileId?: string;
   }>;
   readonly profiles?: ReadonlyArray<GatewayProfile>;
   readonly pendingApprovalPlan?: boolean;
@@ -107,6 +108,23 @@ function makePort(input?: {
             { id: "event-2", sequence: 8, kind: "info", summary: "Completed" },
           ],
       checkpoints: [{ turnId: "turn-1", files: [{ path: "src/index.ts", kind: "modified" }] }],
+      artifacts: [
+        {
+          artifactId: "asset-1",
+          kind: "attachment",
+          sourceId: "message-1",
+          name: "result.png",
+          availability: "available",
+        },
+        {
+          artifactId: "workspace-turn-1-0",
+          kind: "workspace-file",
+          sourceId: "turn-1",
+          path: "src/index.ts",
+          changeKind: "modified",
+          availability: "available",
+        },
+      ],
     }),
     createAssetUrl: async () => ({
       relativeUrl: "/asset",
@@ -116,15 +134,20 @@ function makePort(input?: {
     getPullRequestActivity: async () => ({}),
     createThread: async (request) => {
       input?.creates?.push({
-        instanceId: request.modelSelection.instanceId,
-        model: request.modelSelection.model,
-        runtimeMode: request.runtimeMode,
-        ...(request.modelSelection.options?.find((option) => option.id === "reasoningEffort")
+        ...(request.modelSelection?.instanceId === undefined
+          ? {}
+          : { instanceId: request.modelSelection.instanceId }),
+        model: request.modelSelection?.model ?? "server-default",
+        ...(request.profileSelection === undefined
+          ? {}
+          : { profileId: request.profileSelection.profileId }),
+        ...(request.runtimeMode === undefined ? {} : { runtimeMode: request.runtimeMode }),
+        ...(request.modelSelection?.options?.find((option) => option.id === "reasoningEffort")
           ?.value === undefined
           ? {}
           : {
               reasoningEffort: String(
-                request.modelSelection.options.find((option) => option.id === "reasoningEffort")
+                request.modelSelection?.options?.find((option) => option.id === "reasoningEffort")
                   ?.value,
               ),
             }),
@@ -276,14 +299,18 @@ describe("gateway chat tools", () => {
     });
     expect(artifacts.items).toEqual([
       {
-        source: "message",
-        messageId: "message-1",
-        artifact: { id: "asset-1", kind: "image", name: "result.png" },
+        artifactId: "asset-1",
+        kind: "attachment",
+        sourceId: "message-1",
+        name: "result.png",
+        availability: "available",
       },
       {
-        source: "checkpoint",
-        turnId: "turn-1",
-        artifact: { path: "src/index.ts", kind: "modified" },
+        artifactId: "workspace-turn-1-0",
+        kind: "workspace-file",
+        sourceId: "turn-1",
+        path: "src/index.ts",
+        availability: "available",
       },
     ]);
     expect(image).toMatchObject({
@@ -293,8 +320,8 @@ describe("gateway chat tools", () => {
     });
   });
 
-  it("applies a named profile snapshot while preserving explicit thread overrides", async () => {
-    const creates: Array<{ model: string; runtimeMode: string }> = [];
+  it("defers named profile defaults to the server while preserving explicit overrides", async () => {
+    const creates: Array<{ model: string; runtimeMode?: string; reasoningEffort?: string }> = [];
     const profiles: ReadonlyArray<GatewayProfile> = [
       {
         profileId: "profile-andy",
@@ -345,12 +372,14 @@ describe("gateway chat tools", () => {
         model: "glm-5.3",
         runtimeMode: "full-access",
         reasoningEffort: "medium",
+        profileId: "profile-andy",
       },
       {
         instanceId: "codex",
         model: "gpt-5",
         runtimeMode: "approval-required",
         reasoningEffort: "medium",
+        profileId: "profile-andy",
       },
     ]);
   });
@@ -413,7 +442,7 @@ describe("gateway chat tools", () => {
 
 describe("gateway v3 event delivery tools", () => {
   it("replays an identical create request instead of running it twice", async () => {
-    const creates: Array<{ model: string; runtimeMode: string }> = [];
+    const creates: Array<{ model: string; runtimeMode?: string; reasoningEffort?: string }> = [];
     const events = createGatewayEventStore();
     const context = { port: makePort({ creates }), grants, events };
     const request = {
@@ -511,7 +540,7 @@ describe("gateway v3 event delivery tools", () => {
   });
 
   it("reports idempotency_conflict when the same key carries a different payload", async () => {
-    const creates: Array<{ model: string; runtimeMode: string }> = [];
+    const creates: Array<{ model: string; runtimeMode?: string; reasoningEffort?: string }> = [];
     const events = createGatewayEventStore();
     const context = { port: makePort({ creates }), grants, events };
     const base = {
@@ -525,6 +554,93 @@ describe("gateway v3 event delivery tools", () => {
     await expect(
       callGatewayTool(context, "t3_create_thread", { ...base, title: "Different chat" }),
     ).rejects.toMatchObject({ code: "idempotency_conflict" });
+  });
+
+  it("uses first-class artifact records instead of inferring message payloads", async () => {
+    const result = await callGatewayTool(
+      {
+        port: {
+          ...makePort(),
+          getThread: async () => ({
+            artifacts: [
+              {
+                artifactId: "attachment-1",
+                kind: "attachment",
+                sourceId: "message-1",
+                name: "diagram.png",
+                mimeType: "image/png",
+                sizeBytes: 42,
+                availability: "available",
+              },
+            ],
+            messages: [
+              {
+                id: "message-evil",
+                attachments: [{ id: "leaked", hostPath: "/home/user/secret" }],
+              },
+            ],
+          }),
+        },
+        grants: { local: ["artifact"] },
+      },
+      "t3_list_artifacts",
+      { environmentId: "local", threadId: "thread-1" },
+    );
+
+    expect(result).toEqual({
+      items: [
+        {
+          artifactId: "attachment-1",
+          kind: "attachment",
+          sourceId: "message-1",
+          name: "diagram.png",
+          mimeType: "image/png",
+          sizeBytes: 42,
+          availability: "available",
+        },
+      ],
+    });
+  });
+
+  it("forwards an atomic approval-plan modification with a revision guard", async () => {
+    const operations: Array<{ operation: string; payload: Readonly<Record<string, unknown>> }> = [];
+    const request = {
+      environmentId: "local",
+      threadId: "thread-1",
+      planRevision: 10,
+      modifications: [{ actionId: "approval-1", fields: { decision: "accept" } }],
+      idempotencyKey: "modify-approval-1",
+    };
+    await expect(
+      callGatewayTool(
+        {
+          port: makePort({ operations, pendingApprovalPlan: true }),
+          grants: { local: ["read", "approval"] },
+        },
+        "t3_modify_actions",
+        request,
+      ),
+    ).rejects.toMatchObject({ code: "destructive_confirmation_required" });
+    const result = await callGatewayTool(
+      {
+        port: makePort({ operations, pendingApprovalPlan: true }),
+        grants: { local: ["read", "approval"] },
+      },
+      "t3_modify_actions",
+      { ...request, confirmDestructive: true },
+    );
+
+    expect(result).toMatchObject({ accepted: true });
+    expect(operations).toEqual([
+      {
+        operation: "approval.modify",
+        payload: {
+          threadId: "thread-1",
+          planRevision: 10,
+          modifications: [{ actionId: "approval-1", fields: { decision: "accept" } }],
+        },
+      },
+    ]);
   });
 
   it("emits lifecycle events and serves replay with cursors and acks", async () => {
@@ -804,15 +920,9 @@ describe("gateway v3 event delivery tools", () => {
   });
 });
 
-describe("gateway v3 profile snapshots", () => {
-  it("carries profile identity and revision metadata on createThread requests", async () => {
+describe("gateway v3 profile selection", () => {
+  it("carries profile identity, revision, and resolved routing to the authoritative server", async () => {
     const creates: Array<Record<string, unknown>> = [];
-    const port = makePort();
-    const original = port.createThread.bind(port);
-    port.createThread = async (request) => {
-      creates.push(request as unknown as Record<string, unknown>);
-      return original(request);
-    };
     const profiles: ReadonlyArray<GatewayProfile> = [
       {
         profileId: "profile_andy",
@@ -824,6 +934,12 @@ describe("gateway v3 profile snapshots", () => {
         revision: 3,
       },
     ];
+    const port = makePort({ profiles });
+    const original = port.createThread.bind(port);
+    port.createThread = async (request) => {
+      creates.push(request as unknown as Record<string, unknown>);
+      return original(request);
+    };
     const context = { port, grants, profiles };
 
     await callGatewayTool(context, "t3_create_thread", {
@@ -835,22 +951,23 @@ describe("gateway v3 profile snapshots", () => {
     });
 
     expect(creates[0]).toMatchObject({
-      profileSnapshot: {
+      modelSelection: {
+        instanceId: "glm",
+        model: "glm-5.3",
+        options: [{ id: "reasoningEffort", value: "medium" }],
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      profileSelection: {
         profileId: "profile_andy",
-        profileName: "Andy",
         revision: 3,
-        reasoningEffort: "medium",
-        effectiveSource: {
-          modelSelection: "profile",
-          runtimeMode: "profile",
-          interactionMode: "profile",
-          reasoningEffort: "profile",
-        },
+        overrideFields: [],
       },
     });
+    expect(creates[0]).not.toHaveProperty("profileSnapshot");
   });
 
-  it("reports per-field fallback sources when no profile applies", async () => {
+  it("does not synthesize a caller-owned profile snapshot when no profile applies", async () => {
     const creates: Array<Record<string, unknown>> = [];
     const port = makePort();
     const original = port.createThread.bind(port);
@@ -862,15 +979,11 @@ describe("gateway v3 profile snapshots", () => {
       environmentId: "local",
       projectId: "local-project",
       title: "Fallback chat",
-      modelSelection: { instanceId: "codex", model: "gpt-5" },
       idempotencyKey: "fallback-create-1",
     });
-    expect(creates[0]).toMatchObject({
-      profileSnapshot: {
-        profileId: null,
-        effectiveSource: { modelSelection: "thread-override", runtimeMode: "fallback" },
-      },
-    });
+    expect(creates[0]).not.toHaveProperty("profileSnapshot");
+    expect(creates[0]).not.toHaveProperty("profileSelection");
+    expect(creates[0]).not.toHaveProperty("modelSelection");
   });
 });
 
@@ -908,6 +1021,7 @@ describe("gateway v3 readable profiles", () => {
       model: string;
       runtimeMode: string;
       reasoningEffort?: string;
+      profileId?: string;
     }> = [];
     const profiles: ReadonlyArray<GatewayProfile> = [
       {
@@ -920,6 +1034,7 @@ describe("gateway v3 readable profiles", () => {
         revision: 1,
       },
     ];
+
     await expect(
       callGatewayTool(
         { port: makePort({ profiles, creates }), grants, profiles },
@@ -954,7 +1069,7 @@ describe("gateway v3 readable profiles", () => {
       callGatewayTool({ port: makePort({ profiles }), grants, profiles }, "t3_create_thread", {
         environmentId: "local",
         projectId: "local-project",
-        title: "Unresolved profile chat",
+        title: "Resolved profile chat",
         profileId: "profile_andy",
         idempotencyKey: "label-only-create-2",
       }),

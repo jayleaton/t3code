@@ -386,6 +386,17 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               completedAt: "2026-02-24T00:00:08.000Z",
             },
           ],
+          artifacts: [
+            {
+              artifactId: "workspace-turn-1-0",
+              kind: "workspace-file",
+              sourceId: asTurnId("turn-1"),
+              name: "README.md",
+              path: "README.md",
+              createdAt: "2026-02-24T00:00:08.000Z",
+              availability: "available",
+            },
+          ],
           session: {
             threadId: ThreadId.make("thread-1"),
             status: "running",

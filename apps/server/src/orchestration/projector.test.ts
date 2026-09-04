@@ -124,6 +124,7 @@ describe("orchestration projector", () => {
         proposedPlans: [],
         activities: [],
         checkpoints: [],
+        artifacts: [],
         session: null,
       },
     ]);
@@ -720,7 +721,7 @@ describe("orchestration projector", () => {
           checkpointTurnCount: 1,
           checkpointRef: "refs/t3/checkpoints/thread-1/turn/1",
           status: "ready",
-          files: [],
+          files: [{ path: "kept.txt", kind: "modified", additions: 1, deletions: 0 }],
           assistantMessageId: "assistant-msg-1",
           completedAt: "2026-02-23T10:00:02.500Z",
         },
@@ -794,7 +795,7 @@ describe("orchestration projector", () => {
           checkpointTurnCount: 2,
           checkpointRef: "refs/t3/checkpoints/thread-1/turn/2",
           status: "ready",
-          files: [],
+          files: [{ path: "removed.txt", kind: "added", additions: 2, deletions: 0 }],
           assistantMessageId: "assistant-msg-2",
           completedAt: "2026-02-23T10:00:04.500Z",
         },
@@ -850,6 +851,7 @@ describe("orchestration projector", () => {
       thread?.activities.map((activity) => ({ id: activity.id, turnId: activity.turnId })),
     ).toEqual([{ id: "activity-1", turnId: "turn-1" }]);
     expect(thread?.checkpoints.map((checkpoint) => checkpoint.checkpointTurnCount)).toEqual([1]);
+    expect(thread?.artifacts?.map((artifact) => artifact.path)).toEqual(["kept.txt"]);
     expect(thread?.latestTurn?.turnId).toBe("turn-1");
   });
 

@@ -352,6 +352,24 @@ export type OrchestrationProject = typeof OrchestrationProject.Type;
 export const OrchestrationMessageRole = Schema.Literals(["user", "assistant", "system"]);
 export type OrchestrationMessageRole = typeof OrchestrationMessageRole.Type;
 
+const OrchestrationArtifactPath = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(4096),
+  Schema.isPattern(/^(?![\\/])(?![a-z]:[\\/])(?!.*(?:^|[\\/])\.\.(?:[\\/]|$)).+$/i),
+);
+
+export const OrchestrationArtifact = Schema.Struct({
+  artifactId: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
+  kind: Schema.Literals(["attachment", "workspace-file"]),
+  sourceId: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
+  path: Schema.optional(OrchestrationArtifactPath),
+  mimeType: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(255))),
+  sizeBytes: Schema.optional(NonNegativeInt),
+  createdAt: IsoDateTime,
+  availability: Schema.Literals(["available", "unavailable", "deleted"]),
+});
+export type OrchestrationArtifact = typeof OrchestrationArtifact.Type;
+
 export const OrchestrationMessage = Schema.Struct({
   id: MessageId,
   role: OrchestrationMessageRole,
@@ -546,6 +564,7 @@ export const OrchestrationThread = Schema.Struct({
   ),
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
+  artifacts: Schema.optional(Schema.Array(OrchestrationArtifact)),
   session: Schema.NullOr(OrchestrationSession),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
@@ -802,17 +821,26 @@ const ProjectDeleteCommand = Schema.Struct({
   force: Schema.optional(Schema.Boolean),
 });
 
+export const ThreadProfileSelection = Schema.Struct({
+  profileId: TrimmedNonEmptyString,
+  revision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  overrideFields: Schema.Array(
+    Schema.Literals(["modelSelection", "runtimeMode", "interactionMode", "reasoningEffort"]),
+  ),
+});
+export type ThreadProfileSelection = typeof ThreadProfileSelection.Type;
+
 const ThreadCreateCommand = Schema.Struct({
   type: Schema.Literal("thread.create"),
   commandId: CommandId,
   threadId: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
-  modelSelection: ModelSelection,
-  runtimeMode: RuntimeMode,
-  interactionMode: ProviderInteractionMode.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
-  ),
+  modelSelection: Schema.optional(ModelSelection),
+  runtimeMode: Schema.optional(RuntimeMode),
+  interactionMode: Schema.optional(ProviderInteractionMode),
+  profileSelection: Schema.optional(ThreadProfileSelection),
+  useServerDefaults: Schema.optional(Schema.Boolean),
   profileSnapshot: Schema.optional(ThreadProfileSnapshot),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
@@ -1019,10 +1047,31 @@ const ThreadTurnInterruptCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const ThreadLifecycleAction = Schema.Literals([
+  "cancel",
+  "stop",
+  "pause",
+  "resume",
+  "retry",
+  "restart",
+]);
+export type ThreadLifecycleAction = typeof ThreadLifecycleAction.Type;
+
+const ThreadLifecycleControlCommand = Schema.Struct({
+  type: Schema.Literal("thread.lifecycle.control"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  action: ThreadLifecycleAction,
+  attemptId: TrimmedNonEmptyString,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadApprovalBatchRespondCommand = Schema.Struct({
   type: Schema.Literal("thread.approval.batch-respond"),
   commandId: CommandId,
   threadId: ThreadId,
+  expectedRevision: Schema.optional(NonNegativeInt),
   responses: Schema.Array(
     Schema.Struct({ requestId: ApprovalRequestId, decision: ProviderApprovalDecision }),
   ).check(Schema.isMinLength(1), Schema.isMaxLength(100)),
@@ -1088,6 +1137,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
+  ThreadLifecycleControlCommand,
   ThreadApprovalBatchRespondCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
@@ -1117,6 +1167,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
+  ThreadLifecycleControlCommand,
   ThreadApprovalBatchRespondCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,

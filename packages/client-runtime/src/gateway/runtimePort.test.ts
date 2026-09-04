@@ -6,9 +6,11 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import {
+  approvalResponsesFromModifications,
   createGatewayRuntimePortFromContext,
   gatewayEventFromOrchestration,
   resolveGatewayProfileModelSelection,
+  gatewayThreadProjection,
 } from "./runtimePort.ts";
 
 const environmentId = EnvironmentId.make("remote-1");
@@ -54,6 +56,96 @@ describe("Gateway Runtime Port", () => {
     ).toBeUndefined();
   });
 
+  it("projects bounded authoritative lifecycle metadata without leaking raw activity payloads", () => {
+    const projected = gatewayEventFromOrchestration(
+      environmentId,
+      {
+        eventId: "event-1",
+        sequence: 4,
+        occurredAt: "2026-09-04T00:00:00.000Z",
+        type: "thread.activity-appended",
+        aggregateKind: "thread",
+        aggregateId: "thread-1",
+        correlationId: "corr-1",
+        payload: {
+          activity: {
+            kind: "approval.requested",
+            summary: "Approval required for two file changes",
+            payload: {
+              requestId: "approval-1",
+              providerOutput: "secret output",
+              hostPath: "/home/user/private",
+              detail: "provider said secret output from /home/user/private",
+            },
+          },
+        },
+      } as never,
+      {
+        machine: "Build machine",
+        project: { id: "project-1", title: "T3 Code" },
+        thread: { title: "Fix gateway", status: "waiting-approval" },
+      },
+    );
+
+    expect(projected).toMatchObject({
+      environmentId: "remote-1",
+      type: "approval.requested",
+      threadId: "thread-1",
+      data: {
+        machine: "Build machine",
+        project: { id: "project-1", title: "T3 Code" },
+        threadTitle: "Fix gateway",
+        status: "waiting-approval",
+        summary: "Approval required for two file changes",
+        nextAction: "approve_actions",
+        blocker: { kind: "approval", requestId: "approval-1" },
+        serverSequence: 4,
+        serverEventType: "thread.activity-appended",
+        activityKind: "approval.requested",
+        requestId: "approval-1",
+      },
+    });
+    expect(JSON.stringify(projected)).not.toContain("secret output");
+    expect(JSON.stringify(projected)).not.toContain("/home/user/private");
+  });
+
+  it("maps lifecycle receipts to canonical state changes", () => {
+    const projected = gatewayEventFromOrchestration(
+      environmentId,
+      {
+        eventId: "event-lifecycle-1",
+        sequence: 5,
+        occurredAt: "2026-09-04T00:00:01.000Z",
+        type: "thread.activity-appended",
+        aggregateKind: "thread",
+        aggregateId: "thread-1",
+        correlationId: null,
+        payload: {
+          activity: {
+            kind: "lifecycle.pause.completed",
+            summary: "Pause accepted",
+            payload: { action: "pause", attemptId: "attempt-pause-1" },
+          },
+        },
+      } as never,
+      {
+        machine: "Build machine",
+        project: { id: "project-1", title: "T3 Code" },
+        thread: { title: "Fix gateway", status: "running" },
+      },
+    );
+
+    expect(projected).toMatchObject({
+      type: "thread.state_changed",
+      data: {
+        status: "paused",
+        previousStatus: "running",
+        nextAction: "resume",
+        activityKind: "lifecycle.pause.completed",
+      },
+    });
+  });
+
   it("redacts raw provider output and host paths before the bridge boundary", () => {
     const projected = gatewayEventFromOrchestration(environmentId, {
       eventId: "event-1",
@@ -90,6 +182,95 @@ describe("Gateway Runtime Port", () => {
     expect(projected.data).not.toHaveProperty("summary");
     expect(JSON.stringify(projected)).not.toContain("secret output");
     expect(JSON.stringify(projected)).not.toContain("/home/user/private");
+  });
+
+  it("converts approval modifications into one validated server batch", () => {
+    expect(
+      approvalResponsesFromModifications([
+        { actionId: "approval-1", fields: { decision: "decline" } },
+        { actionId: "approval-2", fields: { decision: "acceptForSession" } },
+      ]),
+    ).toEqual([
+      { approvalRequestId: "approval-1", decision: "decline" },
+      { approvalRequestId: "approval-2", decision: "acceptForSession" },
+    ]);
+    expect(() =>
+      approvalResponsesFromModifications([
+        { actionId: "approval-1", fields: { decision: "invalid" } },
+      ]),
+    ).toThrow("Invalid approval modification");
+  });
+
+  it("bounds thread DTOs and removes host-sensitive fields", () => {
+    const projected = gatewayThreadProjection({
+      id: "thread-1",
+      projectId: "project-1",
+      title: "Thread",
+      modelSelection: { instanceId: "codex", model: "gpt" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      latestTurn: null,
+      session: {
+        status: "running",
+        runtimeMode: "full-access",
+        activeTurnId: null,
+        lastError: "provider failed at /home/user/secret",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      messages: [
+        {
+          id: "message-1",
+          role: "assistant",
+          text: "ok",
+          attachments: [],
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      activities: [
+        {
+          id: "activity-1",
+          sequence: 1,
+          turnId: null,
+          tone: "tool",
+          kind: "tool.completed",
+          summary: "done",
+          payload: { rawOutput: "secret", hostPath: "/home/user/secret" },
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      checkpoints: [],
+      artifacts: [
+        {
+          artifactId: "workspace-turn-1-0",
+          kind: "workspace-file",
+          sourceId: "turn-1",
+          name: "secret",
+          path: "/home/user/secret",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          availability: "available",
+        },
+        {
+          artifactId: "workspace-turn-1-1",
+          kind: "workspace-file",
+          sourceId: "turn-1",
+          name: "index.ts",
+          path: "src/index.ts",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          availability: "available",
+        },
+      ],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    } as never);
+
+    expect(projected.session).not.toHaveProperty("lastError");
+    expect(projected.activities[0]?.payload).toEqual({});
+    expect(projected.artifacts).toHaveLength(1);
+    expect(projected.artifacts[0]).toMatchObject({ path: "src/index.ts" });
+    expect(JSON.stringify(projected)).not.toContain("/home/user/secret");
   });
 
   it.effect("projects the existing registry without starting or replacing it", () =>
