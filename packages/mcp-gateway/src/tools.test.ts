@@ -14,7 +14,12 @@ function makePort(input?: {
   readonly approvals?: Array<{ requestId: string; decision: string }>;
   readonly approvalBatches?: Array<ReadonlyArray<{ approvalRequestId: string; decision: string }>>;
   readonly operations?: Array<{ operation: string; payload: Readonly<Record<string, unknown>> }>;
-  readonly creates?: Array<{ model: string; runtimeMode: string; reasoningEffort?: string }>;
+  readonly creates?: Array<{
+    instanceId?: string;
+    model: string;
+    runtimeMode: string;
+    reasoningEffort?: string;
+  }>;
   readonly profiles?: ReadonlyArray<GatewayProfile>;
   readonly pendingApprovalPlan?: boolean;
   readonly staleApprovalPlan?: boolean;
@@ -39,6 +44,10 @@ function makePort(input?: {
     ...(input?.profiles === undefined
       ? {}
       : { listProfiles: async () => input.profiles as ReadonlyArray<GatewayProfile> }),
+    resolveProfileModelSelection: async (_environmentId, profile) =>
+      profile.providerLabel === "Codex" && profile.modelLabel === "GPT-5.6 Sol"
+        ? { instanceId: "codex", model: "gpt-5.6-sol" }
+        : profile.modelSelection,
     listProjects: async (environmentId) => ({
       snapshotAt: "2026-09-02T00:00:00.000Z",
       items: [
@@ -107,6 +116,7 @@ function makePort(input?: {
     getPullRequestActivity: async () => ({}),
     createThread: async (request) => {
       input?.creates?.push({
+        instanceId: request.modelSelection.instanceId,
         model: request.modelSelection.model,
         runtimeMode: request.runtimeMode,
         ...(request.modelSelection.options?.find((option) => option.id === "reasoningEffort")
@@ -330,8 +340,18 @@ describe("gateway chat tools", () => {
     });
 
     expect(creates).toEqual([
-      { model: "glm-5.3", runtimeMode: "full-access", reasoningEffort: "medium" },
-      { model: "gpt-5", runtimeMode: "approval-required", reasoningEffort: "medium" },
+      {
+        instanceId: "glm",
+        model: "glm-5.3",
+        runtimeMode: "full-access",
+        reasoningEffort: "medium",
+      },
+      {
+        instanceId: "codex",
+        model: "gpt-5",
+        runtimeMode: "approval-required",
+        reasoningEffort: "medium",
+      },
     ]);
   });
 
@@ -407,8 +427,49 @@ describe("gateway v3 event delivery tools", () => {
     const first = await callGatewayTool(context, "t3_create_thread", request);
     const second = await callGatewayTool(context, "t3_create_thread", request);
 
-    expect(creates).toEqual([{ model: "gpt-5", runtimeMode: "approval-required" }]);
+    expect(creates).toEqual([
+      { instanceId: "codex", model: "gpt-5", runtimeMode: "approval-required" },
+    ]);
     expect(second).toEqual(first);
+  });
+
+  it("replays a resolved label-only profile without re-reading the mutable catalog", async () => {
+    const creates: Array<{ model: string; runtimeMode: string }> = [];
+    const profiles: ReadonlyArray<GatewayProfile> = [
+      {
+        profileId: "profile-andy",
+        name: "Andy",
+        revision: 1,
+        providerLabel: "Codex",
+        modelLabel: "GPT-5.6 Sol",
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        createdAt: "2026-09-02T00:00:00.000Z",
+        updatedAt: "2026-09-02T00:00:00.000Z",
+      },
+    ];
+    const port = makePort({ creates, profiles });
+    let resolutions = 0;
+    port.resolveProfileModelSelection = async () => {
+      resolutions += 1;
+      if (resolutions > 1) throw new Error("catalog unavailable");
+      return { instanceId: "codex", model: "gpt-5.6-sol" };
+    };
+    const context = { port, grants, events: createGatewayEventStore() };
+    const request = {
+      environmentId: "local",
+      projectId: "local-project",
+      title: "Idempotent profile chat",
+      profile: "Andy",
+      idempotencyKey: "create-profile-idem-1",
+    };
+
+    const first = await callGatewayTool(context, "t3_create_thread", request);
+    const second = await callGatewayTool(context, "t3_create_thread", request);
+
+    expect(second).toEqual(first);
+    expect(resolutions).toBe(1);
+    expect(creates).toHaveLength(1);
   });
 
   it("recovers an ambiguous upstream receipt without repeating the server side effect", async () => {
@@ -841,7 +902,13 @@ describe("gateway v3 readable profiles", () => {
     ]);
   });
 
-  it("rejects a label-only profile without a thread override using readable text", async () => {
+  it("creates a thread from a Settings label-only profile using transient routing", async () => {
+    const creates: Array<{
+      instanceId?: string;
+      model: string;
+      runtimeMode: string;
+      reasoningEffort?: string;
+    }> = [];
     const profiles: ReadonlyArray<GatewayProfile> = [
       {
         profileId: "profile_andy",
@@ -854,16 +921,46 @@ describe("gateway v3 readable profiles", () => {
       },
     ];
     await expect(
+      callGatewayTool(
+        { port: makePort({ profiles, creates }), grants, profiles },
+        "t3_create_thread",
+        {
+          environmentId: "local",
+          projectId: "local-project",
+          title: "Resolved profile chat",
+          profileId: "profile_andy",
+          idempotencyKey: "label-only-create-1",
+        },
+      ),
+    ).resolves.toMatchObject({ status: "accepted" });
+    expect(creates).toEqual([
+      expect.objectContaining({ instanceId: "codex", model: "gpt-5.6-sol" }),
+    ]);
+  });
+
+  it("rejects a disappeared or ambiguous label pair using readable text", async () => {
+    const profiles: ReadonlyArray<GatewayProfile> = [
+      {
+        profileId: "profile_andy",
+        name: "Andy",
+        providerLabel: "Missing Codex",
+        modelLabel: "Missing GPT",
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        revision: 1,
+      },
+    ];
+    await expect(
       callGatewayTool({ port: makePort({ profiles }), grants, profiles }, "t3_create_thread", {
         environmentId: "local",
         projectId: "local-project",
         title: "Unresolved profile chat",
         profileId: "profile_andy",
-        idempotencyKey: "label-only-create-1",
+        idempotencyKey: "label-only-create-2",
       }),
     ).rejects.toMatchObject({
       code: "invalid_input",
-      message: expect.stringContaining("provider: Codex, model: GPT-5.6 Sol"),
+      message: expect.stringContaining("provider: Missing Codex, model: Missing GPT"),
     });
   });
 });

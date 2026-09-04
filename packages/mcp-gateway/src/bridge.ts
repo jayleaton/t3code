@@ -310,6 +310,8 @@ export function createBridgeRuntimePort(input: {
       listEnvironments: () => invoke("listEnvironments", []),
       getEnvironmentStatus: (environmentId) => invoke("getEnvironmentStatus", [environmentId]),
       listProfiles: (environmentId) => invoke("listProfiles", [environmentId]),
+      resolveProfileModelSelection: (environmentId, profile) =>
+        invoke("resolveProfileModelSelection", [environmentId, profile]),
       listProjects: (environmentId) => invoke("listProjects", [environmentId]),
       listThreads: (environmentId) => invoke("listThreads", [environmentId]),
       getThread: (environmentId, threadId) => invoke("getThread", [environmentId, threadId]),

@@ -218,6 +218,7 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
       updateSettings: (patch) =>
         Effect.gen(function* () {
           const currentSettings = yield* Ref.get(currentSettingsRef);
+          yield* validateMcpGatewayProfileNames(patch, "<memory>");
           const now = DateTime.formatIso(yield* DateTime.now);
           const nextSettings = yield* normalizeServerSettings(
             applyServerSettingsPatch(
@@ -238,6 +239,27 @@ export const layerTest = (overrides: DeepPartial<ServerSettings> = {}) =>
 
 const ServerSettingsJson = fromLenientJson(ServerSettings);
 const decodeServerSettingsJsonExit = Schema.decodeUnknownExit(ServerSettingsJson);
+
+function validateMcpGatewayProfileNames(
+  patch: ServerSettingsPatch,
+  settingsPath: string,
+): Effect.Effect<void, ServerSettingsError> {
+  if (patch.mcpGatewayProfiles === undefined) return Effect.void;
+  const names = new Set<string>();
+  for (const profile of patch.mcpGatewayProfiles) {
+    if (names.has(profile.name)) {
+      return Effect.fail(
+        new ServerSettingsError({
+          settingsPath,
+          operation: "normalize",
+          cause: new Error(`Duplicate MCP gateway profile name: ${profile.name}`),
+        }),
+      );
+    }
+    names.add(profile.name);
+  }
+  return Effect.void;
+}
 
 function withServerOwnedMcpGatewayProfiles(
   current: ServerSettings,
@@ -671,6 +693,7 @@ const make = Effect.gen(function* () {
       writeSemaphore.withPermits(1)(
         Effect.gen(function* () {
           const current = yield* getSettingsFromCache;
+          yield* validateMcpGatewayProfileNames(patch, settingsPath);
           const now = DateTime.formatIso(yield* DateTime.now);
           const nextPersisted = yield* persistProviderEnvironmentSecrets(
             current,

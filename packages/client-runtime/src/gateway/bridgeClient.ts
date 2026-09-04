@@ -30,6 +30,7 @@ const METHODS = new Set<keyof GatewayRuntimePort>([
   "listEnvironments",
   "getEnvironmentStatus",
   "listProfiles",
+  "resolveProfileModelSelection",
   "listProjects",
   "listThreads",
   "getThread",

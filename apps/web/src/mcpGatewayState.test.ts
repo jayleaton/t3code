@@ -66,21 +66,26 @@ describe("MCP gateway grants", () => {
     });
   });
 
-  it("persists the delivery scope for webhook-capable environments", () => {
+  it("strips all non-baseline scopes from loaded and saved grants", () => {
     setMcpGatewayGrants({
-      "a534b83f-a352-44d8-aedc-c4230c179390": ["read", "delivery"],
+      "a534b83f-a352-44d8-aedc-c4230c179390": ["read", "delivery", "control"],
     });
 
+    expect(JSON.parse(localStorage.getItem(MCP_GATEWAY_GRANTS_KEY) ?? "null")).toEqual({
+      "a534b83f-a352-44d8-aedc-c4230c179390": ["read"],
+    });
     expect(getMcpGatewayGrants()).toEqual({
-      "a534b83f-a352-44d8-aedc-c4230c179390": ["read", "delivery"],
+      "a534b83f-a352-44d8-aedc-c4230c179390": ["read"],
     });
 
     localStorage.setItem(
       MCP_GATEWAY_GRANTS_KEY,
-      JSON.stringify({ "2549ba75-2a91-4554-8baa-88e6ae0efa48": ["delivery"] }),
+      JSON.stringify({
+        "2549ba75-2a91-4554-8baa-88e6ae0efa48": ["create", "delivery", "control"],
+      }),
     );
     expect(getMcpGatewayGrants()).toEqual({
-      "2549ba75-2a91-4554-8baa-88e6ae0efa48": ["delivery"],
+      "2549ba75-2a91-4554-8baa-88e6ae0efa48": ["create"],
     });
   });
 });

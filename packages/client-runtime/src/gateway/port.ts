@@ -113,6 +113,11 @@ export interface GatewayRuntimePort {
   listEnvironments(): Promise<ReadonlyArray<GatewayEnvironmentSummary>>;
   getEnvironmentStatus(environmentId: string): Promise<Record<string, unknown>>;
   listProfiles?(environmentId: string): Promise<ReadonlyArray<GatewayProfile>>;
+  /** Resolve readable profile labels against the environment's live provider catalog. */
+  resolveProfileModelSelection?(
+    environmentId: string,
+    profile: GatewayProfile,
+  ): Promise<GatewayProfileModelSelection | undefined>;
   listProjects(environmentId: string): Promise<GatewayPage<Record<string, unknown>>>;
   listThreads(environmentId: string): Promise<GatewayPage<Record<string, unknown>>>;
   getThread(environmentId: string, threadId: string): Promise<Record<string, unknown>>;
