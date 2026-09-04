@@ -64,12 +64,16 @@ function isStaleRequestFailureDetail(payload: Record<string, unknown> | null): b
 }
 
 // Scans the read model's activities, which the projector caps at the most
-// recent 500 plus pending async questions. Async questions remain actionable
-// while the agent works, so they must not expire with the activity window.
-function hasOpenBlockingRequest(thread: {
+// recent 500. That bound is safe here: an OPEN approval/user-input request
+// blocks its turn, so the thread cannot accumulate hundreds of later
+// activities while one is outstanding — a request that has scrolled out of
+// the window is one whose turn kept running, i.e. it was resolved or went
+// stale. (The projection pipeline's pendingApprovalCount reads the same
+// capped stream and stays consistent with this view.)
+function openBlockingRequests(thread: {
   readonly activities: ReadonlyArray<{ readonly kind: string; readonly payload: unknown }>;
-}): boolean {
-  const openRequestIds = new Set<string>();
+}): ReadonlyMap<string, "approval" | "user-input"> {
+  const openRequests = new Map<string, "approval" | "user-input">();
   for (const activity of thread.activities) {
     const payload =
       typeof activity.payload === "object" && activity.payload !== null
@@ -77,19 +81,27 @@ function hasOpenBlockingRequest(thread: {
         : null;
     const requestId = typeof payload?.requestId === "string" ? payload.requestId : null;
     if (requestId === null) continue;
-    if (activity.kind === "approval.requested" || activity.kind === "user-input.requested") {
-      openRequestIds.add(requestId);
+    if (activity.kind === "approval.requested") {
+      openRequests.set(requestId, "approval");
+    } else if (activity.kind === "user-input.requested") {
+      openRequests.set(requestId, "user-input");
     } else if (activity.kind === "approval.resolved" || activity.kind === "user-input.resolved") {
-      openRequestIds.delete(requestId);
+      openRequests.delete(requestId);
     } else if (
       (activity.kind === "provider.approval.respond.failed" ||
         activity.kind === "provider.user-input.respond.failed") &&
       isStaleRequestFailureDetail(payload)
     ) {
-      openRequestIds.delete(requestId);
+      openRequests.delete(requestId);
     }
   }
-  return openRequestIds.size > 0;
+  return openRequests;
+}
+
+function hasOpenBlockingRequest(thread: {
+  readonly activities: ReadonlyArray<{ readonly kind: string; readonly payload: unknown }>;
+}): boolean {
+  return openBlockingRequests(thread).size > 0;
 }
 
 /** Apply the shared shell-level rule to the detailed command read model. */
@@ -359,6 +371,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
+          ...(command.profileSnapshot === undefined
+            ? {}
+            : { profileSnapshot: command.profileSnapshot }),
           branch: command.branch,
           worktreePath: command.worktreePath,
           createdAt: command.createdAt,
@@ -1046,6 +1061,55 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdAt: command.createdAt,
         },
       };
+    }
+
+    case "thread.approval.batch-respond": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const openRequests = openBlockingRequests(thread);
+      const seen = new Set<string>();
+      for (const response of command.responses) {
+        if (seen.has(response.requestId)) {
+          return yield* Effect.fail(
+            new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: `approval request ${response.requestId} appears more than once`,
+            }),
+          );
+        }
+        seen.add(response.requestId);
+        if (openRequests.get(response.requestId) !== "approval") {
+          return yield* Effect.fail(
+            new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: `approval request ${response.requestId} is not pending`,
+            }),
+          );
+        }
+      }
+      return yield* Effect.forEach(command.responses, (response) =>
+        withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+          metadata: { requestId: response.requestId },
+        }).pipe(
+          Effect.map((base) => ({
+            ...base,
+            type: "thread.approval-response-requested" as const,
+            payload: {
+              threadId: command.threadId,
+              requestId: response.requestId,
+              decision: response.decision,
+              createdAt: command.createdAt,
+            },
+          })),
+        ),
+      );
     }
 
     case "thread.approval.respond": {

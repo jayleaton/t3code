@@ -334,6 +334,9 @@ export function projectEvent(
             modelSelection: payload.modelSelection,
             runtimeMode: payload.runtimeMode,
             interactionMode: payload.interactionMode,
+            ...(payload.profileSnapshot === undefined
+              ? {}
+              : { profileSnapshot: payload.profileSnapshot }),
             branch: payload.branch,
             worktreePath: payload.worktreePath,
             latestTurn: null,

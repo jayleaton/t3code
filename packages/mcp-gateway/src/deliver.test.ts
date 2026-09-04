@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "@effect/vitest";
 
-import { createPinnedWebhookRequestOptions, resolveWebhookDestination } from "./deliver.ts";
+import {
+  createPinnedWebhookRequestOptions,
+  resolveWebhookDestination,
+  startWebhookDeliveryWorker,
+} from "./deliver.ts";
+import { createGatewayEventStore, type WebhookTarget } from "./events.ts";
 
 const target = {
   url: "https://hooks.example.com/status?source=t3",
@@ -18,6 +23,68 @@ describe("webhook delivery network policy", () => {
     await expect(resolveWebhookDestination(target.url, lookup)).rejects.toThrow(
       "public network destination",
     );
+  });
+
+  it("rejects carrier-grade NAT destinations used by private overlay networks", async () => {
+    const lookup = vi.fn(async () => [{ address: "100.100.100.100", family: 4 as const }]);
+
+    await expect(resolveWebhookDestination(target.url, lookup)).rejects.toThrow(
+      "public network destination",
+    );
+  });
+
+  it("stops webhook delivery immediately when delivery scope is revoked", async () => {
+    const store = createGatewayEventStore();
+    const { webhook } = store.registerWebhook({
+      environmentId: "env-1",
+      url: "https://example.com/hook",
+    });
+    store.emit({ environmentId: "env-1", type: "thread.completed" });
+    let authorized = false;
+    const sender = vi.fn(async () => ({ ok: true, retryable: false }));
+    const worker = startWebhookDeliveryWorker(store, {
+      intervalMs: 60_000,
+      isAuthorized: () => authorized,
+      sender,
+    });
+
+    await worker.runOnce();
+    expect(sender).not.toHaveBeenCalled();
+    expect(store.webhookById(webhook.webhookId)?.ackedSequence).toBe(0);
+
+    authorized = true;
+    await worker.runOnce();
+    expect(sender).toHaveBeenCalledOnce();
+    expect(store.webhookById(webhook.webhookId)?.ackedSequence).toBe(1);
+    worker.stop();
+    store.close();
+  });
+
+  it("does not let revoked deliveries starve authorized webhooks in the same due batch", async () => {
+    const store = createGatewayEventStore();
+    for (let index = 0; index < 32; index += 1) {
+      store.registerWebhook({
+        environmentId: "revoked",
+        url: `https://example.com/revoked-${index}`,
+      });
+    }
+    store.registerWebhook({ environmentId: "allowed", url: "https://example.com/allowed" });
+    store.emit({ environmentId: "revoked", type: "thread.completed" });
+    store.emit({ environmentId: "allowed", type: "thread.completed" });
+    const sender = vi.fn(async (_delivery: WebhookTarget) => ({ ok: true, retryable: false }));
+    const worker = startWebhookDeliveryWorker(store, {
+      intervalMs: 60_000,
+      batchSize: 32,
+      isAuthorized: (environmentId) => environmentId === "allowed",
+      sender,
+    });
+
+    await worker.runOnce();
+
+    expect(sender).toHaveBeenCalledOnce();
+    expect(sender.mock.calls[0]?.[0].url).toBe("https://example.com/allowed");
+    worker.stop();
+    store.close();
   });
 
   it("pins the validated DNS address and cannot follow redirects", async () => {

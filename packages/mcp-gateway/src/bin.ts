@@ -70,8 +70,11 @@ const gateway = createMcpGateway({
   grants: bridge.getGrants,
   profiles: bridge.getProfiles,
   events: eventStore,
+  health: bridge.getHealth,
 });
-const deliveryWorker = startWebhookDeliveryWorker(eventStore);
+const deliveryWorker = startWebhookDeliveryWorker(eventStore, {
+  isAuthorized: (environmentId) => bridge.getGrants()[environmentId]?.includes("delivery") === true,
+});
 const startup = await bridge.ready;
 if (startup.status === "degraded") {
   process.stderr.write(`${JSON.stringify({ component: "t3-mcp-gateway", ...startup })}\n`);

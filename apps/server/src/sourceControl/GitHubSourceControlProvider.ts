@@ -236,6 +236,7 @@ export const make = Effect.gen(function* () {
           headSelector: input.headSelector,
           title: input.title,
           bodyFile: input.bodyFile,
+          ...(input.draft === undefined ? {} : { draft: input.draft }),
         })
         .pipe(
           Effect.mapError(

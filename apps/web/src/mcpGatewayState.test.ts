@@ -69,22 +69,50 @@ describe("MCP gateway grants", () => {
     });
   });
 
+  it("persists the delivery scope for webhook-capable environments", () => {
+    setMcpGatewayGrants({
+      "a534b83f-a352-44d8-aedc-c4230c179390": ["read", "delivery"],
+    });
+
+    expect(getMcpGatewayGrants()).toEqual({
+      "a534b83f-a352-44d8-aedc-c4230c179390": ["read", "delivery"],
+    });
+
+    localStorage.setItem(
+      MCP_GATEWAY_GRANTS_KEY,
+      JSON.stringify({ "2549ba75-2a91-4554-8baa-88e6ae0efa48": ["delivery"] }),
+    );
+    expect(getMcpGatewayGrants()).toEqual({
+      "2549ba75-2a91-4554-8baa-88e6ae0efa48": ["delivery"],
+    });
+  });
+
   it("persists valid named profiles and drops malformed entries", () => {
     setMcpGatewayProfiles([
       {
+        profileId: "profile_andy",
         name: "Andy",
         modelSelection: { instanceId: "glm", model: "glm-5.3" },
+        reasoningEffort: "medium",
         runtimeMode: "full-access",
         interactionMode: "default",
+        revision: 1,
+        createdAt: "2026-09-04T00:00:00.000Z",
+        updatedAt: "2026-09-04T00:00:00.000Z",
       },
     ]);
     expect(JSON.parse(localStorage.getItem(MCP_GATEWAY_PROFILES_KEY) ?? "null")).toHaveLength(1);
     expect(getMcpGatewayProfiles()).toEqual([
       {
+        profileId: "profile_andy",
         name: "Andy",
         modelSelection: { instanceId: "glm", model: "glm-5.3" },
+        reasoningEffort: "medium",
         runtimeMode: "full-access",
         interactionMode: "default",
+        revision: 1,
+        createdAt: "2026-09-04T00:00:00.000Z",
+        updatedAt: "2026-09-04T00:00:00.000Z",
       },
     ]);
 
@@ -97,6 +125,14 @@ describe("MCP gateway grants", () => {
           modelSelection: { instanceId: "codex", model: "gpt-5" },
           runtimeMode: "approval-required",
           interactionMode: "plan",
+        },
+        {
+          profileId: 42,
+          name: "Invalid identity",
+          modelSelection: { instanceId: "codex", model: "gpt-5" },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          revision: -1,
         },
       ]),
     );

@@ -109,6 +109,10 @@ export function createBridgeRuntimePort(input: {
   readonly port: GatewayRuntimePort;
   readonly getGrants: () => GatewayGrants;
   readonly getProfiles: () => ReadonlyArray<GatewayProfile>;
+  readonly getHealth: () => {
+    readonly bridge: "connected" | "disconnected" | "degraded";
+    readonly degradedReasons: ReadonlyArray<string>;
+  };
   readonly ready: Promise<GatewayBridgeStartupResult>;
   readonly close: () => Promise<void>;
 } {
@@ -119,16 +123,23 @@ export function createBridgeRuntimePort(input: {
     port: input.port,
     maxPayload: 1024 * 1024,
   });
+  let startupStatus: GatewayBridgeStartupResult | { readonly status: "starting" } = {
+    status: "starting",
+  };
   const ready = new Promise<GatewayBridgeStartupResult>((resolve) => {
-    server.once("listening", () => resolve({ status: "running" }));
-    server.once("error", (error: NodeJS.ErrnoException) =>
-      resolve({
+    server.once("listening", () => {
+      startupStatus = { status: "running" };
+      resolve(startupStatus);
+    });
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      startupStatus = {
         status: "degraded",
         code: error.code === "EADDRINUSE" ? "address_in_use" : "listen_failed",
         port: input.port,
         message: error.message,
-      }),
-    );
+      };
+      resolve(startupStatus);
+    });
   });
   // WebSocketServer reports listen failures through EventEmitter. Keep an error listener
   // installed after startup so a degraded companion cannot terminate its host process.
@@ -272,6 +283,26 @@ export function createBridgeRuntimePort(input: {
   return {
     getGrants: () => grants,
     getProfiles: () => profiles,
+    getHealth: () => {
+      if (startupStatus.status === "degraded") {
+        return { bridge: "degraded" as const, degradedReasons: [startupStatus.message] };
+      }
+      if (
+        startupStatus.status === "running" &&
+        client !== null &&
+        client.readyState === client.OPEN
+      ) {
+        return { bridge: "connected" as const, degradedReasons: [] };
+      }
+      return {
+        bridge: "disconnected" as const,
+        degradedReasons: [
+          startupStatus.status === "starting"
+            ? "Gateway bridge is still starting."
+            : "No configured T3 client is connected to the gateway bridge.",
+        ],
+      };
+    },
     ready,
     port: {
       listEnvironments: () => invoke("listEnvironments", []),
@@ -287,7 +318,9 @@ export function createBridgeRuntimePort(input: {
       createThread: (request) => invoke("createThread", [request]),
       sendMessage: (request) => invoke("sendMessage", [request]),
       controlThread: (request) => invoke("controlThread", [request]),
+      respondToApprovals: (request) => invoke("respondToApprovals", [request]),
       respondToApproval: (request) => invoke("respondToApproval", [request]),
+      executeOperation: (request) => invoke("executeOperation", [request]),
     },
     close: () =>
       new Promise((resolve, reject) => {

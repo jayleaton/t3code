@@ -2019,6 +2019,7 @@ pending_approval_requests AS (
                 modelSelection: row.modelSelection,
                 runtimeMode: row.runtimeMode,
                 interactionMode: row.interactionMode,
+                ...(row.profileSnapshot === null ? {} : { profileSnapshot: row.profileSnapshot }),
                 branch: row.branch,
                 worktreePath: row.worktreePath,
                 ...(row.linkedPullRequest === null
@@ -2232,6 +2233,7 @@ pending_approval_requests AS (
                   modelSelection: row.modelSelection,
                   runtimeMode: row.runtimeMode,
                   interactionMode: row.interactionMode,
+                  ...(row.profileSnapshot === null ? {} : { profileSnapshot: row.profileSnapshot }),
                   branch: row.branch,
                   worktreePath: row.worktreePath,
                   ...(row.linkedPullRequest === null
@@ -2372,6 +2374,9 @@ pending_approval_requests AS (
                       modelSelection: row.modelSelection,
                       runtimeMode: row.runtimeMode,
                       interactionMode: row.interactionMode,
+                      ...(row.profileSnapshot === null
+                        ? {}
+                        : { profileSnapshot: row.profileSnapshot }),
                       branch: row.branch,
                       worktreePath: row.worktreePath,
                       ...(row.linkedPullRequest === null
@@ -2520,6 +2525,7 @@ pending_approval_requests AS (
                 modelSelection: row.modelSelection,
                 runtimeMode: row.runtimeMode,
                 interactionMode: row.interactionMode,
+                ...(row.profileSnapshot === null ? {} : { profileSnapshot: row.profileSnapshot }),
                 branch: row.branch,
                 worktreePath: row.worktreePath,
                 ...(row.linkedPullRequest === null

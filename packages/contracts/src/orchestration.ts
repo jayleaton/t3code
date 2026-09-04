@@ -482,6 +482,19 @@ export const ThreadLinkedPullRequest = Schema.Struct({
   url: TrimmedNonEmptyString,
 });
 export type ThreadLinkedPullRequest = typeof ThreadLinkedPullRequest.Type;
+export const ThreadProfileSnapshot = Schema.Struct({
+  profileId: Schema.NullOr(TrimmedNonEmptyString),
+  profileName: Schema.NullOr(TrimmedNonEmptyString),
+  revision: Schema.NullOr(NonNegativeInt),
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+  effectiveSource: Schema.Struct({
+    modelSelection: Schema.Literals(["profile", "thread-override", "fallback"]),
+    runtimeMode: Schema.Literals(["profile", "thread-override", "fallback"]),
+    interactionMode: Schema.Literals(["profile", "thread-override", "fallback"]),
+    reasoningEffort: Schema.Literals(["profile", "thread-override", "fallback"]),
+  }),
+});
+export type ThreadProfileSnapshot = typeof ThreadProfileSnapshot.Type;
 
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
@@ -492,6 +505,7 @@ export const OrchestrationThread = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  profileSnapshot: Schema.optional(ThreadProfileSnapshot),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
@@ -570,6 +584,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  profileSnapshot: Schema.optional(ThreadProfileSnapshot),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
@@ -798,6 +813,7 @@ const ThreadCreateCommand = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  profileSnapshot: Schema.optional(ThreadProfileSnapshot),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
@@ -1003,6 +1019,16 @@ const ThreadTurnInterruptCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadApprovalBatchRespondCommand = Schema.Struct({
+  type: Schema.Literal("thread.approval.batch-respond"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  responses: Schema.Array(
+    Schema.Struct({ requestId: ApprovalRequestId, decision: ProviderApprovalDecision }),
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(100)),
+  createdAt: IsoDateTime,
+});
+
 const ThreadApprovalRespondCommand = Schema.Struct({
   type: Schema.Literal("thread.approval.respond"),
   commandId: CommandId,
@@ -1062,6 +1088,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
+  ThreadApprovalBatchRespondCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -1090,6 +1117,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
+  ThreadApprovalBatchRespondCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -1283,6 +1311,7 @@ export const ThreadCreatedPayload = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  profileSnapshot: Schema.optional(ThreadProfileSnapshot),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,

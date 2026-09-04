@@ -38,7 +38,9 @@ const METHODS = new Set<keyof GatewayRuntimePort>([
   "createThread",
   "sendMessage",
   "controlThread",
+  "respondToApprovals",
   "respondToApproval",
+  "executeOperation",
 ]);
 
 async function proof(token: string, value: string): Promise<string> {
