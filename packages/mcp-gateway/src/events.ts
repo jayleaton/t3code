@@ -22,6 +22,18 @@ export interface GatewayEvent {
   readonly data: Readonly<Record<string, unknown>>;
 }
 
+export interface GatewayDeliveryFailure {
+  readonly failureId: string;
+  readonly environmentId: string;
+  readonly type: "delivery.failed";
+  readonly authoritativeSequence: null;
+  readonly occurredAt: string;
+  readonly webhookId: string;
+  readonly eventId: string;
+  readonly attempts: number;
+  readonly error: string;
+}
+
 export interface GatewaySubscription {
   readonly subscriptionId: string;
   readonly environmentId: string;
@@ -239,6 +251,16 @@ CREATE TABLE IF NOT EXISTS deliveries (
   FOREIGN KEY (webhookId) REFERENCES webhooks(webhookId) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS deliveries_due ON deliveries(state, nextAttemptAt);
+CREATE TABLE IF NOT EXISTS delivery_failures (
+  failureId TEXT PRIMARY KEY,
+  environmentId TEXT NOT NULL,
+  webhookId TEXT NOT NULL,
+  eventId TEXT NOT NULL,
+  occurredAt TEXT NOT NULL,
+  attempts INTEGER NOT NULL,
+  error TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS delivery_failures_environment ON delivery_failures(environmentId, occurredAt);
 CREATE TABLE IF NOT EXISTS idempotency (
   key TEXT PRIMARY KEY,
   payload TEXT NOT NULL,
@@ -260,9 +282,6 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA synchronous = NORMAL;");
   db.exec(SCHEMA);
-  // A process crash may leave a reservation without a receipt. It is safe to
-  // release only those placeholders on restart so the caller can retry.
-  db.prepare("DELETE FROM idempotency WHERE result = 'null'").run();
   const listeners = new Set<(event: GatewayEvent) => void>();
 
   const eventFromRow = (row: Record<string, unknown>): GatewayEvent => {
@@ -850,7 +869,7 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
       outcome: WebhookAttemptOutcome,
       error?: string,
       ackedSequence?: number,
-    ): { readonly done: boolean; readonly deliveryFailedEvent: GatewayEvent | null } => {
+    ): { readonly done: boolean; readonly deliveryFailedEvent: GatewayDeliveryFailure | null } => {
       const webhook = webhookById(webhookId);
       const event = eventById(eventId);
       if (webhook === undefined || event === undefined)
@@ -874,19 +893,31 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
         db.prepare(
           "UPDATE deliveries SET state = 'failed', lastError = ? WHERE webhookId = ? AND eventId = ?",
         ).run(error ?? "delivery failed", webhookId, eventId);
-        const deliveryFailedEvent = emit({
+        const failureId = newId("delivery_failure");
+        const failureError = error ?? "delivery failed";
+        const occurredAt = now();
+        db.prepare(
+          "INSERT INTO delivery_failures (failureId, environmentId, webhookId, eventId, occurredAt, attempts, error) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ).run(
+          failureId,
+          webhook.environmentId,
+          webhookId,
+          eventId,
+          occurredAt,
+          attempts,
+          failureError,
+        );
+        const deliveryFailedEvent: GatewayDeliveryFailure = {
+          failureId,
           environmentId: webhook.environmentId,
           type: "delivery.failed",
-          ...(event.threadId === undefined ? {} : { threadId: event.threadId }),
-          ...(event.correlationId === undefined ? {} : { correlationId: event.correlationId }),
-          data: { webhookId, eventId, attempts, error: error ?? "delivery failed" },
-        });
-        // delivery.failed is durable health state only; emit() intentionally does
-        // not enqueue it for webhooks, preventing recursive failure cascades.
-        db.prepare("DELETE FROM deliveries WHERE webhookId = ? AND eventId = ?").run(
+          authoritativeSequence: null,
+          occurredAt,
           webhookId,
-          deliveryFailedEvent.eventId,
-        );
+          eventId,
+          attempts,
+          error: failureError,
+        };
         return { done: true, deliveryFailedEvent };
       }
       // Bounded exponential backoff with a hard cap.

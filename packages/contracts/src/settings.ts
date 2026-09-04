@@ -585,6 +585,26 @@ export const BackgroundActivitySettings = Schema.Struct({
 }).pipe(Schema.withDecodingDefault(Effect.succeed({})));
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
+export const McpGatewayProfile = Schema.Struct({
+  profileId: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  revision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  modelSelection: ModelSelection,
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+  runtimeMode: Schema.Literals([
+    "approval-required",
+    "auto-accept-edits",
+    "auto",
+    "full-access",
+    "read-only",
+  ]),
+  interactionMode: Schema.Literals(["default", "plan"]),
+  environmentIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  createdAt: TrimmedNonEmptyString,
+  updatedAt: TrimmedNonEmptyString,
+});
+export type McpGatewayProfile = typeof McpGatewayProfile.Type;
+
 export const ServerSettings = Schema.Struct({
   // Legacy token-by-token assistant output. Deliberately a fresh key (was
   // `enableAssistantStreaming`): decoding drops the old key, so everyone,
@@ -628,6 +648,9 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
   addProjectBaseDirectory: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  mcpGatewayProfiles: Schema.Array(McpGatewayProfile).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(
       Effect.succeed({
@@ -827,6 +850,7 @@ export const ServerSettingsPatch = Schema.Struct({
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
+  mcpGatewayProfiles: Schema.optionalKey(Schema.Array(McpGatewayProfile)),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   sourceControlWritingStyle: Schema.optionalKey(
     Schema.Struct({

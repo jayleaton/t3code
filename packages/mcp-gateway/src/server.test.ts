@@ -145,7 +145,7 @@ describe("MCP gateway server", () => {
         retryable: false,
         environmentId: "local",
         requestId: "send-1",
-        details: { requiredScope: "send" },
+        details: { requiredScopes: ["send"], missingScopes: ["send"] },
       },
     });
 
@@ -217,12 +217,8 @@ describe("MCP gateway server", () => {
 
     currentGrants = { local: ["read"] };
     events.emit({ environmentId: "local", type: "thread.started", threadId: "thread-1" });
-    await expect.poll(() => notifications).toHaveLength(4);
+    await expect.poll(() => notifications).toHaveLength(3);
     expect(notifications.slice(2)).toEqual([
-      expect.objectContaining({
-        subscriptionId,
-        event: expect.objectContaining({ sequence: 4, type: "thread.started" }),
-      }),
       expect.objectContaining({
         subscriptionId,
         event: expect.objectContaining({ sequence: 5, type: "thread.started" }),
@@ -236,11 +232,8 @@ describe("MCP gateway server", () => {
       schemaVersion: "3",
       data: {
         subscriptionId,
-        items: [
-          expect.objectContaining({ sequence: 4, type: "thread.started" }),
-          expect.objectContaining({ sequence: 5, type: "thread.started" }),
-        ],
-        ackedSequence: 3,
+        items: [expect.objectContaining({ sequence: 5, type: "thread.started" })],
+        ackedSequence: 4,
       },
     });
 

@@ -5,7 +5,10 @@ import * as Effect from "effect/Effect";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import { EnvironmentRegistry } from "../connection/registry.ts";
-import { createGatewayRuntimePortFromContext } from "./runtimePort.ts";
+import {
+  createGatewayRuntimePortFromContext,
+  gatewayEventFromOrchestration,
+} from "./runtimePort.ts";
 
 const environmentId = EnvironmentId.make("remote-1");
 const testCrypto = Crypto.make({
@@ -14,6 +17,44 @@ const testCrypto = Crypto.make({
 });
 
 describe("Gateway Runtime Port", () => {
+  it("redacts raw provider output and host paths before the bridge boundary", () => {
+    const projected = gatewayEventFromOrchestration(environmentId, {
+      eventId: "event-1",
+      sequence: 4,
+      occurredAt: "2026-09-04T00:00:00.000Z",
+      type: "thread.activity-appended",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      correlationId: "corr-1",
+      payload: {
+        activity: {
+          kind: "approval.requested",
+          payload: {
+            requestId: "approval-1",
+            providerOutput: "secret output",
+            hostPath: "/home/user/private",
+            detail: "provider said secret output from /home/user/private",
+          },
+        },
+      },
+    } as never);
+
+    expect(projected).toMatchObject({
+      environmentId: "remote-1",
+      type: "approval.requested",
+      threadId: "thread-1",
+      data: {
+        serverSequence: 4,
+        serverEventType: "thread.activity-appended",
+        activityKind: "approval.requested",
+        requestId: "approval-1",
+      },
+    });
+    expect(projected.data).not.toHaveProperty("summary");
+    expect(JSON.stringify(projected)).not.toContain("secret output");
+    expect(JSON.stringify(projected)).not.toContain("/home/user/private");
+  });
+
   it.effect("projects the existing registry without starting or replacing it", () =>
     Effect.gen(function* () {
       const entries = yield* SubscriptionRef.make(

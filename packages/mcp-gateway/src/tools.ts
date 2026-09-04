@@ -18,6 +18,7 @@ export interface GatewayToolContext {
   readonly port: GatewayRuntimePort;
   readonly grants: GatewayGrantSource;
   readonly profiles?: GatewayProfileSource;
+  readonly repositoryAllowlist?: ReadonlyArray<string>;
   readonly events?: GatewayEventStore;
   readonly health?: () => {
     readonly bridge: "connected" | "disconnected" | "degraded";
@@ -32,6 +33,15 @@ function currentGrants(source: GatewayGrantSource): GatewayGrants {
 function currentProfiles(source: GatewayProfileSource | undefined): ReadonlyArray<GatewayProfile> {
   if (source === undefined) return [];
   return typeof source === "function" ? source() : source;
+}
+
+async function authoritativeProfiles(
+  context: GatewayToolContext,
+  environmentId: string,
+): Promise<ReadonlyArray<GatewayProfile>> {
+  return context.port.listProfiles === undefined
+    ? currentProfiles(context.profiles)
+    : context.port.listProfiles(environmentId);
 }
 
 function record(input: unknown): Record<string, unknown> {
@@ -57,10 +67,10 @@ function requiredString(input: Record<string, unknown>, key: string): string {
   return value;
 }
 
-function environmentWithScope(
+function environmentWithScopes(
   context: GatewayToolContext,
   input: Record<string, unknown>,
-  scope: GatewayScope,
+  requiredScopes: ReadonlyArray<GatewayScope>,
 ): string {
   const environmentId = requiredString(input, "environmentId");
   const scopes = currentGrants(context.grants)[environmentId];
@@ -72,16 +82,25 @@ function environmentWithScope(
       environmentId,
     });
   }
-  if (!scopes.includes(scope)) {
+  const missingScopes = requiredScopes.filter((scope) => !scopes.includes(scope));
+  if (missingScopes.length > 0) {
     throw new GatewayError({
       code: "scope_required",
-      message: `Scope ${scope} is required for environment ${environmentId}.`,
+      message: `Scope ${missingScopes.join(" and ")} is required for environment ${environmentId}.`,
       retryable: false,
       environmentId,
-      details: { requiredScope: scope },
+      details: { requiredScopes, missingScopes },
     });
   }
   return environmentId;
+}
+
+function environmentWithScope(
+  context: GatewayToolContext,
+  input: Record<string, unknown>,
+  scope: GatewayScope,
+): string {
+  return environmentWithScopes(context, input, [scope]);
 }
 
 function idFor(kind: string, idempotencyKey: string): string {
@@ -205,6 +224,68 @@ function pullRequestRef(input: Record<string, unknown>) {
   };
 }
 
+function assertRepositoryAllowed(
+  context: GatewayToolContext,
+  environmentId: string,
+  owner: string,
+  repository: string,
+): void {
+  const identity = `${owner}/${repository}`.toLowerCase();
+  const allowlist = context.repositoryAllowlist ?? ["jayleaton/t3code"];
+  if (!allowlist.some((candidate) => candidate.toLowerCase() === identity)) {
+    throw new GatewayError({
+      code: "scope_required",
+      message: `Repository ${identity} is outside the configured write allowlist.`,
+      retryable: false,
+      environmentId,
+      details: { repository: identity, permission: "repository-allowlist" },
+    });
+  }
+}
+
+async function assertProjectRepositoryAllowed(
+  context: GatewayToolContext,
+  environmentId: string,
+  input: Record<string, unknown>,
+): Promise<void> {
+  const projectId = requiredString(input, "projectId");
+  const projects = await context.port.listProjects(environmentId);
+  const project = projects.items.find((candidate) => candidate.id === projectId);
+  const identity =
+    typeof project?.repositoryIdentity === "object" && project.repositoryIdentity !== null
+      ? (project.repositoryIdentity as Record<string, unknown>)
+      : undefined;
+  if (typeof identity?.owner !== "string" || typeof identity.name !== "string") {
+    throw new GatewayError({
+      code: "invalid_input",
+      message: `Project ${projectId} has no authoritative repository identity.`,
+      retryable: false,
+      environmentId,
+    });
+  }
+  const requestedOwner = typeof input.owner === "string" ? input.owner : identity.owner;
+  const rawRepository = typeof input.repository === "string" ? input.repository : identity.name;
+  const requestedRepository = rawRepository.includes("/")
+    ? (rawRepository.split("/", 2)[1] ?? "")
+    : rawRepository;
+  const qualifiedOwner = rawRepository.includes("/")
+    ? (rawRepository.split("/", 2)[0] ?? "")
+    : requestedOwner;
+  if (
+    qualifiedOwner !== identity.owner ||
+    requestedRepository !== identity.name ||
+    requestedOwner !== identity.owner
+  ) {
+    throw new GatewayError({
+      code: "invalid_input",
+      message: "Repository target does not match the selected project identity.",
+      retryable: false,
+      environmentId,
+    });
+  }
+  assertRepositoryAllowed(context, environmentId, identity.owner, identity.name);
+}
+
 function requiredIdempotencyKey(input: Record<string, unknown>): string {
   return requiredString(input, "idempotencyKey");
 }
@@ -244,24 +325,15 @@ async function withIdempotency(
     if (previous !== undefined && previous !== null) return previous;
     const active = pending.get(key);
     if (active !== undefined) return active;
-    throw new GatewayError({
-      code: "request_in_progress",
-      message: "This request id is recovering after an interrupted execution; retry it.",
-      retryable: true,
-      requestId: key,
-    });
+    // Re-issue the exact same authoritative command id after an interrupted
+    // transport. T3's durable command receipt returns the original result and
+    // prevents the underlying side effect from running twice.
   }
   const execution = (async () => {
-    try {
-      const result = await operation();
-      events.forgetRequest(key);
-      events.rememberRequest(key, canonical, result);
-      return result;
-    } catch (error) {
-      // Failed attempts release the key so a corrected retry is possible.
-      events.forgetRequest(key);
-      throw error;
-    }
+    const result = await operation();
+    events.forgetRequest(key);
+    events.rememberRequest(key, canonical, result);
+    return result;
   })();
   pending.set(key, execution);
   try {
@@ -422,7 +494,7 @@ export async function callGatewayTool(
     case "t3_list_profiles": {
       const environmentId = environmentWithScope(context, input, "read");
       return {
-        items: currentProfiles(context.profiles).filter(
+        items: (await authoritativeProfiles(context, environmentId)).filter(
           (profile) =>
             !Array.isArray(profile.environmentIds) ||
             profile.environmentIds.includes(environmentId),
@@ -431,7 +503,7 @@ export async function callGatewayTool(
       };
     }
     case "t3_get_approval_plan": {
-      const environmentId = environmentWithScope(context, input, "read");
+      const environmentId = environmentWithScope(context, input, "approval");
       const thread = await context.port.getThread(environmentId, requiredString(input, "threadId"));
       return approvalPlan(thread);
     }
@@ -489,7 +561,7 @@ export async function callGatewayTool(
       };
     }
     case "t3_list_artifacts": {
-      const environmentId = environmentWithScope(context, input, "read");
+      const environmentId = environmentWithScope(context, input, "artifact");
       const thread = await context.port.getThread(environmentId, requiredString(input, "threadId"));
       const items: Array<Record<string, unknown>> = [];
       for (const message of Array.isArray(thread.messages) ? thread.messages : []) {
@@ -510,7 +582,7 @@ export async function callGatewayTool(
       return { items };
     }
     case "t3_get_artifact": {
-      const environmentId = environmentWithScope(context, input, "read");
+      const environmentId = environmentWithScope(context, input, "artifact");
       const threadId = requiredString(input, "threadId");
       const artifactId = requiredString(input, "artifactId");
       const thread = await context.port.getThread(environmentId, threadId);
@@ -588,16 +660,16 @@ export async function callGatewayTool(
       });
     }
     case "t3_get_pr": {
-      const environmentId = environmentWithScope(context, input, "read");
+      const environmentId = environmentWithScope(context, input, "review");
       return context.port.getPullRequest(environmentId, pullRequestRef(input));
     }
     case "t3_get_pr_checks": {
-      const environmentId = environmentWithScope(context, input, "read");
+      const environmentId = environmentWithScope(context, input, "review");
       const detail = await context.port.getPullRequest(environmentId, pullRequestRef(input));
       return { items: Array.isArray(detail.checks) ? detail.checks : [] };
     }
     case "t3_list_review_comments": {
-      const environmentId = environmentWithScope(context, input, "read");
+      const environmentId = environmentWithScope(context, input, "review");
       const activity = await context.port.getPullRequestActivity(
         environmentId,
         pullRequestRef(input),
@@ -612,7 +684,7 @@ export async function callGatewayTool(
       return { items, unresolvedCount: items.length };
     }
     case "t3_modify_actions": {
-      const environmentId = environmentWithScope(context, input, "control");
+      const environmentId = environmentWithScope(context, input, "approval");
       const idempotencyKey = requiredIdempotencyKey(input);
       const threadId = requiredString(input, "threadId");
       const requestedRevision = Number(input.planRevision);
@@ -726,8 +798,15 @@ export async function callGatewayTool(
     case "t3_reply_review_comment":
     case "t3_apply_review_fixes":
     case "t3_publish_pr": {
-      const environmentId = environmentWithScope(context, input, "control");
+      const requiredScopes: ReadonlyArray<GatewayScope> =
+        name === "t3_apply_patch" || name === "t3_create_branch" || name === "t3_commit_changes"
+          ? ["admin"]
+          : name === "t3_publish_pr"
+            ? ["review", "admin"]
+            : ["review"];
+      const environmentId = environmentWithScopes(context, input, requiredScopes);
       const idempotencyKey = requiredIdempotencyKey(input);
+      await assertProjectRepositoryAllowed(context, environmentId, input);
       if (name === "t3_publish_pr" && input.confirmDestructive !== true) {
         throw new GatewayError({
           code: "destructive_confirmation_required",
@@ -762,6 +841,7 @@ export async function callGatewayTool(
             environmentId,
           });
         }
+        assertRepositoryAllowed(context, environmentId, owner, requiredString(input, "repository"));
       }
       const operations: Record<string, string> = {
         t3_apply_patch: "git.apply_patch",
@@ -792,14 +872,13 @@ export async function callGatewayTool(
       const idempotencyKey = requiredIdempotencyKey(input);
       const profileName = typeof input.profile === "string" ? input.profile.trim() : "";
       const profileIdInput = typeof input.profileId === "string" ? input.profileId.trim() : "";
+      const profiles = await authoritativeProfiles(context, environmentId);
       const profile =
         profileIdInput !== ""
-          ? currentProfiles(context.profiles).find(
-              (candidate) => candidate.profileId === profileIdInput,
-            )
+          ? profiles.find((candidate) => candidate.profileId === profileIdInput)
           : profileName === ""
             ? undefined
-            : currentProfiles(context.profiles).find((candidate) => candidate.name === profileName);
+            : profiles.find((candidate) => candidate.name === profileName);
       if ((profileName !== "" || profileIdInput !== "") && profile === undefined) {
         throw new GatewayError({
           code: "invalid_input",
@@ -931,7 +1010,7 @@ export async function callGatewayTool(
       );
     }
     case "t3_control_thread": {
-      const environmentId = environmentWithScope(context, input, "control");
+      const environmentId = environmentWithScope(context, input, "lifecycle");
       const idempotencyKey = requiredIdempotencyKey(input);
       const rawAction = requiredString(input, "action");
       if (
@@ -963,7 +1042,7 @@ export async function callGatewayTool(
       );
     }
     case "t3_respond_to_approval": {
-      const environmentId = environmentWithScope(context, input, "control");
+      const environmentId = environmentWithScope(context, input, "approval");
       const idempotencyKey = requiredIdempotencyKey(input);
       const rawDecision = requiredString(input, "decision");
       if (
@@ -996,7 +1075,7 @@ export async function callGatewayTool(
     }
     case "t3_approve_actions":
     case "t3_reject_actions": {
-      const environmentId = environmentWithScope(context, input, "control");
+      const environmentId = environmentWithScope(context, input, "approval");
       const threadId = requiredString(input, "threadId");
       const idempotencyKey = requiredIdempotencyKey(input);
       const actionIds = requiredStringArray(input, "actionIds");
@@ -1125,7 +1204,7 @@ export async function callGatewayTool(
     }
     case "t3_register_webhook": {
       const events = requireEventStore(context);
-      const environmentId = environmentWithScope(context, input, "delivery");
+      const environmentId = environmentWithScopes(context, input, ["read", "delivery"]);
       const { webhook, secret } = events.registerWebhook({
         environmentId,
         url: requiredString(input, "url"),
@@ -1137,7 +1216,7 @@ export async function callGatewayTool(
     }
     case "t3_update_webhook": {
       const events = requireEventStore(context);
-      const environmentId = environmentWithScope(context, input, "delivery");
+      const environmentId = environmentWithScopes(context, input, ["read", "delivery"]);
       const types = Array.isArray(input.types)
         ? input.types.filter((t): t is string => typeof t === "string")
         : undefined;
@@ -1146,7 +1225,7 @@ export async function callGatewayTool(
     }
     case "t3_rotate_webhook_secret": {
       const events = requireEventStore(context);
-      const environmentId = environmentWithScope(context, input, "delivery");
+      const environmentId = environmentWithScopes(context, input, ["read", "delivery"]);
       const { webhook, secret } = events.rotateWebhookSecret(
         environmentId,
         requiredString(input, "webhookId"),
@@ -1155,13 +1234,13 @@ export async function callGatewayTool(
     }
     case "t3_delete_webhook": {
       const events = requireEventStore(context);
-      const environmentId = environmentWithScope(context, input, "delivery");
+      const environmentId = environmentWithScopes(context, input, ["read", "delivery"]);
       events.deleteWebhook(environmentId, requiredString(input, "webhookId"));
       return { deleted: true };
     }
     case "t3_list_webhooks": {
       const events = requireEventStore(context);
-      const environmentId = environmentWithScope(context, input, "read");
+      const environmentId = environmentWithScopes(context, input, ["read", "delivery"]);
       return { items: events.listWebhooks(environmentId) };
     }
     default:

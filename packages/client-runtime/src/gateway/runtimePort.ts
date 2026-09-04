@@ -84,7 +84,7 @@ const threadSnapshot = (environmentId: EnvironmentId, threadId: ThreadId) =>
     );
   });
 
-function gatewayEventFromOrchestration(
+export function gatewayEventFromOrchestration(
   environmentId: EnvironmentId,
   event: OrchestrationEvent,
 ): GatewayRuntimeEvent {
@@ -94,6 +94,10 @@ function gatewayEventFromOrchestration(
     typeof payload.activity === "object" &&
     payload.activity !== null
       ? (payload.activity as Record<string, unknown>)
+      : undefined;
+  const activityPayload =
+    typeof activity?.payload === "object" && activity.payload !== null
+      ? (activity.payload as Record<string, unknown>)
       : undefined;
   const activityKind = typeof activity?.kind === "string" ? activity.kind : undefined;
   const type =
@@ -123,7 +127,10 @@ function gatewayEventFromOrchestration(
     data: {
       serverSequence: event.sequence,
       serverEventType: event.type,
-      payload,
+      ...(activityKind === undefined ? {} : { activityKind }),
+      ...(typeof activityPayload?.requestId === "string"
+        ? { requestId: activityPayload.requestId.slice(0, 256) }
+        : {}),
     },
   };
 }
@@ -202,6 +209,17 @@ export function createGatewayRuntimePort(runtime: GatewayEffectRuntime): Gateway
           const environmentId = EnvironmentId.make(rawEnvironmentId);
           const state = yield* registry.state(environmentId);
           return { environmentId, ...state } as Record<string, unknown>;
+        }),
+      ),
+    listProfiles: (rawEnvironmentId) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          const settings = yield* registry.run(
+            EnvironmentId.make(rawEnvironmentId),
+            request(WS_METHODS.serverGetSettings, {}),
+          );
+          return settings.mcpGatewayProfiles;
         }),
       ),
     listProjects: (rawEnvironmentId) =>

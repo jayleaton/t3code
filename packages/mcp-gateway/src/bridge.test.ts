@@ -142,7 +142,7 @@ describe("gateway bridge", () => {
     expect(onRequest).not.toHaveBeenCalled();
 
     const closedClient = closed(client);
-    client.send(JSON.stringify({ type: "configure", grants: { stale: ["admin"] } }));
+    client.send(JSON.stringify({ type: "configure", grants: { stale: ["unknown-scope"] } }));
     await closedClient;
     await expect(bridge.port.listEnvironments()).rejects.toThrow("No configured T3 client");
     await bridge.close();

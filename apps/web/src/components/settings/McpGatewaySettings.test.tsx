@@ -1,3 +1,4 @@
+import { ProviderInstanceId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -66,10 +67,17 @@ describe("MCP environment grant matrix", () => {
       <McpProfileList
         profiles={[
           {
+            profileId: "profile-andy",
             name: "Andy",
-            modelSelection: { instanceId: "glm", model: "glm-5.3" },
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("glm"),
+              model: "glm-5.3",
+            },
             runtimeMode: "full-access",
             interactionMode: "default",
+            revision: 1,
+            createdAt: "2026-09-04T00:00:00.000Z",
+            updatedAt: "2026-09-04T00:00:00.000Z",
           },
         ]}
         onChange={vi.fn()}

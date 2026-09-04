@@ -18,6 +18,31 @@ const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 
+describe("ServerSettings MCP gateway profiles", () => {
+  it("stores revisioned server-owned profiles including read-only profiles", () => {
+    const profile = {
+      profileId: "profile-andy",
+      name: "Andy",
+      revision: 3,
+      modelSelection: { instanceId: "codex", model: "gpt-5.6" },
+      reasoningEffort: "high",
+      runtimeMode: "read-only" as const,
+      interactionMode: "default" as const,
+      environmentIds: ["local"],
+      createdAt: "2026-09-04T00:00:00.000Z",
+      updatedAt: "2026-09-04T01:00:00.000Z",
+    };
+
+    expect(decodeServerSettings({ mcpGatewayProfiles: [profile] }).mcpGatewayProfiles).toEqual([
+      profile,
+    ]);
+    expect(decodeServerSettingsPatch({ mcpGatewayProfiles: [profile] }).mcpGatewayProfiles).toEqual(
+      [profile],
+    );
+    expect(DEFAULT_SERVER_SETTINGS.mcpGatewayProfiles).toEqual([]);
+  });
+});
+
 describe("ClientSettings word wrap", () => {
   it("defaults word wrap on", () => {
     expect(decodeClientSettings({}).wordWrap).toBe(true);

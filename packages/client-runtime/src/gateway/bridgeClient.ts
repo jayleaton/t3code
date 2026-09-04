@@ -29,6 +29,7 @@ export interface GatewayBridgeSocket {
 const METHODS = new Set<keyof GatewayRuntimePort>([
   "listEnvironments",
   "getEnvironmentStatus",
+  "listProfiles",
   "listProjects",
   "listThreads",
   "getThread",
@@ -151,7 +152,9 @@ export function connectGatewayBridge(input: {
             ) {
               throw new Error("Invalid gateway bridge cursor configuration.");
             }
-            const environmentIds = Object.keys(input.grants ?? {});
+            const environmentIds = Object.entries(input.grants ?? {})
+              .filter(([, scopes]) => scopes.includes("read"))
+              .map(([environmentId]) => environmentId);
             const rawCursors = candidate.cursors as Record<string, unknown>;
             const afterSequenceByEnvironment: Record<string, number> = {};
             for (const environmentId of environmentIds) {

@@ -176,6 +176,50 @@ describe("gateway event store", () => {
     }
   });
 
+  it("keeps delivery failures outside the server-authoritative sequence", () => {
+    const store = createGatewayEventStore({
+      file: ":memory:",
+      webhookRetryBaseMs: 0,
+      now: () => clock.value,
+      newEventId: () => `evt-${++counter}`,
+    });
+    const { webhook } = store.registerWebhook({
+      environmentId: "env-1",
+      url: "https://example.com/hook",
+    });
+    const first = store.ingest({
+      eventId: "server-1",
+      environmentId: "env-1",
+      sequence: 1,
+      type: "thread.started",
+      occurredAt: clock.value,
+    });
+    const delivery = store.buildDelivery(webhook.webhookId, first.eventId);
+    expect(delivery).toBeDefined();
+    const failed = store.reportDeliveryAttempt(
+      webhook.webhookId,
+      first.eventId,
+      { ok: false, retryable: false },
+      "receiver rejected event",
+    );
+
+    expect(store.latestSequence("env-1")).toBe(1);
+    expect(store.history("env-1", 0, 10).map((event) => event.type)).toEqual(["thread.started"]);
+    expect(failed.deliveryFailedEvent).toMatchObject({
+      type: "delivery.failed",
+      authoritativeSequence: null,
+    });
+    expect(() =>
+      store.ingest({
+        eventId: "server-2",
+        environmentId: "env-1",
+        sequence: 2,
+        type: "thread.completed",
+        occurredAt: clock.value,
+      }),
+    ).not.toThrow();
+  });
+
   it("remembers and recalls request results exactly once", () => {
     const store = makeStore();
     expect(store.rememberRequest("key-1", '{"a":1}', { status: "accepted" })).toBe("accepted");
