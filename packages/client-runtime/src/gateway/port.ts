@@ -1,4 +1,4 @@
-export type GatewayScope = "read" | "create" | "send" | "control";
+export type GatewayScope = "read" | "create" | "send" | "control" | "delivery";
 export type GatewayThreadControlAction =
   | "cancel"
   | "stop"
@@ -9,10 +9,21 @@ export type GatewayThreadControlAction =
 export type GatewayApprovalDecision = "accept" | "acceptForSession" | "decline" | "cancel";
 
 export interface GatewayProfile {
+  readonly profileId?: string;
   readonly name: string;
   readonly modelSelection: { readonly instanceId: string; readonly model: string };
-  readonly runtimeMode: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
+  readonly reasoningEffort?: string;
+  readonly runtimeMode:
+    | "approval-required"
+    | "auto-accept-edits"
+    | "auto"
+    | "full-access"
+    | "read-only";
   readonly interactionMode: "default" | "plan";
+  readonly environmentIds?: ReadonlyArray<string>;
+  readonly revision?: number;
+  readonly createdAt?: string;
+  readonly updatedAt?: string;
 }
 
 export interface GatewayProfile {
@@ -50,12 +61,53 @@ export interface GatewayMutationResult {
   readonly messageId?: string;
 }
 
+export interface GatewayRuntimeEvent {
+  readonly eventId: string;
+  readonly sequence: number;
+  readonly occurredAt: string;
+  readonly environmentId: string;
+  readonly type: string;
+  readonly correlationId?: string;
+  readonly threadId?: string;
+  readonly data?: Readonly<Record<string, unknown>>;
+}
+
+export interface GatewayRuntimeEventSubscription {
+  readonly environmentIds: ReadonlyArray<string>;
+  readonly afterSequenceByEnvironment: Readonly<Record<string, number>>;
+}
+
+export interface GatewayRuntimeEventSource {
+  subscribe(
+    listener: (event: GatewayRuntimeEvent) => void,
+    subscription: GatewayRuntimeEventSubscription,
+  ): () => void;
+}
+
 export interface GatewayRuntimePort {
   listEnvironments(): Promise<ReadonlyArray<GatewayEnvironmentSummary>>;
   getEnvironmentStatus(environmentId: string): Promise<Record<string, unknown>>;
   listProjects(environmentId: string): Promise<GatewayPage<Record<string, unknown>>>;
   listThreads(environmentId: string): Promise<GatewayPage<Record<string, unknown>>>;
   getThread(environmentId: string, threadId: string): Promise<Record<string, unknown>>;
+  createAssetUrl(
+    environmentId: string,
+    resource:
+      | { readonly _tag: "attachment"; readonly attachmentId: string }
+      | { readonly _tag: "workspace-file"; readonly threadId: string; readonly path: string },
+  ): Promise<{
+    readonly relativeUrl: string;
+    readonly expiresAt: number;
+    readonly sourcePath?: string | undefined;
+  }>;
+  getPullRequest(
+    environmentId: string,
+    ref: { readonly projectId: string; readonly repository: string; readonly number: number },
+  ): Promise<Record<string, unknown>>;
+  getPullRequestActivity(
+    environmentId: string,
+    ref: { readonly projectId: string; readonly repository: string; readonly number: number },
+  ): Promise<Record<string, unknown>>;
   createThread(input: {
     readonly environmentId: string;
     readonly projectId: string;

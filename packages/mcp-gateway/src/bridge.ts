@@ -2,7 +2,12 @@ import * as NodeCrypto from "node:crypto";
 
 import { WebSocketServer, type WebSocket } from "ws";
 
-import type { GatewayProfile, GatewayRuntimePort, GatewayScope } from "./port.ts";
+import type {
+  GatewayProfile,
+  GatewayRuntimeEvent,
+  GatewayRuntimePort,
+  GatewayScope,
+} from "./port.ts";
 
 export type GatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
 
@@ -15,7 +20,7 @@ export type GatewayBridgeStartupResult =
       readonly message: string;
     };
 
-const GATEWAY_SCOPES = new Set<GatewayScope>(["read", "create", "send", "control"]);
+const GATEWAY_SCOPES = new Set<GatewayScope>(["read", "create", "send", "control", "delivery"]);
 
 function parseGrants(value: unknown): GatewayGrants {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -98,6 +103,8 @@ export function createBridgeRuntimePort(input: {
   readonly requestTimeoutMs?: number;
   readonly authenticationTimeoutMs?: number;
   readonly initialGrants?: GatewayGrants;
+  readonly getEventCursor?: (environmentId: string) => number;
+  readonly onEvent?: (event: GatewayRuntimeEvent) => void;
 }): {
   readonly port: GatewayRuntimePort;
   readonly getGrants: () => GatewayGrants;
@@ -189,6 +196,33 @@ export function createBridgeRuntimePort(input: {
           client = socket;
           configured = true;
           authenticationSignal.removeEventListener("abort", onAuthenticationTimeout);
+          const cursors = Object.fromEntries(
+            Object.keys(nextGrants).map((environmentId) => [
+              environmentId,
+              input.getEventCursor?.(environmentId) ?? 0,
+            ]),
+          );
+          socket.send(JSON.stringify({ type: "configured", cursors }));
+          return;
+        }
+        if (response.type === "event") {
+          if (client !== socket || !configured) return;
+          const event = response.event;
+          if (typeof event !== "object" || event === null || Array.isArray(event)) return;
+          const runtimeEvent = event as Record<string, unknown>;
+          if (
+            typeof runtimeEvent.environmentId !== "string" ||
+            grants[runtimeEvent.environmentId] === undefined ||
+            typeof runtimeEvent.eventId !== "string" ||
+            !Number.isInteger(runtimeEvent.sequence) ||
+            typeof runtimeEvent.type !== "string" ||
+            typeof runtimeEvent.occurredAt !== "string"
+          ) {
+            // A partial grant excludes an environment from forwarding; receiving
+            // an excluded event is ignored rather than disconnecting the bridge.
+            return;
+          }
+          input.onEvent?.(runtimeEvent as unknown as GatewayRuntimeEvent);
           return;
         }
         if (client !== socket) return;
@@ -245,6 +279,11 @@ export function createBridgeRuntimePort(input: {
       listProjects: (environmentId) => invoke("listProjects", [environmentId]),
       listThreads: (environmentId) => invoke("listThreads", [environmentId]),
       getThread: (environmentId, threadId) => invoke("getThread", [environmentId, threadId]),
+      createAssetUrl: (environmentId, resource) =>
+        invoke("createAssetUrl", [environmentId, resource]),
+      getPullRequest: (environmentId, ref) => invoke("getPullRequest", [environmentId, ref]),
+      getPullRequestActivity: (environmentId, ref) =>
+        invoke("getPullRequestActivity", [environmentId, ref]),
       createThread: (request) => invoke("createThread", [request]),
       sendMessage: (request) => invoke("sendMessage", [request]),
       controlThread: (request) => invoke("controlThread", [request]),

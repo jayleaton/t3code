@@ -55,6 +55,12 @@ function makePort(input?: {
       ],
       checkpoints: [{ turnId: "turn-1", files: [{ path: "src/index.ts", kind: "modified" }] }],
     }),
+    createAssetUrl: async () => ({
+      relativeUrl: "/asset",
+      expiresAt: 1_800_000_000_000,
+    }),
+    getPullRequest: async () => ({}),
+    getPullRequestActivity: async () => ({}),
     createThread: async (request) => {
       input?.creates?.push({
         model: request.modelSelection.model,
@@ -98,8 +104,8 @@ function makePort(input?: {
 }
 
 const grants = {
-  local: ["read", "create", "send", "control"],
-  remote: ["read", "create", "send", "control"],
+  local: ["read", "create", "send", "control", "delivery"],
+  remote: ["read", "create", "send", "control", "delivery"],
 } as const;
 
 describe("gateway chat tools", () => {
@@ -319,6 +325,23 @@ describe("gateway v3 event delivery tools", () => {
       threadId: created.threadId,
       action: "stop",
       idempotencyKey: "event-stop-1",
+    });
+    expect(events.latestSequence("local")).toBe(0);
+    events.ingest({
+      environmentId: "local",
+      eventId: "server-event-1",
+      sequence: 1,
+      occurredAt: "2026-09-04T00:00:00.000Z",
+      type: "thread.started",
+      threadId: created.threadId as string,
+    });
+    events.ingest({
+      environmentId: "local",
+      eventId: "server-event-2",
+      sequence: 2,
+      occurredAt: "2026-09-04T00:00:01.000Z",
+      type: "thread.state_changed",
+      threadId: created.threadId as string,
     });
 
     const replay = await callGatewayTool(context, "t3_get_events", {

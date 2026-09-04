@@ -16,7 +16,7 @@ async function proof(token: string, value: string): Promise<string> {
   );
   return Array.from(signature, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
-import type { GatewayRuntimePort } from "./port.ts";
+import type { GatewayRuntimeEventSource, GatewayRuntimePort } from "./port.ts";
 
 class FakeSocket implements GatewayBridgeSocket {
   readonly OPEN = 1;
@@ -123,6 +123,52 @@ describe("gateway bridge client", () => {
       }),
     );
     expect(onState).toHaveBeenCalledWith("running");
+    bridge.stop();
+  });
+
+  it("subscribes only granted environments from durable sidecar cursors", async () => {
+    const socket = new FakeSocket();
+    const token = "test-token-123456789";
+    const subscribe = vi.fn<GatewayRuntimeEventSource["subscribe"]>(() => () => undefined);
+    const events = { subscribe } as unknown as GatewayRuntimeEventSource;
+    const bridge = connectGatewayBridge({
+      port: unusedPort,
+      events,
+      token,
+      grants: { granted: ["read"] },
+      url: "ws://127.0.0.1:47631",
+      createSocket: () => socket,
+    });
+    const nonce = "b".repeat(64);
+
+    socket.emit("message", JSON.stringify({ type: "challenge", nonce }));
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    socket.emit(
+      "message",
+      JSON.stringify({ type: "authenticated", proof: await proof(token, `server:${nonce}`) }),
+    );
+    await vi.waitFor(() =>
+      expect(socket.sent.map((message) => JSON.parse(message))).toContainEqual({
+        type: "configure",
+        grants: { granted: ["read"] },
+        profiles: [],
+      }),
+    );
+    expect(subscribe).not.toHaveBeenCalled();
+
+    socket.emit(
+      "message",
+      JSON.stringify({
+        type: "configured",
+        cursors: { granted: 41 },
+      }),
+    );
+
+    await vi.waitFor(() => expect(subscribe).toHaveBeenCalledTimes(1));
+    expect(subscribe.mock.calls[0]?.[1]).toEqual({
+      environmentIds: ["granted"],
+      afterSequenceByEnvironment: { granted: 41 },
+    });
     bridge.stop();
   });
 });

@@ -1,7 +1,12 @@
 import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 
-import type { GatewayProfile, GatewayRuntimePort, GatewayScope } from "./port.ts";
+import type {
+  GatewayProfile,
+  GatewayRuntimeEventSource,
+  GatewayRuntimePort,
+  GatewayScope,
+} from "./port.ts";
 
 export type GatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
 
@@ -27,6 +32,9 @@ const METHODS = new Set<keyof GatewayRuntimePort>([
   "listProjects",
   "listThreads",
   "getThread",
+  "createAssetUrl",
+  "getPullRequest",
+  "getPullRequestActivity",
   "createThread",
   "sendMessage",
   "controlThread",
@@ -50,6 +58,7 @@ async function proof(token: string, value: string): Promise<string> {
 
 export function connectGatewayBridge(input: {
   readonly port: GatewayRuntimePort;
+  readonly events?: GatewayRuntimeEventSource;
   readonly grants?: GatewayGrants;
   readonly profiles?: ReadonlyArray<GatewayProfile>;
   readonly url: string;
@@ -60,6 +69,7 @@ export function connectGatewayBridge(input: {
 }) {
   let socket: GatewayBridgeSocket | null = null;
   let reconnectFiber: Fiber.Fiber<void, never> | null = null;
+  let unsubscribeEvents: (() => void) | null = null;
   let stopped = false;
 
   const connect = () => {
@@ -76,6 +86,8 @@ export function connectGatewayBridge(input: {
     next.addEventListener("close", () => {
       if (socket !== next || stopped) return;
       socket = null;
+      unsubscribeEvents?.();
+      unsubscribeEvents = null;
       input.onState?.("degraded");
       reconnectFiber = Effect.runFork(
         Effect.sleep(input.reconnectDelayMs ?? 1_000).pipe(Effect.tap(() => Effect.sync(connect))),
@@ -129,6 +141,41 @@ export function connectGatewayBridge(input: {
             input.onState?.("running");
             return;
           }
+          if (candidate.type === "configured") {
+            if (
+              !authenticated ||
+              typeof candidate.cursors !== "object" ||
+              candidate.cursors === null
+            ) {
+              throw new Error("Invalid gateway bridge cursor configuration.");
+            }
+            const environmentIds = Object.keys(input.grants ?? {});
+            const rawCursors = candidate.cursors as Record<string, unknown>;
+            const afterSequenceByEnvironment: Record<string, number> = {};
+            for (const environmentId of environmentIds) {
+              const cursor = rawCursors[environmentId];
+              if (!Number.isInteger(cursor) || (cursor as number) < 0) {
+                throw new Error(`Invalid gateway bridge cursor for environment ${environmentId}.`);
+              }
+              afterSequenceByEnvironment[environmentId] = cursor as number;
+            }
+            const allowedEnvironmentIds = new Set(environmentIds);
+            unsubscribeEvents?.();
+            unsubscribeEvents =
+              input.events?.subscribe(
+                (runtimeEvent) => {
+                  if (
+                    allowedEnvironmentIds.has(runtimeEvent.environmentId) &&
+                    socket === next &&
+                    next.readyState === next.OPEN
+                  ) {
+                    next.send(JSON.stringify({ type: "event", event: runtimeEvent }));
+                  }
+                },
+                { environmentIds, afterSequenceByEnvironment },
+              ) ?? null;
+            return;
+          }
           if (!authenticated) throw new Error("Gateway bridge is not authenticated.");
           if (
             typeof candidate.id !== "number" ||
@@ -163,6 +210,8 @@ export function connectGatewayBridge(input: {
       stopped = true;
       reconnectFiber?.interruptUnsafe();
       reconnectFiber = null;
+      unsubscribeEvents?.();
+      unsubscribeEvents = null;
       const active = socket;
       socket = null;
       active?.close();

@@ -7,6 +7,8 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  WS_METHODS,
+  type OrchestrationEvent,
   type OrchestrationShellSnapshot,
   type OrchestrationThread,
   type OrchestrationThreadDetailSnapshot,
@@ -27,8 +29,8 @@ import {
   startThreadTurn,
   stopThreadSession,
 } from "../operations/commands.ts";
-import { subscribe } from "../rpc/client.ts";
-import type { GatewayRuntimePort } from "./port.ts";
+import { request, subscribe } from "../rpc/client.ts";
+import type { GatewayRuntimeEvent, GatewayRuntimeEventSource, GatewayRuntimePort } from "./port.ts";
 
 export interface GatewayEffectRuntime {
   runPromise<A, E>(effect: Effect.Effect<A, E, EnvironmentRegistry | Crypto.Crypto>): Promise<A>;
@@ -81,6 +83,95 @@ const threadSnapshot = (environmentId: EnvironmentId, threadId: ThreadId) =>
     );
   });
 
+function gatewayEventFromOrchestration(
+  environmentId: EnvironmentId,
+  event: OrchestrationEvent,
+): GatewayRuntimeEvent {
+  const payload = event.payload as unknown as Record<string, unknown>;
+  const activity =
+    event.type === "thread.activity-appended" &&
+    typeof payload.activity === "object" &&
+    payload.activity !== null
+      ? (payload.activity as Record<string, unknown>)
+      : undefined;
+  const activityKind = typeof activity?.kind === "string" ? activity.kind : undefined;
+  const type =
+    event.type === "thread.created" || event.type === "thread.turn-start-requested"
+      ? "thread.started"
+      : activityKind === "approval.requested"
+        ? "approval.requested"
+        : activityKind === "user-input.requested"
+          ? "input.requested"
+          : activityKind === "turn.completed"
+            ? "thread.completed"
+            : activityKind === "turn.failed" || activityKind === "error"
+              ? "thread.failed"
+              : activityKind === "turn.interrupted"
+                ? "thread.interrupted"
+                : event.aggregateKind === "thread"
+                  ? "thread.progress"
+                  : event.type;
+  return {
+    eventId: event.eventId,
+    sequence: event.sequence,
+    occurredAt: event.occurredAt,
+    environmentId,
+    type,
+    ...(event.aggregateKind === "thread" ? { threadId: event.aggregateId } : {}),
+    ...(event.correlationId === null ? {} : { correlationId: event.correlationId }),
+    data: {
+      serverSequence: event.sequence,
+      serverEventType: event.type,
+      payload,
+    },
+  };
+}
+
+export function createGatewayRuntimeEventSourceFromContext(
+  context: Context.Context<EnvironmentRegistry | Crypto.Crypto>,
+): GatewayRuntimeEventSource {
+  return {
+    subscribe: (listener, subscription) => {
+      const allowedEnvironmentIds = new Set(subscription.environmentIds);
+      const stream = Stream.unwrap(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          return Stream.concat(
+            Stream.fromEffect(SubscriptionRef.get(registry.entries)),
+            SubscriptionRef.changes(registry.entries),
+          ).pipe(
+            Stream.switchMap((entries) =>
+              Stream.mergeAll(
+                [...entries.keys()]
+                  .filter((environmentId) => allowedEnvironmentIds.has(environmentId))
+                  .map((environmentId) =>
+                    registry
+                      .runStream(
+                        environmentId,
+                        subscribe(ORCHESTRATION_WS_METHODS.subscribeEvents, {
+                          afterSequence:
+                            subscription.afterSequenceByEnvironment[environmentId] ?? 0,
+                        }),
+                      )
+                      .pipe(
+                        Stream.map((event) => gatewayEventFromOrchestration(environmentId, event)),
+                        Stream.catchCause(() => Stream.empty),
+                      ),
+                  ),
+                { concurrency: "unbounded" },
+              ),
+            ),
+          );
+        }),
+      );
+      const fiber = Effect.runForkWith(context)(
+        Stream.runForEach(stream, (event) => Effect.sync(() => listener(event))),
+      );
+      return () => fiber.interruptUnsafe();
+    },
+  };
+}
+
 export function createGatewayRuntimePort(runtime: GatewayEffectRuntime): GatewayRuntimePort {
   const run = <A, E>(effect: Effect.Effect<A, E, EnvironmentRegistry | Crypto.Crypto>) =>
     runtime.runPromise(effect);
@@ -125,6 +216,46 @@ export function createGatewayRuntimePort(runtime: GatewayEffectRuntime): Gateway
     getThread: (rawEnvironmentId, rawThreadId) =>
       run(threadSnapshot(EnvironmentId.make(rawEnvironmentId), ThreadId.make(rawThreadId))).then(
         (snapshot) => snapshot.thread as Record<string, unknown>,
+      ),
+    createAssetUrl: (rawEnvironmentId, resource) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          const typedResource =
+            resource._tag === "attachment"
+              ? resource
+              : { ...resource, threadId: ThreadId.make(resource.threadId) };
+          return yield* registry.run(
+            EnvironmentId.make(rawEnvironmentId),
+            request(WS_METHODS.assetsCreateUrl, { resource: typedResource }),
+          );
+        }),
+      ),
+    getPullRequest: (rawEnvironmentId, ref) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          return (yield* registry.run(
+            EnvironmentId.make(rawEnvironmentId),
+            request(WS_METHODS.pullRequestsDetail, {
+              ...ref,
+              projectId: ProjectId.make(ref.projectId),
+            }),
+          )) as Record<string, unknown>;
+        }),
+      ),
+    getPullRequestActivity: (rawEnvironmentId, ref) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          return (yield* registry.run(
+            EnvironmentId.make(rawEnvironmentId),
+            request(WS_METHODS.pullRequestsActivity, {
+              ...ref,
+              projectId: ProjectId.make(ref.projectId),
+            }),
+          )) as Record<string, unknown>;
+        }),
       ),
     createThread: (input) =>
       run(

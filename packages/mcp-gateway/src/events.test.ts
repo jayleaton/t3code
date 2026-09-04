@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { createGatewayEventStore, signWebhookPayload } from "./events.ts";
+import { createGatewayEventStore, isPrivateWebhookAddress, signWebhookPayload } from "./events.ts";
 
 const clock = { value: "2026-09-03T12:00:00.000Z" };
 let counter = 0;
@@ -9,6 +9,7 @@ function makeStore() {
   counter = 0;
   clock.value = "2026-09-03T12:00:00.000Z";
   return createGatewayEventStore({
+    file: ":memory:",
     now: () => clock.value,
     newEventId: () => `evt-${++counter}`,
   });
@@ -32,6 +33,7 @@ describe("gateway event store", () => {
 
   it("marks deliveries and honours retention limits", () => {
     const store = createGatewayEventStore({
+      file: ":memory:",
       retentionEvents: 2,
       retentionDays: 7,
       now: () => clock.value,
@@ -41,7 +43,10 @@ describe("gateway event store", () => {
     store.emit({ environmentId: "env-1", type: "b" });
     store.emit({ environmentId: "env-1", type: "c" });
 
-    expect(store.history("env-1", 0, 10).map((event) => event.type)).toEqual(["b", "c"]);
+    expect(() => store.history("env-1", 0, 10)).toThrowError(
+      expect.objectContaining({ code: "cursor_expired" }),
+    );
+    expect(store.history("env-1", 1, 10).map((event) => event.type)).toEqual(["b", "c"]);
   });
 
   it("keeps subscriptions with monotonic idempotent acks and typed cursors", () => {
@@ -93,7 +98,7 @@ describe("gateway event store", () => {
       type: "thread.completed",
       correlationId: "corr-1",
     });
-    const delivery = store.buildDelivery(webhook.webhookId, event);
+    const delivery = store.buildDelivery(webhook.webhookId, event.eventId);
     expect(delivery).toBeDefined();
     expect(delivery?.headers["X-T3-Event-Id"]).toBe(event.eventId);
     expect(delivery?.headers["X-T3-Event-Sequence"]).toBe(String(event.sequence));
@@ -102,9 +107,12 @@ describe("gateway event store", () => {
       `sha256=${signWebhookPayload(secret, delivery?.body ?? "")}`,
     );
 
-    // Dedupe: a second build for the same event is suppressed until acked.
-    expect(store.buildDelivery(webhook.webhookId, event)).toBeUndefined();
-    store.ackWebhookDelivery(webhook.webhookId, event.eventId);
+    // Dedupe: a second build for the same event is delayed until the attempt is reported.
+    expect(store.buildDelivery(webhook.webhookId, event.eventId)).toBeUndefined();
+    store.reportDeliveryAttempt(webhook.webhookId, event.eventId, {
+      ok: true,
+      retryable: false,
+    });
     expect(store.webhookById(webhook.webhookId)?.ackedSequence).toBe(event.sequence);
   });
 
@@ -113,10 +121,10 @@ describe("gateway event store", () => {
     expect(() =>
       store.registerWebhook({ environmentId: "env-1", url: "http://example.com/hook" }),
     ).toThrowError(expect.objectContaining({ code: "invalid_input" }));
-    expect(() => store.updateWebhook("whk-missing", {})).toThrowError(
+    expect(() => store.updateWebhook("env-1", "whk-missing", {})).toThrowError(
       expect.objectContaining({ code: "unknown_webhook" }),
     );
-    expect(() => store.deleteWebhook("whk-missing")).toThrowError(
+    expect(() => store.deleteWebhook("env-1", "whk-missing")).toThrowError(
       expect.objectContaining({ code: "unknown_webhook" }),
     );
   });
@@ -131,8 +139,41 @@ describe("gateway event store", () => {
     const progress = store.emit({ environmentId: "env-1", type: "thread.progress" });
     const approval = store.emit({ environmentId: "env-2", type: "approval.requested" });
 
-    expect(store.buildDelivery(webhook.webhookId, progress)).toBeUndefined();
-    expect(store.buildDelivery(webhook.webhookId, approval)).toBeUndefined();
+    expect(store.buildDelivery(webhook.webhookId, progress.eventId)).toBeUndefined();
+    expect(store.buildDelivery(webhook.webhookId, approval.eventId)).toBeUndefined();
+  });
+
+  it("applies subscription type filters before the replay limit", () => {
+    const store = makeStore();
+    const subscription = store.subscribe({
+      environmentId: "env-1",
+      types: ["approval.requested"],
+    });
+    store.emit({ environmentId: "env-1", type: "thread.progress" });
+    store.emit({ environmentId: "env-1", type: "thread.progress" });
+    store.emit({ environmentId: "env-1", type: "approval.requested" });
+
+    expect(store.pendingFor(subscription.subscriptionId, 1).map((event) => event.type)).toEqual([
+      "approval.requested",
+    ]);
+  });
+
+  it("rejects IPv4-mapped IPv6 private, loopback, and link-local destinations", () => {
+    for (const address of [
+      "::ffff:127.0.0.1",
+      "::ffff:10.0.0.1",
+      "::ffff:172.16.0.1",
+      "::ffff:192.168.1.1",
+      "::ffff:169.254.169.254",
+    ]) {
+      expect(isPrivateWebhookAddress(address), address).toBe(true);
+      expect(() =>
+        makeStore().registerWebhook({
+          environmentId: "env-1",
+          url: `https://[${address}]/hook`,
+        }),
+      ).toThrowError(expect.objectContaining({ code: "invalid_input" }));
+    }
   });
 
   it("remembers and recalls request results exactly once", () => {

@@ -1411,6 +1411,37 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "orchestration" },
           ),
+        [ORCHESTRATION_WS_METHODS.subscribeEvents]: (input) =>
+          observeRpcStreamEffect(
+            ORCHESTRATION_WS_METHODS.subscribeEvents,
+            Effect.gen(function* () {
+              // Attach the live queue before reading the durable head so no event
+              // can fall into a replay/live handoff gap.
+              const liveBuffer = yield* Queue.unbounded<OrchestrationEvent>();
+              yield* Effect.forkScoped(
+                orchestrationEngine.streamDomainEvents.pipe(
+                  Stream.runForEach((event) => Queue.offer(liveBuffer, event)),
+                ),
+                { startImmediately: true },
+              );
+              const headSequence = yield* orchestrationEngine.latestSequence;
+              const replayGap = Math.max(0, headSequence - input.afterSequence);
+              const replay = orchestrationEngine.readEvents(input.afterSequence, replayGap).pipe(
+                Stream.mapError(
+                  (cause) =>
+                    new OrchestrationGetSnapshotError({
+                      message: "Failed to replay orchestration events",
+                      cause,
+                    }),
+                ),
+              );
+              const live = Stream.fromQueue(liveBuffer).pipe(
+                Stream.filter((event) => event.sequence > headSequence),
+              );
+              return Stream.concat(replay, live);
+            }),
+            { "rpc.aggregate": "orchestration" },
+          ),
         [ORCHESTRATION_WS_METHODS.subscribeShell]: (input) =>
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeShell,
