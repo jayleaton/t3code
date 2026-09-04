@@ -10,6 +10,7 @@ import * as NodePath from "node:path";
 import { createBridgeRuntimePort } from "./bridge.ts";
 import { startWebhookDeliveryWorker } from "./deliver.ts";
 import { createGatewayEventStore } from "./events.ts";
+import { GATEWAY_SCOPE_VALUES, hasGatewayScopes } from "./port.ts";
 import type { GatewayScope } from "./port.ts";
 import { createMcpGateway } from "./server.ts";
 
@@ -24,11 +25,7 @@ function parseGrants(
       !Array.isArray(scopes) ||
       scopes.some(
         (scope) =>
-          scope !== "read" &&
-          scope !== "create" &&
-          scope !== "send" &&
-          scope !== "control" &&
-          scope !== "delivery",
+          typeof scope !== "string" || !GATEWAY_SCOPE_VALUES.includes(scope as GatewayScope),
       )
     ) {
       throw new Error(`Invalid scopes for environment ${environmentId}.`);
@@ -49,6 +46,13 @@ if (bridgeToken === undefined || bridgeToken.length < 16) {
 }
 
 const initialGrants = parseGrants(process.env.T3_MCP_GRANTS);
+const repositoryAllowlist = (process.env.T3_MCP_REPOSITORY_ALLOWLIST ?? "jayleaton/t3code")
+  .split(",")
+  .map((repository) => repository.trim())
+  .filter((repository) => /^[^/\s]+\/[^/\s]+$/u.test(repository));
+if (repositoryAllowlist.length === 0) {
+  throw new Error("T3_MCP_REPOSITORY_ALLOWLIST must contain owner/repository entries.");
+}
 const retentionEvents = Number.parseInt(process.env.T3_MCP_EVENT_RETENTION ?? "100000", 10);
 if (!Number.isInteger(retentionEvents) || retentionEvents < 1) {
   throw new Error("T3_MCP_EVENT_RETENTION must be a positive integer.");
@@ -68,12 +72,13 @@ const bridge = createBridgeRuntimePort({
 const gateway = createMcpGateway({
   port: bridge.port,
   grants: bridge.getGrants,
-  profiles: bridge.getProfiles,
+  repositoryAllowlist,
   events: eventStore,
   health: bridge.getHealth,
 });
 const deliveryWorker = startWebhookDeliveryWorker(eventStore, {
-  isAuthorized: (environmentId) => bridge.getGrants()[environmentId]?.includes("delivery") === true,
+  isAuthorized: (environmentId) =>
+    hasGatewayScopes(bridge.getGrants(), environmentId, ["read", "delivery"]),
 });
 const startup = await bridge.ready;
 if (startup.status === "degraded") {

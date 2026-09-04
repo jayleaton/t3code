@@ -1,5 +1,6 @@
 import {
   connectGatewayBridge,
+  createGatewayRuntimeEventSourceFromContext,
   createGatewayRuntimePortFromContext,
 } from "@t3tools/client-runtime/gateway";
 import * as Option from "effect/Option";
@@ -9,7 +10,6 @@ import { useEffect, useState } from "react";
 import { connectionAtomRuntime } from "./connection/runtime";
 import {
   getMcpGatewayGrants,
-  getMcpGatewayProfiles,
   getMcpGatewayToken,
   isMcpGatewayEnabled,
   publishMcpGatewayStatus,
@@ -24,7 +24,6 @@ export function McpGatewayHost() {
     available: (window.desktopBridge?.getMcpGatewayLaunchConfig() ?? null) !== null,
     enabled: isMcpGatewayEnabled(),
     grants: getMcpGatewayGrants(),
-    profiles: getMcpGatewayProfiles(),
     token: getMcpGatewayToken(),
   }));
 
@@ -34,7 +33,6 @@ export function McpGatewayHost() {
         available: (window.desktopBridge?.getMcpGatewayLaunchConfig() ?? null) !== null,
         enabled: isMcpGatewayEnabled(),
         grants: getMcpGatewayGrants(),
-        profiles: getMcpGatewayProfiles(),
         token: getMcpGatewayToken(),
       });
     return subscribeMcpGatewayConfiguration(onChange);
@@ -56,8 +54,8 @@ export function McpGatewayHost() {
       if (Option.isNone(value)) return;
       bridge = connectGatewayBridge({
         port: createGatewayRuntimePortFromContext(value.value),
+        events: createGatewayRuntimeEventSourceFromContext(value.value),
         grants: configuration.grants,
-        profiles: configuration.profiles,
         token: configuration.token,
         url: BRIDGE_URL,
         onState: publishMcpGatewayStatus,

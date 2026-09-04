@@ -16,6 +16,7 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
   type ModelSelection,
+  type McpGatewayProfile,
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
   type UsageLimitSourceConfig,
@@ -29,6 +30,7 @@ import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
 import * as Effect from "effect/Effect";
@@ -237,12 +239,18 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
       ready: Effect.void,
       getSettings: Ref.get(currentSettingsRef).pipe(Effect.map(resolveTextGenerationProvider)),
       updateSettings: (patch) =>
-        Ref.get(currentSettingsRef).pipe(
-          Effect.map((currentSettings) => applyServerSettingsPatch(currentSettings, patch)),
-          Effect.flatMap(normalizeServerSettings),
-          Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
-          Effect.map(resolveTextGenerationProvider),
-        ),
+        Effect.gen(function* () {
+          const currentSettings = yield* Ref.get(currentSettingsRef);
+          const now = DateTime.formatIso(yield* DateTime.now);
+          const nextSettings = yield* normalizeServerSettings(
+            applyServerSettingsPatch(
+              currentSettings,
+              withServerOwnedMcpGatewayProfiles(currentSettings, patch, now),
+            ),
+          );
+          yield* Ref.set(currentSettingsRef, nextSettings);
+          return resolveTextGenerationProvider(nextSettings);
+        }),
       streamChanges: Stream.empty,
       subscribeChanges: Effect.succeed(Stream.empty),
     } satisfies ServerSettingsService["Service"];
@@ -312,6 +320,41 @@ function restoreUsedProviders(
     },
     providerInstances,
   };
+}
+
+function withServerOwnedMcpGatewayProfiles(
+  current: ServerSettings,
+  patch: ServerSettingsPatch,
+  now: string,
+): ServerSettingsPatch {
+  if (patch.mcpGatewayProfiles === undefined) return patch;
+  const profiles = patch.mcpGatewayProfiles.map((candidate): McpGatewayProfile => {
+    const existing = current.mcpGatewayProfiles.find(
+      (profile) => profile.profileId === candidate.profileId,
+    );
+    const {
+      revision: _candidateRevision,
+      createdAt: _candidateCreatedAt,
+      updatedAt: _candidateUpdatedAt,
+      ...candidateContent
+    } = candidate;
+    if (existing !== undefined) {
+      const {
+        revision: _existingRevision,
+        createdAt: _existingCreatedAt,
+        updatedAt: _existingUpdatedAt,
+        ...existingContent
+      } = existing;
+      if (Equal.equals(candidateContent, existingContent)) return existing;
+    }
+    return {
+      ...candidateContent,
+      revision: (existing?.revision ?? 0) + 1,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+  });
+  return { ...patch, mcpGatewayProfiles: profiles };
 }
 
 function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
@@ -823,9 +866,13 @@ const make = Effect.gen(function* () {
       writeSemaphore.withPermits(1)(
         Effect.gen(function* () {
           const current = yield* getSettingsFromCache;
+          const now = DateTime.formatIso(yield* DateTime.now);
           const nextPersisted = yield* persistProviderEnvironmentSecrets(
             current,
-            applyServerSettingsPatch(current, patch),
+            applyServerSettingsPatch(
+              current,
+              withServerOwnedMcpGatewayProfiles(current, patch, now),
+            ),
           );
           const next = yield* normalizeServerSettings(nextPersisted);
           yield* writeSettingsAtomically(next);

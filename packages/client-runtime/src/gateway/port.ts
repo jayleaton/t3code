@@ -1,4 +1,25 @@
-export type GatewayScope = "read" | "create" | "send" | "control" | "delivery";
+export const GATEWAY_SCOPE_VALUES = [
+  "read",
+  "create",
+  "send",
+  "control",
+  "lifecycle",
+  "approval",
+  "artifact",
+  "review",
+  "admin",
+  "delivery",
+] as const;
+export type GatewayScope = (typeof GATEWAY_SCOPE_VALUES)[number];
+
+export function hasGatewayScopes(
+  grants: Readonly<Record<string, ReadonlyArray<GatewayScope>>>,
+  environmentId: string,
+  required: ReadonlyArray<GatewayScope>,
+): boolean {
+  const scopes = grants[environmentId];
+  return scopes !== undefined && required.every((scope) => scopes.includes(scope));
+}
 export type GatewayThreadControlAction =
   | "cancel"
   | "stop"
@@ -9,14 +30,16 @@ export type GatewayThreadControlAction =
 export type GatewayApprovalDecision = "accept" | "acceptForSession" | "decline" | "cancel";
 
 export interface GatewayProfile {
-  readonly profileId?: string;
+  readonly profileId?: string | undefined;
   readonly name: string;
   readonly modelSelection: {
     readonly instanceId: string;
     readonly model: string;
-    readonly options?: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }>;
+    readonly options?:
+      | ReadonlyArray<{ readonly id: string; readonly value: string | boolean }>
+      | undefined;
   };
-  readonly reasoningEffort?: string;
+  readonly reasoningEffort?: string | undefined;
   readonly runtimeMode:
     | "approval-required"
     | "auto-accept-edits"
@@ -24,10 +47,10 @@ export interface GatewayProfile {
     | "full-access"
     | "read-only";
   readonly interactionMode: "default" | "plan";
-  readonly environmentIds?: ReadonlyArray<string>;
-  readonly revision?: number;
-  readonly createdAt?: string;
-  readonly updatedAt?: string;
+  readonly environmentIds?: ReadonlyArray<string> | undefined;
+  readonly revision?: number | undefined;
+  readonly createdAt?: string | undefined;
+  readonly updatedAt?: string | undefined;
 }
 
 export interface GatewayProfile {
@@ -91,6 +114,7 @@ export interface GatewayRuntimeEventSource {
 export interface GatewayRuntimePort {
   listEnvironments(): Promise<ReadonlyArray<GatewayEnvironmentSummary>>;
   getEnvironmentStatus(environmentId: string): Promise<Record<string, unknown>>;
+  listProfiles?(environmentId: string): Promise<ReadonlyArray<GatewayProfile>>;
   listProjects(environmentId: string): Promise<GatewayPage<Record<string, unknown>>>;
   listThreads(environmentId: string): Promise<GatewayPage<Record<string, unknown>>>;
   getThread(environmentId: string, threadId: string): Promise<Record<string, unknown>>;

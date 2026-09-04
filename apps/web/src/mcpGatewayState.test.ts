@@ -2,11 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   getMcpGatewayGrants,
-  getMcpGatewayProfiles,
   MCP_GATEWAY_GRANTS_KEY,
-  MCP_GATEWAY_PROFILES_KEY,
   setMcpGatewayGrants,
-  setMcpGatewayProfiles,
 } from "./mcpGatewayState";
 
 function storage(): Storage {
@@ -58,7 +55,7 @@ describe("MCP gateway grants", () => {
     localStorage.setItem(
       MCP_GATEWAY_GRANTS_KEY,
       JSON.stringify({
-        primary: ["read", "admin"],
+        primary: ["read", "unknown-scope"],
         "a534b83f-a352-44d8-aedc-c4230c179390": ["read", "read", "send"],
         "2549ba75-2a91-4554-8baa-88e6ae0efa48": "read",
       }),
@@ -85,57 +82,5 @@ describe("MCP gateway grants", () => {
     expect(getMcpGatewayGrants()).toEqual({
       "2549ba75-2a91-4554-8baa-88e6ae0efa48": ["delivery"],
     });
-  });
-
-  it("persists valid named profiles and drops malformed entries", () => {
-    setMcpGatewayProfiles([
-      {
-        profileId: "profile_andy",
-        name: "Andy",
-        modelSelection: { instanceId: "glm", model: "glm-5.3" },
-        reasoningEffort: "medium",
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        revision: 1,
-        createdAt: "2026-09-04T00:00:00.000Z",
-        updatedAt: "2026-09-04T00:00:00.000Z",
-      },
-    ]);
-    expect(JSON.parse(localStorage.getItem(MCP_GATEWAY_PROFILES_KEY) ?? "null")).toHaveLength(1);
-    expect(getMcpGatewayProfiles()).toEqual([
-      {
-        profileId: "profile_andy",
-        name: "Andy",
-        modelSelection: { instanceId: "glm", model: "glm-5.3" },
-        reasoningEffort: "medium",
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        revision: 1,
-        createdAt: "2026-09-04T00:00:00.000Z",
-        updatedAt: "2026-09-04T00:00:00.000Z",
-      },
-    ]);
-
-    localStorage.setItem(
-      MCP_GATEWAY_PROFILES_KEY,
-      JSON.stringify([
-        { name: "broken", modelSelection: null, runtimeMode: "admin" },
-        {
-          name: "Safe",
-          modelSelection: { instanceId: "codex", model: "gpt-5" },
-          runtimeMode: "approval-required",
-          interactionMode: "plan",
-        },
-        {
-          profileId: 42,
-          name: "Invalid identity",
-          modelSelection: { instanceId: "codex", model: "gpt-5" },
-          runtimeMode: "approval-required",
-          interactionMode: "default",
-          revision: -1,
-        },
-      ]),
-    );
-    expect(getMcpGatewayProfiles().map((profile) => profile.name)).toEqual(["Safe"]);
   });
 });

@@ -1,6 +1,11 @@
-import type { GatewayProfile, GatewayScope } from "@t3tools/client-runtime/gateway";
+import { GATEWAY_SCOPE_VALUES } from "@t3tools/client-runtime/gateway";
+import type { GatewayScope } from "@t3tools/client-runtime/gateway";
+import { ProviderInstanceId } from "@t3tools/contracts";
+import type { McpGatewayProfile } from "@t3tools/contracts/settings";
 import { ServerCogIcon, Trash2Icon } from "lucide-react";
 import { useEffect, useState } from "react";
+
+import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
 
 import { useEnvironments } from "../../state/environments";
 import { randomUUID } from "../../lib/utils";
@@ -11,7 +16,6 @@ import { Switch } from "../ui/switch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import {
   getMcpGatewayGrants,
-  getMcpGatewayProfiles,
   getMcpGatewayToken,
   isMcpGatewayEnabled,
   MCP_GATEWAY_STATE_EVENT,
@@ -19,11 +23,10 @@ import {
   type McpGatewayUiState,
   setMcpGatewayEnabled,
   setMcpGatewayGrants,
-  setMcpGatewayProfiles,
   setMcpGatewayToken,
 } from "../../mcpGatewayState";
 
-const GATEWAY_SCOPES = ["read", "create", "send", "control", "delivery"] as const;
+const GATEWAY_SCOPES = GATEWAY_SCOPE_VALUES.filter((scope) => scope !== "control");
 
 export function updateMcpGatewayGrant(
   grants: McpGatewayGrants,
@@ -116,15 +119,15 @@ export function McpProfileList({
   profiles,
   onChange,
 }: {
-  readonly profiles: ReadonlyArray<GatewayProfile>;
-  readonly onChange: (profiles: ReadonlyArray<GatewayProfile>) => void;
+  readonly profiles: ReadonlyArray<McpGatewayProfile>;
+  readonly onChange: (profiles: ReadonlyArray<McpGatewayProfile>) => void;
 }) {
   const [name, setName] = useState("");
   const [instanceId, setInstanceId] = useState("");
   const [model, setModel] = useState("");
   const [reasoningEffort, setReasoningEffort] = useState("");
   const [runtimeMode, setRuntimeMode] =
-    useState<GatewayProfile["runtimeMode"]>("approval-required");
+    useState<McpGatewayProfile["runtimeMode"]>("approval-required");
 
   return (
     <div className="space-y-3">
@@ -182,12 +185,15 @@ export function McpProfileList({
           className="h-9 rounded-md border bg-background px-3 text-sm"
           aria-label="Profile runtime mode"
           value={runtimeMode}
-          onChange={(event) => setRuntimeMode(event.target.value as GatewayProfile["runtimeMode"])}
+          onChange={(event) =>
+            setRuntimeMode(event.target.value as McpGatewayProfile["runtimeMode"])
+          }
         >
           <option value="approval-required">approval-required</option>
           <option value="auto-accept-edits">auto-accept-edits</option>
           <option value="auto">auto</option>
           <option value="full-access">full-access</option>
+          <option value="read-only">read-only</option>
         </select>
       </div>
       <Button
@@ -196,10 +202,13 @@ export function McpProfileList({
         onClick={() => {
           const now = new globalThis.Date().toISOString();
           const existing = profiles.find((candidate) => candidate.name === name.trim());
-          const profile: GatewayProfile = {
+          const profile: McpGatewayProfile = {
             profileId: existing?.profileId ?? `profile_${randomUUID()}`,
             name: name.trim(),
-            modelSelection: { instanceId: instanceId.trim(), model: model.trim() },
+            modelSelection: {
+              instanceId: ProviderInstanceId.make(instanceId.trim()),
+              model: model.trim(),
+            },
             ...(reasoningEffort.trim() === "" ? {} : { reasoningEffort: reasoningEffort.trim() }),
             runtimeMode,
             interactionMode: "default",
@@ -225,7 +234,8 @@ export function McpGatewaySettings() {
   const [enabled, setEnabled] = useState(isMcpGatewayEnabled);
   const [token, setToken] = useState(getMcpGatewayToken);
   const [grants, setGrants] = useState(getMcpGatewayGrants);
-  const [profiles, setProfiles] = useState(getMcpGatewayProfiles);
+  const profiles = usePrimarySettings((settings) => settings.mcpGatewayProfiles);
+  const updatePrimarySettings = useUpdatePrimarySettings();
   const [status, setStatus] = useState<McpGatewayUiState>(enabled ? "connecting" : "disabled");
 
   useEffect(() => {
@@ -297,10 +307,7 @@ export function McpGatewaySettings() {
         >
           <McpProfileList
             profiles={profiles}
-            onChange={(next) => {
-              setProfiles(next);
-              setMcpGatewayProfiles(next);
-            }}
+            onChange={(next) => updatePrimarySettings({ mcpGatewayProfiles: next })}
           />
         </SettingsRow>
         <SettingsRow

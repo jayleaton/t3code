@@ -15,6 +15,7 @@ function makePort(input?: {
   readonly approvalBatches?: Array<ReadonlyArray<{ approvalRequestId: string; decision: string }>>;
   readonly operations?: Array<{ operation: string; payload: Readonly<Record<string, unknown>> }>;
   readonly creates?: Array<{ model: string; runtimeMode: string; reasoningEffort?: string }>;
+  readonly profiles?: ReadonlyArray<GatewayProfile>;
   readonly pendingApprovalPlan?: boolean;
   readonly staleApprovalPlan?: boolean;
   readonly projectOwner?: string;
@@ -35,6 +36,9 @@ function makePort(input?: {
       environmentId,
       connectionState: "connected",
     }),
+    ...(input?.profiles === undefined
+      ? {}
+      : { listProfiles: async () => input.profiles as ReadonlyArray<GatewayProfile> }),
     listProjects: async (environmentId) => ({
       snapshotAt: "2026-09-02T00:00:00.000Z",
       items: [
@@ -42,7 +46,7 @@ function makePort(input?: {
           id: `${environmentId}-project`,
           title: "Project",
           workspaceRoot: "/repo",
-          repositoryIdentity: { owner: input?.projectOwner ?? "jayleaton" },
+          repositoryIdentity: { owner: input?.projectOwner ?? "jayleaton", name: "t3code" },
         },
       ],
     }),
@@ -171,8 +175,28 @@ function makePort(input?: {
 }
 
 const grants = {
-  local: ["read", "create", "send", "control", "delivery"],
-  remote: ["read", "create", "send", "control", "delivery"],
+  local: [
+    "read",
+    "create",
+    "send",
+    "lifecycle",
+    "approval",
+    "artifact",
+    "review",
+    "admin",
+    "delivery",
+  ],
+  remote: [
+    "read",
+    "create",
+    "send",
+    "lifecycle",
+    "approval",
+    "artifact",
+    "review",
+    "admin",
+    "delivery",
+  ],
 } as const;
 
 describe("gateway chat tools", () => {
@@ -263,14 +287,30 @@ describe("gateway chat tools", () => {
     const creates: Array<{ model: string; runtimeMode: string }> = [];
     const profiles: ReadonlyArray<GatewayProfile> = [
       {
+        profileId: "profile-andy",
         name: "Andy",
         modelSelection: { instanceId: "glm", model: "glm-5.3" },
         reasoningEffort: "medium",
         runtimeMode: "full-access",
         interactionMode: "default",
+        revision: 2,
+        createdAt: "2026-09-04T00:00:00.000Z",
+        updatedAt: "2026-09-04T01:00:00.000Z",
       },
     ];
-    const context = { port: makePort({ creates }), grants, profiles };
+    const browserLocalProfiles: ReadonlyArray<GatewayProfile> = [
+      {
+        name: "Andy",
+        modelSelection: { instanceId: "codex", model: "stale-local-model" },
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+      },
+    ];
+    const context = {
+      port: makePort({ creates, profiles }),
+      grants,
+      profiles: browserLocalProfiles,
+    };
 
     await callGatewayTool(context, "t3_create_thread", {
       environmentId: "local",
@@ -320,7 +360,7 @@ describe("gateway chat tools", () => {
     await callGatewayTool(
       {
         port: makePort({ approvals }),
-        grants: { local: ["read", "control"] },
+        grants: { local: ["read", "approval"] },
       },
       "t3_respond_to_approval",
       {
@@ -369,6 +409,44 @@ describe("gateway v3 event delivery tools", () => {
 
     expect(creates).toEqual([{ model: "gpt-5", runtimeMode: "approval-required" }]);
     expect(second).toEqual(first);
+  });
+
+  it("recovers an ambiguous upstream receipt without repeating the server side effect", async () => {
+    const events = createGatewayEventStore();
+    let effects = 0;
+    let committedRequestId: string | undefined;
+    const port = makePort();
+    port.sendMessage = async (request) => {
+      if (committedRequestId === undefined) {
+        committedRequestId = request.requestId;
+        effects += 1;
+        throw new Error("transport closed after commit");
+      }
+      expect(request.requestId).toBe(committedRequestId);
+      return {
+        requestId: committedRequestId,
+        commandId: committedRequestId,
+        status: "accepted",
+        threadId: request.threadId,
+        messageId: request.messageId,
+      };
+    };
+    const context = { port, grants, events };
+    const request = {
+      environmentId: "local",
+      threadId: "thread-1",
+      text: "Run once",
+      idempotencyKey: "ambiguous-send-1",
+    };
+
+    await expect(callGatewayTool(context, "t3_send_message", request)).rejects.toThrow(
+      "transport closed after commit",
+    );
+    await expect(callGatewayTool(context, "t3_send_message", request)).resolves.toMatchObject({
+      status: "accepted",
+      commandId: "mcp-request-ambiguous-send-1",
+    });
+    expect(effects).toBe(1);
   });
 
   it("reports idempotency_conflict when the same key carries a different payload", async () => {
@@ -461,6 +539,18 @@ describe("gateway v3 event delivery tools", () => {
     expect(tail.items.map((event: { type: string }) => event.type)).toEqual([
       "thread.state_changed",
     ]);
+  });
+
+  it("requires read and delivery scopes for webhook registration", async () => {
+    const events = createGatewayEventStore();
+    await expect(
+      callGatewayTool(
+        { port: makePort(), grants: { local: ["delivery"] }, events },
+        "t3_register_webhook",
+        { environmentId: "local", url: "https://example.com/hook" },
+      ),
+    ).rejects.toMatchObject({ code: "scope_required" });
+    expect(events.listWebhooks("local")).toEqual([]);
   });
 
   it("registers, lists, and deletes webhooks without ever re-serving the secret", async () => {
@@ -566,6 +656,23 @@ describe("gateway v3 event delivery tools", () => {
     ]);
   });
 
+  it("does not let the legacy control scope authorize repository writes", async () => {
+    const operations: Array<{ operation: string; payload: Readonly<Record<string, unknown>> }> = [];
+    await expect(
+      callGatewayTool(
+        { port: makePort({ operations }), grants: { local: ["control"] } },
+        "t3_apply_patch",
+        {
+          environmentId: "local",
+          projectId: "local-project",
+          patch: "--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n",
+          idempotencyKey: "patch-control-only",
+        },
+      ),
+    ).rejects.toMatchObject({ code: "scope_required" });
+    expect(operations).toEqual([]);
+  });
+
   it("rejects patch paths outside the selected project root", async () => {
     const operations: Array<{ operation: string; payload: Readonly<Record<string, unknown>> }> = [];
     await expect(
@@ -576,6 +683,27 @@ describe("gateway v3 event delivery tools", () => {
         idempotencyKey: "patch-escape",
       }),
     ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(operations).toEqual([]);
+  });
+
+  it("rejects upstream repository writes even when the selected project matches", async () => {
+    const operations: Array<{ operation: string; payload: Readonly<Record<string, unknown>> }> = [];
+    await expect(
+      callGatewayTool(
+        { port: makePort({ operations, projectOwner: "pingdotgg" }), grants },
+        "t3_create_pr",
+        {
+          environmentId: "local",
+          projectId: "local-project",
+          owner: "pingdotgg",
+          repository: "t3code",
+          headBranch: "feature/test",
+          baseBranch: "main",
+          title: "Unsafe upstream write",
+          idempotencyKey: "pr-upstream",
+        },
+      ),
+    ).rejects.toMatchObject({ code: "scope_required" });
     expect(operations).toEqual([]);
   });
 
@@ -601,7 +729,7 @@ describe("gateway v3 event delivery tools", () => {
     const input = {
       environmentId: "local",
       projectId: "local-project",
-      repository: "owner/repo",
+      repository: "jayleaton/t3code",
       number: 12,
       title: "Updated",
       idempotencyKey: "update-pr-1",

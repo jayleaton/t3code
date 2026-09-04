@@ -1,3 +1,4 @@
+import { GATEWAY_SCOPE_VALUES, hasGatewayScopes } from "@t3tools/client-runtime/gateway";
 import type {
   GatewayApprovalDecision,
   GatewayEnvironmentSummary,
@@ -10,6 +11,7 @@ import type {
   GatewayThreadControlAction,
 } from "@t3tools/client-runtime/gateway";
 
+export { GATEWAY_SCOPE_VALUES, hasGatewayScopes };
 export type {
   GatewayApprovalDecision,
   GatewayEnvironmentSummary,

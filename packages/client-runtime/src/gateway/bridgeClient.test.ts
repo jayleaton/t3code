@@ -126,7 +126,7 @@ describe("gateway bridge client", () => {
     bridge.stop();
   });
 
-  it("subscribes only granted environments from durable sidecar cursors", async () => {
+  it("subscribes only readable environments from durable sidecar cursors", async () => {
     const socket = new FakeSocket();
     const token = "test-token-123456789";
     const subscribe = vi.fn<GatewayRuntimeEventSource["subscribe"]>(() => () => undefined);
@@ -135,7 +135,7 @@ describe("gateway bridge client", () => {
       port: unusedPort,
       events,
       token,
-      grants: { granted: ["read"] },
+      grants: { granted: ["read"], webhookOnly: ["delivery"] },
       url: "ws://127.0.0.1:47631",
       createSocket: () => socket,
     });
@@ -150,7 +150,7 @@ describe("gateway bridge client", () => {
     await vi.waitFor(() =>
       expect(socket.sent.map((message) => JSON.parse(message))).toContainEqual({
         type: "configure",
-        grants: { granted: ["read"] },
+        grants: { granted: ["read"], webhookOnly: ["delivery"] },
         profiles: [],
       }),
     );
@@ -160,7 +160,7 @@ describe("gateway bridge client", () => {
       "message",
       JSON.stringify({
         type: "configured",
-        cursors: { granted: 41 },
+        cursors: { granted: 41, webhookOnly: 99 },
       }),
     );
 

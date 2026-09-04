@@ -2,6 +2,7 @@ import * as NodeCrypto from "node:crypto";
 
 import { WebSocketServer, type WebSocket } from "ws";
 
+import { GATEWAY_SCOPE_VALUES } from "./port.ts";
 import type {
   GatewayProfile,
   GatewayRuntimeEvent,
@@ -20,7 +21,7 @@ export type GatewayBridgeStartupResult =
       readonly message: string;
     };
 
-const GATEWAY_SCOPES = new Set<GatewayScope>(["read", "create", "send", "control", "delivery"]);
+const GATEWAY_SCOPES = new Set<GatewayScope>(GATEWAY_SCOPE_VALUES);
 
 function parseGrants(value: unknown): GatewayGrants {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -63,7 +64,8 @@ function parseProfiles(value: unknown): ReadonlyArray<GatewayProfile> {
       (profile.runtimeMode !== "approval-required" &&
         profile.runtimeMode !== "auto-accept-edits" &&
         profile.runtimeMode !== "auto" &&
-        profile.runtimeMode !== "full-access") ||
+        profile.runtimeMode !== "full-access" &&
+        profile.runtimeMode !== "read-only") ||
       (profile.interactionMode !== "default" && profile.interactionMode !== "plan")
     ) {
       throw new Error(`Invalid gateway profile ${String(profile.name ?? "")}.`);
@@ -223,7 +225,7 @@ export function createBridgeRuntimePort(input: {
           const runtimeEvent = event as Record<string, unknown>;
           if (
             typeof runtimeEvent.environmentId !== "string" ||
-            grants[runtimeEvent.environmentId] === undefined ||
+            grants[runtimeEvent.environmentId]?.includes("read") !== true ||
             typeof runtimeEvent.eventId !== "string" ||
             !Number.isInteger(runtimeEvent.sequence) ||
             typeof runtimeEvent.type !== "string" ||
@@ -307,6 +309,7 @@ export function createBridgeRuntimePort(input: {
     port: {
       listEnvironments: () => invoke("listEnvironments", []),
       getEnvironmentStatus: (environmentId) => invoke("getEnvironmentStatus", [environmentId]),
+      listProfiles: (environmentId) => invoke("listProfiles", [environmentId]),
       listProjects: (environmentId) => invoke("listProjects", [environmentId]),
       listThreads: (environmentId) => invoke("listThreads", [environmentId]),
       getThread: (environmentId, threadId) => invoke("getThread", [environmentId, threadId]),

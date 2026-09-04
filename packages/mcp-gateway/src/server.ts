@@ -492,6 +492,7 @@ export function createMcpGateway(input: {
   readonly port: GatewayRuntimePort;
   readonly grants: GatewayGrantSource;
   readonly profiles?: GatewayProfileSource;
+  readonly repositoryAllowlist?: ReadonlyArray<string>;
   readonly events?: import("./events.ts").GatewayEventStore;
   readonly health?: GatewayToolContext["health"];
 }) {
@@ -500,6 +501,9 @@ export function createMcpGateway(input: {
     port: input.port,
     grants: input.grants,
     ...(input.profiles === undefined ? {} : { profiles: input.profiles }),
+    ...(input.repositoryAllowlist === undefined
+      ? {}
+      : { repositoryAllowlist: input.repositoryAllowlist }),
     ...(input.events === undefined ? {} : { events: input.events }),
     ...(input.health === undefined ? {} : { health: input.health }),
   };
@@ -604,7 +608,11 @@ export function createMcpGateway(input: {
   };
   const unsubscribe = input.events?.onEvent((event) => {
     for (const subscriptionId of input.events?.matchingSubscriptions(event) ?? []) {
-      if (!hasScope(event.environmentId, "read")) continue;
+      if (!hasScope(event.environmentId, "read")) {
+        input.events?.ack(subscriptionId, event.sequence);
+        forwardedSequences.set(subscriptionId, event.sequence);
+        continue;
+      }
       if (initializingSubscriptions.has(subscriptionId)) {
         const pending = bufferedEvents.get(subscriptionId) ?? [];
         pending.push(event);
