@@ -589,7 +589,20 @@ export const McpGatewayProfile = Schema.Struct({
   profileId: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
   revision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
-  modelSelection: ModelSelection,
+  /**
+   * Readable selection text. These labels — not IDs — are the persisted
+   * profile data the Settings UI writes and the agent reads. Routing keys
+   * (provider instance id, model slug) are resolved transiently at thread
+   * creation from the live provider catalog and never serialized here.
+   */
+  providerLabel: Schema.optional(TrimmedNonEmptyString),
+  modelLabel: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * Legacy routing snapshot from pre-v3 rows, kept decodable so existing
+   * settings files keep working until the profile is re-saved through the
+   * label pickers. New profile writes never populate this field.
+   */
+  modelSelection: Schema.optional(ModelSelection),
   reasoningEffort: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: Schema.Literals([
     "approval-required",
@@ -604,6 +617,32 @@ export const McpGatewayProfile = Schema.Struct({
   updatedAt: TrimmedNonEmptyString,
 });
 export type McpGatewayProfile = typeof McpGatewayProfile.Type;
+
+/** Human-readable permission-mode label for MCP gateway profiles. */
+export const MCP_GATEWAY_RUNTIME_MODE_LABELS: Record<McpGatewayProfile["runtimeMode"], string> = {
+  "approval-required": "Approval required",
+  "auto-accept-edits": "Auto-accept edits",
+  auto: "Auto",
+  "full-access": "Full access",
+  "read-only": "Read only",
+};
+
+/**
+ * One-sentence readable summary of a gateway profile. Built from the
+ * readable labels only — never falls back to instance/model IDs.
+ */
+export const formatMcpGatewayProfileSummary = (
+  profile: McpGatewayProfile,
+  unavailable = false,
+): string => {
+  const selection =
+    profile.providerLabel !== undefined && profile.modelLabel !== undefined
+      ? `${profile.providerLabel} ${profile.modelLabel}`
+      : "unselected provider/model";
+  const reasoning = profile.reasoningEffort === undefined ? "default" : profile.reasoningEffort;
+  const availability = unavailable ? " (provider or model currently unavailable — re-select)" : "";
+  return `${profile.name} — ${selection}, ${reasoning} reasoning, ${MCP_GATEWAY_RUNTIME_MODE_LABELS[profile.runtimeMode]}${availability}`;
+};
 
 export const ServerSettings = Schema.Struct({
   // Legacy token-by-token assistant output. Deliberately a fresh key (was
