@@ -812,3 +812,58 @@ describe("gateway v3 profile snapshots", () => {
     });
   });
 });
+
+describe("gateway v3 readable profiles", () => {
+  it("surfaces readable labels on t3_list_profiles without requiring routing keys", async () => {
+    const profiles: ReadonlyArray<GatewayProfile> = [
+      {
+        profileId: "profile_andy",
+        name: "Andy",
+        providerLabel: "Codex",
+        modelLabel: "GPT-5.6 Sol",
+        reasoningEffort: "medium",
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        revision: 1,
+      },
+    ];
+    const listed = await callGatewayTool(
+      { port: makePort({ profiles }), grants, profiles },
+      "t3_list_profiles",
+      { environmentId: "local" },
+    );
+    expect(listed.items).toEqual([
+      expect.objectContaining({
+        name: "Andy",
+        providerLabel: "Codex",
+        modelLabel: "GPT-5.6 Sol",
+      }),
+    ]);
+  });
+
+  it("rejects a label-only profile without a thread override using readable text", async () => {
+    const profiles: ReadonlyArray<GatewayProfile> = [
+      {
+        profileId: "profile_andy",
+        name: "Andy",
+        providerLabel: "Codex",
+        modelLabel: "GPT-5.6 Sol",
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        revision: 1,
+      },
+    ];
+    await expect(
+      callGatewayTool({ port: makePort({ profiles }), grants, profiles }, "t3_create_thread", {
+        environmentId: "local",
+        projectId: "local-project",
+        title: "Unresolved profile chat",
+        profileId: "profile_andy",
+        idempotencyKey: "label-only-create-1",
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_input",
+      message: expect.stringContaining("provider: Codex, model: GPT-5.6 Sol"),
+    });
+  });
+});

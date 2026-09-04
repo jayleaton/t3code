@@ -32,13 +32,15 @@ export type GatewayApprovalDecision = "accept" | "acceptForSession" | "decline" 
 export interface GatewayProfile {
   readonly profileId?: string | undefined;
   readonly name: string;
-  readonly modelSelection: {
-    readonly instanceId: string;
-    readonly model: string;
-    readonly options?:
-      | ReadonlyArray<{ readonly id: string; readonly value: string | boolean }>
-      | undefined;
-  };
+  /**
+   * Readable selection text persisted with the profile. The label pair is
+   * the agent-facing representation; `modelSelection` below is a transient
+   * routing snapshot resolved against the live catalog and is not profile
+   * identity.
+   */
+  readonly providerLabel?: string | undefined;
+  readonly modelLabel?: string | undefined;
+  readonly modelSelection?: GatewayProfileModelSelection | undefined;
   readonly reasoningEffort?: string | undefined;
   readonly runtimeMode:
     | "approval-required"
@@ -51,6 +53,14 @@ export interface GatewayProfile {
   readonly revision?: number | undefined;
   readonly createdAt?: string | undefined;
   readonly updatedAt?: string | undefined;
+}
+
+export interface GatewayProfileModelSelection {
+  readonly instanceId: string;
+  readonly model: string;
+  readonly options?:
+    | ReadonlyArray<{ readonly id: string; readonly value: string | boolean }>
+    | undefined;
 }
 
 export interface GatewayEnvironmentSummary {

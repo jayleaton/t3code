@@ -910,6 +910,20 @@ export async function callGatewayTool(
       }
       const hasThreadModel = input.modelSelection !== undefined;
       const rawModelSelection = input.modelSelection ?? profile?.modelSelection;
+      // Profiles persist readable provider/model labels, not routing keys
+      // (spec §9.2). When a profile carries no transient routing snapshot —
+      // a label-only profile written by the v3 Settings pickers — the
+      // caller must supply the selection explicitly, and any user-facing
+      // error names the readable labels rather than an ID.
+      if (rawModelSelection === undefined) {
+        throw new GatewayError({
+          code: "invalid_input",
+          message: `Profile ${profile?.name ?? "requested"} has no resolved provider/model (provider: ${profile?.providerLabel ?? "unselected"}, model: ${profile?.modelLabel ?? "unselected"}); supply modelSelection or re-select the profile in Settings.`,
+          retryable: false,
+          environmentId,
+          details: { profileId: profile?.profileId },
+        });
+      }
       const modelSelection = record(rawModelSelection);
       const hasThreadRuntimeMode = input.runtimeMode !== undefined;
       const hasThreadInteractionMode = input.interactionMode !== undefined;
