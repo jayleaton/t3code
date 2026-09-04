@@ -51,6 +51,7 @@
     "@oxlint/plugins": "^1.63.0",
     "@types/node": "catalog:",
     "@typescript/native-preview": "catalog:",
+    "happy-dom": "^20.13.2",
     "vite-plus": "catalog:"
   },
   "engines": {

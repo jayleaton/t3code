@@ -1,4 +1,3 @@
-import { GATEWAY_SCOPE_VALUES } from "@t3tools/client-runtime/gateway";
 import type { GatewayScope } from "@t3tools/client-runtime/gateway";
 import {
   formatMcpGatewayProfileSummary,
@@ -49,10 +48,12 @@ import {
   setMcpGatewayToken,
 } from "../../mcpGatewayState";
 
-/** Scope set applied by the machine-level `On` baseline (spec §9.2). */
-const GRANTED_SCOPES: ReadonlyArray<GatewayScope> = GATEWAY_SCOPE_VALUES.filter(
-  (scope) => scope !== "control",
-);
+/**
+ * Scope set applied by the machine-level `On` baseline and offered in the
+ * per-machine tweak menu (spec §2/§9.2: Web Settings keeps per-environment
+ * `read`, `create`, and `send` grants).
+ */
+const GRANTED_SCOPES: ReadonlyArray<GatewayScope> = ["read", "create", "send"];
 
 const SCOPE_LABELS: Record<GatewayScope, string> = {
   read: "Read",
@@ -340,22 +341,24 @@ export function McpProfileList({
   readonly onChange: (profiles: ReadonlyArray<McpGatewayProfile>) => void;
 }) {
   const [draft, setDraft] = useState<ProfileDraft>(EMPTY_DRAFT);
-  const [editingName, setEditingName] = useState<string | null>(null);
+  const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const providerEntries = useMemo(() => deriveProfileProviderEntries(providers), [providers]);
   const selectedEntry =
     draft.instanceId === null
       ? undefined
       : providerEntries.find((entry) => entry.instanceId === draft.instanceId);
   const existing =
-    editingName === null ? undefined : profiles.find((profile) => profile.name === editingName);
+    editingProfileId === null
+      ? undefined
+      : profiles.find((profile) => profile.profileId === editingProfileId);
 
   const resetDraft = () => {
     setDraft(EMPTY_DRAFT);
-    setEditingName(null);
+    setEditingProfileId(null);
   };
 
   const startEdit = (profile: McpGatewayProfile) => {
-    setEditingName(profile.name);
+    setEditingProfileId(profile.profileId);
     const entry = providerEntries.find(
       (candidate) =>
         candidate.label === profile.providerLabel &&
@@ -378,7 +381,7 @@ export function McpProfileList({
   };
 
   const unresolved =
-    editingName !== null &&
+    editingProfileId !== null &&
     existing !== undefined &&
     (selectedEntry === undefined ||
       draft.model === null ||
@@ -387,7 +390,14 @@ export function McpProfileList({
         existing.modelLabel !==
           selectedEntry.models.find((candidate) => candidate.slug === draft.model)?.name));
 
-  const canSave = draft.name.trim() !== "" && selectedEntry !== undefined && draft.model !== null;
+  const duplicateName = profiles.some(
+    (profile) => profile.profileId !== editingProfileId && profile.name === draft.name.trim(),
+  );
+  const canSave =
+    draft.name.trim() !== "" &&
+    !duplicateName &&
+    selectedEntry !== undefined &&
+    draft.model !== null;
 
   return (
     <div className="space-y-3">
@@ -568,6 +578,11 @@ export function McpProfileList({
           The saved provider or model is no longer offered. Re-select both before saving.
         </p>
       ) : null}
+      {duplicateName ? (
+        <p className="text-xs text-destructive" role="note">
+          A profile named {draft.name.trim()} already exists.
+        </p>
+      ) : null}
 
       <div className="flex items-center gap-2">
         <Button
@@ -579,7 +594,18 @@ export function McpProfileList({
             if (entry === undefined || model === undefined) return;
             const now = new globalThis.Date().toISOString();
             const name = draft.name.trim();
-            const previous = profiles.find((candidate) => candidate.name === name);
+            // The edited profile is tracked by its stable profileId, never
+            // by name — renaming must not orphan the original row or mint a
+            // fresh identity (spec §9.1: renames keep profileId and history).
+            const previous = existing;
+            if (
+              profiles.some(
+                (candidate) =>
+                  candidate.profileId !== previous?.profileId && candidate.name === name,
+              )
+            ) {
+              return;
+            }
             // Persist readable labels only. The instance/model routing keys
             // stay in this draft — they are never serialized into the
             // profile (spec §9.2).
@@ -591,17 +617,22 @@ export function McpProfileList({
               ...(draft.reasoningEffort === null ? {} : { reasoningEffort: draft.reasoningEffort }),
               runtimeMode: draft.runtimeMode,
               interactionMode: previous?.interactionMode ?? "default",
-              revision: (previous?.revision ?? 0) + 1,
+              // Required wire fields are placeholders on create and preserved
+              // on edit; the server assigns revision and timestamps.
+              revision: previous?.revision ?? 1,
               createdAt: previous?.createdAt ?? now,
-              updatedAt: now,
+              updatedAt: previous?.updatedAt ?? now,
             };
-            onChange([...profiles.filter((candidate) => candidate.name !== profile.name), profile]);
+            onChange([
+              ...profiles.filter((candidate) => candidate.profileId !== previous?.profileId),
+              profile,
+            ]);
             resetDraft();
           }}
         >
-          {editingName === null ? "Save profile" : `Update ${editingName}`}
+          {editingProfileId === null ? "Save profile" : `Update ${existing?.name ?? "profile"}`}
         </Button>
-        {editingName !== null || draft !== EMPTY_DRAFT ? (
+        {editingProfileId !== null || draft !== EMPTY_DRAFT ? (
           <Button variant="ghost" onClick={resetDraft}>
             Cancel
           </Button>

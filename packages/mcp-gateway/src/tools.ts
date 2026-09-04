@@ -872,120 +872,126 @@ export async function callGatewayTool(
       const idempotencyKey = requiredIdempotencyKey(input);
       const profileName = typeof input.profile === "string" ? input.profile.trim() : "";
       const profileIdInput = typeof input.profileId === "string" ? input.profileId.trim() : "";
-      const profiles = await authoritativeProfiles(context, environmentId);
-      const profile =
-        profileIdInput !== ""
-          ? profiles.find((candidate) => candidate.profileId === profileIdInput)
-          : profileName === ""
-            ? undefined
-            : profiles.find((candidate) => candidate.name === profileName);
-      if ((profileName !== "" || profileIdInput !== "") && profile === undefined) {
-        throw new GatewayError({
-          code: "invalid_input",
-          message: `Unknown gateway profile ${profileIdInput || profileName}.`,
-          retryable: false,
-        });
-      }
-      if (
-        profile !== undefined &&
-        Array.isArray(profile.environmentIds) &&
-        !profile.environmentIds.includes(environmentId)
-      ) {
-        throw new GatewayError({
-          code: "scope_required",
-          message: `Profile ${profile.name} is not allowed in environment ${environmentId}.`,
-          retryable: false,
-          environmentId,
-          details: { profileId: profile.profileId, permission: "environment-allowlist" },
-        });
-      }
-      if (profile?.runtimeMode === "read-only") {
-        throw new GatewayError({
-          code: "scope_required",
-          message: `Profile ${profile.name} is read-only and cannot create a thread.`,
-          retryable: false,
-          environmentId,
-          details: { profileId: profile.profileId, permission: "read-only" },
-        });
-      }
-      const hasThreadModel = input.modelSelection !== undefined;
-      const rawModelSelection = input.modelSelection ?? profile?.modelSelection;
-      // Profiles persist readable provider/model labels, not routing keys
-      // (spec §9.2). When a profile carries no transient routing snapshot —
-      // a label-only profile written by the v3 Settings pickers — the
-      // caller must supply the selection explicitly, and any user-facing
-      // error names the readable labels rather than an ID.
-      if (rawModelSelection === undefined) {
-        throw new GatewayError({
-          code: "invalid_input",
-          message: `Profile ${profile?.name ?? "requested"} has no resolved provider/model (provider: ${profile?.providerLabel ?? "unselected"}, model: ${profile?.modelLabel ?? "unselected"}); supply modelSelection or re-select the profile in Settings.`,
-          retryable: false,
-          environmentId,
-          details: { profileId: profile?.profileId },
-        });
-      }
-      const modelSelection = record(rawModelSelection);
-      const hasThreadRuntimeMode = input.runtimeMode !== undefined;
-      const hasThreadInteractionMode = input.interactionMode !== undefined;
-      const requestedRuntimeMode = input.runtimeMode ?? profile?.runtimeMode;
-      const requestedInteractionMode = input.interactionMode ?? profile?.interactionMode;
-      const resolvedRuntimeMode =
-        requestedRuntimeMode === "auto-accept-edits" ||
-        requestedRuntimeMode === "auto" ||
-        requestedRuntimeMode === "full-access"
-          ? requestedRuntimeMode
-          : "approval-required";
-      const resolvedInteractionMode = requestedInteractionMode === "plan" ? "plan" : "default";
-      // Per spec section 9.2 the thread carries an immutable snapshot of the
-      // resolved configuration plus the source each field came from, so later
-      // profile edits cannot mutate existing work.
-      const sourceFor = (
-        fromThread: boolean,
-        fromProfile: boolean,
-      ): "profile" | "thread-override" | "fallback" =>
-        fromThread ? "thread-override" : fromProfile ? "profile" : "fallback";
-      const reasoningEffort =
-        typeof input.reasoningEffort === "string"
-          ? input.reasoningEffort
-          : profile?.reasoningEffort;
-      const inheritedOptions = Array.isArray(modelSelection.options)
-        ? modelSelection.options.flatMap((candidate) => {
-            const option = record(candidate);
-            return option !== undefined &&
-              typeof option.id === "string" &&
-              (typeof option.value === "string" || typeof option.value === "boolean")
-              ? [{ id: option.id, value: option.value }]
-              : [];
-          })
-        : [];
-      const modelOptions =
-        reasoningEffort === undefined
-          ? inheritedOptions
-          : [
-              ...inheritedOptions.filter((option) => option.id !== "reasoningEffort"),
-              { id: "reasoningEffort", value: reasoningEffort },
-            ];
-      const profileSnapshot = {
-        profileId: profile?.profileId ?? null,
-        profileName: profile?.name ?? null,
-        revision: profile?.revision ?? null,
-        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
-        effectiveSource: {
-          modelSelection: sourceFor(hasThreadModel, profile !== undefined),
-          runtimeMode: sourceFor(hasThreadRuntimeMode, profile !== undefined),
-          interactionMode: sourceFor(hasThreadInteractionMode, profile !== undefined),
-          reasoningEffort: sourceFor(
-            input.reasoningEffort !== undefined,
-            profile?.reasoningEffort !== undefined,
-          ),
-        },
-      };
       return withIdempotency(
         context,
         `${environmentId}::${idFor("thread", idempotencyKey)}`,
         input,
         async () => {
-          const result = await context.port.createThread({
+          const profiles = await authoritativeProfiles(context, environmentId);
+          const profile =
+            profileIdInput !== ""
+              ? profiles.find((candidate) => candidate.profileId === profileIdInput)
+              : profileName === ""
+                ? undefined
+                : profiles.find((candidate) => candidate.name === profileName);
+          if ((profileName !== "" || profileIdInput !== "") && profile === undefined) {
+            throw new GatewayError({
+              code: "invalid_input",
+              message: `Unknown gateway profile ${profileIdInput || profileName}.`,
+              retryable: false,
+            });
+          }
+          if (
+            profile !== undefined &&
+            Array.isArray(profile.environmentIds) &&
+            !profile.environmentIds.includes(environmentId)
+          ) {
+            throw new GatewayError({
+              code: "scope_required",
+              message: `Profile ${profile.name} is not allowed in environment ${environmentId}.`,
+              retryable: false,
+              environmentId,
+              details: { profileId: profile.profileId, permission: "environment-allowlist" },
+            });
+          }
+          if (profile?.runtimeMode === "read-only") {
+            throw new GatewayError({
+              code: "scope_required",
+              message: `Profile ${profile.name} is read-only and cannot create a thread.`,
+              retryable: false,
+              environmentId,
+              details: { profileId: profile.profileId, permission: "read-only" },
+            });
+          }
+          const hasThreadModel = input.modelSelection !== undefined;
+          const profileModelSelection = hasThreadModel
+            ? undefined
+            : profile === undefined
+              ? undefined
+              : context.port.resolveProfileModelSelection === undefined
+                ? profile.modelSelection
+                : await context.port.resolveProfileModelSelection(environmentId, profile);
+          const rawModelSelection = input.modelSelection ?? profileModelSelection;
+          // Settings profiles persist readable labels, not routing keys. Resolve
+          // those labels against the selected environment's live catalog at this
+          // authoritative create boundary; only a missing/ambiguous pair remains
+          // unresolved. The resolved keys live only in the new thread snapshot.
+          if (rawModelSelection === undefined) {
+            throw new GatewayError({
+              code: "invalid_input",
+              message: `Profile ${profile?.name ?? "requested"} provider/model is no longer uniquely available (provider: ${profile?.providerLabel ?? "unselected"}, model: ${profile?.modelLabel ?? "unselected"}); re-select the profile in Settings.`,
+              retryable: false,
+              environmentId,
+              details: { profileId: profile?.profileId },
+            });
+          }
+          const modelSelection = record(rawModelSelection);
+          const hasThreadRuntimeMode = input.runtimeMode !== undefined;
+          const hasThreadInteractionMode = input.interactionMode !== undefined;
+          const requestedRuntimeMode = input.runtimeMode ?? profile?.runtimeMode;
+          const requestedInteractionMode = input.interactionMode ?? profile?.interactionMode;
+          const resolvedRuntimeMode =
+            requestedRuntimeMode === "auto-accept-edits" ||
+            requestedRuntimeMode === "auto" ||
+            requestedRuntimeMode === "full-access"
+              ? requestedRuntimeMode
+              : "approval-required";
+          const resolvedInteractionMode = requestedInteractionMode === "plan" ? "plan" : "default";
+          // Per spec section 9.2 the thread carries an immutable snapshot of the
+          // resolved configuration plus the source each field came from, so later
+          // profile edits cannot mutate existing work.
+          const sourceFor = (
+            fromThread: boolean,
+            fromProfile: boolean,
+          ): "profile" | "thread-override" | "fallback" =>
+            fromThread ? "thread-override" : fromProfile ? "profile" : "fallback";
+          const reasoningEffort =
+            typeof input.reasoningEffort === "string"
+              ? input.reasoningEffort
+              : profile?.reasoningEffort;
+          const inheritedOptions = Array.isArray(modelSelection.options)
+            ? modelSelection.options.flatMap((candidate) => {
+                const option = record(candidate);
+                return option !== undefined &&
+                  typeof option.id === "string" &&
+                  (typeof option.value === "string" || typeof option.value === "boolean")
+                  ? [{ id: option.id, value: option.value }]
+                  : [];
+              })
+            : [];
+          const modelOptions =
+            reasoningEffort === undefined
+              ? inheritedOptions
+              : [
+                  ...inheritedOptions.filter((option) => option.id !== "reasoningEffort"),
+                  { id: "reasoningEffort", value: reasoningEffort },
+                ];
+          const profileSnapshot = {
+            profileId: profile?.profileId ?? null,
+            profileName: profile?.name ?? null,
+            revision: profile?.revision ?? null,
+            ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+            effectiveSource: {
+              modelSelection: sourceFor(hasThreadModel, profile !== undefined),
+              runtimeMode: sourceFor(hasThreadRuntimeMode, profile !== undefined),
+              interactionMode: sourceFor(hasThreadInteractionMode, profile !== undefined),
+              reasoningEffort: sourceFor(
+                input.reasoningEffort !== undefined,
+                profile?.reasoningEffort !== undefined,
+              ),
+            },
+          };
+          return context.port.createThread({
             environmentId,
             projectId: requiredString(input, "projectId"),
             threadId: idFor("thread", idempotencyKey),
@@ -1000,7 +1006,6 @@ export async function callGatewayTool(
             profileSnapshot,
             requestId: idFor("request", idempotencyKey),
           });
-          return result;
         },
       );
     }

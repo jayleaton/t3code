@@ -1,4 +1,4 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, type ServerProvider } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -8,6 +8,7 @@ import { EnvironmentRegistry } from "../connection/registry.ts";
 import {
   createGatewayRuntimePortFromContext,
   gatewayEventFromOrchestration,
+  resolveGatewayProfileModelSelection,
 } from "./runtimePort.ts";
 
 const environmentId = EnvironmentId.make("remote-1");
@@ -17,6 +18,42 @@ const testCrypto = Crypto.make({
 });
 
 describe("Gateway Runtime Port", () => {
+  it("resolves readable labels only when one live provider/model pair matches", () => {
+    const profile = {
+      profileId: "profile-andy",
+      name: "Andy",
+      providerLabel: "Codex",
+      modelLabel: "GPT-5.6 Sol",
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      revision: 1,
+      createdAt: "2026-09-04T00:00:00.000Z",
+      updatedAt: "2026-09-04T00:00:00.000Z",
+    } as const;
+    const provider = {
+      instanceId: "codex-main",
+      driver: "codex",
+      displayName: "Codex",
+      enabled: true,
+      availability: "available",
+      models: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
+    } as unknown as ServerProvider;
+
+    expect(resolveGatewayProfileModelSelection(profile, [provider])).toEqual({
+      instanceId: "codex-main",
+      model: "gpt-5.6-sol",
+    });
+    expect(resolveGatewayProfileModelSelection(profile, [provider, provider])).toBeUndefined();
+    expect(
+      resolveGatewayProfileModelSelection(profile, [{ ...provider, enabled: false } as never]),
+    ).toBeUndefined();
+    expect(
+      resolveGatewayProfileModelSelection(profile, [
+        { ...provider, models: [{ slug: "other", name: "Other" }] } as never,
+      ]),
+    ).toBeUndefined();
+  });
+
   it("redacts raw provider output and host paths before the bridge boundary", () => {
     const projected = gatewayEventFromOrchestration(environmentId, {
       eventId: "event-1",
