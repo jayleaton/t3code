@@ -2,12 +2,14 @@ import { EnvironmentId, type ServerProvider } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import {
   approvalResponsesFromModifications,
   createGatewayRuntimePortFromContext,
+  enrichGatewayRuntimeEventStream,
   gatewayEventFromOrchestration,
   resolveGatewayProfileModelSelection,
   gatewayThreadProjection,
@@ -108,6 +110,91 @@ describe("Gateway Runtime Port", () => {
     expect(JSON.stringify(projected)).not.toContain("secret output");
     expect(JSON.stringify(projected)).not.toContain("/home/user/private");
   });
+
+  it.effect("refreshes create, rename, and status context after an event stream starts", () =>
+    Effect.gen(function* () {
+      const snapshot = (sequence: number, title: string, status: "queued" | "running") =>
+        ({
+          snapshotSequence: sequence,
+          projects: [{ id: "project-1", title: "T3 Code" }],
+          threads: [
+            {
+              id: "thread-1",
+              projectId: "project-1",
+              title,
+              latestTurn: status === "running" ? { state: "running" } : null,
+              session: null,
+            },
+          ],
+          updatedAt: `2026-09-04T00:00:0${sequence}.000Z`,
+        }) as never;
+      const snapshots = [
+        snapshot(1, "Initial title", "queued"),
+        snapshot(2, "Renamed title", "queued"),
+        snapshot(3, "Renamed title", "running"),
+      ];
+      const events = [
+        {
+          eventId: "event-create",
+          sequence: 1,
+          occurredAt: "2026-09-04T00:00:01.000Z",
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          correlationId: null,
+          payload: { projectId: "project-1", title: "Initial title" },
+        },
+        {
+          eventId: "event-rename",
+          sequence: 2,
+          occurredAt: "2026-09-04T00:00:02.000Z",
+          type: "thread.meta-updated",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          correlationId: null,
+          payload: { threadId: "thread-1", title: "Renamed title" },
+        },
+        {
+          eventId: "event-status",
+          sequence: 3,
+          occurredAt: "2026-09-04T00:00:03.000Z",
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          correlationId: null,
+          payload: {},
+        },
+      ] as const;
+      const loadSnapshot = vi.fn((event: { readonly sequence: number }) =>
+        Effect.succeed(snapshots[event.sequence - 1] as never),
+      );
+
+      const projected = yield* enrichGatewayRuntimeEventStream({
+        environmentId,
+        machine: "Build machine",
+        initialSnapshot: {
+          snapshotSequence: 0,
+          projects: [],
+          threads: [],
+          updatedAt: "2026-09-04T00:00:00.000Z",
+        } as never,
+        events: Stream.fromIterable(events as never),
+        loadSnapshot,
+      }).pipe(Stream.runCollect);
+
+      expect(Array.from(projected)).toMatchObject([
+        {
+          data: {
+            project: { id: "project-1", title: "T3 Code" },
+            threadTitle: "Initial title",
+          },
+        },
+        { data: { threadTitle: "Renamed title" } },
+        { data: { threadTitle: "Renamed title", status: "running" } },
+      ]);
+      expect(loadSnapshot).toHaveBeenCalledTimes(3);
+    }),
+  );
 
   it("maps lifecycle receipts to canonical state changes", () => {
     const projected = gatewayEventFromOrchestration(

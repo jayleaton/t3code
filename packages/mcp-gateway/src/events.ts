@@ -316,6 +316,18 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
     };
   };
 
+  const deliveryFailureFromRow = (row: Record<string, unknown>): GatewayDeliveryFailure => ({
+    failureId: row.failureId as string,
+    environmentId: row.environmentId as string,
+    type: "delivery.failed",
+    authoritativeSequence: null,
+    occurredAt: row.occurredAt as string,
+    webhookId: row.webhookId as string,
+    eventId: row.eventId as string,
+    attempts: row.attempts as number,
+    error: row.error as string,
+  });
+
   const publicWebhook = (webhook: GatewayWebhookConfig): GatewayWebhookConfig => ({
     ...webhook,
     secret: "",
@@ -784,6 +796,23 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
       }
       db.prepare("DELETE FROM deliveries WHERE webhookId = ?").run(webhookId);
       db.prepare("DELETE FROM webhooks WHERE webhookId = ?").run(webhookId);
+    },
+    deliveryFailureSummary: (
+      environmentIds: ReadonlyArray<string>,
+    ): { readonly count: number; readonly recent: ReadonlyArray<GatewayDeliveryFailure> } => {
+      if (environmentIds.length === 0) return { count: 0, recent: [] };
+      const placeholders = environmentIds.map(() => "?").join(", ");
+      const count = db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM delivery_failures WHERE environmentId IN (${placeholders})`,
+        )
+        .get(...environmentIds) as { count: number };
+      const recent = db
+        .prepare(
+          `SELECT * FROM delivery_failures WHERE environmentId IN (${placeholders}) ORDER BY occurredAt DESC, failureId DESC LIMIT 5`,
+        )
+        .all(...environmentIds) as Array<Record<string, unknown>>;
+      return { count: count.count, recent: recent.map(deliveryFailureFromRow) };
     },
     listWebhooks: (environmentId?: string): ReadonlyArray<GatewayWebhookConfig> => {
       const rows = (
