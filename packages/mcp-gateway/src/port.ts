@@ -1,26 +1,34 @@
 import type {
+  GatewayApprovalDecision,
   GatewayEnvironmentSummary,
   GatewayMutationResult,
   GatewayPage,
   GatewayProfile,
   GatewayRuntimePort,
   GatewayScope,
+  GatewayThreadControlAction,
 } from "@t3tools/client-runtime/gateway";
 
 export type {
+  GatewayApprovalDecision,
   GatewayEnvironmentSummary,
   GatewayMutationResult,
   GatewayPage,
   GatewayProfile,
   GatewayRuntimePort,
   GatewayScope,
+  GatewayThreadControlAction,
 };
 
 export type GatewayErrorCode =
   | "invalid_input"
   | "unknown_tool"
-  | "invalid_profile"
+  | "not_configured"
   | "unknown_environment"
+  | "unknown_subscription"
+  | "unknown_webhook"
+  | "cursor_expired"
+  | "idempotency_conflict"
   | "scope_required"
   | "environment_unavailable"
   | "upstream_failure";

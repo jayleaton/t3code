@@ -206,12 +206,7 @@ describe("gateway bridge", () => {
         profiles: [
           {
             name: "Andy",
-            environmentId: "a534b83f-a352-44d8-aedc-c4230c179390",
-            providerLabel: "OpenCode",
-            modelLabel: "GLM 5.3",
-            instanceId: "opencode",
-            model: "glm-5.3",
-            reasoningEffort: "medium",
+            modelSelection: { instanceId: "glm", model: "glm-5.3" },
             runtimeMode: "full-access",
             interactionMode: "default",
           },
@@ -228,12 +223,7 @@ describe("gateway bridge", () => {
     expect(bridge.getProfiles()).toEqual([
       {
         name: "Andy",
-        environmentId: "a534b83f-a352-44d8-aedc-c4230c179390",
-        providerLabel: "OpenCode",
-        modelLabel: "GLM 5.3",
-        instanceId: "opencode",
-        model: "glm-5.3",
-        reasoningEffort: "medium",
+        modelSelection: { instanceId: "glm", model: "glm-5.3" },
         runtimeMode: "full-access",
         interactionMode: "default",
       },

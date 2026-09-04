@@ -15,7 +15,7 @@ export type GatewayBridgeStartupResult =
       readonly message: string;
     };
 
-const GATEWAY_SCOPES = new Set<GatewayScope>(["read", "create", "send"]);
+const GATEWAY_SCOPES = new Set<GatewayScope>(["read", "create", "send", "control"]);
 
 function parseGrants(value: unknown): GatewayGrants {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -38,45 +38,32 @@ function parseGrants(value: unknown): GatewayGrants {
   return grants;
 }
 
-const REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
-const RUNTIME_MODES = new Set(["approval-required", "auto-accept-edits", "auto", "full-access"]);
-
 function parseProfiles(value: unknown): ReadonlyArray<GatewayProfile> {
+  if (value === undefined) return [];
   if (!Array.isArray(value)) throw new Error("Gateway profiles must be an array.");
-  const names = new Set<string>();
   return value.map((candidate) => {
     if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
-      throw new Error("Gateway profile must be an object.");
+      throw new Error("Invalid gateway profile.");
     }
     const profile = candidate as Record<string, unknown>;
-    for (const key of [
-      "name",
-      "environmentId",
-      "providerLabel",
-      "modelLabel",
-      "instanceId",
-      "model",
-    ]) {
-      if (typeof profile[key] !== "string" || (profile[key] as string).trim() === "") {
-        throw new Error(`Gateway profile ${key} must be a non-empty string.`);
-      }
-    }
-    if (names.has(profile.name as string)) throw new Error("Gateway profile names must be unique.");
-    names.add(profile.name as string);
+    const modelSelection = profile.modelSelection;
     if (
-      profile.reasoningEffort !== undefined &&
-      (typeof profile.reasoningEffort !== "string" ||
-        !REASONING_EFFORTS.has(profile.reasoningEffort))
+      typeof profile.name !== "string" ||
+      profile.name.trim() === "" ||
+      typeof modelSelection !== "object" ||
+      modelSelection === null ||
+      Array.isArray(modelSelection) ||
+      typeof (modelSelection as Record<string, unknown>).instanceId !== "string" ||
+      typeof (modelSelection as Record<string, unknown>).model !== "string" ||
+      (profile.runtimeMode !== "approval-required" &&
+        profile.runtimeMode !== "auto-accept-edits" &&
+        profile.runtimeMode !== "auto" &&
+        profile.runtimeMode !== "full-access") ||
+      (profile.interactionMode !== "default" && profile.interactionMode !== "plan")
     ) {
-      throw new Error("Gateway profile reasoning effort is invalid.");
+      throw new Error(`Invalid gateway profile ${String(profile.name ?? "")}.`);
     }
-    if (typeof profile.runtimeMode !== "string" || !RUNTIME_MODES.has(profile.runtimeMode)) {
-      throw new Error("Gateway profile runtime mode is invalid.");
-    }
-    if (profile.interactionMode !== "default" && profile.interactionMode !== "plan") {
-      throw new Error("Gateway profile interaction mode is invalid.");
-    }
-    return profile as unknown as GatewayProfile;
+    return candidate as GatewayProfile;
   });
 }
 
@@ -111,7 +98,6 @@ export function createBridgeRuntimePort(input: {
   readonly requestTimeoutMs?: number;
   readonly authenticationTimeoutMs?: number;
   readonly initialGrants?: GatewayGrants;
-  readonly initialProfiles?: ReadonlyArray<GatewayProfile>;
 }): {
   readonly port: GatewayRuntimePort;
   readonly getGrants: () => GatewayGrants;
@@ -143,7 +129,7 @@ export function createBridgeRuntimePort(input: {
   let client: WebSocket | null = null;
   let latestAuthenticatedGeneration = 0;
   let grants = input.initialGrants ?? {};
-  let profiles = input.initialProfiles ?? [];
+  let profiles: ReadonlyArray<GatewayProfile> = [];
   let nextId = 1;
   const pending = new Map<number, PendingRequest>();
 
@@ -193,7 +179,7 @@ export function createBridgeRuntimePort(input: {
             return;
           }
           const nextGrants = parseGrants(response.grants);
-          const nextProfiles = parseProfiles(response.profiles ?? []);
+          const nextProfiles = parseProfiles(response.profiles);
           if (client !== null && client !== socket) {
             rejectPending("T3 gateway client was replaced.");
             client.close(1012, "Replaced by a newly configured T3 client runtime.");
@@ -261,6 +247,8 @@ export function createBridgeRuntimePort(input: {
       getThread: (environmentId, threadId) => invoke("getThread", [environmentId, threadId]),
       createThread: (request) => invoke("createThread", [request]),
       sendMessage: (request) => invoke("sendMessage", [request]),
+      controlThread: (request) => invoke("controlThread", [request]),
+      respondToApproval: (request) => invoke("respondToApproval", [request]),
     },
     close: () =>
       new Promise((resolve, reject) => {

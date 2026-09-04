@@ -26,6 +26,18 @@ const port: GatewayRuntimePort = {
     threadId: input.threadId,
     messageId: input.messageId,
   }),
+  controlThread: async (input) => ({
+    requestId: input.requestId,
+    commandId: input.requestId,
+    status: "accepted",
+    threadId: input.threadId,
+  }),
+  respondToApproval: async (input) => ({
+    requestId: input.requestId,
+    commandId: input.requestId,
+    status: "accepted",
+    threadId: input.threadId,
+  }),
 };
 
 describe("MCP gateway server", () => {

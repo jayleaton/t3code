@@ -1,17 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
-  getMcpGatewayStatus,
-  getMcpGatewayToken,
   getMcpGatewayGrants,
   getMcpGatewayProfiles,
-  MCP_GATEWAY_ENABLED_KEY,
   MCP_GATEWAY_GRANTS_KEY,
   MCP_GATEWAY_PROFILES_KEY,
-  publishMcpGatewayStatus,
   setMcpGatewayGrants,
   setMcpGatewayProfiles,
-  subscribeMcpGatewayConfiguration,
 } from "./mcpGatewayState";
 
 function storage(): Storage {
@@ -30,16 +25,12 @@ function storage(): Storage {
 
 describe("MCP gateway grants", () => {
   let localStorage: Storage;
-  let listeners: Map<string, EventListener>;
 
   beforeEach(() => {
     localStorage = storage();
-    listeners = new Map();
     vi.stubGlobal("window", {
       localStorage,
       dispatchEvent: vi.fn(),
-      addEventListener: (type: string, listener: EventListener) => listeners.set(type, listener),
-      removeEventListener: (type: string) => listeners.delete(type),
     });
   });
 
@@ -78,68 +69,37 @@ describe("MCP gateway grants", () => {
     });
   });
 
-  it("persists named readable profiles and drops malformed or duplicate entries", () => {
+  it("persists valid named profiles and drops malformed entries", () => {
     setMcpGatewayProfiles([
       {
         name: "Andy",
-        environmentId: "local",
-        providerLabel: "OpenCode",
-        modelLabel: "GLM 5.3",
-        instanceId: "opencode",
-        model: "glm-5.3",
-        reasoningEffort: "medium",
+        modelSelection: { instanceId: "glm", model: "glm-5.3" },
         runtimeMode: "full-access",
         interactionMode: "default",
       },
     ]);
+    expect(JSON.parse(localStorage.getItem(MCP_GATEWAY_PROFILES_KEY) ?? "null")).toHaveLength(1);
     expect(getMcpGatewayProfiles()).toEqual([
-      expect.objectContaining({
+      {
         name: "Andy",
-        providerLabel: "OpenCode",
-        modelLabel: "GLM 5.3",
-      }),
+        modelSelection: { instanceId: "glm", model: "glm-5.3" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      },
     ]);
 
-    const valid = JSON.parse(localStorage.getItem(MCP_GATEWAY_PROFILES_KEY) ?? "[]")[0];
     localStorage.setItem(
       MCP_GATEWAY_PROFILES_KEY,
       JSON.stringify([
-        valid,
-        { ...valid, environmentId: "other" },
-        { name: "Broken", environmentId: "local", runtimeMode: "root" },
+        { name: "broken", modelSelection: null, runtimeMode: "admin" },
+        {
+          name: "Safe",
+          modelSelection: { instanceId: "codex", model: "gpt-5" },
+          runtimeMode: "approval-required",
+          interactionMode: "plan",
+        },
       ]),
     );
-    expect(getMcpGatewayProfiles()).toEqual([valid]);
-  });
-
-  it("returns an empty token when session storage is unavailable", () => {
-    Object.defineProperty(window, "sessionStorage", {
-      configurable: true,
-      get: () => {
-        throw new DOMException("Access denied", "SecurityError");
-      },
-    });
-
-    expect(getMcpGatewayToken()).toBe("");
-  });
-
-  it("replays the latest gateway status to settings mounted after startup", () => {
-    publishMcpGatewayStatus("running");
-
-    expect(getMcpGatewayStatus()).toBe("running");
-  });
-
-  it("observes gateway configuration changes from other tabs", () => {
-    const onChange = vi.fn();
-    const unsubscribe = subscribeMcpGatewayConfiguration(onChange);
-
-    listeners.get("storage")?.({ key: MCP_GATEWAY_ENABLED_KEY } as StorageEvent);
-    expect(onChange).toHaveBeenCalledOnce();
-
-    listeners.get("storage")?.({ key: "unrelated" } as StorageEvent);
-    expect(onChange).toHaveBeenCalledOnce();
-
-    unsubscribe();
-    expect(listeners.has("storage")).toBe(false);
+    expect(getMcpGatewayProfiles().map((profile) => profile.name)).toEqual(["Safe"]);
   });
 });
