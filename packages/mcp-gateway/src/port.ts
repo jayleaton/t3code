@@ -4,6 +4,7 @@ import type {
   GatewayMutationResult,
   GatewayPage,
   GatewayProfile,
+  GatewayRuntimeEvent,
   GatewayRuntimePort,
   GatewayScope,
   GatewayThreadControlAction,
@@ -15,6 +16,7 @@ export type {
   GatewayMutationResult,
   GatewayPage,
   GatewayProfile,
+  GatewayRuntimeEvent,
   GatewayRuntimePort,
   GatewayScope,
   GatewayThreadControlAction,
@@ -29,6 +31,9 @@ export type GatewayErrorCode =
   | "unknown_webhook"
   | "cursor_expired"
   | "idempotency_conflict"
+  | "request_in_progress"
+  | "stale_plan"
+  | "destructive_confirmation_required"
   | "scope_required"
   | "environment_unavailable"
   | "upstream_failure";

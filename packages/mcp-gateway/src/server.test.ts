@@ -13,6 +13,9 @@ const port: GatewayRuntimePort = {
   listProjects: async () => ({ items: [], snapshotAt: "snapshot-1" }),
   listThreads: async () => ({ items: [], snapshotAt: "snapshot-1" }),
   getThread: async (environmentId, threadId) => ({ environmentId, id: threadId, messages: [] }),
+  createAssetUrl: async () => ({ relativeUrl: "/asset", expiresAt: 1_800_000_000_000 }),
+  getPullRequest: async () => ({}),
+  getPullRequestActivity: async () => ({}),
   createThread: async (input) => ({
     requestId: input.requestId,
     commandId: input.requestId,

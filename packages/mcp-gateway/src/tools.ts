@@ -106,9 +106,92 @@ function stablePayload(value: unknown): string {
   return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stablePayload(item)}`).join(",")}}`;
 }
 
+function approvalPlan(thread: Record<string, unknown>) {
+  const pending = new Map<string, Record<string, unknown>>();
+  const activities = (Array.isArray(thread.activities) ? thread.activities : []).toSorted(
+    (left, right) => {
+      const leftSequence =
+        typeof left === "object" && left !== null && "sequence" in left ? Number(left.sequence) : 0;
+      const rightSequence =
+        typeof right === "object" && right !== null && "sequence" in right
+          ? Number(right.sequence)
+          : 0;
+      return leftSequence - rightSequence;
+    },
+  );
+  let revision = 0;
+  for (const candidate of activities) {
+    if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) continue;
+    const activity = candidate as Record<string, unknown>;
+    const payload =
+      typeof activity.payload === "object" &&
+      activity.payload !== null &&
+      !Array.isArray(activity.payload)
+        ? (activity.payload as Record<string, unknown>)
+        : {};
+    const requestId = typeof payload.requestId === "string" ? payload.requestId : undefined;
+    if (typeof activity.sequence === "number") revision = Math.max(revision, activity.sequence);
+    if (requestId === undefined) continue;
+    if (activity.kind === "approval.requested") {
+      const requestKind = typeof payload.requestKind === "string" ? payload.requestKind : "command";
+      pending.set(requestId, {
+        approvalActionId: requestId,
+        requestKind,
+        detail: typeof payload.detail === "string" ? payload.detail : "Approval requested",
+        risk: requestKind === "file-read" ? "low" : "high",
+        reversible: requestKind !== "command",
+        requiresDestructiveConfirmation: requestKind === "command" || requestKind === "file-change",
+        modifiableFields: [],
+      });
+    } else if (activity.kind === "approval.resolved") {
+      pending.delete(requestId);
+    }
+  }
+  const threadId = typeof thread.id === "string" ? thread.id : "unknown";
+  return {
+    approvalPlanId: `plan-${threadId}`,
+    revision,
+    actions: [...pending.values()],
+  };
+}
+
+function requiredStringArray(input: Record<string, unknown>, key: string): ReadonlyArray<string> {
+  const value = input[key];
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((item) => typeof item !== "string" || item.trim() === "")
+  ) {
+    throw new GatewayError({
+      code: "invalid_input",
+      message: `${key} must be a non-empty array of strings.`,
+      retryable: false,
+    });
+  }
+  return value as ReadonlyArray<string>;
+}
+
+function pullRequestRef(input: Record<string, unknown>) {
+  const number = Number(input.number);
+  if (!Number.isInteger(number) || number < 1) {
+    throw new GatewayError({
+      code: "invalid_input",
+      message: "number must be a positive integer.",
+      retryable: false,
+    });
+  }
+  return {
+    projectId: requiredString(input, "projectId"),
+    repository: requiredString(input, "repository"),
+    number,
+  };
+}
+
 function requiredIdempotencyKey(input: Record<string, unknown>): string {
   return requiredString(input, "idempotencyKey");
 }
+
+const pendingRequests = new WeakMap<GatewayEventStore, Map<string, Promise<unknown>>>();
 
 // Memoizes a mutating command per (environmentId, threadId, requestId). On a
 // first attempt it runs the operation and stores the receipt; a same-payload
@@ -123,6 +206,11 @@ async function withIdempotency(
   // preserving the v1 single-shot semantics.
   if (context.events === undefined) return operation();
   const events = context.events;
+  let pending = pendingRequests.get(events);
+  if (pending === undefined) {
+    pending = new Map();
+    pendingRequests.set(events, pending);
+  }
   const canonical = stablePayload(payload);
   const outcome = events.rememberRequest(key, canonical, null);
   if (outcome === "conflict") {
@@ -135,17 +223,33 @@ async function withIdempotency(
   }
   if (outcome === "duplicate") {
     const previous = events.recallRequest(key);
-    if (previous !== undefined) return previous;
+    if (previous !== undefined && previous !== null) return previous;
+    const active = pending.get(key);
+    if (active !== undefined) return active;
+    throw new GatewayError({
+      code: "request_in_progress",
+      message: "This request id is recovering after an interrupted execution; retry it.",
+      retryable: true,
+      requestId: key,
+    });
   }
+  const execution = (async () => {
+    try {
+      const result = await operation();
+      events.forgetRequest(key);
+      events.rememberRequest(key, canonical, result);
+      return result;
+    } catch (error) {
+      // Failed attempts release the key so a corrected retry is possible.
+      events.forgetRequest(key);
+      throw error;
+    }
+  })();
+  pending.set(key, execution);
   try {
-    const result = await operation();
-    events.forgetRequest(key);
-    events.rememberRequest(key, canonical, result);
-    return result;
-  } catch (error) {
-    // Failed attempts release the key so a corrected retry is possible.
-    events.forgetRequest(key);
-    throw error;
+    return await execution;
+  } finally {
+    pending.delete(key);
   }
 }
 
@@ -185,6 +289,56 @@ export async function callGatewayTool(
     case "t3_get_thread": {
       const environmentId = environmentWithScope(context, input, "read");
       return context.port.getThread(environmentId, requiredString(input, "threadId"));
+    }
+    case "t3_summarize_thread": {
+      const environmentId = environmentWithScope(context, input, "read");
+      const thread = await context.port.getThread(environmentId, requiredString(input, "threadId"));
+      const plan = approvalPlan(thread);
+      const session =
+        typeof thread.session === "object" && thread.session !== null
+          ? (thread.session as Record<string, unknown>)
+          : null;
+      const latestTurn =
+        typeof thread.latestTurn === "object" && thread.latestTurn !== null
+          ? (thread.latestTurn as Record<string, unknown>)
+          : null;
+      const status =
+        plan.actions.length > 0
+          ? "waiting-approval"
+          : typeof latestTurn?.state === "string"
+            ? latestTurn.state
+            : typeof session?.status === "string"
+              ? session.status
+              : "queued";
+      return {
+        environmentId,
+        threadId: thread.id,
+        title: thread.title,
+        status,
+        summary: session?.lastError ?? `Thread is ${status}.`,
+        blockers: plan.actions,
+        approvalPlan: plan,
+        artifacts: Array.isArray(thread.checkpoints) ? thread.checkpoints : [],
+        nextAction:
+          plan.actions.length > 0 ? "approve_actions" : status === "running" ? "await_event" : null,
+        snapshotAt: thread.updatedAt ?? "runtime",
+      };
+    }
+    case "t3_list_profiles": {
+      const environmentId = environmentWithScope(context, input, "read");
+      return {
+        items: currentProfiles(context.profiles).filter(
+          (profile) =>
+            !Array.isArray(profile.environmentIds) ||
+            profile.environmentIds.includes(environmentId),
+        ),
+        snapshotAt: "runtime",
+      };
+    }
+    case "t3_get_approval_plan": {
+      const environmentId = environmentWithScope(context, input, "read");
+      const thread = await context.port.getThread(environmentId, requiredString(input, "threadId"));
+      return approvalPlan(thread);
     }
     case "t3_get_messages": {
       const environmentId = environmentWithScope(context, input, "read");
@@ -241,19 +395,145 @@ export async function callGatewayTool(
       }
       return { items };
     }
+    case "t3_get_artifact": {
+      const environmentId = environmentWithScope(context, input, "read");
+      const threadId = requiredString(input, "threadId");
+      const artifactId = requiredString(input, "artifactId");
+      const thread = await context.port.getThread(environmentId, threadId);
+      const kind = requiredString(input, "kind");
+      if (kind === "attachment") {
+        const belongsToThread = (Array.isArray(thread.messages) ? thread.messages : []).some(
+          (message) =>
+            typeof message === "object" &&
+            message !== null &&
+            !Array.isArray(message) &&
+            (Array.isArray((message as Record<string, unknown>).attachments)
+              ? ((message as Record<string, unknown>).attachments as ReadonlyArray<unknown>)
+              : []
+            ).some(
+              (attachment) =>
+                typeof attachment === "object" &&
+                attachment !== null &&
+                !Array.isArray(attachment) &&
+                (attachment as Record<string, unknown>).id === artifactId,
+            ),
+        );
+        if (!belongsToThread) {
+          throw new GatewayError({
+            code: "invalid_input",
+            message: `Artifact ${artifactId} does not belong to thread ${threadId}.`,
+            retryable: false,
+            environmentId,
+          });
+        }
+        const download = await context.port.createAssetUrl(environmentId, {
+          _tag: "attachment",
+          attachmentId: artifactId,
+        });
+        return { artifactId, environmentId, threadId, availability: "available", download };
+      }
+      if (kind === "workspace-file") {
+        const path = requiredString(input, "path");
+        const belongsToThread = (Array.isArray(thread.checkpoints) ? thread.checkpoints : []).some(
+          (checkpoint) =>
+            typeof checkpoint === "object" &&
+            checkpoint !== null &&
+            !Array.isArray(checkpoint) &&
+            (Array.isArray((checkpoint as Record<string, unknown>).files)
+              ? ((checkpoint as Record<string, unknown>).files as ReadonlyArray<unknown>)
+              : []
+            ).some(
+              (file) =>
+                typeof file === "object" &&
+                file !== null &&
+                !Array.isArray(file) &&
+                (file as Record<string, unknown>).path === path,
+            ),
+        );
+        if (!belongsToThread) {
+          throw new GatewayError({
+            code: "invalid_input",
+            message: `Workspace artifact ${path} does not belong to thread ${threadId}.`,
+            retryable: false,
+            environmentId,
+          });
+        }
+        const download = await context.port.createAssetUrl(environmentId, {
+          _tag: "workspace-file",
+          threadId,
+          path,
+        });
+        return { artifactId, environmentId, threadId, availability: "available", download };
+      }
+      throw new GatewayError({
+        code: "invalid_input",
+        message: `Unsupported artifact kind ${kind}.`,
+        retryable: false,
+        environmentId,
+      });
+    }
+    case "t3_get_pr": {
+      const environmentId = environmentWithScope(context, input, "read");
+      return context.port.getPullRequest(environmentId, pullRequestRef(input));
+    }
+    case "t3_get_pr_checks": {
+      const environmentId = environmentWithScope(context, input, "read");
+      const detail = await context.port.getPullRequest(environmentId, pullRequestRef(input));
+      return { items: Array.isArray(detail.checks) ? detail.checks : [] };
+    }
+    case "t3_list_review_comments": {
+      const environmentId = environmentWithScope(context, input, "read");
+      const activity = await context.port.getPullRequestActivity(
+        environmentId,
+        pullRequestRef(input),
+      );
+      const items = (Array.isArray(activity.reviewThreads) ? activity.reviewThreads : []).filter(
+        (thread): thread is Record<string, unknown> =>
+          typeof thread === "object" &&
+          thread !== null &&
+          !Array.isArray(thread) &&
+          (thread as Record<string, unknown>).isResolved !== true,
+      );
+      return { items, unresolvedCount: items.length };
+    }
     case "t3_create_thread": {
       const environmentId = environmentWithScope(context, input, "create");
       const idempotencyKey = requiredIdempotencyKey(input);
       const profileName = typeof input.profile === "string" ? input.profile.trim() : "";
+      const profileId = typeof input.profileId === "string" ? input.profileId.trim() : "";
       const profile =
-        profileName === ""
-          ? undefined
-          : currentProfiles(context.profiles).find((candidate) => candidate.name === profileName);
-      if (profileName !== "" && profile === undefined) {
+        profileId !== ""
+          ? currentProfiles(context.profiles).find((candidate) => candidate.profileId === profileId)
+          : profileName === ""
+            ? undefined
+            : currentProfiles(context.profiles).find((candidate) => candidate.name === profileName);
+      if ((profileName !== "" || profileId !== "") && profile === undefined) {
         throw new GatewayError({
           code: "invalid_input",
-          message: `Unknown gateway profile ${profileName}.`,
+          message: `Unknown gateway profile ${profileId || profileName}.`,
           retryable: false,
+        });
+      }
+      if (
+        profile !== undefined &&
+        Array.isArray(profile.environmentIds) &&
+        !profile.environmentIds.includes(environmentId)
+      ) {
+        throw new GatewayError({
+          code: "scope_required",
+          message: `Profile ${profile.name} is not allowed in environment ${environmentId}.`,
+          retryable: false,
+          environmentId,
+          details: { profileId: profile.profileId, permission: "environment-allowlist" },
+        });
+      }
+      if (profile?.runtimeMode === "read-only") {
+        throw new GatewayError({
+          code: "scope_required",
+          message: `Profile ${profile.name} is read-only and cannot create a thread.`,
+          retryable: false,
+          environmentId,
+          details: { profileId: profile.profileId, permission: "read-only" },
         });
       }
       const rawModelSelection = input.modelSelection ?? profile?.modelSelection;
@@ -283,12 +563,6 @@ export async function callGatewayTool(
             interactionMode: requestedInteractionMode === "plan" ? "plan" : "default",
             requestId: idFor("request", idempotencyKey),
           });
-          context.events?.emit({
-            environmentId,
-            type: "thread.started",
-            threadId: result.threadId,
-            data: { title: requiredString(input, "title") },
-          });
           return result;
         },
       );
@@ -307,12 +581,6 @@ export async function callGatewayTool(
             text: requiredString(input, "text"),
             messageId: idFor("message", idempotencyKey),
             requestId: idFor("request", idempotencyKey),
-          });
-          context.events?.emit({
-            environmentId,
-            type: "thread.progress",
-            threadId: result.threadId,
-            data: { messageId: result.messageId },
           });
           return result;
         },
@@ -346,12 +614,6 @@ export async function callGatewayTool(
             requestId: idFor("request", idempotencyKey),
             messageId: idFor("message", idempotencyKey),
           });
-          context.events?.emit({
-            environmentId,
-            type: "thread.state_changed",
-            threadId: result.threadId,
-            data: { action },
-          });
           return result;
         },
       );
@@ -384,13 +646,78 @@ export async function callGatewayTool(
             decision,
             requestId: idFor("request", idempotencyKey),
           });
-          context.events?.emit({
-            environmentId,
-            type: "approval.updated",
-            threadId: result.threadId,
-            data: { approvalRequestId: requiredString(input, "approvalRequestId"), decision },
-          });
           return result;
+        },
+      );
+    }
+    case "t3_approve_actions":
+    case "t3_reject_actions": {
+      const environmentId = environmentWithScope(context, input, "control");
+      const threadId = requiredString(input, "threadId");
+      const idempotencyKey = requiredIdempotencyKey(input);
+      const actionIds = requiredStringArray(input, "actionIds");
+      const thread = await context.port.getThread(environmentId, threadId);
+      const plan = approvalPlan(thread);
+      const requestedRevision = Number(input.planRevision);
+      if (!Number.isInteger(requestedRevision) || requestedRevision !== plan.revision) {
+        throw new GatewayError({
+          code: "stale_plan",
+          message: `Approval plan changed from revision ${String(input.planRevision)} to ${plan.revision}.`,
+          retryable: false,
+          environmentId,
+          details: { approvalPlanId: plan.approvalPlanId, currentRevision: plan.revision },
+        });
+      }
+      const selected = plan.actions.filter((action) =>
+        actionIds.includes(action.approvalActionId as string),
+      );
+      if (selected.length !== actionIds.length) {
+        throw new GatewayError({
+          code: "invalid_input",
+          message: "One or more approval action IDs are not pending in this plan.",
+          retryable: false,
+          environmentId,
+        });
+      }
+      if (
+        name === "t3_approve_actions" &&
+        input.confirmDestructive !== true &&
+        selected.some((action) => action.requiresDestructiveConfirmation === true)
+      ) {
+        throw new GatewayError({
+          code: "destructive_confirmation_required",
+          message: "One or more selected actions require confirmDestructive: true.",
+          retryable: false,
+          environmentId,
+        });
+      }
+      return withIdempotency(
+        context,
+        `${environmentId}::${threadId}::${idFor("approval-plan", idempotencyKey)}`,
+        input,
+        async () => {
+          const decision: GatewayApprovalDecision =
+            name === "t3_approve_actions" ? "accept" : "decline";
+          const results = [];
+          for (const action of selected) {
+            results.push(
+              await context.port.respondToApproval({
+                environmentId,
+                threadId,
+                approvalRequestId: action.approvalActionId as string,
+                decision,
+                requestId: `${idFor("request", idempotencyKey)}-${String(action.approvalActionId)}`,
+              }),
+            );
+          }
+          return {
+            approvalPlanId: plan.approvalPlanId,
+            revision: plan.revision,
+            approved: decision === "accept" ? results.length : 0,
+            rejected: decision === "decline" ? results.length : 0,
+            pending: plan.actions.length - results.length,
+            results,
+          };
         },
       );
     }
@@ -432,11 +759,8 @@ export async function callGatewayTool(
       const events = requireEventStore(context);
       const environmentId = environmentWithScope(context, input, "read");
       const subscriptionId = requiredString(input, "subscriptionId");
-      const subscription = events.pendingFor(subscriptionId, 1);
-      if (
-        subscription[0]?.environmentId !== undefined &&
-        subscription[0].environmentId !== environmentId
-      ) {
+      const subscription = events.subscriptionById(subscriptionId);
+      if (subscription === undefined || subscription.environmentId !== environmentId) {
         throw new GatewayError({
           code: "unknown_subscription",
           message: `Subscription ${subscriptionId} does not belong to environment ${environmentId}.`,
@@ -449,7 +773,7 @@ export async function callGatewayTool(
     }
     case "t3_register_webhook": {
       const events = requireEventStore(context);
-      const environmentId = environmentWithScope(context, input, "read");
+      const environmentId = environmentWithScope(context, input, "delivery");
       const { webhook, secret } = events.registerWebhook({
         environmentId,
         url: requiredString(input, "url"),
@@ -461,17 +785,26 @@ export async function callGatewayTool(
     }
     case "t3_update_webhook": {
       const events = requireEventStore(context);
-      environmentWithScope(context, input, "read");
+      const environmentId = environmentWithScope(context, input, "delivery");
       const types = Array.isArray(input.types)
         ? input.types.filter((t): t is string => typeof t === "string")
         : undefined;
       const patch = types === undefined ? {} : { types };
-      return events.updateWebhook(requiredString(input, "webhookId"), patch);
+      return events.updateWebhook(environmentId, requiredString(input, "webhookId"), patch);
+    }
+    case "t3_rotate_webhook_secret": {
+      const events = requireEventStore(context);
+      const environmentId = environmentWithScope(context, input, "delivery");
+      const { webhook, secret } = events.rotateWebhookSecret(
+        environmentId,
+        requiredString(input, "webhookId"),
+      );
+      return { ...webhook, secret, secretReference: `webhook-secret/${webhook.webhookId}` };
     }
     case "t3_delete_webhook": {
       const events = requireEventStore(context);
-      environmentWithScope(context, input, "read");
-      events.deleteWebhook(requiredString(input, "webhookId"));
+      const environmentId = environmentWithScope(context, input, "delivery");
+      events.deleteWebhook(environmentId, requiredString(input, "webhookId"));
       return { deleted: true };
     }
     case "t3_list_webhooks": {

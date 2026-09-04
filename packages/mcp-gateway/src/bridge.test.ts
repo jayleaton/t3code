@@ -232,6 +232,64 @@ describe("gateway bridge", () => {
     await bridge.close();
   });
 
+  it("returns durable cursors and ingests events only for granted environments", async () => {
+    const port = await unusedPort();
+    const onEvent = vi.fn();
+    const getEventCursor = vi.fn((environmentId: string) =>
+      environmentId === "granted" ? 41 : 99,
+    );
+    const bridge = createBridgeRuntimePort({
+      port,
+      token: TOKEN,
+      onEvent,
+      getEventCursor,
+    });
+    const client = new WebSocket(`ws://127.0.0.1:${port}`);
+    const messages: Array<Record<string, unknown>> = [];
+    const authenticated = authenticate(client, (message) => messages.push(message), false);
+    await opened(client);
+    await authenticated;
+    client.send(JSON.stringify({ type: "configure", grants: { granted: ["read"] } }));
+
+    await vi.waitFor(() =>
+      expect(messages).toContainEqual({ type: "configured", cursors: { granted: 41 } }),
+    );
+    expect(getEventCursor).toHaveBeenCalledTimes(1);
+    expect(getEventCursor).toHaveBeenCalledWith("granted");
+
+    client.send(
+      JSON.stringify({
+        type: "event",
+        event: {
+          environmentId: "denied",
+          eventId: "e-1",
+          sequence: 100,
+          type: "thread.progress",
+          occurredAt: "2026-09-04T00:00:00.000Z",
+        },
+      }),
+    );
+    client.send(
+      JSON.stringify({
+        type: "event",
+        event: {
+          environmentId: "granted",
+          eventId: "e-2",
+          sequence: 42,
+          type: "thread.progress",
+          occurredAt: "2026-09-04T00:00:01.000Z",
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(onEvent).toHaveBeenCalledTimes(1));
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ environmentId: "granted", eventId: "e-2", sequence: 42 }),
+    );
+
+    client.close();
+    await bridge.close();
+  });
+
   it("times out requests that receive no runtime response", async () => {
     const port = await unusedPort();
     const bridge = createBridgeRuntimePort({ port, token: TOKEN, requestTimeoutMs: 10 });

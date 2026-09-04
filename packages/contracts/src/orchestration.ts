@@ -32,6 +32,7 @@ export const ORCHESTRATION_WS_METHODS = {
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
+  subscribeEvents: "orchestration.subscribeEvents",
 } as const;
 
 export const ProviderApprovalPolicy = Schema.Literals([
@@ -1663,6 +1664,11 @@ export class OrchestrationGetWorkflowScriptError extends Schema.TaggedErrorClass
   }
 }
 
+export const OrchestrationSubscribeEventsInput = Schema.Struct({
+  afterSequence: NonNegativeInt,
+});
+export type OrchestrationSubscribeEventsInput = typeof OrchestrationSubscribeEventsInput.Type;
+
 export const OrchestrationRpcSchemas = {
   dispatchCommand: {
     input: ClientOrchestrationCommand,
@@ -1687,6 +1693,10 @@ export const OrchestrationRpcSchemas = {
   getArchivedShellSnapshot: {
     input: Schema.Struct({}),
     output: OrchestrationShellSnapshot,
+  },
+  subscribeEvents: {
+    input: OrchestrationSubscribeEventsInput,
+    output: OrchestrationEvent,
   },
   subscribeThread: {
     input: OrchestrationSubscribeThreadInput,
