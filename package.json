@@ -50,6 +50,7 @@
     "@effect/tsgo": "catalog:",
     "@types/node": "catalog:",
     "@typescript/native-preview": "catalog:",
+    "happy-dom": "^20.13.2",
     "knip": "6.34.0",
     "vite-plus": "catalog:"
   },

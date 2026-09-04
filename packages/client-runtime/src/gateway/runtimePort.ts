@@ -12,6 +12,7 @@ import {
   type OrchestrationShellSnapshot,
   type OrchestrationThread,
   type OrchestrationThreadDetailSnapshot,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -32,6 +33,7 @@ import {
 } from "../operations/commands.ts";
 import { request, runStream, subscribe } from "../rpc/client.ts";
 import type {
+  GatewayProfile,
   GatewayProfileModelSelection,
   GatewayRuntimeEvent,
   GatewayRuntimeEventSource,
@@ -88,6 +90,35 @@ const threadSnapshot = (environmentId: EnvironmentId, threadId: ThreadId) =>
       ),
     );
   });
+
+/**
+ * Resolves persisted readable profile labels against a live provider catalog.
+ * Exactly one enabled/available provider + model pair must match; duplicate
+ * labels stay unresolved rather than routing a thread ambiguously. Legacy
+ * profiles without labels retain their persisted routing snapshot.
+ */
+export function resolveGatewayProfileModelSelection(
+  profile: GatewayProfile,
+  providers: ReadonlyArray<ServerProvider>,
+): GatewayProfileModelSelection | undefined {
+  if (profile.providerLabel === undefined || profile.modelLabel === undefined) {
+    return profile.modelSelection as GatewayProfileModelSelection | undefined;
+  }
+  const matches = providers.flatMap((provider) => {
+    const providerLabel = provider.displayName?.trim() || provider.driver;
+    if (
+      !provider.enabled ||
+      provider.availability === "unavailable" ||
+      providerLabel !== profile.providerLabel
+    ) {
+      return [];
+    }
+    return provider.models
+      .filter((model) => model.name === profile.modelLabel)
+      .map((model) => ({ instanceId: provider.instanceId, model: model.slug }));
+  });
+  return matches.length === 1 ? matches[0] : undefined;
+}
 
 export function gatewayEventFromOrchestration(
   environmentId: EnvironmentId,
@@ -228,6 +259,17 @@ export function createGatewayRuntimePort(runtime: GatewayEffectRuntime): Gateway
             ...profile,
             modelSelection: profile.modelSelection as GatewayProfileModelSelection | undefined,
           }));
+        }),
+      ),
+    resolveProfileModelSelection: (rawEnvironmentId, profile) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          const config = yield* registry.run(
+            EnvironmentId.make(rawEnvironmentId),
+            request(WS_METHODS.serverGetConfig, {}),
+          );
+          return resolveGatewayProfileModelSelection(profile, config.providers);
         }),
       ),
     listProjects: (rawEnvironmentId) =>

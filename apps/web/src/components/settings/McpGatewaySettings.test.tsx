@@ -1,3 +1,6 @@
+// @vitest-environment happy-dom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -83,8 +86,8 @@ describe("MCP environment grant matrix", () => {
 
   it("select all turns every visible machine on, then back off", () => {
     const once = toggleMcpGatewayGrantForAll({}, environments);
-    expect(once[environments[0]!.environmentId]).toContain("read");
-    expect(once[environments[1]!.environmentId]).toContain("send");
+    expect(once[environments[0]!.environmentId]).toEqual(["read", "create", "send"]);
+    expect(once[environments[1]!.environmentId]).toEqual(["read", "create", "send"]);
     const twice = toggleMcpGatewayGrantForAll(once, environments);
     expect(twice).toEqual({});
   });
@@ -177,6 +180,86 @@ describe("MCP named profiles", () => {
     expect(summary).toContain("Andy — Codex GPT-5.6 Sol");
     expect(summary).not.toContain("instance");
     expect(summary).not.toMatch(/gpt-5\.6-sol/);
+  });
+
+  it("preserves identity for ordinary edits and renames, and rejects duplicate names", async () => {
+    (
+      globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
+    const bobProfile: McpGatewayProfile = {
+      ...andyProfile,
+      profileId: "profile-bob",
+      name: "Bob",
+    };
+
+    const exerciseEdit = async (profiles: ReadonlyArray<McpGatewayProfile>, nextName?: string) => {
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+      const root = createRoot(container);
+      const onChange = vi.fn();
+      await act(async () => {
+        root.render(
+          <McpProfileList profiles={profiles} providers={[codexProvider]} onChange={onChange} />,
+        );
+      });
+      await act(async () => {
+        (container.querySelector('[aria-label="Edit Andy profile"]') as HTMLButtonElement).click();
+      });
+      if (nextName !== undefined) {
+        await act(async () => {
+          const input = container.querySelector('[aria-label="Profile name"]') as HTMLInputElement;
+          const setter = Object.getOwnPropertyDescriptor(
+            globalThis.HTMLInputElement.prototype,
+            "value",
+          )?.set;
+          setter?.call(input, nextName);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+      }
+      return { container, root, onChange };
+    };
+
+    const ordinary = await exerciseEdit([andyProfile]);
+    await act(async () => {
+      (ordinary.container.querySelector("button:not([aria-label])") as HTMLButtonElement).click();
+    });
+    expect(ordinary.onChange).toHaveBeenCalledWith([
+      expect.objectContaining({
+        profileId: "profile-andy",
+        name: "Andy",
+        revision: 1,
+        createdAt: andyProfile.createdAt,
+        updatedAt: andyProfile.updatedAt,
+      }),
+    ]);
+    await act(async () => ordinary.root.unmount());
+    ordinary.container.remove();
+
+    const renamed = await exerciseEdit([andyProfile], "Bob");
+    const renameButton = [...renamed.container.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Update Andy"),
+    );
+    await act(async () => renameButton?.click());
+    expect(renamed.onChange).toHaveBeenCalledWith([
+      expect.objectContaining({
+        profileId: "profile-andy",
+        name: "Bob",
+        createdAt: andyProfile.createdAt,
+      }),
+    ]);
+    await act(async () => renamed.root.unmount());
+    renamed.container.remove();
+
+    const duplicate = await exerciseEdit([andyProfile, bobProfile], "Bob");
+    expect(duplicate.container.textContent).toContain("A profile named Bob already exists.");
+    const duplicateButton = [...duplicate.container.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Update Andy"),
+    );
+    expect(duplicateButton).toHaveProperty("disabled", true);
+    await act(async () => duplicateButton?.click());
+    expect(duplicate.onChange).not.toHaveBeenCalled();
+    await act(async () => duplicate.root.unmount());
+    duplicate.container.remove();
   });
 
   it("provider and model pickers come from the live provider catalog", () => {
