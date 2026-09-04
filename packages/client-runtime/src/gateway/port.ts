@@ -129,7 +129,6 @@ export interface GatewayRuntimePort {
   ): Promise<{
     readonly relativeUrl: string;
     readonly expiresAt: number;
-    readonly sourcePath?: string | undefined;
   }>;
   getPullRequest(
     environmentId: string,
@@ -144,27 +143,20 @@ export interface GatewayRuntimePort {
     readonly projectId: string;
     readonly threadId: string;
     readonly title: string;
-    readonly modelSelection: {
+    readonly modelSelection?: {
       readonly instanceId: string;
       readonly model: string;
       readonly options?: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }>;
     };
-    readonly runtimeMode: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
-    readonly interactionMode: "default" | "plan";
+    readonly runtimeMode?: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
+    readonly interactionMode?: "default" | "plan";
     readonly requestId: string;
-    /** Immutable server-owned snapshot of the resolved profile at creation
-     * time. Later profile edits affect future threads only. */
-    readonly profileSnapshot?: {
-      readonly profileId: string | null;
-      readonly profileName: string | null;
-      readonly revision: number | null;
-      readonly reasoningEffort?: string;
-      readonly effectiveSource: {
-        readonly modelSelection: "profile" | "thread-override" | "fallback";
-        readonly runtimeMode: "profile" | "thread-override" | "fallback";
-        readonly interactionMode: "profile" | "thread-override" | "fallback";
-        readonly reasoningEffort: "profile" | "thread-override" | "fallback";
-      };
+    readonly profileSelection?: {
+      readonly profileId: string;
+      readonly revision: number;
+      readonly overrideFields: ReadonlyArray<
+        "modelSelection" | "runtimeMode" | "interactionMode" | "reasoningEffort"
+      >;
     };
   }): Promise<GatewayMutationResult>;
   sendMessage(input: {
@@ -188,6 +180,7 @@ export interface GatewayRuntimePort {
       readonly approvalRequestId: string;
       readonly decision: GatewayApprovalDecision;
     }>;
+    readonly expectedRevision: number;
     readonly requestId: string;
   }): Promise<GatewayMutationResult>;
   respondToApproval(input: {

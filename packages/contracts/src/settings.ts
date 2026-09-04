@@ -618,6 +618,17 @@ export const McpGatewayProfile = Schema.Struct({
 });
 export type McpGatewayProfile = typeof McpGatewayProfile.Type;
 
+const McpGatewayProfiles = Schema.Array(McpGatewayProfile).check(
+  Schema.makeFilter((profiles) => {
+    const names = new Set<string>();
+    for (const profile of profiles) {
+      if (names.has(profile.name)) return `Duplicate gateway profile name '${profile.name}'.`;
+      names.add(profile.name);
+    }
+    return true;
+  }),
+);
+
 /** Human-readable permission-mode label for MCP gateway profiles. */
 export const MCP_GATEWAY_RUNTIME_MODE_LABELS: Record<McpGatewayProfile["runtimeMode"], string> = {
   "approval-required": "Approval required",
@@ -687,9 +698,7 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
   addProjectBaseDirectory: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
-  mcpGatewayProfiles: Schema.Array(McpGatewayProfile).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
+  mcpGatewayProfiles: McpGatewayProfiles.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(
       Effect.succeed({
@@ -889,7 +898,7 @@ export const ServerSettingsPatch = Schema.Struct({
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
-  mcpGatewayProfiles: Schema.optionalKey(Schema.Array(McpGatewayProfile)),
+  mcpGatewayProfiles: Schema.optionalKey(McpGatewayProfiles),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   sourceControlWritingStyle: Schema.optionalKey(
     Schema.Struct({

@@ -30,18 +30,11 @@ function currentGrants(source: GatewayGrantSource): GatewayGrants {
   return typeof source === "function" ? source() : source;
 }
 
-function currentProfiles(source: GatewayProfileSource | undefined): ReadonlyArray<GatewayProfile> {
-  if (source === undefined) return [];
-  return typeof source === "function" ? source() : source;
-}
-
 async function authoritativeProfiles(
   context: GatewayToolContext,
   environmentId: string,
 ): Promise<ReadonlyArray<GatewayProfile>> {
-  return context.port.listProfiles === undefined
-    ? currentProfiles(context.profiles)
-    : context.port.listProfiles(environmentId);
+  return context.port.listProfiles === undefined ? [] : context.port.listProfiles(environmentId);
 }
 
 function record(input: unknown): Record<string, unknown> {
@@ -53,6 +46,51 @@ function record(input: unknown): Record<string, unknown> {
     });
   }
   return input as Record<string, unknown>;
+}
+
+function gatewayArtifactRecord(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  const artifact = record(value);
+  const artifactId = typeof artifact.artifactId === "string" ? artifact.artifactId : undefined;
+  const kind =
+    artifact.kind === "attachment" || artifact.kind === "workspace-file"
+      ? artifact.kind
+      : undefined;
+  const sourceId = typeof artifact.sourceId === "string" ? artifact.sourceId : undefined;
+  const availability =
+    artifact.availability === "available" ||
+    artifact.availability === "unavailable" ||
+    artifact.availability === "deleted"
+      ? artifact.availability
+      : undefined;
+  if (
+    artifactId === undefined ||
+    kind === undefined ||
+    sourceId === undefined ||
+    availability === undefined
+  ) {
+    return undefined;
+  }
+  const path = typeof artifact.path === "string" ? artifact.path : undefined;
+  if (
+    path !== undefined &&
+    (path.startsWith("/") ||
+      path.startsWith("\\") ||
+      /^[a-z]:[\\/]/i.test(path) ||
+      path.split(/[\\/]/).includes(".."))
+  ) {
+    return undefined;
+  }
+  return {
+    artifactId,
+    kind,
+    sourceId,
+    availability,
+    ...(typeof artifact.name === "string" ? { name: artifact.name.slice(0, 512) } : {}),
+    ...(path === undefined ? {} : { path }),
+    ...(typeof artifact.mimeType === "string" ? { mimeType: artifact.mimeType.slice(0, 255) } : {}),
+    ...(typeof artifact.sizeBytes === "number" ? { sizeBytes: artifact.sizeBytes } : {}),
+    ...(typeof artifact.createdAt === "string" ? { createdAt: artifact.createdAt } : {}),
+  };
 }
 
 function requiredString(input: Record<string, unknown>, key: string): string {
@@ -173,7 +211,7 @@ function approvalPlan(thread: Record<string, unknown>) {
         risk: requestKind === "file-read" ? "low" : "high",
         reversible: requestKind !== "command",
         requiresDestructiveConfirmation: requestKind === "command" || requestKind === "file-change",
-        modifiableFields: [],
+        modifiableFields: ["decision"],
       });
     } else if (activity.kind === "approval.resolved") {
       pending.delete(requestId);
@@ -485,7 +523,7 @@ export async function callGatewayTool(
         summary: session?.lastError ?? `Thread is ${status}.`,
         blockers: plan.actions,
         approvalPlan: plan,
-        artifacts: Array.isArray(thread.checkpoints) ? thread.checkpoints : [],
+        artifacts: Array.isArray(thread.artifacts) ? thread.artifacts : [],
         nextAction:
           plan.actions.length > 0 ? "approve_actions" : status === "running" ? "await_event" : null,
         snapshotAt: thread.updatedAt ?? "runtime",
@@ -563,22 +601,16 @@ export async function callGatewayTool(
     case "t3_list_artifacts": {
       const environmentId = environmentWithScope(context, input, "artifact");
       const thread = await context.port.getThread(environmentId, requiredString(input, "threadId"));
-      const items: Array<Record<string, unknown>> = [];
-      for (const message of Array.isArray(thread.messages) ? thread.messages : []) {
-        if (typeof message !== "object" || message === null || Array.isArray(message)) continue;
-        const value = message as Record<string, unknown>;
-        for (const artifact of Array.isArray(value.attachments) ? value.attachments : []) {
-          items.push({ source: "message", messageId: value.id, artifact });
-        }
-      }
-      for (const checkpoint of Array.isArray(thread.checkpoints) ? thread.checkpoints : []) {
-        if (typeof checkpoint !== "object" || checkpoint === null || Array.isArray(checkpoint))
-          continue;
-        const value = checkpoint as Record<string, unknown>;
-        for (const artifact of Array.isArray(value.files) ? value.files : []) {
-          items.push({ source: "checkpoint", turnId: value.turnId, artifact });
-        }
-      }
+      const items = (Array.isArray(thread.artifacts) ? thread.artifacts : [])
+        .slice(0, 2_000)
+        .flatMap((artifact) => {
+          try {
+            const projected = gatewayArtifactRecord(artifact);
+            return projected === undefined ? [] : [projected];
+          } catch {
+            return [];
+          }
+        });
       return { items };
     }
     case "t3_get_artifact": {
@@ -586,75 +618,51 @@ export async function callGatewayTool(
       const threadId = requiredString(input, "threadId");
       const artifactId = requiredString(input, "artifactId");
       const thread = await context.port.getThread(environmentId, threadId);
-      const kind = requiredString(input, "kind");
-      if (kind !== "workspace-file") {
-        const belongsToThread = (Array.isArray(thread.messages) ? thread.messages : []).some(
-          (message) =>
-            typeof message === "object" &&
-            message !== null &&
-            !Array.isArray(message) &&
-            (Array.isArray((message as Record<string, unknown>).attachments)
-              ? ((message as Record<string, unknown>).attachments as ReadonlyArray<unknown>)
-              : []
-            ).some(
-              (attachment) =>
-                typeof attachment === "object" &&
-                attachment !== null &&
-                !Array.isArray(attachment) &&
-                (attachment as Record<string, unknown>).id === artifactId &&
-                (kind === "attachment" || (attachment as Record<string, unknown>).kind === kind),
-            ),
-        );
-        if (!belongsToThread) {
-          throw new GatewayError({
-            code: "invalid_input",
-            message: `Artifact ${artifactId} does not belong to thread ${threadId}.`,
-            retryable: false,
-            environmentId,
-          });
-        }
+      const artifact = (Array.isArray(thread.artifacts) ? thread.artifacts : [])
+        .slice(0, 2_000)
+        .flatMap((candidate) => {
+          try {
+            const projected = gatewayArtifactRecord(candidate);
+            return projected === undefined ? [] : [projected];
+          } catch {
+            return [];
+          }
+        })
+        .find((candidate) => candidate.artifactId === artifactId);
+      if (artifact === undefined) {
+        throw new GatewayError({
+          code: "invalid_input",
+          message: `Artifact ${artifactId} does not belong to thread ${threadId}.`,
+          retryable: false,
+          environmentId,
+        });
+      }
+      if (artifact.availability !== "available") {
+        throw new GatewayError({
+          code: "invalid_input",
+          message: `Artifact ${artifactId} is ${String(artifact.availability)}.`,
+          retryable: false,
+          environmentId,
+        });
+      }
+      if (artifact.kind === "attachment" && typeof artifact.sourceId === "string") {
         const download = await context.port.createAssetUrl(environmentId, {
           _tag: "attachment",
           attachmentId: artifactId,
         });
-        return { artifactId, environmentId, threadId, availability: "available", download };
+        return { ...artifact, environmentId, threadId, download };
       }
-      if (kind === "workspace-file") {
-        const path = requiredString(input, "path");
-        const belongsToThread = (Array.isArray(thread.checkpoints) ? thread.checkpoints : []).some(
-          (checkpoint) =>
-            typeof checkpoint === "object" &&
-            checkpoint !== null &&
-            !Array.isArray(checkpoint) &&
-            (Array.isArray((checkpoint as Record<string, unknown>).files)
-              ? ((checkpoint as Record<string, unknown>).files as ReadonlyArray<unknown>)
-              : []
-            ).some(
-              (file) =>
-                typeof file === "object" &&
-                file !== null &&
-                !Array.isArray(file) &&
-                (file as Record<string, unknown>).path === path,
-            ),
-        );
-        if (!belongsToThread) {
-          throw new GatewayError({
-            code: "invalid_input",
-            message: `Workspace artifact ${path} does not belong to thread ${threadId}.`,
-            retryable: false,
-            environmentId,
-          });
-        }
+      if (artifact.kind === "workspace-file" && typeof artifact.path === "string") {
         const download = await context.port.createAssetUrl(environmentId, {
           _tag: "workspace-file",
           threadId,
-          path,
+          path: artifact.path,
         });
-        return { artifactId, environmentId, threadId, availability: "available", download };
+        return { ...artifact, environmentId, threadId, download };
       }
       throw new GatewayError({
         code: "invalid_input",
-        message: `Unsupported artifact kind ${kind}.`,
+        message: `Unsupported artifact record ${artifactId}.`,
         retryable: false,
         environmentId,
       });
@@ -737,6 +745,18 @@ export async function callGatewayTool(
           throw new GatewayError({
             code: "invalid_input",
             message: `Action ${String(value.actionId)} contains fields that are not modifiable.`,
+            retryable: false,
+            environmentId,
+          });
+        }
+        if (
+          action.requiresDestructiveConfirmation === true &&
+          (fields.decision === "accept" || fields.decision === "acceptForSession") &&
+          input.confirmDestructive !== true
+        ) {
+          throw new GatewayError({
+            code: "destructive_confirmation_required",
+            message: `Action ${String(value.actionId)} requires confirmDestructive: true.`,
             retryable: false,
             environmentId,
           });
@@ -893,6 +913,23 @@ export async function callGatewayTool(
           }
           if (
             profile !== undefined &&
+            (typeof profile.profileId !== "string" ||
+              profile.profileId.trim() === "" ||
+              !Number.isInteger(profile.revision))
+          ) {
+            throw new GatewayError({
+              code: "invalid_input",
+              message: `Gateway profile ${profile.name} is not a server-owned revisioned profile.`,
+              retryable: false,
+              environmentId,
+            });
+          }
+          const authoritativeProfileRef =
+            profile === undefined
+              ? undefined
+              : { profileId: profile.profileId as string, revision: profile.revision as number };
+          if (
+            profile !== undefined &&
             Array.isArray(profile.environmentIds) &&
             !profile.environmentIds.includes(environmentId)
           ) {
@@ -924,9 +961,10 @@ export async function callGatewayTool(
           const rawModelSelection = input.modelSelection ?? profileModelSelection;
           // Settings profiles persist readable labels, not routing keys. Resolve
           // those labels against the selected environment's live catalog at this
-          // authoritative create boundary; only a missing/ambiguous pair remains
-          // unresolved. The resolved keys live only in the new thread snapshot.
-          if (rawModelSelection === undefined) {
+          // authoritative create boundary; only a missing/ambiguous profile pair
+          // remains unresolved. With no selected profile or explicit override,
+          // the server-owned provider/global default chain remains authoritative.
+          if (rawModelSelection === undefined && profile !== undefined) {
             throw new GatewayError({
               code: "invalid_input",
               message: `Profile ${profile?.name ?? "requested"} provider/model is no longer uniquely available (provider: ${profile?.providerLabel ?? "unselected"}, model: ${profile?.modelLabel ?? "unselected"}); re-select the profile in Settings.`,
@@ -935,7 +973,8 @@ export async function callGatewayTool(
               details: { profileId: profile?.profileId },
             });
           }
-          const modelSelection = record(rawModelSelection);
+          const modelSelection =
+            rawModelSelection === undefined ? undefined : record(rawModelSelection);
           const hasThreadRuntimeMode = input.runtimeMode !== undefined;
           const hasThreadInteractionMode = input.interactionMode !== undefined;
           const requestedRuntimeMode = input.runtimeMode ?? profile?.runtimeMode;
@@ -947,19 +986,11 @@ export async function callGatewayTool(
               ? requestedRuntimeMode
               : "approval-required";
           const resolvedInteractionMode = requestedInteractionMode === "plan" ? "plan" : "default";
-          // Per spec section 9.2 the thread carries an immutable snapshot of the
-          // resolved configuration plus the source each field came from, so later
-          // profile edits cannot mutate existing work.
-          const sourceFor = (
-            fromThread: boolean,
-            fromProfile: boolean,
-          ): "profile" | "thread-override" | "fallback" =>
-            fromThread ? "thread-override" : fromProfile ? "profile" : "fallback";
           const reasoningEffort =
             typeof input.reasoningEffort === "string"
               ? input.reasoningEffort
               : profile?.reasoningEffort;
-          const inheritedOptions = Array.isArray(modelSelection.options)
+          const inheritedOptions = Array.isArray(modelSelection?.options)
             ? modelSelection.options.flatMap((candidate) => {
                 const option = record(candidate);
                 return option !== undefined &&
@@ -976,34 +1007,39 @@ export async function callGatewayTool(
                   ...inheritedOptions.filter((option) => option.id !== "reasoningEffort"),
                   { id: "reasoningEffort", value: reasoningEffort },
                 ];
-          const profileSnapshot = {
-            profileId: profile?.profileId ?? null,
-            profileName: profile?.name ?? null,
-            revision: profile?.revision ?? null,
-            ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
-            effectiveSource: {
-              modelSelection: sourceFor(hasThreadModel, profile !== undefined),
-              runtimeMode: sourceFor(hasThreadRuntimeMode, profile !== undefined),
-              interactionMode: sourceFor(hasThreadInteractionMode, profile !== undefined),
-              reasoningEffort: sourceFor(
-                input.reasoningEffort !== undefined,
-                profile?.reasoningEffort !== undefined,
-              ),
-            },
-          };
           return context.port.createThread({
             environmentId,
             projectId: requiredString(input, "projectId"),
             threadId: idFor("thread", idempotencyKey),
             title: requiredString(input, "title"),
-            modelSelection: {
-              instanceId: requiredString(modelSelection, "instanceId"),
-              model: requiredString(modelSelection, "model"),
-              ...(modelOptions.length === 0 ? {} : { options: modelOptions }),
-            },
-            runtimeMode: resolvedRuntimeMode,
-            interactionMode: resolvedInteractionMode,
-            profileSnapshot,
+            ...(modelSelection === undefined
+              ? {}
+              : {
+                  modelSelection: {
+                    instanceId: requiredString(modelSelection, "instanceId"),
+                    model: requiredString(modelSelection, "model"),
+                    ...(modelOptions.length === 0 ? {} : { options: modelOptions }),
+                  },
+                }),
+            ...(resolvedRuntimeMode === undefined ? {} : { runtimeMode: resolvedRuntimeMode }),
+            ...(resolvedInteractionMode === undefined
+              ? {}
+              : { interactionMode: resolvedInteractionMode }),
+            ...(authoritativeProfileRef === undefined
+              ? {}
+              : {
+                  profileSelection: {
+                    ...authoritativeProfileRef,
+                    overrideFields: [
+                      ...(hasThreadModel ? (["modelSelection"] as const) : []),
+                      ...(hasThreadRuntimeMode ? (["runtimeMode"] as const) : []),
+                      ...(hasThreadInteractionMode ? (["interactionMode"] as const) : []),
+                      ...(input.reasoningEffort !== undefined
+                        ? (["reasoningEffort"] as const)
+                        : []),
+                    ],
+                  },
+                }),
             requestId: idFor("request", idempotencyKey),
           });
         },
@@ -1155,6 +1191,7 @@ export async function callGatewayTool(
               approvalRequestId: action.approvalActionId as string,
               decision,
             })),
+            expectedRevision: plan.revision,
             requestId: idFor("request", idempotencyKey),
           });
           return {

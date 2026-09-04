@@ -10,13 +10,11 @@ import {
   WS_METHODS,
   type OrchestrationEvent,
   type OrchestrationShellSnapshot,
-  type OrchestrationThread,
   type OrchestrationThreadDetailSnapshot,
   type ServerProvider,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
@@ -24,12 +22,11 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import {
+  controlThreadLifecycle,
   createThread,
-  interruptThreadTurn,
   respondToThreadApproval,
   respondToThreadApprovals,
   startThreadTurn,
-  stopThreadSession,
 } from "../operations/commands.ts";
 import { request, runStream, subscribe } from "../rpc/client.ts";
 import type {
@@ -43,10 +40,6 @@ import type {
 export interface GatewayEffectRuntime {
   runPromise<A, E>(effect: Effect.Effect<A, E, EnvironmentRegistry | Crypto.Crypto>): Promise<A>;
 }
-
-class GatewayThreadRetryError extends Data.TaggedError("GatewayThreadRetryError")<{
-  readonly message: string;
-}> {}
 
 export function createGatewayRuntimePortFromContext(
   context: Context.Context<EnvironmentRegistry | Crypto.Crypto>,
@@ -120,9 +113,96 @@ export function resolveGatewayProfileModelSelection(
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+export function approvalResponsesFromModifications(modifications: unknown): ReadonlyArray<{
+  readonly approvalRequestId: string;
+  readonly decision: "accept" | "acceptForSession" | "decline" | "cancel";
+}> {
+  if (!Array.isArray(modifications) || modifications.length === 0) {
+    throw new Error("Invalid approval modification: modifications must be non-empty.");
+  }
+  return modifications.map((candidate) => {
+    if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
+      throw new Error("Invalid approval modification: expected an action object.");
+    }
+    const modification = candidate as Record<string, unknown>;
+    const fields = modification.fields;
+    const decision =
+      typeof fields === "object" && fields !== null && !Array.isArray(fields)
+        ? (fields as Record<string, unknown>).decision
+        : undefined;
+    if (
+      typeof modification.actionId !== "string" ||
+      (decision !== "accept" &&
+        decision !== "acceptForSession" &&
+        decision !== "decline" &&
+        decision !== "cancel")
+    ) {
+      throw new Error("Invalid approval modification: actionId and decision are required.");
+    }
+    return { approvalRequestId: modification.actionId, decision };
+  });
+}
+
+interface GatewayEventContext {
+  readonly machine: string;
+  readonly project?: { readonly id: string; readonly title: string };
+  readonly thread?: { readonly title: string; readonly status: string };
+}
+
+function boundedText(value: unknown, limit = 512): string | undefined {
+  return typeof value === "string" && value.trim() !== ""
+    ? value.trim().slice(0, limit)
+    : undefined;
+}
+
+function boundedRecordField(
+  record: Readonly<Record<string, unknown>>,
+  key: string,
+  maxLength = 2_000,
+): Readonly<Record<string, string>> {
+  const value = boundedText(record[key], maxLength);
+  return value === undefined ? {} : { [key]: value };
+}
+
+function gatewayLifecycleStatus(kind: string | undefined): string | undefined {
+  if (kind === "lifecycle.pause.completed") return "paused";
+  if (kind === "lifecycle.cancel.completed") return "canceled";
+  if (kind === "lifecycle.stop.completed") return "stopped";
+  if (
+    kind === "lifecycle.resume.completed" ||
+    kind === "lifecycle.retry.completed" ||
+    kind === "lifecycle.restart.completed"
+  )
+    return "queued";
+  return undefined;
+}
+
+function gatewayStatusForActivity(kind: string | undefined, fallback: string | undefined) {
+  const lifecycleStatus = gatewayLifecycleStatus(kind);
+  if (lifecycleStatus !== undefined) return lifecycleStatus;
+  if (kind === "approval.requested") return "waiting-approval";
+  if (kind === "user-input.requested") return "waiting-input";
+  if (kind === "turn.completed") return "completed";
+  if (kind === "turn.failed" || kind === "error") return "failed";
+  if (kind === "turn.interrupted") return "interrupted";
+  return fallback;
+}
+
+function gatewayNextAction(status: string | undefined): string | null | undefined {
+  if (status === "waiting-approval") return "approve_actions";
+  if (status === "waiting-input") return "provide_input";
+  if (status === "paused") return "resume";
+  if (status === "stopped") return "restart";
+  if (status === "running" || status === "queued") return "await_event";
+  if (status === "failed" || status === "interrupted") return "retry_or_restart";
+  if (status === "completed" || status === "canceled") return null;
+  return undefined;
+}
+
 export function gatewayEventFromOrchestration(
   environmentId: EnvironmentId,
   event: OrchestrationEvent,
+  context?: GatewayEventContext,
 ): GatewayRuntimeEvent {
   const payload = event.payload as unknown as Record<string, unknown>;
   const activity =
@@ -135,23 +215,45 @@ export function gatewayEventFromOrchestration(
     typeof activity?.payload === "object" && activity.payload !== null
       ? (activity.payload as Record<string, unknown>)
       : undefined;
-  const activityKind = typeof activity?.kind === "string" ? activity.kind : undefined;
+  const activityKind = boundedText(activity?.kind, 128);
+  const status =
+    event.type === "thread.created" || event.type === "thread.turn-start-requested"
+      ? "running"
+      : gatewayStatusForActivity(activityKind, context?.thread?.status);
+  const lifecycleStatus = gatewayLifecycleStatus(activityKind);
   const type =
     event.type === "thread.created" || event.type === "thread.turn-start-requested"
       ? "thread.started"
-      : activityKind === "approval.requested"
-        ? "approval.requested"
-        : activityKind === "user-input.requested"
-          ? "input.requested"
-          : activityKind === "turn.completed"
-            ? "thread.completed"
-            : activityKind === "turn.failed" || activityKind === "error"
-              ? "thread.failed"
-              : activityKind === "turn.interrupted"
-                ? "thread.interrupted"
-                : event.aggregateKind === "thread"
-                  ? "thread.progress"
-                  : event.type;
+      : lifecycleStatus !== undefined
+        ? activityKind === "lifecycle.cancel.completed"
+          ? "thread.canceled"
+          : "thread.state_changed"
+        : activityKind === "approval.requested"
+          ? "approval.requested"
+          : activityKind === "user-input.requested"
+            ? "input.requested"
+            : activityKind === "turn.completed"
+              ? "thread.completed"
+              : activityKind === "turn.failed" || activityKind === "error"
+                ? "thread.failed"
+                : activityKind === "turn.interrupted"
+                  ? "thread.interrupted"
+                  : activityKind === "artifact.created" || activityKind === "artifact.updated"
+                    ? activityKind
+                    : activityKind === "pr.updated" || activityKind === "milestone"
+                      ? activityKind === "milestone"
+                        ? "thread.milestone"
+                        : activityKind
+                      : activityKind === "blocked" || activityKind === "turn.blocked"
+                        ? "thread.blocked"
+                        : event.aggregateKind === "thread"
+                          ? "thread.progress"
+                          : event.type;
+  const requestId = boundedText(activityPayload?.requestId, 256);
+  const summary = boundedText(activity?.summary);
+  const nextAction = gatewayNextAction(status);
+  const projectId = boundedText(payload.projectId, 256) ?? context?.project?.id;
+  const threadTitle = boundedText(payload.title) ?? context?.thread?.title;
   return {
     eventId: event.eventId,
     sequence: event.sequence,
@@ -161,13 +263,195 @@ export function gatewayEventFromOrchestration(
     ...(event.aggregateKind === "thread" ? { threadId: event.aggregateId } : {}),
     ...(event.correlationId === null ? {} : { correlationId: event.correlationId }),
     data: {
+      ...(context?.machine === undefined ? {} : { machine: context.machine }),
+      ...(projectId === undefined
+        ? {}
+        : {
+            project: {
+              id: projectId,
+              ...(context?.project?.title === undefined ? {} : { title: context.project.title }),
+            },
+          }),
+      ...(threadTitle === undefined ? {} : { threadTitle }),
+      ...(status === undefined ? {} : { status }),
+      ...(lifecycleStatus === undefined || context?.thread?.status === undefined
+        ? {}
+        : { previousStatus: context.thread.status }),
+      ...(summary === undefined ? {} : { summary }),
+      ...(nextAction === undefined ? {} : { nextAction }),
+      ...(activityKind === "approval.requested" || activityKind === "user-input.requested"
+        ? {
+            blocker: {
+              kind: activityKind === "approval.requested" ? "approval" : "input",
+              ...(requestId === undefined ? {} : { requestId }),
+            },
+          }
+        : {}),
       serverSequence: event.sequence,
       serverEventType: event.type,
       ...(activityKind === undefined ? {} : { activityKind }),
-      ...(typeof activityPayload?.requestId === "string"
-        ? { requestId: activityPayload.requestId.slice(0, 256) }
-        : {}),
+      ...(requestId === undefined ? {} : { requestId }),
     },
+  };
+}
+
+function isSafeWorkspaceRelativePath(path: string): boolean {
+  return (
+    !path.startsWith("/") &&
+    !path.startsWith("\\") &&
+    !/^[a-z]:[\\/]/i.test(path) &&
+    path.split(/[\\/]/).every((segment) => segment !== "..")
+  );
+}
+
+function gatewayProjectProjection(project: OrchestrationShellSnapshot["projects"][number]) {
+  return {
+    id: project.id,
+    title: project.title,
+    defaultModelSelection: project.defaultModelSelection,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
+  };
+}
+
+function gatewayThreadShellProjection(thread: OrchestrationShellSnapshot["threads"][number]) {
+  return {
+    id: thread.id,
+    projectId: thread.projectId,
+    title: thread.title,
+    status: gatewayStatusFromThread(thread),
+    latestTurn: thread.latestTurn,
+    session:
+      thread.session === null
+        ? null
+        : {
+            status: thread.session.status,
+            runtimeMode: thread.session.runtimeMode,
+            activeTurnId: thread.session.activeTurnId,
+            updatedAt: thread.session.updatedAt,
+          },
+    createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt,
+  };
+}
+
+function gatewayArtifactsFromThread(thread: OrchestrationThreadDetailSnapshot["thread"]) {
+  return (thread.artifacts ?? []).slice(-2_000).flatMap((artifact) => {
+    if (artifact.kind === "workspace-file") {
+      if (artifact.path === undefined || !isSafeWorkspaceRelativePath(artifact.path)) return [];
+      return [{ ...artifact, name: boundedText(artifact.name, 512) ?? "artifact" }];
+    }
+    return [
+      {
+        artifactId: artifact.artifactId,
+        kind: artifact.kind,
+        sourceId: artifact.sourceId,
+        name: boundedText(artifact.name, 512) ?? "artifact",
+        ...(artifact.mimeType === undefined ? {} : { mimeType: artifact.mimeType }),
+        ...(artifact.sizeBytes === undefined ? {} : { sizeBytes: artifact.sizeBytes }),
+        availability: artifact.availability,
+        createdAt: artifact.createdAt,
+      },
+    ];
+  });
+}
+
+function gatewayActivity(
+  activity: OrchestrationThreadDetailSnapshot["thread"]["activities"][number],
+) {
+  const payload = activity.payload as Readonly<Record<string, unknown>>;
+  const safePayload = {
+    ...boundedRecordField(payload, "requestId", 256),
+    ...boundedRecordField(payload, "requestKind", 128),
+    ...boundedRecordField(payload, "action", 64),
+    ...boundedRecordField(payload, "attemptId", 256),
+    ...boundedRecordField(payload, "status", 64),
+  };
+  return {
+    id: activity.id,
+    sequence: activity.sequence,
+    turnId: activity.turnId,
+    tone: activity.tone,
+    kind: activity.kind,
+    summary: boundedText(activity.summary, 2_000) ?? "Activity",
+    payload: safePayload,
+    createdAt: activity.createdAt,
+  };
+}
+
+export function gatewayThreadProjection(thread: OrchestrationThreadDetailSnapshot["thread"]) {
+  return {
+    id: thread.id,
+    projectId: thread.projectId,
+    title: thread.title,
+    modelSelection: thread.modelSelection,
+    runtimeMode: thread.runtimeMode,
+    interactionMode: thread.interactionMode,
+    latestTurn: thread.latestTurn,
+    session:
+      thread.session === null
+        ? null
+        : {
+            status: thread.session.status,
+            runtimeMode: thread.session.runtimeMode,
+            activeTurnId: thread.session.activeTurnId,
+            updatedAt: thread.session.updatedAt,
+          },
+    messages: thread.messages.slice(-500).map((message) => ({
+      id: message.id,
+      role: message.role,
+      text: message.text.slice(0, 120_000),
+      attachments: (message.attachments ?? []).slice(0, 100).map((attachment) => ({
+        type: attachment.type,
+        id: boundedText(attachment.id, 512) ?? "attachment",
+        name: boundedText(attachment.name, 512) ?? "attachment",
+        mimeType: boundedText(attachment.mimeType, 255) ?? "application/octet-stream",
+        sizeBytes: attachment.sizeBytes,
+      })),
+      turnId: message.turnId,
+      streaming: message.streaming,
+      createdAt: message.createdAt,
+      updatedAt: message.updatedAt,
+    })),
+    activities: thread.activities.slice(-1_000).map(gatewayActivity),
+    artifacts: gatewayArtifactsFromThread(thread),
+    createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt,
+  };
+}
+
+function gatewayStatusFromThread(thread: OrchestrationShellSnapshot["threads"][number]): string {
+  if (thread.latestTurn?.state === "completed") return "completed";
+  if (thread.latestTurn?.state === "error" || thread.session?.status === "error") return "failed";
+  if (thread.latestTurn?.state === "interrupted" || thread.session?.status === "interrupted")
+    return "interrupted";
+  if (
+    thread.latestTurn?.state === "running" ||
+    thread.session?.status === "running" ||
+    thread.session?.status === "starting"
+  )
+    return "running";
+  return "queued";
+}
+
+function gatewayEventContext(
+  machine: string,
+  snapshot: OrchestrationShellSnapshot,
+  event: OrchestrationEvent,
+): GatewayEventContext {
+  const thread =
+    event.aggregateKind === "thread"
+      ? snapshot.threads.find((candidate) => candidate.id === event.aggregateId)
+      : undefined;
+  const payload = event.payload as unknown as Record<string, unknown>;
+  const projectId = typeof payload.projectId === "string" ? payload.projectId : thread?.projectId;
+  const project = snapshot.projects.find((candidate) => candidate.id === projectId);
+  return {
+    machine,
+    ...(project === undefined ? {} : { project: { id: project.id, title: project.title } }),
+    ...(thread === undefined
+      ? {}
+      : { thread: { title: thread.title, status: gatewayStatusFromThread(thread) } }),
   };
 }
 
@@ -186,22 +470,34 @@ export function createGatewayRuntimeEventSourceFromContext(
           ).pipe(
             Stream.switchMap((entries) =>
               Stream.mergeAll(
-                [...entries.keys()]
-                  .filter((environmentId) => allowedEnvironmentIds.has(environmentId))
-                  .map((environmentId) =>
-                    registry
-                      .runStream(
-                        environmentId,
-                        subscribe(ORCHESTRATION_WS_METHODS.subscribeEvents, {
-                          afterSequence:
-                            subscription.afterSequenceByEnvironment[environmentId] ?? 0,
-                        }),
-                      )
-                      .pipe(
-                        Stream.map((event) => gatewayEventFromOrchestration(environmentId, event)),
-                        Stream.catchCause(() => Stream.empty),
+                [...entries.values()]
+                  .filter((entry) => allowedEnvironmentIds.has(entry.target.environmentId))
+                  .map((entry) => {
+                    const environmentId = entry.target.environmentId;
+                    return Stream.unwrap(
+                      shellSnapshot(environmentId).pipe(
+                        Effect.map((snapshot) =>
+                          registry
+                            .runStream(
+                              environmentId,
+                              subscribe(ORCHESTRATION_WS_METHODS.subscribeEvents, {
+                                afterSequence:
+                                  subscription.afterSequenceByEnvironment[environmentId] ?? 0,
+                              }),
+                            )
+                            .pipe(
+                              Stream.map((event) =>
+                                gatewayEventFromOrchestration(
+                                  environmentId,
+                                  event,
+                                  gatewayEventContext(entry.target.label, snapshot, event),
+                                ),
+                              ),
+                            ),
+                        ),
                       ),
-                  ),
+                    ).pipe(Stream.catchCause(() => Stream.empty));
+                  }),
                 { concurrency: "unbounded" },
               ),
             ),
@@ -274,17 +570,17 @@ export function createGatewayRuntimePort(runtime: GatewayEffectRuntime): Gateway
       ),
     listProjects: (rawEnvironmentId) =>
       run(shellSnapshot(EnvironmentId.make(rawEnvironmentId))).then((snapshot) => ({
-        items: snapshot.projects as ReadonlyArray<Record<string, unknown>>,
+        items: snapshot.projects.map(gatewayProjectProjection),
         snapshotAt: snapshot.updatedAt,
       })),
     listThreads: (rawEnvironmentId) =>
       run(shellSnapshot(EnvironmentId.make(rawEnvironmentId))).then((snapshot) => ({
-        items: snapshot.threads as ReadonlyArray<Record<string, unknown>>,
+        items: snapshot.threads.map(gatewayThreadShellProjection),
         snapshotAt: snapshot.updatedAt,
       })),
     getThread: (rawEnvironmentId, rawThreadId) =>
       run(threadSnapshot(EnvironmentId.make(rawEnvironmentId), ThreadId.make(rawThreadId))).then(
-        (snapshot) => snapshot.thread as Record<string, unknown>,
+        (snapshot) => gatewayThreadProjection(snapshot.thread),
       ),
     createAssetUrl: (rawEnvironmentId, resource) =>
       run(
@@ -294,10 +590,11 @@ export function createGatewayRuntimePort(runtime: GatewayEffectRuntime): Gateway
             resource._tag === "attachment"
               ? resource
               : { ...resource, threadId: ThreadId.make(resource.threadId) };
-          return yield* registry.run(
+          const asset = yield* registry.run(
             EnvironmentId.make(rawEnvironmentId),
             request(WS_METHODS.assetsCreateUrl, { resource: typedResource }),
           );
+          return { relativeUrl: asset.relativeUrl, expiresAt: asset.expiresAt };
         }),
       ),
     getPullRequest: (rawEnvironmentId, ref) =>
@@ -337,15 +634,21 @@ export function createGatewayRuntimePort(runtime: GatewayEffectRuntime): Gateway
               threadId: ThreadId.make(input.threadId),
               projectId: ProjectId.make(input.projectId),
               title: input.title,
-              modelSelection: {
-                ...input.modelSelection,
-                instanceId: ProviderInstanceId.make(input.modelSelection.instanceId),
-              },
-              runtimeMode: input.runtimeMode,
-              interactionMode: input.interactionMode,
-              ...(input.profileSnapshot === undefined
+              ...(input.modelSelection === undefined
+                ? { useServerDefaults: input.profileSelection === undefined }
+                : {
+                    modelSelection: {
+                      ...input.modelSelection,
+                      instanceId: ProviderInstanceId.make(input.modelSelection.instanceId),
+                    },
+                  }),
+              ...(input.runtimeMode === undefined ? {} : { runtimeMode: input.runtimeMode }),
+              ...(input.interactionMode === undefined
                 ? {}
-                : { profileSnapshot: input.profileSnapshot }),
+                : { interactionMode: input.interactionMode }),
+              ...(input.profileSelection === undefined
+                ? {}
+                : { profileSelection: input.profileSelection }),
               branch: null,
               worktreePath: null,
             }),
@@ -398,59 +701,16 @@ export function createGatewayRuntimePort(runtime: GatewayEffectRuntime): Gateway
           const environmentId = EnvironmentId.make(input.environmentId);
           const threadId = ThreadId.make(input.threadId);
           const registry = yield* EnvironmentRegistry;
-          const detail = yield* threadSnapshot(environmentId, threadId);
-          const thread = detail.thread as OrchestrationThread;
-          const stop = (requestId = input.requestId) =>
-            registry.run(
-              environmentId,
-              stopThreadSession({ commandId: CommandId.make(requestId), threadId }),
-            );
-          const interrupt = () =>
-            registry.run(
-              environmentId,
-              interruptThreadTurn({
-                commandId: CommandId.make(input.requestId),
-                threadId,
-                ...(thread.session?.activeTurnId === null ||
-                thread.session?.activeTurnId === undefined
-                  ? {}
-                  : { turnId: thread.session.activeTurnId }),
-              }),
-            );
-          const restart = () => {
-            const previous = thread.messages.findLast((message) => message.role === "user");
-            if (previous === undefined) {
-              return Effect.fail(
-                new GatewayThreadRetryError({
-                  message: `Thread ${input.threadId} has no user message to retry.`,
-                }),
-              );
-            }
-            return registry.run(
-              environmentId,
-              startThreadTurn({
-                commandId: CommandId.make(input.requestId),
-                threadId,
-                message: {
-                  messageId: MessageId.make(input.messageId),
-                  role: "user",
-                  text: previous.text,
-                  attachments: [],
-                },
-                modelSelection: thread.modelSelection,
-                runtimeMode: thread.runtimeMode,
-                interactionMode: thread.interactionMode,
-              }),
-            );
-          };
-
-          if (input.action === "stop") yield* stop();
-          else if (input.action === "cancel" || input.action === "pause") yield* interrupt();
-          else {
-            if (input.action === "restart") yield* stop(`${input.requestId}-stop`);
-            yield* restart();
-          }
-
+          yield* registry.run(
+            environmentId,
+            controlThreadLifecycle({
+              commandId: CommandId.make(input.requestId),
+              threadId,
+              action: input.action,
+              attemptId: input.requestId,
+              messageId: MessageId.make(input.messageId),
+            }),
+          );
           return {
             requestId: input.requestId,
             commandId: input.requestId,
@@ -468,6 +728,7 @@ export function createGatewayRuntimePort(runtime: GatewayEffectRuntime): Gateway
             respondToThreadApprovals({
               commandId: CommandId.make(input.requestId),
               threadId: ThreadId.make(input.threadId),
+              expectedRevision: input.expectedRevision,
               responses: input.responses.map((response) => ({
                 requestId: ApprovalRequestId.make(response.approvalRequestId),
                 decision: response.decision,
@@ -518,6 +779,32 @@ export function createGatewayRuntimePort(runtime: GatewayEffectRuntime): Gateway
                   (candidate) => candidate.id === projectId,
                 );
           const cwd = project?.workspaceRoot;
+          if (input.operation === "approval.modify") {
+            const threadId = ThreadId.make(String(payload.threadId ?? ""));
+            const expectedRevision = Number(payload.planRevision);
+            if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+              throw new Error("Invalid approval plan revision.");
+            }
+            const responses = approvalResponsesFromModifications(payload.modifications);
+            yield* registry.run(
+              environmentId,
+              respondToThreadApprovals({
+                commandId: CommandId.make(input.requestId ?? `gateway-approval-modify:${threadId}`),
+                threadId,
+                expectedRevision,
+                responses: responses.map((response) => ({
+                  requestId: ApprovalRequestId.make(response.approvalRequestId),
+                  decision: response.decision,
+                })),
+              }),
+            );
+            return {
+              accepted: true,
+              threadId,
+              expectedRevision,
+              modifiedCount: responses.length,
+            };
+          }
           if (input.operation === "git.status") {
             if (cwd === undefined)
               throw new Error(`Project ${String(payload.projectId)} was not found.`);
