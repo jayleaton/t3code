@@ -31,7 +31,12 @@ import {
   stopThreadSession,
 } from "../operations/commands.ts";
 import { request, runStream, subscribe } from "../rpc/client.ts";
-import type { GatewayRuntimeEvent, GatewayRuntimeEventSource, GatewayRuntimePort } from "./port.ts";
+import type {
+  GatewayProfileModelSelection,
+  GatewayRuntimeEvent,
+  GatewayRuntimeEventSource,
+  GatewayRuntimePort,
+} from "./port.ts";
 
 export interface GatewayEffectRuntime {
   runPromise<A, E>(effect: Effect.Effect<A, E, EnvironmentRegistry | Crypto.Crypto>): Promise<A>;
@@ -219,7 +224,10 @@ export function createGatewayRuntimePort(runtime: GatewayEffectRuntime): Gateway
             EnvironmentId.make(rawEnvironmentId),
             request(WS_METHODS.serverGetSettings, {}),
           );
-          return settings.mcpGatewayProfiles;
+          return settings.mcpGatewayProfiles.map((profile) => ({
+            ...profile,
+            modelSelection: profile.modelSelection as GatewayProfileModelSelection | undefined,
+          }));
         }),
       ),
     listProjects: (rawEnvironmentId) =>
