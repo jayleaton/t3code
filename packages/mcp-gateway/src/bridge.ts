@@ -2,7 +2,7 @@ import * as NodeCrypto from "node:crypto";
 
 import { WebSocketServer, type WebSocket } from "ws";
 
-import type { GatewayRuntimePort, GatewayScope } from "./port.ts";
+import type { GatewayProfile, GatewayRuntimePort, GatewayScope } from "./port.ts";
 
 export type GatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
 
@@ -15,7 +15,7 @@ export type GatewayBridgeStartupResult =
       readonly message: string;
     };
 
-const GATEWAY_SCOPES = new Set<GatewayScope>(["read", "create", "send"]);
+const GATEWAY_SCOPES = new Set<GatewayScope>(["read", "create", "send", "control"]);
 
 function parseGrants(value: unknown): GatewayGrants {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -36,6 +36,35 @@ function parseGrants(value: unknown): GatewayGrants {
     grants[environmentId] = [...new Set(candidate)] as ReadonlyArray<GatewayScope>;
   }
   return grants;
+}
+
+function parseProfiles(value: unknown): ReadonlyArray<GatewayProfile> {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("Gateway profiles must be an array.");
+  return value.map((candidate) => {
+    if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
+      throw new Error("Invalid gateway profile.");
+    }
+    const profile = candidate as Record<string, unknown>;
+    const modelSelection = profile.modelSelection;
+    if (
+      typeof profile.name !== "string" ||
+      profile.name.trim() === "" ||
+      typeof modelSelection !== "object" ||
+      modelSelection === null ||
+      Array.isArray(modelSelection) ||
+      typeof (modelSelection as Record<string, unknown>).instanceId !== "string" ||
+      typeof (modelSelection as Record<string, unknown>).model !== "string" ||
+      (profile.runtimeMode !== "approval-required" &&
+        profile.runtimeMode !== "auto-accept-edits" &&
+        profile.runtimeMode !== "auto" &&
+        profile.runtimeMode !== "full-access") ||
+      (profile.interactionMode !== "default" && profile.interactionMode !== "plan")
+    ) {
+      throw new Error(`Invalid gateway profile ${String(profile.name ?? "")}.`);
+    }
+    return candidate as GatewayProfile;
+  });
 }
 
 interface PendingRequest {
@@ -72,6 +101,7 @@ export function createBridgeRuntimePort(input: {
 }): {
   readonly port: GatewayRuntimePort;
   readonly getGrants: () => GatewayGrants;
+  readonly getProfiles: () => ReadonlyArray<GatewayProfile>;
   readonly ready: Promise<GatewayBridgeStartupResult>;
   readonly close: () => Promise<void>;
 } {
@@ -99,6 +129,7 @@ export function createBridgeRuntimePort(input: {
   let client: WebSocket | null = null;
   let latestAuthenticatedGeneration = 0;
   let grants = input.initialGrants ?? {};
+  let profiles: ReadonlyArray<GatewayProfile> = [];
   let nextId = 1;
   const pending = new Map<number, PendingRequest>();
 
@@ -148,11 +179,13 @@ export function createBridgeRuntimePort(input: {
             return;
           }
           const nextGrants = parseGrants(response.grants);
+          const nextProfiles = parseProfiles(response.profiles);
           if (client !== null && client !== socket) {
             rejectPending("T3 gateway client was replaced.");
             client.close(1012, "Replaced by a newly configured T3 client runtime.");
           }
           grants = nextGrants;
+          profiles = nextProfiles;
           client = socket;
           configured = true;
           authenticationSignal.removeEventListener("abort", onAuthenticationTimeout);
@@ -204,6 +237,7 @@ export function createBridgeRuntimePort(input: {
 
   return {
     getGrants: () => grants,
+    getProfiles: () => profiles,
     ready,
     port: {
       listEnvironments: () => invoke("listEnvironments", []),
@@ -213,6 +247,8 @@ export function createBridgeRuntimePort(input: {
       getThread: (environmentId, threadId) => invoke("getThread", [environmentId, threadId]),
       createThread: (request) => invoke("createThread", [request]),
       sendMessage: (request) => invoke("sendMessage", [request]),
+      controlThread: (request) => invoke("controlThread", [request]),
+      respondToApproval: (request) => invoke("respondToApproval", [request]),
     },
     close: () =>
       new Promise((resolve, reject) => {

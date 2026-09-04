@@ -203,6 +203,14 @@ describe("gateway bridge", () => {
           "a534b83f-a352-44d8-aedc-c4230c179390": ["read", "create", "send"],
           "2549ba75-2a91-4554-8baa-88e6ae0efa48": ["read"],
         },
+        profiles: [
+          {
+            name: "Andy",
+            modelSelection: { instanceId: "glm", model: "glm-5.3" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
+        ],
       }),
     );
 
@@ -212,6 +220,14 @@ describe("gateway bridge", () => {
         "2549ba75-2a91-4554-8baa-88e6ae0efa48": ["read"],
       }),
     );
+    expect(bridge.getProfiles()).toEqual([
+      {
+        name: "Andy",
+        modelSelection: { instanceId: "glm", model: "glm-5.3" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      },
+    ]);
     client.close();
     await bridge.close();
   });

@@ -1,4 +1,19 @@
-export type GatewayScope = "read" | "create" | "send";
+export type GatewayScope = "read" | "create" | "send" | "control";
+export type GatewayThreadControlAction =
+  | "cancel"
+  | "stop"
+  | "pause"
+  | "resume"
+  | "retry"
+  | "restart";
+export type GatewayApprovalDecision = "accept" | "acceptForSession" | "decline" | "cancel";
+
+export interface GatewayProfile {
+  readonly name: string;
+  readonly modelSelection: { readonly instanceId: string; readonly model: string };
+  readonly runtimeMode: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
+  readonly interactionMode: "default" | "plan";
+}
 
 export interface GatewayEnvironmentSummary {
   readonly environmentId: string;
@@ -44,6 +59,20 @@ export interface GatewayRuntimePort {
     readonly threadId: string;
     readonly text: string;
     readonly messageId: string;
+    readonly requestId: string;
+  }): Promise<GatewayMutationResult>;
+  controlThread(input: {
+    readonly environmentId: string;
+    readonly threadId: string;
+    readonly action: GatewayThreadControlAction;
+    readonly requestId: string;
+    readonly messageId: string;
+  }): Promise<GatewayMutationResult>;
+  respondToApproval(input: {
+    readonly environmentId: string;
+    readonly threadId: string;
+    readonly approvalRequestId: string;
+    readonly decision: GatewayApprovalDecision;
     readonly requestId: string;
   }): Promise<GatewayMutationResult>;
 }

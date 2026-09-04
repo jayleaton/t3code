@@ -1,7 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { McpEnvironmentGrantMatrix, updateMcpGatewayGrant } from "./McpGatewaySettings";
+import {
+  McpEnvironmentGrantMatrix,
+  McpProfileList,
+  updateMcpGatewayGrant,
+} from "./McpGatewaySettings";
 
 const grants = {
   "a534b83f-a352-44d8-aedc-c4230c179390": ["read", "create", "send"] as const,
@@ -55,6 +59,27 @@ describe("MCP environment grant matrix", () => {
     expect(markup).toContain('aria-label="Grant create access to Primary"');
     expect(markup).toContain('aria-label="Grant send access to Primary"');
     expect(markup).toContain('data-checked=""');
+  });
+
+  it("renders named profile execution settings", () => {
+    const markup = renderToStaticMarkup(
+      <McpProfileList
+        profiles={[
+          {
+            name: "Andy",
+            modelSelection: { instanceId: "glm", model: "glm-5.3" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
+        ]}
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain("Andy");
+    expect(markup).toContain("glm-5.3");
+    expect(markup).toContain("full-access");
+    expect(markup).toContain('aria-label="Remove Andy profile"');
   });
 
   it("keeps persisted grants for unregistered environments visible and revocable", () => {

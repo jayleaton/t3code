@@ -1,14 +1,16 @@
-import type { GatewayScope } from "@t3tools/client-runtime/gateway";
-import { ServerCogIcon } from "lucide-react";
+import type { GatewayProfile, GatewayScope } from "@t3tools/client-runtime/gateway";
+import { ServerCogIcon, Trash2Icon } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { useEnvironments } from "../../state/environments";
+import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import {
   getMcpGatewayGrants,
+  getMcpGatewayProfiles,
   getMcpGatewayToken,
   isMcpGatewayEnabled,
   MCP_GATEWAY_STATE_EVENT,
@@ -16,10 +18,11 @@ import {
   type McpGatewayUiState,
   setMcpGatewayEnabled,
   setMcpGatewayGrants,
+  setMcpGatewayProfiles,
   setMcpGatewayToken,
 } from "../../mcpGatewayState";
 
-const GATEWAY_SCOPES = ["read", "create", "send"] as const;
+const GATEWAY_SCOPES = ["read", "create", "send", "control"] as const;
 
 export function updateMcpGatewayGrant(
   grants: McpGatewayGrants,
@@ -108,11 +111,104 @@ export function McpEnvironmentGrantMatrix({
   );
 }
 
+export function McpProfileList({
+  profiles,
+  onChange,
+}: {
+  readonly profiles: ReadonlyArray<GatewayProfile>;
+  readonly onChange: (profiles: ReadonlyArray<GatewayProfile>) => void;
+}) {
+  const [name, setName] = useState("");
+  const [instanceId, setInstanceId] = useState("");
+  const [model, setModel] = useState("");
+  const [runtimeMode, setRuntimeMode] =
+    useState<GatewayProfile["runtimeMode"]>("approval-required");
+
+  return (
+    <div className="space-y-3">
+      {profiles.map((profile) => (
+        <div
+          key={profile.name}
+          className="flex items-center justify-between gap-3 rounded-lg border p-3"
+        >
+          <div className="min-w-0 text-sm">
+            <div className="font-medium">{profile.name}</div>
+            <div className="break-all text-xs text-muted-foreground">
+              {profile.modelSelection.instanceId} / {profile.modelSelection.model} ·{" "}
+              {profile.runtimeMode}
+            </div>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`Remove ${profile.name} profile`}
+            onClick={() =>
+              onChange(profiles.filter((candidate) => candidate.name !== profile.name))
+            }
+          >
+            <Trash2Icon className="size-4" />
+          </Button>
+        </div>
+      ))}
+      <div className="grid gap-2 sm:grid-cols-2">
+        <Input
+          value={name}
+          placeholder="Profile name"
+          aria-label="Profile name"
+          onChange={(event) => setName(event.target.value)}
+        />
+        <Input
+          value={instanceId}
+          placeholder="Provider instance ID"
+          aria-label="Profile provider instance ID"
+          onChange={(event) => setInstanceId(event.target.value)}
+        />
+        <Input
+          value={model}
+          placeholder="Model ID"
+          aria-label="Profile model ID"
+          onChange={(event) => setModel(event.target.value)}
+        />
+        <select
+          className="h-9 rounded-md border bg-background px-3 text-sm"
+          aria-label="Profile runtime mode"
+          value={runtimeMode}
+          onChange={(event) => setRuntimeMode(event.target.value as GatewayProfile["runtimeMode"])}
+        >
+          <option value="approval-required">approval-required</option>
+          <option value="auto-accept-edits">auto-accept-edits</option>
+          <option value="auto">auto</option>
+          <option value="full-access">full-access</option>
+        </select>
+      </div>
+      <Button
+        variant="outline"
+        disabled={name.trim() === "" || instanceId.trim() === "" || model.trim() === ""}
+        onClick={() => {
+          const profile: GatewayProfile = {
+            name: name.trim(),
+            modelSelection: { instanceId: instanceId.trim(), model: model.trim() },
+            runtimeMode,
+            interactionMode: "default",
+          };
+          onChange([...profiles.filter((candidate) => candidate.name !== profile.name), profile]);
+          setName("");
+          setInstanceId("");
+          setModel("");
+        }}
+      >
+        Save profile
+      </Button>
+    </div>
+  );
+}
+
 export function McpGatewaySettings() {
   const { environments } = useEnvironments();
   const [enabled, setEnabled] = useState(isMcpGatewayEnabled);
   const [token, setToken] = useState(getMcpGatewayToken);
   const [grants, setGrants] = useState(getMcpGatewayGrants);
+  const [profiles, setProfiles] = useState(getMcpGatewayProfiles);
   const [status, setStatus] = useState<McpGatewayUiState>(enabled ? "connecting" : "disabled");
 
   useEffect(() => {
@@ -174,6 +270,19 @@ export function McpGatewaySettings() {
             onChange={(next) => {
               setGrants(next);
               setMcpGatewayGrants(next);
+            }}
+          />
+        </SettingsRow>
+        <SettingsRow
+          id="mcp-gateway-profiles"
+          title="Named profiles"
+          description="Save model and execution defaults for MCP-created threads. Values are copied into each new thread; later profile edits do not mutate existing work."
+        >
+          <McpProfileList
+            profiles={profiles}
+            onChange={(next) => {
+              setProfiles(next);
+              setMcpGatewayProfiles(next);
             }}
           />
         </SettingsRow>

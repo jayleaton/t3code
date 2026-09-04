@@ -1,4 +1,5 @@
 import {
+  ApprovalRequestId,
   CommandId,
   EnvironmentId,
   MessageId,
@@ -7,23 +8,35 @@ import {
   ProviderInstanceId,
   ThreadId,
   type OrchestrationShellSnapshot,
+  type OrchestrationThread,
   type OrchestrationThreadDetailSnapshot,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import { EnvironmentRegistry } from "../connection/registry.ts";
-import { createThread, startThreadTurn } from "../operations/commands.ts";
+import {
+  createThread,
+  interruptThreadTurn,
+  respondToThreadApproval,
+  startThreadTurn,
+  stopThreadSession,
+} from "../operations/commands.ts";
 import { subscribe } from "../rpc/client.ts";
 import type { GatewayRuntimePort } from "./port.ts";
 
 export interface GatewayEffectRuntime {
   runPromise<A, E>(effect: Effect.Effect<A, E, EnvironmentRegistry | Crypto.Crypto>): Promise<A>;
 }
+
+class GatewayThreadRetryError extends Data.TaggedError("GatewayThreadRetryError")<{
+  readonly message: string;
+}> {}
 
 export function createGatewayRuntimePortFromContext(
   context: Context.Context<EnvironmentRegistry | Crypto.Crypto>,
@@ -173,6 +186,94 @@ export function createGatewayRuntimePort(runtime: GatewayEffectRuntime): Gateway
             status: "accepted" as const,
             threadId: input.threadId,
             messageId: input.messageId,
+          };
+        }),
+      ),
+    controlThread: (input) =>
+      run(
+        Effect.gen(function* () {
+          const environmentId = EnvironmentId.make(input.environmentId);
+          const threadId = ThreadId.make(input.threadId);
+          const registry = yield* EnvironmentRegistry;
+          const detail = yield* threadSnapshot(environmentId, threadId);
+          const thread = detail.thread as OrchestrationThread;
+          const stop = (requestId = input.requestId) =>
+            registry.run(
+              environmentId,
+              stopThreadSession({ commandId: CommandId.make(requestId), threadId }),
+            );
+          const interrupt = () =>
+            registry.run(
+              environmentId,
+              interruptThreadTurn({
+                commandId: CommandId.make(input.requestId),
+                threadId,
+                ...(thread.session?.activeTurnId === null ||
+                thread.session?.activeTurnId === undefined
+                  ? {}
+                  : { turnId: thread.session.activeTurnId }),
+              }),
+            );
+          const restart = () => {
+            const previous = thread.messages.findLast((message) => message.role === "user");
+            if (previous === undefined) {
+              return Effect.fail(
+                new GatewayThreadRetryError({
+                  message: `Thread ${input.threadId} has no user message to retry.`,
+                }),
+              );
+            }
+            return registry.run(
+              environmentId,
+              startThreadTurn({
+                commandId: CommandId.make(input.requestId),
+                threadId,
+                message: {
+                  messageId: MessageId.make(input.messageId),
+                  role: "user",
+                  text: previous.text,
+                  attachments: [],
+                },
+                modelSelection: thread.modelSelection,
+                runtimeMode: thread.runtimeMode,
+                interactionMode: thread.interactionMode,
+              }),
+            );
+          };
+
+          if (input.action === "stop") yield* stop();
+          else if (input.action === "cancel" || input.action === "pause") yield* interrupt();
+          else {
+            if (input.action === "restart") yield* stop(`${input.requestId}-stop`);
+            yield* restart();
+          }
+
+          return {
+            requestId: input.requestId,
+            commandId: input.requestId,
+            status: "accepted" as const,
+            threadId: input.threadId,
+          };
+        }),
+      ),
+    respondToApproval: (input) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          yield* registry.run(
+            EnvironmentId.make(input.environmentId),
+            respondToThreadApproval({
+              commandId: CommandId.make(input.requestId),
+              threadId: ThreadId.make(input.threadId),
+              requestId: ApprovalRequestId.make(input.approvalRequestId),
+              decision: input.decision,
+            }),
+          );
+          return {
+            requestId: input.requestId,
+            commandId: input.requestId,
+            status: "accepted" as const,
+            threadId: input.threadId,
           };
         }),
       ),

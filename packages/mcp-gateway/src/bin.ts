@@ -2,6 +2,7 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 import { createBridgeRuntimePort } from "./bridge.ts";
+import { createGatewayEventStore } from "./events.ts";
 import type { GatewayScope } from "./port.ts";
 import { createMcpGateway } from "./server.ts";
 
@@ -14,7 +15,10 @@ function parseGrants(
   for (const [environmentId, scopes] of Object.entries(value)) {
     if (
       !Array.isArray(scopes) ||
-      scopes.some((scope) => scope !== "read" && scope !== "create" && scope !== "send")
+      scopes.some(
+        (scope) =>
+          scope !== "read" && scope !== "create" && scope !== "send" && scope !== "control",
+      )
     ) {
       throw new Error(`Invalid scopes for environment ${environmentId}.`);
     }
@@ -34,6 +38,11 @@ if (bridgeToken === undefined || bridgeToken.length < 16) {
 }
 
 const initialGrants = parseGrants(process.env.T3_MCP_GRANTS);
+const retentionEvents = Number.parseInt(process.env.T3_MCP_EVENT_RETENTION ?? "100000", 10);
+if (!Number.isInteger(retentionEvents) || retentionEvents < 1) {
+  throw new Error("T3_MCP_EVENT_RETENTION must be a positive integer.");
+}
+const eventStore = createGatewayEventStore({ retentionEvents });
 const bridge = createBridgeRuntimePort({
   port: bridgePort,
   token: bridgeToken,
@@ -42,6 +51,8 @@ const bridge = createBridgeRuntimePort({
 const gateway = createMcpGateway({
   port: bridge.port,
   grants: bridge.getGrants,
+  profiles: bridge.getProfiles,
+  events: eventStore,
 });
 const startup = await bridge.ready;
 if (startup.status === "degraded") {

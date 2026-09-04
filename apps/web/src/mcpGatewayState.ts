@@ -1,14 +1,15 @@
-import type { GatewayScope } from "@t3tools/client-runtime/gateway";
+import type { GatewayProfile, GatewayScope } from "@t3tools/client-runtime/gateway";
 
 export const MCP_GATEWAY_ENABLED_KEY = "t3code:mcp-gateway-enabled";
 export const MCP_GATEWAY_TOKEN_KEY = "t3code:mcp-gateway-bridge-token";
 export const MCP_GATEWAY_GRANTS_KEY = "t3code:mcp-gateway-grants";
+export const MCP_GATEWAY_PROFILES_KEY = "t3code:mcp-gateway-profiles";
 export const MCP_GATEWAY_STATE_EVENT = "t3code:mcp-gateway-state";
 
 export type McpGatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
 export type McpGatewayUiState = "disabled" | "connecting" | "running" | "degraded";
 
-const GATEWAY_SCOPES = new Set<GatewayScope>(["read", "create", "send"]);
+const GATEWAY_SCOPES = new Set<GatewayScope>(["read", "create", "send", "control"]);
 
 export function isMcpGatewayEnabled(): boolean {
   return window.localStorage.getItem(MCP_GATEWAY_ENABLED_KEY) === "true";
@@ -40,6 +41,44 @@ export function getMcpGatewayGrants(): McpGatewayGrants {
   } catch {
     return {};
   }
+}
+
+export function getMcpGatewayProfiles(): ReadonlyArray<GatewayProfile> {
+  const raw = window.localStorage.getItem(MCP_GATEWAY_PROFILES_KEY);
+  if (raw === null) return [];
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (!Array.isArray(value)) return [];
+    return value.filter((candidate): candidate is GatewayProfile => {
+      if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate))
+        return false;
+      const profile = candidate as Record<string, unknown>;
+      const modelSelection = profile.modelSelection;
+      return (
+        typeof profile.name === "string" &&
+        profile.name.trim() !== "" &&
+        typeof modelSelection === "object" &&
+        modelSelection !== null &&
+        !Array.isArray(modelSelection) &&
+        typeof (modelSelection as Record<string, unknown>).instanceId === "string" &&
+        (modelSelection as Record<string, unknown>).instanceId !== "" &&
+        typeof (modelSelection as Record<string, unknown>).model === "string" &&
+        (modelSelection as Record<string, unknown>).model !== "" &&
+        (profile.runtimeMode === "approval-required" ||
+          profile.runtimeMode === "auto-accept-edits" ||
+          profile.runtimeMode === "auto" ||
+          profile.runtimeMode === "full-access") &&
+        (profile.interactionMode === "default" || profile.interactionMode === "plan")
+      );
+    });
+  } catch {
+    return [];
+  }
+}
+
+export function setMcpGatewayProfiles(profiles: ReadonlyArray<GatewayProfile>): void {
+  window.localStorage.setItem(MCP_GATEWAY_PROFILES_KEY, JSON.stringify(profiles));
+  window.dispatchEvent(new Event(MCP_GATEWAY_STATE_EVENT));
 }
 
 export function setMcpGatewayToken(token: string): void {

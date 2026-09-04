@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   getMcpGatewayGrants,
+  getMcpGatewayProfiles,
   MCP_GATEWAY_GRANTS_KEY,
+  MCP_GATEWAY_PROFILES_KEY,
   setMcpGatewayGrants,
+  setMcpGatewayProfiles,
 } from "./mcpGatewayState";
 
 function storage(): Storage {
@@ -64,5 +67,39 @@ describe("MCP gateway grants", () => {
     expect(getMcpGatewayGrants()).toEqual({
       "a534b83f-a352-44d8-aedc-c4230c179390": ["read", "send"],
     });
+  });
+
+  it("persists valid named profiles and drops malformed entries", () => {
+    setMcpGatewayProfiles([
+      {
+        name: "Andy",
+        modelSelection: { instanceId: "glm", model: "glm-5.3" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      },
+    ]);
+    expect(JSON.parse(localStorage.getItem(MCP_GATEWAY_PROFILES_KEY) ?? "null")).toHaveLength(1);
+    expect(getMcpGatewayProfiles()).toEqual([
+      {
+        name: "Andy",
+        modelSelection: { instanceId: "glm", model: "glm-5.3" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      },
+    ]);
+
+    localStorage.setItem(
+      MCP_GATEWAY_PROFILES_KEY,
+      JSON.stringify([
+        { name: "broken", modelSelection: null, runtimeMode: "admin" },
+        {
+          name: "Safe",
+          modelSelection: { instanceId: "codex", model: "gpt-5" },
+          runtimeMode: "approval-required",
+          interactionMode: "plan",
+        },
+      ]),
+    );
+    expect(getMcpGatewayProfiles().map((profile) => profile.name)).toEqual(["Safe"]);
   });
 });

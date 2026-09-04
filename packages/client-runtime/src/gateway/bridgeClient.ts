@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 
-import type { GatewayRuntimePort, GatewayScope } from "./port.ts";
+import type { GatewayProfile, GatewayRuntimePort, GatewayScope } from "./port.ts";
 
 export type GatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
 
@@ -29,6 +29,8 @@ const METHODS = new Set<keyof GatewayRuntimePort>([
   "getThread",
   "createThread",
   "sendMessage",
+  "controlThread",
+  "respondToApproval",
 ]);
 
 async function proof(token: string, value: string): Promise<string> {
@@ -49,6 +51,7 @@ async function proof(token: string, value: string): Promise<string> {
 export function connectGatewayBridge(input: {
   readonly port: GatewayRuntimePort;
   readonly grants?: GatewayGrants;
+  readonly profiles?: ReadonlyArray<GatewayProfile>;
   readonly url: string;
   readonly token: string;
   readonly createSocket?: (url: string) => GatewayBridgeSocket;
@@ -116,7 +119,13 @@ export function connectGatewayBridge(input: {
             }
             authenticated = true;
             expectedServerProof = null;
-            next.send(JSON.stringify({ type: "configure", grants: input.grants ?? {} }));
+            next.send(
+              JSON.stringify({
+                type: "configure",
+                grants: input.grants ?? {},
+                profiles: input.profiles ?? [],
+              }),
+            );
             input.onState?.("running");
             return;
           }

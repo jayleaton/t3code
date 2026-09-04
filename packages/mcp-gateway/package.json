@@ -22,6 +22,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@t3tools/client-runtime": "workspace:*",
+    "effect": "catalog:",
     "ws": "^8.18.3",
     "zod": "4.4.3"
   },
