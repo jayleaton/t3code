@@ -11,7 +11,11 @@ export type GatewayApprovalDecision = "accept" | "acceptForSession" | "decline" 
 export interface GatewayProfile {
   readonly profileId?: string;
   readonly name: string;
-  readonly modelSelection: { readonly instanceId: string; readonly model: string };
+  readonly modelSelection: {
+    readonly instanceId: string;
+    readonly model: string;
+    readonly options?: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }>;
+  };
   readonly reasoningEffort?: string;
   readonly runtimeMode:
     | "approval-required"
@@ -101,10 +105,28 @@ export interface GatewayRuntimePort {
     readonly projectId: string;
     readonly threadId: string;
     readonly title: string;
-    readonly modelSelection: { readonly instanceId: string; readonly model: string };
+    readonly modelSelection: {
+      readonly instanceId: string;
+      readonly model: string;
+      readonly options?: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }>;
+    };
     readonly runtimeMode: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
     readonly interactionMode: "default" | "plan";
     readonly requestId: string;
+    /** Immutable server-owned snapshot of the resolved profile at creation
+     * time. Later profile edits affect future threads only. */
+    readonly profileSnapshot?: {
+      readonly profileId: string | null;
+      readonly profileName: string | null;
+      readonly revision: number | null;
+      readonly reasoningEffort?: string;
+      readonly effectiveSource: {
+        readonly modelSelection: "profile" | "thread-override" | "fallback";
+        readonly runtimeMode: "profile" | "thread-override" | "fallback";
+        readonly interactionMode: "profile" | "thread-override" | "fallback";
+        readonly reasoningEffort: "profile" | "thread-override" | "fallback";
+      };
+    };
   }): Promise<GatewayMutationResult>;
   sendMessage(input: {
     readonly environmentId: string;
@@ -120,6 +142,15 @@ export interface GatewayRuntimePort {
     readonly requestId: string;
     readonly messageId: string;
   }): Promise<GatewayMutationResult>;
+  respondToApprovals?(input: {
+    readonly environmentId: string;
+    readonly threadId: string;
+    readonly responses: ReadonlyArray<{
+      readonly approvalRequestId: string;
+      readonly decision: GatewayApprovalDecision;
+    }>;
+    readonly requestId: string;
+  }): Promise<GatewayMutationResult>;
   respondToApproval(input: {
     readonly environmentId: string;
     readonly threadId: string;
@@ -127,4 +158,12 @@ export interface GatewayRuntimePort {
     readonly decision: GatewayApprovalDecision;
     readonly requestId: string;
   }): Promise<GatewayMutationResult>;
+  /** Extended v3 operations that map directly to authoritative server RPCs.
+   * Kept behind one transport method so older bridge clients fail closed. */
+  executeOperation?(input: {
+    readonly operation: string;
+    readonly environmentId: string;
+    readonly requestId?: string;
+    readonly payload: Readonly<Record<string, unknown>>;
+  }): Promise<Record<string, unknown>>;
 }

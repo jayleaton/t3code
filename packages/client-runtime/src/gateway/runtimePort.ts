@@ -26,10 +26,11 @@ import {
   createThread,
   interruptThreadTurn,
   respondToThreadApproval,
+  respondToThreadApprovals,
   startThreadTurn,
   stopThreadSession,
 } from "../operations/commands.ts";
-import { request, subscribe } from "../rpc/client.ts";
+import { request, runStream, subscribe } from "../rpc/client.ts";
 import type { GatewayRuntimeEvent, GatewayRuntimeEventSource, GatewayRuntimePort } from "./port.ts";
 
 export interface GatewayEffectRuntime {
@@ -274,6 +275,9 @@ export function createGatewayRuntimePort(runtime: GatewayEffectRuntime): Gateway
               },
               runtimeMode: input.runtimeMode,
               interactionMode: input.interactionMode,
+              ...(input.profileSnapshot === undefined
+                ? {}
+                : { profileSnapshot: input.profileSnapshot }),
               branch: null,
               worktreePath: null,
             }),
@@ -387,6 +391,29 @@ export function createGatewayRuntimePort(runtime: GatewayEffectRuntime): Gateway
           };
         }),
       ),
+    respondToApprovals: (input) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          yield* registry.run(
+            EnvironmentId.make(input.environmentId),
+            respondToThreadApprovals({
+              commandId: CommandId.make(input.requestId),
+              threadId: ThreadId.make(input.threadId),
+              responses: input.responses.map((response) => ({
+                requestId: ApprovalRequestId.make(response.approvalRequestId),
+                decision: response.decision,
+              })),
+            }),
+          );
+          return {
+            requestId: input.requestId,
+            commandId: input.requestId,
+            status: "accepted" as const,
+            threadId: input.threadId,
+          };
+        }),
+      ),
     respondToApproval: (input) =>
       run(
         Effect.gen(function* () {
@@ -406,6 +433,226 @@ export function createGatewayRuntimePort(runtime: GatewayEffectRuntime): Gateway
             status: "accepted" as const,
             threadId: input.threadId,
           };
+        }),
+      ),
+    executeOperation: (input) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          const environmentId = EnvironmentId.make(input.environmentId);
+          const payload = input.payload;
+          const projectId =
+            typeof payload.projectId === "string" ? ProjectId.make(payload.projectId) : undefined;
+          const project =
+            projectId === undefined
+              ? undefined
+              : (yield* shellSnapshot(environmentId)).projects.find(
+                  (candidate) => candidate.id === projectId,
+                );
+          const cwd = project?.workspaceRoot;
+          if (input.operation === "git.status") {
+            if (cwd === undefined)
+              throw new Error(`Project ${String(payload.projectId)} was not found.`);
+            return (yield* registry.run(
+              environmentId,
+              subscribe(WS_METHODS.subscribeVcsStatus, { cwd }).pipe(
+                Stream.runHead,
+                Effect.map(Option.getOrThrow),
+              ),
+            )) as unknown as Record<string, unknown>;
+          }
+          if (input.operation === "git.diff") {
+            const rawThreadId = String(payload.threadId ?? "");
+            const detail = yield* threadSnapshot(environmentId, ThreadId.make(rawThreadId));
+            return (yield* registry.run(
+              environmentId,
+              request(ORCHESTRATION_WS_METHODS.getFullThreadDiff, {
+                threadId: ThreadId.make(rawThreadId),
+                toTurnCount: detail.thread.messages.filter((message) => message.role === "user")
+                  .length,
+              }),
+            )) as unknown as Record<string, unknown>;
+          }
+          const prRef = {
+            projectId: ProjectId.make(String(payload.projectId ?? "")),
+            repository: String(payload.repository ?? ""),
+            number: Number(payload.number),
+          };
+          if (input.operation === "pr.apply_review_fixes") {
+            const activity = yield* registry.run(
+              environmentId,
+              request(WS_METHODS.pullRequestsActivity, prRef),
+            );
+            const requestedIds = new Set(
+              Array.isArray(payload.commentIds)
+                ? payload.commentIds.filter((id): id is string => typeof id === "string")
+                : [],
+            );
+            const selectedThreads = activity.reviewThreads.filter((thread) =>
+              requestedIds.has(thread.id),
+            );
+            if (selectedThreads.length !== requestedIds.size) {
+              throw new Error("One or more review comment IDs are no longer available.");
+            }
+            const threadId = ThreadId.make(String(payload.threadId ?? ""));
+            const shell = yield* shellSnapshot(environmentId);
+            const thread = shell.threads.find((candidate) => candidate.id === threadId);
+            if (thread === undefined) throw new Error(`Thread ${threadId} was not found.`);
+            const requestId = input.requestId ?? `gateway-pr-fixes-${String(payload.number)}`;
+            const instructions = selectedThreads
+              .map(
+                (reviewThread) =>
+                  `${reviewThread.path}:${String(reviewThread.line ?? "file")}\n${reviewThread.comments
+                    .map((comment) => comment.body)
+                    .join("\n")}`,
+              )
+              .join("\n\n");
+            yield* registry.run(
+              environmentId,
+              startThreadTurn({
+                commandId: CommandId.make(requestId),
+                threadId,
+                message: {
+                  messageId: MessageId.make(`${requestId}-message`),
+                  role: "user",
+                  text: `Apply only these approved pull request review fixes. Do not resolve review threads; they remain unresolved until the pull request is refreshed.\n\n${instructions}`,
+                  attachments: [],
+                },
+                modelSelection: thread.modelSelection,
+                runtimeMode: thread.runtimeMode,
+                interactionMode: thread.interactionMode,
+              }),
+            );
+            return { queued: true, threadId, reviewThreadIds: [...requestedIds] };
+          }
+          if (input.operation === "pr.update") {
+            yield* registry.run(
+              environmentId,
+              request(WS_METHODS.pullRequestsUpdate, {
+                ...prRef,
+                ...(typeof payload.title === "string" ? { title: payload.title } : {}),
+                ...(typeof payload.body === "string" ? { body: payload.body } : {}),
+              }),
+            );
+            return { updated: true };
+          }
+          if (input.operation === "pr.reply") {
+            yield* registry.run(
+              environmentId,
+              request(WS_METHODS.pullRequestsReplyToThread, {
+                ...prRef,
+                threadId: String(payload.commentId ?? ""),
+                body: String(payload.body ?? ""),
+              }),
+            );
+            return { replied: true };
+          }
+          if (input.operation === "pr.publish") {
+            yield* registry.run(
+              environmentId,
+              request(WS_METHODS.pullRequestsRunAction, { ...prRef, action: "ready" }),
+            );
+            return { published: true };
+          }
+          if (input.operation === "git.apply_patch") {
+            if (cwd === undefined)
+              throw new Error(`Project ${String(payload.projectId)} was not found.`);
+            yield* registry.run(
+              environmentId,
+              request(WS_METHODS.vcsApplyPatch, {
+                cwd,
+                patch: String(payload.patch),
+              }),
+            );
+            return { applied: true };
+          }
+          if (input.operation === "git.create_branch") {
+            if (cwd === undefined)
+              throw new Error(`Project ${String(payload.projectId)} was not found.`);
+            return (yield* registry.run(
+              environmentId,
+              request(WS_METHODS.vcsCreateRef, {
+                cwd,
+                refName: String(payload.branch ?? ""),
+                switchRef: true,
+              }),
+            )) as unknown as Record<string, unknown>;
+          }
+          if (input.operation === "git.commit" || input.operation === "git.create_pr") {
+            if (cwd === undefined)
+              throw new Error(`Project ${String(payload.projectId)} was not found.`);
+            const action = input.operation === "git.commit" ? "commit" : "create_pr";
+            if (input.operation === "git.create_pr") {
+              const refs = yield* registry.run(
+                environmentId,
+                request(WS_METHODS.vcsListRefs, {
+                  cwd,
+                  refKind: "all",
+                  includeMatchingRemoteRefs: true,
+                  refresh: true,
+                  limit: 500,
+                }),
+              );
+              const head = refs.refs.find((ref) => ref.current)?.name;
+              const defaultRefs = refs.refs
+                .filter((ref) => ref.isDefault)
+                .map((ref) => ref.name.split("/").at(-1));
+              if (
+                head !== payload.headBranch ||
+                !defaultRefs.includes(String(payload.baseBranch))
+              ) {
+                throw new Error(
+                  "Pull request head/base must match the selected project's current and default refs.",
+                );
+              }
+            }
+            const progress = yield* registry.run(
+              environmentId,
+              runStream(WS_METHODS.gitRunStackedAction, {
+                actionId: input.requestId ?? `gateway-${input.operation}`,
+                cwd,
+                action,
+                ...(input.operation === "git.create_pr" && typeof payload.draft === "boolean"
+                  ? { draft: payload.draft }
+                  : {}),
+                ...(typeof payload.message === "string" ? { commitMessage: payload.message } : {}),
+                ...(Array.isArray(payload.paths)
+                  ? {
+                      filePaths: payload.paths.filter(
+                        (path): path is string => typeof path === "string",
+                      ),
+                    }
+                  : {}),
+              }).pipe(Stream.runLast, Effect.map(Option.getOrThrow)),
+            );
+            const result =
+              typeof progress === "object" &&
+              progress !== null &&
+              "kind" in progress &&
+              progress.kind === "action_finished"
+                ? progress.result
+                : undefined;
+            if (
+              input.operation === "git.create_pr" &&
+              result?.pr.number !== undefined &&
+              typeof payload.owner === "string" &&
+              typeof payload.repository === "string" &&
+              typeof payload.title === "string"
+            ) {
+              yield* registry.run(
+                environmentId,
+                request(WS_METHODS.pullRequestsUpdate, {
+                  projectId: ProjectId.make(String(payload.projectId)),
+                  repository: payload.repository,
+                  number: result.pr.number,
+                  title: payload.title,
+                  ...(typeof payload.body === "string" ? { body: payload.body } : {}),
+                }),
+              );
+            }
+            return (result ?? progress) as unknown as Record<string, unknown>;
+          }
+          throw new Error(`Gateway operation ${input.operation} is not supported by this runtime.`);
         }),
       ),
   };

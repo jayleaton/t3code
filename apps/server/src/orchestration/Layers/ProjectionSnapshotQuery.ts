@@ -1692,6 +1692,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 modelSelection: row.modelSelection,
                 runtimeMode: row.runtimeMode,
                 interactionMode: row.interactionMode,
+                ...(row.profileSnapshot === null ? {} : { profileSnapshot: row.profileSnapshot }),
                 branch: row.branch,
                 worktreePath: row.worktreePath,
                 latestTurn: latestTurnByThread.get(row.threadId) ?? null,
@@ -1899,6 +1900,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   modelSelection: row.modelSelection,
                   runtimeMode: row.runtimeMode,
                   interactionMode: row.interactionMode,
+                  ...(row.profileSnapshot === null ? {} : { profileSnapshot: row.profileSnapshot }),
                   branch: row.branch,
                   worktreePath: row.worktreePath,
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
@@ -2035,6 +2037,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                       modelSelection: row.modelSelection,
                       runtimeMode: row.runtimeMode,
                       interactionMode: row.interactionMode,
+                      ...(row.profileSnapshot === null
+                        ? {}
+                        : { profileSnapshot: row.profileSnapshot }),
                       branch: row.branch,
                       worktreePath: row.worktreePath,
                       latestTurn: latestTurnByThread.get(row.threadId) ?? null,
@@ -2180,6 +2185,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   modelSelection: row.modelSelection,
                   runtimeMode: row.runtimeMode,
                   interactionMode: row.interactionMode,
+                  ...(row.profileSnapshot === null ? {} : { profileSnapshot: row.profileSnapshot }),
                   branch: row.branch,
                   worktreePath: row.worktreePath,
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,

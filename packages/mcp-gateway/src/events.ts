@@ -80,14 +80,17 @@ export function isPrivateWebhookAddress(hostname: string): boolean {
     }
   }
   if (NodeNet.isIP(normalized) === 4) {
-    const [a = 0, b = 0] = normalized.split(".").map(Number);
+    const [a = 0, b = 0, c = 0] = normalized.split(".").map(Number);
     return (
       a === 0 ||
       a === 10 ||
+      (a === 100 && b >= 64 && b <= 127) ||
       a === 127 ||
       (a === 169 && b === 254) ||
       (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
+      (a === 192 && ((b === 0 && (c === 0 || c === 2)) || b === 168)) ||
+      (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) ||
+      (a === 203 && b === 0 && c === 113) ||
       a >= 224
     );
   }
@@ -522,6 +525,36 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
         ) as Array<Record<string, unknown>>;
       return rows.map(eventFromRow);
     },
+    operationHistory: (
+      environmentId: string,
+      afterSequence: number,
+      limit: number,
+      threadId?: string,
+    ): ReadonlyArray<GatewayEvent> => {
+      trim();
+      if (cursorExpired(environmentId, afterSequence)) {
+        throw new GatewayError({
+          code: "cursor_expired",
+          message: `Cursor ${afterSequence} is older than event retention for environment ${environmentId}; request a fresh snapshot.`,
+          retryable: false,
+          environmentId,
+        });
+      }
+      const rows = (
+        threadId === undefined
+          ? db
+              .prepare(
+                "SELECT * FROM events WHERE environmentId = ? AND sequence > ? ORDER BY sequence ASC LIMIT ?",
+              )
+              .all(environmentId, afterSequence, limit)
+          : db
+              .prepare(
+                "SELECT * FROM events WHERE environmentId = ? AND threadId = ? AND sequence > ? ORDER BY sequence ASC LIMIT ?",
+              )
+              .all(environmentId, threadId, afterSequence, limit)
+      ) as Array<Record<string, unknown>>;
+      return rows.map(eventFromRow);
+    },
     latestSequence: (environmentId: string): number => {
       const row = db
         .prepare("SELECT lastSequence FROM sequences WHERE environmentId = ?")
@@ -595,7 +628,21 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
           retryable: false,
         });
       }
-      // Acknowledgements are monotonic and idempotent.
+      const latestSequence = (() => {
+        const row = db
+          .prepare("SELECT lastSequence FROM sequences WHERE environmentId = ?")
+          .get(subscription.environmentId) as { lastSequence: number } | undefined;
+        return row?.lastSequence ?? 0;
+      })();
+      if (throughSequence > latestSequence) {
+        throw new GatewayError({
+          code: "invalid_input",
+          message: `throughSequence may not exceed the latest retained sequence ${latestSequence}.`,
+          retryable: false,
+          environmentId: subscription.environmentId,
+        });
+      }
+      // Acknowledgements are monotonic and may not skip beyond the retained event frontier.
       const next: GatewaySubscription = {
         ...subscription,
         ackedSequence: Math.max(subscription.ackedSequence, throughSequence),
@@ -732,13 +779,23 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
       return found === undefined ? undefined : publicWebhook(found);
     },
     /** Two-phase delivery: claim rows as in-flight before any network I/O. */
-    dueDeliveries: (limit: number): ReadonlyArray<GatewayDeliveryRecord> => {
+    dueDeliveries: (
+      limit: number,
+      excludedEnvironmentIds: ReadonlyArray<string> = [],
+    ): ReadonlyArray<GatewayDeliveryRecord> => {
       const cutoff = now();
+      const exclusions = excludedEnvironmentIds.map(() => "?").join(", ");
       const rows = db
         .prepare(
-          "SELECT * FROM deliveries WHERE state IN ('pending', 'in-flight') AND nextAttemptAt <= ? ORDER BY nextAttemptAt ASC LIMIT ?",
+          `SELECT deliveries.* FROM deliveries
+           JOIN webhooks ON webhooks.webhookId = deliveries.webhookId
+           WHERE deliveries.state IN ('pending', 'in-flight')
+             AND deliveries.nextAttemptAt <= ?
+             ${exclusions === "" ? "" : `AND webhooks.environmentId NOT IN (${exclusions})`}
+           ORDER BY deliveries.nextAttemptAt ASC
+           LIMIT ?`,
         )
-        .all(cutoff, limit) as Array<Record<string, unknown>>;
+        .all(cutoff, ...excludedEnvironmentIds, limit) as Array<Record<string, unknown>>;
       return rows.map((row) => ({
         webhookId: row.webhookId as string,
         eventId: row.eventId as string,

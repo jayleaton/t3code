@@ -3,6 +3,7 @@ import { ServerCogIcon, Trash2Icon } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { useEnvironments } from "../../state/environments";
+import { randomUUID } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
@@ -22,7 +23,7 @@ import {
   setMcpGatewayToken,
 } from "../../mcpGatewayState";
 
-const GATEWAY_SCOPES = ["read", "create", "send", "control"] as const;
+const GATEWAY_SCOPES = ["read", "create", "send", "control", "delivery"] as const;
 
 export function updateMcpGatewayGrant(
   grants: McpGatewayGrants,
@@ -121,6 +122,7 @@ export function McpProfileList({
   const [name, setName] = useState("");
   const [instanceId, setInstanceId] = useState("");
   const [model, setModel] = useState("");
+  const [reasoningEffort, setReasoningEffort] = useState("");
   const [runtimeMode, setRuntimeMode] =
     useState<GatewayProfile["runtimeMode"]>("approval-required");
 
@@ -135,7 +137,8 @@ export function McpProfileList({
             <div className="font-medium">{profile.name}</div>
             <div className="break-all text-xs text-muted-foreground">
               {profile.modelSelection.instanceId} / {profile.modelSelection.model} ·{" "}
-              {profile.runtimeMode}
+              {profile.reasoningEffort === undefined ? "default effort" : profile.reasoningEffort} ·{" "}
+              {profile.runtimeMode} · revision {profile.revision ?? 0}
             </div>
           </div>
           <Button
@@ -169,6 +172,12 @@ export function McpProfileList({
           aria-label="Profile model ID"
           onChange={(event) => setModel(event.target.value)}
         />
+        <Input
+          value={reasoningEffort}
+          placeholder="Reasoning effort (for example, medium)"
+          aria-label="Profile reasoning effort"
+          onChange={(event) => setReasoningEffort(event.target.value)}
+        />
         <select
           className="h-9 rounded-md border bg-background px-3 text-sm"
           aria-label="Profile runtime mode"
@@ -185,16 +194,24 @@ export function McpProfileList({
         variant="outline"
         disabled={name.trim() === "" || instanceId.trim() === "" || model.trim() === ""}
         onClick={() => {
+          const now = new globalThis.Date().toISOString();
+          const existing = profiles.find((candidate) => candidate.name === name.trim());
           const profile: GatewayProfile = {
+            profileId: existing?.profileId ?? `profile_${randomUUID()}`,
             name: name.trim(),
             modelSelection: { instanceId: instanceId.trim(), model: model.trim() },
+            ...(reasoningEffort.trim() === "" ? {} : { reasoningEffort: reasoningEffort.trim() }),
             runtimeMode,
             interactionMode: "default",
+            revision: (existing?.revision ?? 0) + 1,
+            createdAt: existing?.createdAt ?? now,
+            updatedAt: now,
           };
           onChange([...profiles.filter((candidate) => candidate.name !== profile.name), profile]);
           setName("");
           setInstanceId("");
           setModel("");
+          setReasoningEffort("");
         }}
       >
         Save profile

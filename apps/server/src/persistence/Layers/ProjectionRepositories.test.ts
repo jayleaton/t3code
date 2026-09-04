@@ -71,7 +71,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
     }),
   );
 
-  it.effect("stores JSON for thread model options", () =>
+  it.effect("stores JSON for thread model options and profile snapshots", () =>
     Effect.gen(function* () {
       const threads = yield* ProjectionThreadRepository;
       const sql = yield* SqlClient.SqlClient;
@@ -86,6 +86,18 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         },
         runtimeMode: "full-access",
         interactionMode: "default",
+        profileSnapshot: {
+          profileId: "profile-andy",
+          profileName: "Andy",
+          revision: 3,
+          reasoningEffort: "medium",
+          effectiveSource: {
+            modelSelection: "profile",
+            runtimeMode: "profile",
+            interactionMode: "profile",
+            reasoningEffort: "profile",
+          },
+        },
         branch: null,
         worktreePath: null,
         latestTurnId: null,
@@ -106,8 +118,11 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
 
       const rows = yield* sql<{
         readonly modelSelection: string | null;
+        readonly profileSnapshot: string | null;
       }>`
-        SELECT model_selection_json AS "modelSelection"
+        SELECT
+          model_selection_json AS "modelSelection",
+          profile_snapshot_json AS "profileSnapshot"
         FROM projection_threads
         WHERE thread_id = 'thread-null-options'
       `;
@@ -124,6 +139,22 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
           model: "claude-opus-4-6",
         }),
       );
+      assert.strictEqual(
+        row.profileSnapshot,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        JSON.stringify({
+          profileId: "profile-andy",
+          profileName: "Andy",
+          revision: 3,
+          reasoningEffort: "medium",
+          effectiveSource: {
+            modelSelection: "profile",
+            runtimeMode: "profile",
+            interactionMode: "profile",
+            reasoningEffort: "profile",
+          },
+        }),
+      );
 
       const persisted = yield* threads.getById({
         threadId: ThreadId.make("thread-null-options"),
@@ -131,6 +162,18 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       assert.deepStrictEqual(Option.getOrNull(persisted)?.modelSelection, {
         instanceId: ProviderInstanceId.make("claudeAgent"),
         model: "claude-opus-4-6",
+      });
+      assert.deepStrictEqual(Option.getOrNull(persisted)?.profileSnapshot, {
+        profileId: "profile-andy",
+        profileName: "Andy",
+        revision: 3,
+        reasoningEffort: "medium",
+        effectiveSource: {
+          modelSelection: "profile",
+          runtimeMode: "profile",
+          interactionMode: "profile",
+          reasoningEffort: "profile",
+        },
       });
     }),
   );
@@ -149,6 +192,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         },
         runtimeMode: "full-access",
         interactionMode: "default",
+        profileSnapshot: null,
         branch: null,
         worktreePath: null,
         latestTurnId: null,

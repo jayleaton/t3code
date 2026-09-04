@@ -9,7 +9,7 @@ export const MCP_GATEWAY_STATE_EVENT = "t3code:mcp-gateway-state";
 export type McpGatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
 export type McpGatewayUiState = "disabled" | "connecting" | "running" | "degraded";
 
-const GATEWAY_SCOPES = new Set<GatewayScope>(["read", "create", "send", "control"]);
+const GATEWAY_SCOPES = new Set<GatewayScope>(["read", "create", "send", "control", "delivery"]);
 
 export function isMcpGatewayEnabled(): boolean {
   return window.localStorage.getItem(MCP_GATEWAY_ENABLED_KEY) === "true";
@@ -57,6 +57,14 @@ export function getMcpGatewayProfiles(): ReadonlyArray<GatewayProfile> {
       return (
         typeof profile.name === "string" &&
         profile.name.trim() !== "" &&
+        (profile.profileId === undefined ||
+          (typeof profile.profileId === "string" && profile.profileId.trim() !== "")) &&
+        (profile.revision === undefined ||
+          (typeof profile.revision === "number" &&
+            Number.isInteger(profile.revision) &&
+            profile.revision >= 1)) &&
+        (profile.createdAt === undefined || typeof profile.createdAt === "string") &&
+        (profile.updatedAt === undefined || typeof profile.updatedAt === "string") &&
         typeof modelSelection === "object" &&
         modelSelection !== null &&
         !Array.isArray(modelSelection) &&

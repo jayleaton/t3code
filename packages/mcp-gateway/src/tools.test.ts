@@ -12,7 +12,12 @@ import { callGatewayTool } from "./tools.ts";
 function makePort(input?: {
   readonly controls?: Array<{ action: GatewayThreadControlAction; requestId: string }>;
   readonly approvals?: Array<{ requestId: string; decision: string }>;
-  readonly creates?: Array<{ model: string; runtimeMode: string }>;
+  readonly approvalBatches?: Array<ReadonlyArray<{ approvalRequestId: string; decision: string }>>;
+  readonly operations?: Array<{ operation: string; payload: Readonly<Record<string, unknown>> }>;
+  readonly creates?: Array<{ model: string; runtimeMode: string; reasoningEffort?: string }>;
+  readonly pendingApprovalPlan?: boolean;
+  readonly staleApprovalPlan?: boolean;
+  readonly projectOwner?: string;
 }): GatewayRuntimePort {
   const environments = ["local", "remote"] as const;
   const threads = new Map<string, Array<Record<string, unknown>>>(
@@ -32,7 +37,14 @@ function makePort(input?: {
     }),
     listProjects: async (environmentId) => ({
       snapshotAt: "2026-09-02T00:00:00.000Z",
-      items: [{ id: `${environmentId}-project`, title: "Project", workspaceRoot: "/repo" }],
+      items: [
+        {
+          id: `${environmentId}-project`,
+          title: "Project",
+          workspaceRoot: "/repo",
+          repositoryIdentity: { owner: input?.projectOwner ?? "jayleaton" },
+        },
+      ],
     }),
     listThreads: async (environmentId) => ({
       snapshotAt: "2026-09-02T00:00:00.000Z",
@@ -49,10 +61,38 @@ function makePort(input?: {
           attachments: [{ id: "asset-1", kind: "image", name: "result.png" }],
         },
       ],
-      activities: [
-        { id: "event-1", sequence: 7, kind: "tool", summary: "Ran checks" },
-        { id: "event-2", sequence: 8, kind: "info", summary: "Completed" },
-      ],
+      activities: input?.pendingApprovalPlan
+        ? [
+            {
+              id: "approval-1",
+              sequence: 9,
+              kind: "approval.requested",
+              payload: { requestId: "approval-1", requestKind: "command", detail: "Run command" },
+            },
+            {
+              id: "approval-2",
+              sequence: 10,
+              kind: "approval.requested",
+              payload: { requestId: "approval-2", requestKind: "file-read", detail: "Read file" },
+            },
+            ...(input.staleApprovalPlan
+              ? [
+                  {
+                    id: "approval-stale",
+                    sequence: 11,
+                    kind: "provider.approval.respond.failed",
+                    payload: {
+                      requestId: "approval-1",
+                      detail: "Unknown pending approval request approval-1",
+                    },
+                  },
+                ]
+              : []),
+          ]
+        : [
+            { id: "event-1", sequence: 7, kind: "tool", summary: "Ran checks" },
+            { id: "event-2", sequence: 8, kind: "info", summary: "Completed" },
+          ],
       checkpoints: [{ turnId: "turn-1", files: [{ path: "src/index.ts", kind: "modified" }] }],
     }),
     createAssetUrl: async () => ({
@@ -65,6 +105,15 @@ function makePort(input?: {
       input?.creates?.push({
         model: request.modelSelection.model,
         runtimeMode: request.runtimeMode,
+        ...(request.modelSelection.options?.find((option) => option.id === "reasoningEffort")
+          ?.value === undefined
+          ? {}
+          : {
+              reasoningEffort: String(
+                request.modelSelection.options.find((option) => option.id === "reasoningEffort")
+                  ?.value,
+              ),
+            }),
       });
       const thread = { id: request.threadId, projectId: request.projectId, title: request.title };
       threads.get(request.environmentId)?.push(thread);
@@ -91,6 +140,20 @@ function makePort(input?: {
         threadId: request.threadId,
       };
     },
+    respondToApprovals: async (request) => {
+      input?.approvalBatches?.push(
+        request.responses.map((response) => ({
+          approvalRequestId: response.approvalRequestId,
+          decision: response.decision,
+        })),
+      );
+      return {
+        requestId: request.requestId,
+        commandId: request.requestId,
+        status: "accepted",
+        threadId: request.threadId,
+      };
+    },
     respondToApproval: async (request) => {
       input?.approvals?.push({ requestId: request.approvalRequestId, decision: request.decision });
       return {
@@ -99,6 +162,10 @@ function makePort(input?: {
         status: "accepted",
         threadId: request.threadId,
       };
+    },
+    executeOperation: async (request) => {
+      input?.operations?.push({ operation: request.operation, payload: request.payload });
+      return { operation: request.operation, accepted: true };
     },
   };
 }
@@ -162,6 +229,12 @@ describe("gateway chat tools", () => {
       environmentId: "local",
       threadId: "thread-1",
     });
+    const image = await callGatewayTool(context, "t3_get_artifact", {
+      environmentId: "local",
+      threadId: "thread-1",
+      artifactId: "asset-1",
+      kind: "image",
+    });
 
     expect(history).toEqual({
       items: [{ id: "event-2", sequence: 8, kind: "info", summary: "Completed" }],
@@ -179,6 +252,11 @@ describe("gateway chat tools", () => {
         artifact: { path: "src/index.ts", kind: "modified" },
       },
     ]);
+    expect(image).toMatchObject({
+      artifactId: "asset-1",
+      availability: "available",
+      download: { relativeUrl: "/asset" },
+    });
   });
 
   it("applies a named profile snapshot while preserving explicit thread overrides", async () => {
@@ -187,6 +265,7 @@ describe("gateway chat tools", () => {
       {
         name: "Andy",
         modelSelection: { instanceId: "glm", model: "glm-5.3" },
+        reasoningEffort: "medium",
         runtimeMode: "full-access",
         interactionMode: "default",
       },
@@ -211,8 +290,8 @@ describe("gateway chat tools", () => {
     });
 
     expect(creates).toEqual([
-      { model: "glm-5.3", runtimeMode: "full-access" },
-      { model: "gpt-5", runtimeMode: "approval-required" },
+      { model: "glm-5.3", runtimeMode: "full-access", reasoningEffort: "medium" },
+      { model: "gpt-5", runtimeMode: "approval-required", reasoningEffort: "medium" },
     ]);
   });
 
@@ -366,6 +445,13 @@ describe("gateway v3 event delivery tools", () => {
       throughSequence: replay.latestSequence,
     });
     expect(acked).toEqual({ subscriptionId: subscription.subscriptionId, ackedSequence: 2 });
+    await expect(
+      callGatewayTool(context, "t3_ack_events", {
+        environmentId: "local",
+        subscriptionId: subscription.subscriptionId,
+        throughSequence: 999,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
 
     // Cursor replay honours afterSequence.
     const tail = await callGatewayTool(context, "t3_get_events", {
@@ -420,5 +506,181 @@ describe("gateway v3 event delivery tools", () => {
         environmentId: "local",
       }),
     ).rejects.toMatchObject({ code: "not_configured" });
+  });
+
+  it("reports degraded bridge health instead of claiming a healthy connection", async () => {
+    const health = await callGatewayTool(
+      {
+        port: makePort(),
+        grants,
+        health: () => ({ bridge: "degraded", degradedReasons: ["bridge address in use"] }),
+      },
+      "t3_get_gateway_health",
+      {},
+    );
+
+    expect(health).toMatchObject({
+      health: "degraded",
+      mcpTransport: "connected",
+      bridge: "degraded",
+      degradedReasons: ["bridge address in use"],
+    });
+  });
+
+  it("applies grouped approvals through one atomic runtime command", async () => {
+    const approvalBatches: Array<ReadonlyArray<{ approvalRequestId: string; decision: string }>> =
+      [];
+    const port = makePort({ approvalBatches, pendingApprovalPlan: true });
+
+    const result = await callGatewayTool({ port, grants }, "t3_approve_actions", {
+      environmentId: "local",
+      threadId: "thread-1",
+      actionIds: ["approval-1", "approval-2"],
+      planRevision: 10,
+      confirmDestructive: true,
+      idempotencyKey: "approve-group-1",
+    });
+
+    expect(approvalBatches).toEqual([
+      [
+        { approvalRequestId: "approval-1", decision: "accept" },
+        { approvalRequestId: "approval-2", decision: "accept" },
+      ],
+    ]);
+    expect(result).toMatchObject({ approved: 2, pending: 0 });
+  });
+
+  it("removes approvals that the canonical server marked stale", async () => {
+    const plan = await callGatewayTool(
+      {
+        port: makePort({ pendingApprovalPlan: true, staleApprovalPlan: true }),
+        grants,
+      },
+      "t3_get_approval_plan",
+      { environmentId: "local", threadId: "thread-1" },
+    );
+
+    expect(plan).toMatchObject({ revision: 11 });
+    expect((plan as { actions: Array<{ approvalActionId: string }> }).actions).toEqual([
+      expect.objectContaining({ approvalActionId: "approval-2" }),
+    ]);
+  });
+
+  it("rejects patch paths outside the selected project root", async () => {
+    const operations: Array<{ operation: string; payload: Readonly<Record<string, unknown>> }> = [];
+    await expect(
+      callGatewayTool({ port: makePort({ operations }), grants }, "t3_apply_patch", {
+        environmentId: "local",
+        projectId: "local-project",
+        patch: "--- a/README.md\n+++ ../../outside\n@@ -1 +1 @@\n-old\n+new\n",
+        idempotencyKey: "patch-escape",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(operations).toEqual([]);
+  });
+
+  it("rejects pull requests targeting a different repository owner", async () => {
+    await expect(
+      callGatewayTool({ port: makePort({ projectOwner: "jayleaton" }), grants }, "t3_create_pr", {
+        environmentId: "local",
+        projectId: "local-project",
+        owner: "fork-owner",
+        repository: "t3code",
+        headBranch: "feature/test",
+        baseBranch: "main",
+        title: "Test",
+        idempotencyKey: "pr-fork",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+  });
+
+  it("routes v3 write tools through the runtime operation boundary idempotently", async () => {
+    const operations: Array<{ operation: string; payload: Readonly<Record<string, unknown>> }> = [];
+    const events = createGatewayEventStore();
+    const context = { port: makePort({ operations }), grants, events };
+    const input = {
+      environmentId: "local",
+      projectId: "local-project",
+      repository: "owner/repo",
+      number: 12,
+      title: "Updated",
+      idempotencyKey: "update-pr-1",
+    };
+
+    const first = await callGatewayTool(context, "t3_update_pr", input);
+    const second = await callGatewayTool(context, "t3_update_pr", input);
+
+    expect(first).toEqual(second);
+    expect(operations).toEqual([{ operation: "pr.update", payload: input }]);
+  });
+});
+
+describe("gateway v3 profile snapshots", () => {
+  it("carries profile identity and revision metadata on createThread requests", async () => {
+    const creates: Array<Record<string, unknown>> = [];
+    const port = makePort();
+    const original = port.createThread.bind(port);
+    port.createThread = async (request) => {
+      creates.push(request as unknown as Record<string, unknown>);
+      return original(request);
+    };
+    const profiles: ReadonlyArray<GatewayProfile> = [
+      {
+        profileId: "profile_andy",
+        name: "Andy",
+        modelSelection: { instanceId: "glm", model: "glm-5.3" },
+        reasoningEffort: "medium",
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        revision: 3,
+      },
+    ];
+    const context = { port, grants, profiles };
+
+    await callGatewayTool(context, "t3_create_thread", {
+      environmentId: "local",
+      projectId: "local-project",
+      title: "Snapshot chat",
+      profileId: "profile_andy",
+      idempotencyKey: "snapshot-create-1",
+    });
+
+    expect(creates[0]).toMatchObject({
+      profileSnapshot: {
+        profileId: "profile_andy",
+        profileName: "Andy",
+        revision: 3,
+        reasoningEffort: "medium",
+        effectiveSource: {
+          modelSelection: "profile",
+          runtimeMode: "profile",
+          interactionMode: "profile",
+          reasoningEffort: "profile",
+        },
+      },
+    });
+  });
+
+  it("reports per-field fallback sources when no profile applies", async () => {
+    const creates: Array<Record<string, unknown>> = [];
+    const port = makePort();
+    const original = port.createThread.bind(port);
+    port.createThread = async (request) => {
+      creates.push(request as unknown as Record<string, unknown>);
+      return original(request);
+    };
+    await callGatewayTool({ port, grants }, "t3_create_thread", {
+      environmentId: "local",
+      projectId: "local-project",
+      title: "Fallback chat",
+      modelSelection: { instanceId: "codex", model: "gpt-5" },
+      idempotencyKey: "fallback-create-1",
+    });
+    expect(creates[0]).toMatchObject({
+      profileSnapshot: {
+        profileId: null,
+        effectiveSource: { modelSelection: "thread-override", runtimeMode: "fallback" },
+      },
+    });
   });
 });

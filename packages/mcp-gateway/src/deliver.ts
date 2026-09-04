@@ -136,7 +136,8 @@ export function startWebhookDeliveryWorker(
     readonly intervalMs?: number;
     readonly batchSize?: number;
     readonly sender?: (target: WebhookTarget) => Promise<WebhookSendResult>;
-  } = {},
+    readonly isAuthorized: (environmentId: string) => boolean;
+  },
 ): { readonly stop: () => void; readonly runOnce: () => Promise<void> } {
   const sender = input.sender ?? fetchWebhookSender;
   let stopped = false;
@@ -145,17 +146,31 @@ export function startWebhookDeliveryWorker(
     if (stopped || running) return;
     running = true;
     try {
-      for (const delivery of store.dueDeliveries(input.batchSize ?? 32)) {
-        const target = store.buildDelivery(delivery.webhookId, delivery.eventId);
-        if (target === undefined) continue;
-        const result = await sender(target);
-        store.reportDeliveryAttempt(
-          delivery.webhookId,
-          delivery.eventId,
-          { ok: result.ok, retryable: result.retryable },
-          result.error,
-          result.ackedSequence,
-        );
+      const batchSize = input.batchSize ?? 32;
+      const excludedEnvironmentIds = new Set<string>();
+      let attempted = 0;
+      while (attempted < batchSize) {
+        const due = store.dueDeliveries(batchSize - attempted, [...excludedEnvironmentIds]);
+        if (due.length === 0) break;
+        for (const delivery of due) {
+          const webhook = store.webhookById(delivery.webhookId);
+          if (webhook === undefined) continue;
+          if (!input.isAuthorized(webhook.environmentId)) {
+            excludedEnvironmentIds.add(webhook.environmentId);
+            continue;
+          }
+          const target = store.buildDelivery(delivery.webhookId, delivery.eventId);
+          if (target === undefined) continue;
+          attempted += 1;
+          const result = await sender(target);
+          store.reportDeliveryAttempt(
+            delivery.webhookId,
+            delivery.eventId,
+            { ok: result.ok, retryable: result.retryable },
+            result.error,
+            result.ackedSequence,
+          );
+        }
       }
     } finally {
       running = false;
