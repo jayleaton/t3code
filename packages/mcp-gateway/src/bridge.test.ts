@@ -423,6 +423,97 @@ describe("gateway bridge", () => {
     },
   );
 
+  it("recovers an interrupted historical send using complete message evidence after bridge reconnect", async () => {
+    const port = await unusedPort();
+    const bridge = createBridgeRuntimePort({ port, token: TOKEN, requestTimeoutMs: 100 });
+    await bridge.ready;
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-bridge-send-replay-"));
+    const file = NodePath.join(directory, "events.sqlite");
+    const input = {
+      environmentId: "local",
+      threadId: "thread-1",
+      text: "Persisted outside the bounded projection",
+      idempotencyKey: "historical-send",
+    };
+    const key = "local::thread-1::mcp-request-historical-send";
+    const requestId = `mcp-request-v2-${NodeCrypto.createHash("sha256")
+      .update(
+        JSON.stringify({
+          aggregateId: "thread-1",
+          environmentId: "local",
+          idempotencyKey: "historical-send",
+          version: 2,
+        }),
+      )
+      .digest("hex")}`;
+    const receipt = {
+      requestId,
+      commandId: requestId,
+      status: "accepted" as const,
+      threadId: "thread-1",
+      messageId: "mcp-message-historical-send",
+    };
+    let events = createGatewayEventStore({ file });
+    events.rememberRequest(
+      key,
+      `{"input":{"environmentId":"local","idempotencyKey":"historical-send","text":"Persisted outside the bounded projection","threadId":"thread-1"},"operation":"message.send"}`,
+      null,
+    );
+    events.markRequestDispatched(key, {
+      requestId,
+      messageId: receipt.messageId,
+    });
+    events.close();
+    events = createGatewayEventStore({ file });
+    const methods: string[] = [];
+    const runtime = new WebSocket(`ws://127.0.0.1:${port}`);
+    const authenticated = authenticate(
+      runtime,
+      (message) => {
+        if (typeof message.method !== "string") return;
+        methods.push(message.method);
+        const id = message.id;
+        if (message.method === "hasThreadMessage") {
+          runtime.send(JSON.stringify({ id, result: true }));
+        } else if (message.method === "sendMessage") {
+          runtime.send(JSON.stringify({ id, result: receipt }));
+        }
+      },
+      false,
+    );
+    try {
+      await opened(runtime);
+      await authenticated;
+      runtime.send(JSON.stringify({ type: "configure", grants: { local: ["read", "send"] } }));
+      await vi.waitFor(() => expect(bridge.getHealth().bridge).toBe("connected"));
+
+      await expect(
+        callGatewayTool(
+          { port: bridge.port, grants: bridge.getGrants, events },
+          "t3_send_message",
+          input,
+        ),
+      ).resolves.toEqual(receipt);
+      expect(methods).toEqual(["hasThreadMessage", "sendMessage"]);
+
+      events.close();
+      events = createGatewayEventStore({ file });
+      await expect(
+        callGatewayTool(
+          { port: bridge.port, grants: bridge.getGrants, events },
+          "t3_send_message",
+          input,
+        ),
+      ).resolves.toEqual(receipt);
+      expect(methods).toEqual(["hasThreadMessage", "sendMessage", "hasThreadMessage"]);
+    } finally {
+      runtime.close();
+      events.close();
+      await bridge.close();
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ["t3_reject_actions", "t3_approve_actions"],
     ["t3_approve_actions", "t3_reject_actions"],

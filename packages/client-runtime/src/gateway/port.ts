@@ -121,6 +121,8 @@ export interface GatewayRuntimePort {
   listProjects(environmentId: string): Promise<GatewayPage<Record<string, unknown>>>;
   listThreads(environmentId: string): Promise<GatewayPage<Record<string, unknown>>>;
   getThread(environmentId: string, threadId: string): Promise<Record<string, unknown>>;
+  /** Check complete authoritative thread state rather than the bounded display projection. */
+  hasThreadMessage?(environmentId: string, threadId: string, messageId: string): Promise<boolean>;
   createAssetUrl(
     environmentId: string,
     resource:
