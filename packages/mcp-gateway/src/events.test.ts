@@ -1,4 +1,10 @@
+// @effect-diagnostics nodeBuiltinImport:off - exercises SQLite schema migration with a real file.
 import { describe, expect, it } from "@effect/vitest";
+
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as NodeSqlite from "node:sqlite";
 
 import { createGatewayEventStore, isPrivateWebhookAddress, signWebhookPayload } from "./events.ts";
 
@@ -16,6 +22,39 @@ function makeStore() {
 }
 
 describe("gateway event store", () => {
+  it("migrates legacy idempotency rows without treating unknown null rows as dispatched", () => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-events-migrate-"));
+    const file = NodePath.join(directory, "events.sqlite");
+    const legacy = new NodeSqlite.DatabaseSync(file);
+    legacy.exec(
+      "CREATE TABLE idempotency (key TEXT PRIMARY KEY, payload TEXT NOT NULL, result TEXT NOT NULL)",
+    );
+    legacy
+      .prepare("INSERT INTO idempotency (key, payload, result) VALUES (?, ?, ?)")
+      .run("completed", "{}", '{"accepted":true}');
+    legacy
+      .prepare("INSERT INTO idempotency (key, payload, result) VALUES (?, ?, ?)")
+      .run("uncertain", "{}", "null");
+    legacy.close();
+
+    const store = createGatewayEventStore({ file });
+    try {
+      expect(store.requestState("completed")).toBe("completed");
+      expect(store.recallRequest("completed")).toEqual({ accepted: true });
+      expect(store.requestState("uncertain")).toBe("validating");
+      expect(store.recallDispatchContext("uncertain")).toBeUndefined();
+      store.markRequestDispatched("uncertain", { planRevision: 1 });
+      expect(store.requestState("uncertain")).toBe("dispatched");
+      expect(store.recallDispatchContext("uncertain")).toEqual({ planRevision: 1 });
+      store.completeRequest("uncertain", { accepted: true });
+      expect(store.requestState("uncertain")).toBe("completed");
+      expect(store.recallRequest("uncertain")).toEqual({ accepted: true });
+    } finally {
+      store.close();
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("assigns monotonic per-environment sequences and replays in order", () => {
     const store = makeStore();
     store.emit({ environmentId: "env-1", type: "thread.started" });

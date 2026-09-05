@@ -264,7 +264,9 @@ CREATE INDEX IF NOT EXISTS delivery_failures_environment ON delivery_failures(en
 CREATE TABLE IF NOT EXISTS idempotency (
   key TEXT PRIMARY KEY,
   payload TEXT NOT NULL,
-  result TEXT NOT NULL
+  result TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'validating',
+  dispatchContext TEXT
 );
 `;
 
@@ -282,6 +284,18 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA synchronous = NORMAL;");
   db.exec(SCHEMA);
+  const idempotencyColumns = db
+    .prepare("PRAGMA table_info(idempotency)")
+    .all() as unknown as ReadonlyArray<{
+    readonly name: string;
+  }>;
+  if (!idempotencyColumns.some((column) => column.name === "status")) {
+    db.exec("ALTER TABLE idempotency ADD COLUMN status TEXT NOT NULL DEFAULT 'validating'");
+    db.exec("UPDATE idempotency SET status = 'completed' WHERE result <> 'null'");
+  }
+  if (!idempotencyColumns.some((column) => column.name === "dispatchContext")) {
+    db.exec("ALTER TABLE idempotency ADD COLUMN dispatchContext TEXT");
+  }
   const listeners = new Set<(event: GatewayEvent) => void>();
 
   const eventFromRow = (row: Record<string, unknown>): GatewayEvent => {
@@ -999,11 +1013,9 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
         | { payload: string }
         | undefined;
       if (stored !== undefined) return stored.payload === payload ? "duplicate" : "conflict";
-      db.prepare("INSERT INTO idempotency (key, payload, result) VALUES (?, ?, ?)").run(
-        key,
-        payload,
-        JSON.stringify(result ?? null),
-      );
+      db.prepare(
+        "INSERT INTO idempotency (key, payload, result, status) VALUES (?, ?, ?, 'validating')",
+      ).run(key, payload, JSON.stringify(result ?? null));
       return "accepted";
     },
     recallRequest: <T>(key: string): T | undefined => {
@@ -1011,6 +1023,31 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
         | { result: string }
         | undefined;
       return stored === undefined ? undefined : (JSON.parse(stored.result) as T);
+    },
+    requestState: (key: string): "validating" | "dispatched" | "completed" | undefined => {
+      const stored = db.prepare("SELECT status FROM idempotency WHERE key = ?").get(key) as
+        | { status: "validating" | "dispatched" | "completed" }
+        | undefined;
+      return stored?.status;
+    },
+    recallDispatchContext: <T>(key: string): T | undefined => {
+      const stored = db
+        .prepare("SELECT dispatchContext FROM idempotency WHERE key = ?")
+        .get(key) as { dispatchContext: string | null } | undefined;
+      return stored?.dispatchContext === null || stored?.dispatchContext === undefined
+        ? undefined
+        : (JSON.parse(stored.dispatchContext) as T);
+    },
+    markRequestDispatched: (key: string, dispatchContext: unknown): void => {
+      db.prepare(
+        "UPDATE idempotency SET status = 'dispatched', dispatchContext = ? WHERE key = ?",
+      ).run(JSON.stringify(dispatchContext ?? null), key);
+    },
+    completeRequest: (key: string, result: unknown): void => {
+      db.prepare("UPDATE idempotency SET result = ?, status = 'completed' WHERE key = ?").run(
+        JSON.stringify(result ?? null),
+        key,
+      );
     },
     forgetRequest: (key: string): void => {
       db.prepare("DELETE FROM idempotency WHERE key = ?").run(key);

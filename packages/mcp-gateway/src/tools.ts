@@ -333,15 +333,19 @@ const pendingRequests = new WeakMap<GatewayEventStore, Map<string, Promise<unkno
 // Memoizes a mutating command per (environmentId, threadId, requestId). On a
 // first attempt it runs the operation and stores the receipt; a same-payload
 // retry replays the stored receipt; a different payload is idempotency_conflict.
-async function withIdempotency(
+async function withIdempotency<Prepared = undefined>(
   context: GatewayToolContext,
   key: string,
   payload: unknown,
-  operation: () => Promise<unknown>,
+  operation: (prepared: Prepared | undefined) => Promise<unknown>,
+  prepare?: () => Promise<Prepared> | Prepared,
 ): Promise<unknown> {
   // Additive v3 behavior: without an event store the command runs directly,
   // preserving the v1 single-shot semantics.
-  if (context.events === undefined) return operation();
+  if (context.events === undefined) {
+    const prepared = prepare === undefined ? undefined : await prepare();
+    return operation(prepared);
+  }
   const events = context.events;
   let pending = pendingRequests.get(events);
   if (pending === undefined) {
@@ -363,16 +367,29 @@ async function withIdempotency(
     if (previous !== undefined && previous !== null) return previous;
     const active = pending.get(key);
     if (active !== undefined) return active;
-    // Re-issue the exact same authoritative command id after an interrupted
-    // transport. T3's durable command receipt returns the original result and
-    // prevents the underlying side effect from running twice.
   }
-  const execution = (async () => {
-    const result = await operation();
-    events.forgetRequest(key);
-    events.rememberRequest(key, canonical, result);
+  const recovering = outcome === "duplicate" && events.requestState(key) === "dispatched";
+  // Start on the next microtask so the Promise is visible to same-process
+  // duplicates before validation or dispatch can yield.
+  const execution = Promise.resolve().then(async () => {
+    let prepared: Prepared | undefined;
+    if (recovering) {
+      prepared = events.recallDispatchContext<Prepared>(key);
+    } else {
+      try {
+        prepared = prepare === undefined ? undefined : await prepare();
+      } catch (error) {
+        // A failed pre-dispatch check must not leave an ambiguous null receipt
+        // that a later retry could mistake for an authoritative dispatch.
+        events.forgetRequest(key);
+        throw error;
+      }
+      events.markRequestDispatched(key, prepared);
+    }
+    const result = await operation(prepared);
+    events.completeRequest(key, result);
     return result;
-  })();
+  });
   pending.set(key, execution);
   try {
     return await execution;
@@ -715,84 +732,94 @@ export async function callGatewayTool(
       const idempotencyKey = requiredIdempotencyKey(input);
       const threadId = requiredString(input, "threadId");
       const requestedRevision = Number(input.planRevision);
-      const thread = await context.port.getThread(environmentId, threadId);
-      const plan = approvalPlan(thread);
-      if (!Number.isInteger(requestedRevision) || requestedRevision !== plan.revision) {
-        throw new GatewayError({
-          code: "stale_plan",
-          message: `Approval plan changed from revision ${String(input.planRevision)} to ${plan.revision}.`,
-          retryable: false,
-          environmentId,
-          details: { approvalPlanId: plan.approvalPlanId, currentRevision: plan.revision },
-        });
-      }
       const modifications = Array.isArray(input.modifications) ? input.modifications : [];
-      if (modifications.length === 0) {
-        throw new GatewayError({
-          code: "invalid_input",
-          message: "modifications cannot be empty.",
-          retryable: false,
-          environmentId,
-        });
-      }
-      for (const modification of modifications) {
-        if (
-          typeof modification !== "object" ||
-          modification === null ||
-          Array.isArray(modification)
-        ) {
-          throw new GatewayError({
-            code: "invalid_input",
-            message: "Each modification must identify one pending action.",
-            retryable: false,
-            environmentId,
-          });
-        }
-        const value = modification as Record<string, unknown>;
-        const action = plan.actions.find(
-          (candidate) => candidate.approvalActionId === value.actionId,
-        );
-        const fields = record(value.fields);
-        if (
-          action === undefined ||
-          fields === undefined ||
-          Object.keys(fields).some(
-            (field) =>
-              !(Array.isArray(action.modifiableFields) && action.modifiableFields.includes(field)),
-          )
-        ) {
-          throw new GatewayError({
-            code: "invalid_input",
-            message: `Action ${String(value.actionId)} contains fields that are not modifiable.`,
-            retryable: false,
-            environmentId,
-          });
-        }
-        if (
-          action.requiresDestructiveConfirmation === true &&
-          (fields.decision === "accept" || fields.decision === "acceptForSession") &&
-          input.confirmDestructive !== true
-        ) {
-          throw new GatewayError({
-            code: "destructive_confirmation_required",
-            message: `Action ${String(value.actionId)} requires confirmDestructive: true.`,
-            retryable: false,
-            environmentId,
-          });
-        }
-      }
       const execute = requireOperationPort(context);
       return withIdempotency(
         context,
         `${environmentId}::${threadId}::${idFor("approval-plan", idempotencyKey)}`,
         input,
-        () =>
+        (prepared) =>
           execute({
             environmentId,
             operation: "approval.modify",
-            payload: { threadId, planRevision: requestedRevision, modifications },
+            payload: prepared ?? {
+              threadId,
+              planRevision: requestedRevision,
+              modifications,
+            },
             requestId: idFor("request", idempotencyKey),
           }),
+        async () => {
+          const thread = await context.port.getThread(environmentId, threadId);
+          const plan = approvalPlan(thread);
+          if (!Number.isInteger(requestedRevision) || requestedRevision !== plan.revision) {
+            throw new GatewayError({
+              code: "stale_plan",
+              message: `Approval plan changed from revision ${String(input.planRevision)} to ${plan.revision}.`,
+              retryable: false,
+              environmentId,
+              details: { approvalPlanId: plan.approvalPlanId, currentRevision: plan.revision },
+            });
+          }
+          if (modifications.length === 0) {
+            throw new GatewayError({
+              code: "invalid_input",
+              message: "modifications cannot be empty.",
+              retryable: false,
+              environmentId,
+            });
+          }
+          for (const modification of modifications) {
+            if (
+              typeof modification !== "object" ||
+              modification === null ||
+              Array.isArray(modification)
+            ) {
+              throw new GatewayError({
+                code: "invalid_input",
+                message: "Each modification must identify one pending action.",
+                retryable: false,
+                environmentId,
+              });
+            }
+            const value = modification as Record<string, unknown>;
+            const action = plan.actions.find(
+              (candidate) => candidate.approvalActionId === value.actionId,
+            );
+            const fields = record(value.fields);
+            if (
+              action === undefined ||
+              fields === undefined ||
+              Object.keys(fields).some(
+                (field) =>
+                  !(
+                    Array.isArray(action.modifiableFields) &&
+                    action.modifiableFields.includes(field)
+                  ),
+              )
+            ) {
+              throw new GatewayError({
+                code: "invalid_input",
+                message: `Action ${String(value.actionId)} contains fields that are not modifiable.`,
+                retryable: false,
+                environmentId,
+              });
+            }
+            if (
+              action.requiresDestructiveConfirmation === true &&
+              (fields.decision === "accept" || fields.decision === "acceptForSession") &&
+              input.confirmDestructive !== true
+            ) {
+              throw new GatewayError({
+                code: "destructive_confirmation_required",
+                message: `Action ${String(value.actionId)} requires confirmDestructive: true.`,
+                retryable: false,
+                environmentId,
+              });
+            }
+          }
+          return { threadId, planRevision: requestedRevision, modifications };
+        },
       );
     }
     case "t3_replay_events": {
@@ -1136,48 +1163,47 @@ export async function callGatewayTool(
         context,
         `${environmentId}::${threadId}::${idFor("request", idempotencyKey)}`,
         input,
-        async () => {
-          if (decision === "accept" || decision === "acceptForSession") {
-            const approvalRequestId = requiredString(input, "approvalRequestId");
-            const thread = await context.port.getThread(environmentId, threadId);
-            const plan = approvalPlan(thread);
-            const action = plan.actions.find(
-              (candidate) => candidate.approvalActionId === approvalRequestId,
-            );
-            // Fail closed for new dispatches: an action missing from the
-            // reconstructed plan (unknown, resolved, or truncated out of the
-            // newest-1,000 activity window) must never be treated as safe.
-            // Durable and in-flight retries are handled by withIdempotency
-            // before this operation runs, after the current grant check above.
-            if (action === undefined) {
-              throw new GatewayError({
-                code: "stale_plan",
-                message: `Approval request ${approvalRequestId} is not pending in the current approval plan. Re-fetch the plan and retry.`,
-                retryable: false,
-                environmentId,
-                details: { approvalPlanId: plan.approvalPlanId, currentRevision: plan.revision },
-              });
-            }
-            if (
-              action.requiresDestructiveConfirmation === true &&
-              input.confirmDestructive !== true
-            ) {
-              throw new GatewayError({
-                code: "destructive_confirmation_required",
-                message: `Action ${String(action.approvalActionId)} requires confirmDestructive: true.`,
-                retryable: false,
-                environmentId,
-              });
-            }
-          }
-          const result = await context.port.respondToApproval({
+        () =>
+          context.port.respondToApproval({
             environmentId,
             threadId,
             approvalRequestId: requiredString(input, "approvalRequestId"),
             decision,
             requestId: idFor("request", idempotencyKey),
-          });
-          return result;
+          }),
+        async () => {
+          if (decision !== "accept" && decision !== "acceptForSession") return;
+          const approvalRequestId = requiredString(input, "approvalRequestId");
+          const thread = await context.port.getThread(environmentId, threadId);
+          const plan = approvalPlan(thread);
+          const action = plan.actions.find(
+            (candidate) => candidate.approvalActionId === approvalRequestId,
+          );
+          // Fail closed for new dispatches: an action missing from the
+          // reconstructed plan (unknown, resolved, or truncated out of the
+          // newest-1,000 activity window) must never be treated as safe.
+          // A durable dispatched marker lets an uncertain authoritative command
+          // recover without granting that bypass to failed pre-dispatch checks.
+          if (action === undefined) {
+            throw new GatewayError({
+              code: "stale_plan",
+              message: `Approval request ${approvalRequestId} is not pending in the current approval plan. Re-fetch the plan and retry.`,
+              retryable: false,
+              environmentId,
+              details: { approvalPlanId: plan.approvalPlanId, currentRevision: plan.revision },
+            });
+          }
+          if (
+            action.requiresDestructiveConfirmation === true &&
+            input.confirmDestructive !== true
+          ) {
+            throw new GatewayError({
+              code: "destructive_confirmation_required",
+              message: `Action ${String(action.approvalActionId)} requires confirmDestructive: true.`,
+              retryable: false,
+              environmentId,
+            });
+          }
         },
       );
     }
@@ -1187,46 +1213,12 @@ export async function callGatewayTool(
       const threadId = requiredString(input, "threadId");
       const idempotencyKey = requiredIdempotencyKey(input);
       const actionIds = requiredStringArray(input, "actionIds");
-      const thread = await context.port.getThread(environmentId, threadId);
-      const plan = approvalPlan(thread);
       const requestedRevision = Number(input.planRevision);
-      if (!Number.isInteger(requestedRevision) || requestedRevision !== plan.revision) {
-        throw new GatewayError({
-          code: "stale_plan",
-          message: `Approval plan changed from revision ${String(input.planRevision)} to ${plan.revision}.`,
-          retryable: false,
-          environmentId,
-          details: { approvalPlanId: plan.approvalPlanId, currentRevision: plan.revision },
-        });
-      }
-      const selected = plan.actions.filter((action) =>
-        actionIds.includes(action.approvalActionId as string),
-      );
-      if (selected.length !== actionIds.length) {
-        throw new GatewayError({
-          code: "invalid_input",
-          message: "One or more approval action IDs are not pending in this plan.",
-          retryable: false,
-          environmentId,
-        });
-      }
-      if (
-        name === "t3_approve_actions" &&
-        input.confirmDestructive !== true &&
-        selected.some((action) => action.requiresDestructiveConfirmation === true)
-      ) {
-        throw new GatewayError({
-          code: "destructive_confirmation_required",
-          message: "One or more selected actions require confirmDestructive: true.",
-          retryable: false,
-          environmentId,
-        });
-      }
       return withIdempotency(
         context,
         `${environmentId}::${threadId}::${idFor("approval-plan", idempotencyKey)}`,
         input,
-        async () => {
+        async (prepared) => {
           const decision: GatewayApprovalDecision =
             name === "t3_approve_actions" ? "accept" : "decline";
           if (context.port.respondToApprovals === undefined) {
@@ -1237,23 +1229,71 @@ export async function callGatewayTool(
               environmentId,
             });
           }
+          const dispatch = prepared ?? {
+            approvalPlanId: `plan-${threadId}`,
+            revision: requestedRevision,
+            actionIds,
+            pending: 0,
+          };
           const receipt = await context.port.respondToApprovals({
             environmentId,
             threadId,
-            responses: selected.map((action) => ({
-              approvalRequestId: action.approvalActionId as string,
+            responses: dispatch.actionIds.map((approvalRequestId) => ({
+              approvalRequestId,
               decision,
             })),
-            expectedRevision: plan.revision,
+            expectedRevision: dispatch.revision,
             requestId: idFor("request", idempotencyKey),
           });
           return {
+            approvalPlanId: dispatch.approvalPlanId,
+            revision: dispatch.revision,
+            approved: decision === "accept" ? dispatch.actionIds.length : 0,
+            rejected: decision === "decline" ? dispatch.actionIds.length : 0,
+            pending: dispatch.pending,
+            receipt,
+          };
+        },
+        async () => {
+          const thread = await context.port.getThread(environmentId, threadId);
+          const plan = approvalPlan(thread);
+          if (!Number.isInteger(requestedRevision) || requestedRevision !== plan.revision) {
+            throw new GatewayError({
+              code: "stale_plan",
+              message: `Approval plan changed from revision ${String(input.planRevision)} to ${plan.revision}.`,
+              retryable: false,
+              environmentId,
+              details: { approvalPlanId: plan.approvalPlanId, currentRevision: plan.revision },
+            });
+          }
+          const selected = plan.actions.filter((action) =>
+            actionIds.includes(action.approvalActionId as string),
+          );
+          if (selected.length !== actionIds.length) {
+            throw new GatewayError({
+              code: "invalid_input",
+              message: "One or more approval action IDs are not pending in this plan.",
+              retryable: false,
+              environmentId,
+            });
+          }
+          if (
+            name === "t3_approve_actions" &&
+            input.confirmDestructive !== true &&
+            selected.some((action) => action.requiresDestructiveConfirmation === true)
+          ) {
+            throw new GatewayError({
+              code: "destructive_confirmation_required",
+              message: "One or more selected actions require confirmDestructive: true.",
+              retryable: false,
+              environmentId,
+            });
+          }
+          return {
             approvalPlanId: plan.approvalPlanId,
             revision: plan.revision,
-            approved: decision === "accept" ? selected.length : 0,
-            rejected: decision === "decline" ? selected.length : 0,
+            actionIds: selected.map((action) => action.approvalActionId as string),
             pending: plan.actions.length - selected.length,
-            receipt,
           };
         },
       );

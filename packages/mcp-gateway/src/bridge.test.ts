@@ -1,10 +1,17 @@
+// @effect-diagnostics nodeBuiltinImport:off - exercises durable SQLite replay across a real bridge reconnect.
 import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
 import * as NodeNet from "node:net";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
 import { describe, expect, it, vi } from "@effect/vitest";
 import WebSocket from "ws";
 
 import { createBridgeRuntimePort } from "./bridge.ts";
+import { createGatewayEventStore } from "./events.ts";
+import type { GatewayMutationResult } from "./port.ts";
+import { callGatewayTool } from "./tools.ts";
 
 const TOKEN = "test-token-123456789";
 
@@ -289,6 +296,132 @@ describe("gateway bridge", () => {
     client.close();
     await bridge.close();
   });
+
+  it.each(["accept", "acceptForSession"] as const)(
+    "recovers one authoritative %s side effect after a real bridge disconnect and store reopen",
+    async (decision) => {
+      const port = await unusedPort();
+      const bridge = createBridgeRuntimePort({ port, token: TOKEN, requestTimeoutMs: 100 });
+      await bridge.ready;
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-bridge-replay-"));
+      const file = NodePath.join(directory, "events.sqlite");
+      let events = createGatewayEventStore({ file });
+      let pending = true;
+      let sideEffects = 0;
+      const receipts = new Map<string, GatewayMutationResult>();
+      const thread = () => ({
+        id: "thread-1",
+        activities: pending
+          ? [
+              {
+                id: "approval-1",
+                sequence: 1,
+                kind: "approval.requested",
+                payload: {
+                  requestId: "approval-1",
+                  requestKind: "command",
+                  detail: "Run command",
+                },
+              },
+            ]
+          : [
+              {
+                id: "approval-1",
+                sequence: 1,
+                kind: "approval.requested",
+                payload: {
+                  requestId: "approval-1",
+                  requestKind: "command",
+                  detail: "Run command",
+                },
+              },
+              {
+                id: "approval-resolved-1",
+                sequence: 2,
+                kind: "approval.resolved",
+                payload: { requestId: "approval-1" },
+              },
+            ],
+      });
+      let disconnectAfterAcceptance = true;
+      const connectRuntime = async () => {
+        const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+        const authenticated = authenticate(
+          socket,
+          (message) => {
+            const id = message.id;
+            const args = message.args as ReadonlyArray<Record<string, unknown>> | undefined;
+            if (message.method === "getThread") {
+              socket.send(JSON.stringify({ id, result: thread() }));
+              return;
+            }
+            if (message.method !== "respondToApproval") return;
+            const request = args?.[0];
+            const requestId = String(request?.requestId ?? "");
+            const previous = receipts.get(requestId);
+            if (previous !== undefined) {
+              socket.send(JSON.stringify({ id, result: previous }));
+              return;
+            }
+            sideEffects += 1;
+            pending = false;
+            const receipt = {
+              requestId,
+              commandId: requestId,
+              status: "accepted" as const,
+              threadId: String(request?.threadId ?? ""),
+            };
+            receipts.set(requestId, receipt);
+            if (disconnectAfterAcceptance) socket.close(1012, "injected response loss");
+            else socket.send(JSON.stringify({ id, result: receipt }));
+          },
+          false,
+        );
+        await opened(socket);
+        await authenticated;
+        socket.send(JSON.stringify({ type: "configure", grants: { local: ["read", "approval"] } }));
+        await vi.waitFor(() => expect(bridge.getHealth().bridge).toBe("connected"));
+        expect(bridge.getGrants()).toEqual({ local: ["read", "approval"] });
+        return socket;
+      };
+      let runtime = await connectRuntime();
+      const request = {
+        environmentId: "local",
+        threadId: "thread-1",
+        approvalRequestId: "approval-1",
+        decision,
+        confirmDestructive: true,
+        idempotencyKey: `bridge-lost-${decision}`,
+      };
+      try {
+        await expect(
+          callGatewayTool(
+            { port: bridge.port, grants: bridge.getGrants, events },
+            "t3_respond_to_approval",
+            request,
+          ),
+        ).rejects.toThrow("disconnected");
+        events.close();
+        events = createGatewayEventStore({ file });
+        disconnectAfterAcceptance = false;
+        runtime = await connectRuntime();
+
+        await expect(
+          callGatewayTool(
+            { port: bridge.port, grants: bridge.getGrants, events },
+            "t3_respond_to_approval",
+            request,
+          ),
+        ).resolves.toEqual(receipts.get(`mcp-request-${request.idempotencyKey}`));
+        expect(sideEffects).toBe(1);
+      } finally {
+        runtime.close();
+        events.close();
+        await bridge.close();
+        NodeFS.rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("times out requests that receive no runtime response", async () => {
     const port = await unusedPort();
