@@ -53,11 +53,10 @@ describe("MCP gateway server", () => {
       profiles: [
         {
           name: "Andy",
-          environmentId: "local",
+          environmentIds: ["local"],
           providerLabel: "OpenCode",
           modelLabel: "GLM 5.3",
-          instanceId: "opencode",
-          model: "glm-5.3",
+          modelSelection: { instanceId: "opencode", model: "glm-5.3" },
           reasoningEffort: "medium",
           runtimeMode: "full-access",
           interactionMode: "default",
