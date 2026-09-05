@@ -4,7 +4,7 @@ import type {
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
-import { OrchestrationCommand } from "@t3tools/contracts";
+import { CommandId, OrchestrationCommand } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
@@ -329,6 +329,17 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const readEvents: OrchestrationEngineShape["readEvents"] = (fromSequenceExclusive, limit) =>
     eventStore.readFromSequence(fromSequenceExclusive, limit);
 
+  const getCommandReceipts: NonNullable<OrchestrationEngineShape["getCommandReceipts"]> = (
+    commandIds,
+  ) =>
+    Effect.forEach(commandIds, (commandId) =>
+      commandReceiptRepository.getByCommandId({ commandId: CommandId.make(commandId) }),
+    ).pipe(
+      Effect.map((receipts) =>
+        receipts.flatMap((receipt) => (Option.isSome(receipt) ? [receipt.value] : [])),
+      ),
+    );
+
   const dispatch: OrchestrationEngineShape["dispatch"] = (command) =>
     Effect.gen(function* () {
       const result = yield* Deferred.make<{ sequence: number }, OrchestrationDispatchError>();
@@ -342,6 +353,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   return {
     readEvents,
+    getCommandReceipts,
     dispatch,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (wsServer, ProviderRuntimeIngestion, CheckpointReactor, etc.)

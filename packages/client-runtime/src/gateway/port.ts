@@ -138,6 +138,20 @@ export interface GatewayRuntimePort {
     environmentId: string,
     ref: { readonly projectId: string; readonly repository: string; readonly number: number },
   ): Promise<Record<string, unknown>>;
+  /** Read authoritative receipts without redispatching an ambiguous legacy command. */
+  getCommandReceipts?(
+    environmentId: string,
+    commandIds: ReadonlyArray<string>,
+  ): Promise<
+    ReadonlyArray<{
+      readonly commandId: string;
+      readonly aggregateKind: string;
+      readonly aggregateId: string;
+      readonly status: "accepted" | "rejected";
+      readonly resultSequence: number;
+      readonly error: string | null;
+    }>
+  >;
   createThread(input: {
     readonly environmentId: string;
     readonly projectId: string;

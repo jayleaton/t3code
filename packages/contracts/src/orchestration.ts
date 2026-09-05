@@ -25,6 +25,7 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
+  getCommandReceipts: "orchestration.getCommandReceipts",
   getWorkflowScript: "orchestration.getWorkflowScript",
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
@@ -1589,6 +1590,28 @@ export type OrchestrationThreadStreamItem = typeof OrchestrationThreadStreamItem
 export const OrchestrationCommandReceiptStatus = Schema.Literals(["accepted", "rejected"]);
 export type OrchestrationCommandReceiptStatus = typeof OrchestrationCommandReceiptStatus.Type;
 
+export const OrchestrationCommandReceiptRecord = Schema.Struct({
+  commandId: CommandId,
+  aggregateKind: OrchestrationAggregateKind,
+  aggregateId: Schema.Union([ProjectId, ThreadId]),
+  acceptedAt: IsoDateTime,
+  resultSequence: NonNegativeInt,
+  status: OrchestrationCommandReceiptStatus,
+  error: Schema.NullOr(Schema.String),
+});
+export type OrchestrationCommandReceiptRecord = typeof OrchestrationCommandReceiptRecord.Type;
+
+export const OrchestrationGetCommandReceiptsInput = Schema.Struct({
+  commandIds: Schema.Array(CommandId),
+});
+export type OrchestrationGetCommandReceiptsInput = typeof OrchestrationGetCommandReceiptsInput.Type;
+
+export const OrchestrationGetCommandReceiptsResult = Schema.Struct({
+  receipts: Schema.Array(OrchestrationCommandReceiptRecord),
+});
+export type OrchestrationGetCommandReceiptsResult =
+  typeof OrchestrationGetCommandReceiptsResult.Type;
+
 export const TurnCountRange = Schema.Struct({
   fromTurnCount: NonNegativeInt,
   toTurnCount: NonNegativeInt,
@@ -1754,6 +1777,10 @@ export const OrchestrationRpcSchemas = {
   dispatchCommand: {
     input: ClientOrchestrationCommand,
     output: DispatchResult,
+  },
+  getCommandReceipts: {
+    input: OrchestrationGetCommandReceiptsInput,
+    output: OrchestrationGetCommandReceiptsResult,
   },
   getWorkflowScript: {
     input: OrchestrationGetWorkflowScriptInput,

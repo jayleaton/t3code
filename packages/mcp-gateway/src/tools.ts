@@ -1007,7 +1007,7 @@ export async function callGatewayTool(
       const currentThreadId = scopedIdFor("thread", environmentId, "create", idempotencyKey);
       const currentIdentity = {
         threadId: currentThreadId,
-        requestId: scopedIdFor("request", environmentId, currentThreadId, idempotencyKey),
+        requestId: scopedIdFor("thread", environmentId, currentThreadId, idempotencyKey),
       };
       const buildRequest = async (identity: typeof currentIdentity) => {
         const profiles = await authoritativeProfiles(context, environmentId);
@@ -1159,12 +1159,51 @@ export async function callGatewayTool(
           requestId: identity.requestId,
         };
       };
+      const recoverPreV2Create = async () => {
+        const commandIds = [legacyIdentity.requestId, legacyIdentity.threadId];
+        if (context.port.getCommandReceipts === undefined) {
+          throw new GatewayError({
+            code: "idempotency_conflict",
+            message:
+              "This interrupted legacy create cannot be recovered until the connected runtime supports authoritative receipt lookup.",
+            retryable: false,
+            environmentId,
+          });
+        }
+        const receipts = await context.port.getCommandReceipts(environmentId, commandIds);
+        const accepted = receipts.filter(
+          (receipt) =>
+            receipt.status === "accepted" &&
+            receipt.aggregateKind === "thread" &&
+            receipt.aggregateId === legacyIdentity.threadId &&
+            commandIds.includes(receipt.commandId),
+        );
+        if (accepted.length !== 1) {
+          throw new GatewayError({
+            code: "idempotency_conflict",
+            message:
+              accepted.length === 0
+                ? "No authoritative receipt exists for this interrupted legacy create."
+                : "Multiple authoritative receipts exist for this interrupted legacy create.",
+            retryable: false,
+            environmentId,
+            details: { candidateRequestIds: commandIds },
+          });
+        }
+        const requestId = accepted[0]?.commandId as string;
+        return {
+          requestId,
+          commandId: requestId,
+          status: "accepted" as const,
+          threadId: legacyIdentity.threadId,
+        };
+      };
       return withIdempotency(
         context,
         `${environmentId}::${idFor("thread", idempotencyKey)}`,
         input,
         async (prepared) =>
-          context.port.createThread(prepared ?? (await buildRequest(legacyIdentity))),
+          prepared === undefined ? recoverPreV2Create() : context.port.createThread(prepared),
         () => buildRequest(currentIdentity),
       );
     }

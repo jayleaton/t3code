@@ -650,6 +650,19 @@ export function createGatewayRuntimePort(runtime: GatewayEffectRuntime): Gateway
           )) as Record<string, unknown>;
         }),
       ),
+    getCommandReceipts: (rawEnvironmentId, commandIds) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          const result = yield* registry.run(
+            EnvironmentId.make(rawEnvironmentId),
+            request(ORCHESTRATION_WS_METHODS.getCommandReceipts, {
+              commandIds: commandIds.map((commandId) => CommandId.make(commandId)),
+            }),
+          );
+          return result.receipts;
+        }),
+      ),
     createThread: (input) =>
       run(
         Effect.gen(function* () {

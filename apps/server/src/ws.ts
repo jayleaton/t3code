@@ -1156,6 +1156,23 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "orchestration" },
           ),
+        [ORCHESTRATION_WS_METHODS.getCommandReceipts]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.getCommandReceipts,
+            Effect.gen(function* () {
+              const receipts = yield* orchestrationEngine.getCommandReceipts(input.commandIds);
+              return { receipts };
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationGetSnapshotError({
+                    message: "Failed to read orchestration command receipts.",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
         [ORCHESTRATION_WS_METHODS.getWorkflowScript]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.getWorkflowScript,

@@ -5883,6 +5883,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           },
           orchestrationEngine: {
             dispatch: () => Effect.succeed({ sequence: 7 }),
+            getCommandReceipts: (commandIds) =>
+              Effect.succeed(
+                commandIds.map((commandId) => ({
+                  commandId: CommandId.make(commandId),
+                  aggregateKind: "thread" as const,
+                  aggregateId: ThreadId.make("thread-1"),
+                  acceptedAt: now,
+                  resultSequence: 7,
+                  status: "accepted" as const,
+                  error: null,
+                })),
+              ),
             readEvents: () => Stream.empty,
           },
           checkpointDiffQuery: {
@@ -5916,6 +5928,25 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
       assert.equal(dispatchResult.sequence, 7);
+
+      const receiptResult = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.getCommandReceipts]({
+            commandIds: [CommandId.make("cmd-1")],
+          }),
+        ),
+      );
+      assert.deepEqual(receiptResult.receipts, [
+        {
+          commandId: CommandId.make("cmd-1"),
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          acceptedAt: now,
+          resultSequence: 7,
+          status: "accepted",
+          error: null,
+        },
+      ]);
 
       const turnDiffResult = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
