@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   getMcpGatewayGrants,
+  getMcpGatewayToken,
   MCP_GATEWAY_GRANTS_KEY,
+  MCP_GATEWAY_TOKEN_KEY,
   setMcpGatewayGrants,
 } from "./mcpGatewayState";
 
@@ -22,11 +24,17 @@ function storage(): Storage {
 
 describe("MCP gateway grants", () => {
   let localStorage: Storage;
+  let sessionStorage: Storage;
 
   beforeEach(() => {
     localStorage = storage();
+    sessionStorage = storage();
     vi.stubGlobal("window", {
       localStorage,
+      sessionStorage,
+      desktopBridge: {
+        getMcpGatewayBridgeToken: () => "desktop-token-123456",
+      },
       dispatchEvent: vi.fn(),
     });
   });
@@ -64,6 +72,13 @@ describe("MCP gateway grants", () => {
     expect(getMcpGatewayGrants()).toEqual({
       "a534b83f-a352-44d8-aedc-c4230c179390": ["read", "send"],
     });
+  });
+
+  it("uses the desktop credential only when the session has no explicit token", () => {
+    expect(getMcpGatewayToken()).toBe("desktop-token-123456");
+
+    sessionStorage.setItem(MCP_GATEWAY_TOKEN_KEY, "session-token-123456");
+    expect(getMcpGatewayToken()).toBe("session-token-123456");
   });
 
   it("strips all non-baseline scopes from loaded and saved grants", () => {

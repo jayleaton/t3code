@@ -36,7 +36,9 @@ export function isMcpGatewayEnabled(): boolean {
 }
 
 export function getMcpGatewayToken(): string {
-  return window.sessionStorage.getItem(MCP_GATEWAY_TOKEN_KEY) ?? "";
+  const sessionToken = window.sessionStorage.getItem(MCP_GATEWAY_TOKEN_KEY);
+  if (sessionToken !== null) return sessionToken;
+  return window.desktopBridge?.getMcpGatewayBridgeToken?.() ?? "";
 }
 
 export function getMcpGatewayGrants(): McpGatewayGrants {
