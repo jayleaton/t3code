@@ -526,7 +526,7 @@ describe("gateway bridge", () => {
           ),
         ).rejects.toMatchObject({ code: "destructive_confirmation_required" });
         expect(received).toHaveLength(1);
-        expect(received[0]?.requestId).toBe(`mcp-request-${request.idempotencyKey}`);
+        expect(received[0]?.requestId).toBe(`mcp-approval-plan-${request.idempotencyKey}`);
       } finally {
         runtime.close();
         events.close();
@@ -535,6 +535,100 @@ describe("gateway bridge", () => {
       }
     },
   );
+
+  it("uses distinct authoritative command IDs across grouped and legacy approval namespaces", async () => {
+    const port = await unusedPort();
+    const bridge = createBridgeRuntimePort({ port, token: TOKEN, requestTimeoutMs: 100 });
+    await bridge.ready;
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-bridge-namespace-"));
+    const file = NodePath.join(directory, "events.sqlite");
+    let events = createGatewayEventStore({ file });
+    const received: Array<Record<string, unknown>> = [];
+    const thread = {
+      id: "thread-1",
+      activities: [
+        {
+          id: "approval-1",
+          sequence: 1,
+          kind: "approval.requested",
+          payload: { requestId: "approval-1", requestKind: "command", detail: "First command" },
+        },
+        {
+          id: "approval-2",
+          sequence: 2,
+          kind: "approval.requested",
+          payload: { requestId: "approval-2", requestKind: "command", detail: "Second command" },
+        },
+      ],
+    };
+    const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+    const authenticated = authenticate(socket, (message) => {
+      const id = message.id;
+      const args = message.args as ReadonlyArray<Record<string, unknown>> | undefined;
+      if (message.method === "getThread") {
+        socket.send(JSON.stringify({ id, result: thread }));
+        return;
+      }
+      if (message.method !== "respondToApprovals" && message.method !== "respondToApproval") return;
+      const request = args?.[0] ?? {};
+      received.push({ method: message.method, ...request });
+      socket.send(
+        JSON.stringify({
+          id,
+          result: {
+            requestId: String(request.requestId ?? ""),
+            commandId: String(request.requestId ?? ""),
+            status: "accepted",
+            threadId: "thread-1",
+          },
+        }),
+      );
+    });
+    await opened(socket);
+    await authenticated;
+    socket.send(JSON.stringify({ type: "configure", grants: { local: ["read", "approval"] } }));
+    await vi.waitFor(() => expect(bridge.getGrants()).toEqual({ local: ["read", "approval"] }));
+
+    const idempotencyKey = "cross-approval-namespace";
+    try {
+      await callGatewayTool(
+        { port: bridge.port, grants: bridge.getGrants, events },
+        "t3_reject_actions",
+        {
+          environmentId: "local",
+          threadId: "thread-1",
+          actionIds: ["approval-1"],
+          planRevision: 2,
+          idempotencyKey,
+        },
+      );
+      events.close();
+      events = createGatewayEventStore({ file });
+      await callGatewayTool(
+        { port: bridge.port, grants: bridge.getGrants, events },
+        "t3_respond_to_approval",
+        {
+          environmentId: "local",
+          threadId: "thread-1",
+          approvalRequestId: "approval-2",
+          decision: "accept",
+          confirmDestructive: true,
+          idempotencyKey,
+        },
+      );
+
+      expect(received).toHaveLength(2);
+      expect(received.map((request) => request.requestId)).toEqual([
+        `mcp-approval-plan-${idempotencyKey}`,
+        `mcp-request-${idempotencyKey}`,
+      ]);
+    } finally {
+      socket.close();
+      events.close();
+      await bridge.close();
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
 
   it("times out requests that receive no runtime response", async () => {
     const port = await unusedPort();
