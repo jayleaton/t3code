@@ -1133,11 +1133,25 @@ export async function callGatewayTool(
       const decision = rawDecision as GatewayApprovalDecision;
       if (decision === "accept" || decision === "acceptForSession") {
         const threadId = requiredString(input, "threadId");
+        const approvalRequestId = requiredString(input, "approvalRequestId");
         const thread = await context.port.getThread(environmentId, threadId);
-        const action = approvalPlan(thread).actions.find(
-          (candidate) => candidate.approvalActionId === requiredString(input, "approvalRequestId"),
+        const plan = approvalPlan(thread);
+        const action = plan.actions.find(
+          (candidate) => candidate.approvalActionId === approvalRequestId,
         );
-        if (action?.requiresDestructiveConfirmation === true && input.confirmDestructive !== true) {
+        // Fail closed: an action missing from the reconstructed plan (unknown,
+        // already resolved, or truncated out of the newest-1,000 activity
+        // window) must never be treated as safe to dispatch.
+        if (action === undefined) {
+          throw new GatewayError({
+            code: "stale_plan",
+            message: `Approval request ${approvalRequestId} is not pending in the current approval plan. Re-fetch the plan and retry.`,
+            retryable: false,
+            environmentId,
+            details: { approvalPlanId: plan.approvalPlanId, currentRevision: plan.revision },
+          });
+        }
+        if (action.requiresDestructiveConfirmation === true && input.confirmDestructive !== true) {
           throw new GatewayError({
             code: "destructive_confirmation_required",
             message: `Action ${String(action.approvalActionId)} requires confirmDestructive: true.`,
