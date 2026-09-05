@@ -742,17 +742,29 @@ export async function callGatewayTool(
         context,
         `${environmentId}::${threadId}::${idFor("approval-plan", idempotencyKey)}`,
         idempotencyCommandPayload("approval.modify", input),
-        (prepared) =>
-          execute({
+        (prepared) => {
+          const authoritativeRequestId = idFor("approval-plan", idempotencyKey);
+          const dispatch = prepared ?? {
+            payload: { threadId, planRevision: requestedRevision, modifications },
+            requestId: authoritativeRequestId,
+          };
+          if (dispatch.requestId !== authoritativeRequestId) {
+            throw new GatewayError({
+              code: "idempotency_conflict",
+              message:
+                "This approval request predates scoped command identity and cannot be recovered safely.",
+              retryable: false,
+              environmentId,
+              requestId: authoritativeRequestId,
+            });
+          }
+          return execute({
             environmentId,
             operation: "approval.modify",
-            payload: prepared ?? {
-              threadId,
-              planRevision: requestedRevision,
-              modifications,
-            },
-            requestId: idFor("request", idempotencyKey),
-          }),
+            payload: dispatch.payload,
+            requestId: dispatch.requestId,
+          });
+        },
         async () => {
           const thread = await context.port.getThread(environmentId, threadId);
           const plan = approvalPlan(thread);
@@ -822,7 +834,10 @@ export async function callGatewayTool(
               });
             }
           }
-          return { threadId, planRevision: requestedRevision, modifications };
+          return {
+            payload: { threadId, planRevision: requestedRevision, modifications },
+            requestId: idFor("approval-plan", idempotencyKey),
+          };
         },
       );
     }
@@ -928,13 +943,26 @@ export async function callGatewayTool(
         context,
         `${environmentId}::${idFor("operation", idempotencyKey)}`,
         idempotencyCommandPayload(operations[name] as string, input),
-        () =>
-          execute({
+        (prepared) => {
+          const authoritativeRequestId = idFor("operation", idempotencyKey);
+          if (prepared?.requestId !== authoritativeRequestId) {
+            throw new GatewayError({
+              code: "idempotency_conflict",
+              message:
+                "This operation predates scoped command identity and cannot be recovered safely.",
+              retryable: false,
+              environmentId,
+              requestId: authoritativeRequestId,
+            });
+          }
+          return execute({
             environmentId,
             operation: operations[name] as string,
             payload: input,
-            requestId: idFor("request", idempotencyKey),
-          }),
+            requestId: prepared.requestId,
+          });
+        },
+        () => ({ requestId: idFor("operation", idempotencyKey) }),
       );
     }
     case "t3_create_thread": {
@@ -1090,7 +1118,7 @@ export async function callGatewayTool(
                     ],
                   },
                 }),
-            requestId: idFor("request", idempotencyKey),
+            requestId: idFor("thread", idempotencyKey),
           });
         },
       );
@@ -1229,13 +1257,25 @@ export async function callGatewayTool(
               environmentId,
             });
           }
+          const authoritativeRequestId = idFor("approval-plan", idempotencyKey);
           const dispatch = prepared ?? {
             approvalPlanId: `plan-${threadId}`,
             revision: requestedRevision,
             actionIds,
             decision,
             pending: 0,
+            requestId: authoritativeRequestId,
           };
+          if (dispatch.requestId !== authoritativeRequestId) {
+            throw new GatewayError({
+              code: "idempotency_conflict",
+              message:
+                "This approval request predates scoped command identity and cannot be recovered safely.",
+              retryable: false,
+              environmentId,
+              requestId: authoritativeRequestId,
+            });
+          }
           const receipt = await context.port.respondToApprovals({
             environmentId,
             threadId,
@@ -1244,7 +1284,7 @@ export async function callGatewayTool(
               decision: dispatch.decision,
             })),
             expectedRevision: dispatch.revision,
-            requestId: idFor("request", idempotencyKey),
+            requestId: dispatch.requestId,
           });
           return {
             approvalPlanId: dispatch.approvalPlanId,
@@ -1296,6 +1336,7 @@ export async function callGatewayTool(
             actionIds: selected.map((action) => action.approvalActionId as string),
             decision,
             pending: plan.actions.length - selected.length,
+            requestId: idFor("approval-plan", idempotencyKey),
           };
         },
       );

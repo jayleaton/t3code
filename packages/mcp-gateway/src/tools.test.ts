@@ -211,7 +211,7 @@ function makePort(input?: {
     },
     executeOperation: async (request) => {
       input?.operations?.push({ operation: request.operation, payload: request.payload });
-      return { operation: request.operation, accepted: true };
+      return { operation: request.operation, requestId: request.requestId, accepted: true };
     },
   };
 }
@@ -256,7 +256,10 @@ describe("gateway chat tools", () => {
       modelSelection: { instanceId: "codex", model: "gpt-5" },
       idempotencyKey: `${environmentId}-create-1`,
     });
-    expect(created).toMatchObject({ status: "accepted" });
+    expect(created).toMatchObject({
+      status: "accepted",
+      requestId: `mcp-thread-${environmentId}-create-1`,
+    });
 
     const sent = await callGatewayTool(context, "t3_send_message", {
       environmentId,
@@ -912,6 +915,39 @@ describe("gateway chat tools", () => {
     },
   );
 
+  it("fails closed for pre-scoped dispatched grouped approvals", async () => {
+    const approvalBatches: Array<ReadonlyArray<{ approvalRequestId: string; decision: string }>> =
+      [];
+    const port = makePort({ pendingApprovalPlan: true, approvalBatches });
+    const events = createGatewayEventStore();
+    const request = {
+      environmentId: "local",
+      threadId: "thread-1",
+      planRevision: 10,
+      actionIds: ["approval-1"],
+      idempotencyKey: "pre-scoped-dispatched",
+    };
+    const key = `local::thread-1::mcp-approval-plan-${request.idempotencyKey}`;
+    events.rememberRequest(
+      key,
+      `{"input":{"actionIds":["approval-1"],"environmentId":"local","idempotencyKey":"pre-scoped-dispatched","planRevision":10,"threadId":"thread-1"},"operation":"approval.respond.decline"}`,
+      null,
+    );
+    events.markRequestDispatched(key, {
+      approvalPlanId: "plan-thread-1",
+      revision: 10,
+      actionIds: ["approval-1"],
+      decision: "decline",
+      pending: 1,
+    });
+
+    await expect(
+      callGatewayTool({ port, grants, events }, "t3_reject_actions", request),
+    ).rejects.toMatchObject({ code: "idempotency_conflict" });
+    expect(approvalBatches).toEqual([]);
+    events.close();
+  });
+
   it.each(["t3_approve_actions", "t3_reject_actions", "t3_modify_actions"] as const)(
     "joins an in-flight %s receipt after the approval plan resolves",
     async (toolName) => {
@@ -1064,7 +1100,7 @@ describe("gateway chat tools", () => {
                 approvalPlanId: "plan-thread-1",
                 revision: 1,
                 pending: 0,
-                receipt: { requestId: `mcp-request-${request.idempotencyKey}` },
+                receipt: { requestId: `mcp-approval-plan-${request.idempotencyKey}` },
               },
         );
         expect(sideEffects).toBe(1);
@@ -1373,7 +1409,10 @@ describe("gateway v3 event delivery tools", () => {
       { ...request, confirmDestructive: true },
     );
 
-    expect(result).toMatchObject({ accepted: true });
+    expect(result).toMatchObject({
+      accepted: true,
+      requestId: "mcp-approval-plan-modify-approval-1",
+    });
     expect(operations).toEqual([
       {
         operation: "approval.modify",
@@ -1691,6 +1730,7 @@ describe("gateway v3 event delivery tools", () => {
     const second = await callGatewayTool(context, "t3_update_pr", input);
 
     expect(first).toEqual(second);
+    expect(first).toMatchObject({ requestId: "mcp-operation-update-pr-1" });
     expect(operations).toEqual([{ operation: "pr.update", payload: input }]);
   });
 });
