@@ -258,7 +258,7 @@ describe("gateway chat tools", () => {
     });
     expect(created).toMatchObject({
       status: "accepted",
-      requestId: expect.stringMatching(/^mcp-request-v2-/u),
+      requestId: expect.stringMatching(/^mcp-thread-v2-/u),
       threadId: expect.stringMatching(/^mcp-thread-v2-/u),
     });
 
@@ -1278,18 +1278,77 @@ describe("gateway v3 event delivery tools", () => {
       { instanceId: "codex", model: "gpt-5", runtimeMode: "approval-required" },
     ]);
     expect(first).toMatchObject({
-      requestId: expect.stringMatching(/^mcp-request-v2-/u),
+      requestId: expect.stringMatching(/^mcp-thread-v2-/u),
       threadId: expect.stringMatching(/^mcp-thread-v2-/u),
     });
     expect(second).toEqual(first);
   });
 
-  it("recovers an accepted pre-v2 create with its original authoritative identity", async () => {
+  it("recovers either accepted pre-v2 create identity without dispatching an ambiguous command", async () => {
+    for (const acceptedRequestId of [
+      "mcp-request-migrating-create",
+      "mcp-thread-migrating-create",
+    ]) {
+      const events = createGatewayEventStore();
+      const port = makePort();
+      const queried: Array<ReadonlyArray<string>> = [];
+      port.createThread = async () => {
+        throw new Error("An ambiguous historical create must not be dispatched.");
+      };
+      port.getCommandReceipts = async (_environmentId, commandIds) => {
+        queried.push(commandIds);
+        return [
+          {
+            commandId: acceptedRequestId,
+            aggregateKind: "thread",
+            aggregateId: "mcp-thread-migrating-create",
+            acceptedAt: "2026-09-05T00:00:00.000Z",
+            status: "accepted",
+            resultSequence: 5,
+            error: null,
+          },
+        ];
+      };
+      const request = {
+        environmentId: "local",
+        projectId: "local-project",
+        title: "Migrated chat",
+        modelSelection: { instanceId: "codex", model: "gpt-5" },
+        idempotencyKey: "migrating-create",
+      };
+      const key = "local::mcp-thread-migrating-create";
+      events.rememberRequest(
+        key,
+        `{"environmentId":"local","idempotencyKey":"migrating-create","modelSelection":{"instanceId":"codex","model":"gpt-5"},"projectId":"local-project","title":"Migrated chat"}`,
+        null,
+      );
+      events.markRequestDispatched(key, undefined);
+
+      const recovered = await callGatewayTool(
+        { port, grants, events },
+        "t3_create_thread",
+        request,
+      );
+      const replay = await callGatewayTool({ port, grants, events }, "t3_create_thread", request);
+
+      expect(queried).toEqual([["mcp-request-migrating-create", "mcp-thread-migrating-create"]]);
+      expect(recovered).toEqual({
+        requestId: acceptedRequestId,
+        commandId: acceptedRequestId,
+        status: "accepted",
+        threadId: "mcp-thread-migrating-create",
+      });
+      expect(replay).toEqual(recovered);
+      events.close();
+    }
+  });
+
+  it("uses distinct authoritative command ids for create and same-key send", async () => {
     const events = createGatewayEventStore();
-    const dispatched: Array<{ requestId: string; threadId: string }> = [];
     const port = makePort();
+    const commandIds: string[] = [];
     port.createThread = async (request) => {
-      dispatched.push({ requestId: request.requestId, threadId: request.threadId });
+      commandIds.push(request.requestId);
       return {
         requestId: request.requestId,
         commandId: request.requestId,
@@ -1297,33 +1356,34 @@ describe("gateway v3 event delivery tools", () => {
         threadId: request.threadId,
       };
     };
-    const request = {
-      environmentId: "local",
-      projectId: "local-project",
-      title: "Migrated chat",
-      modelSelection: { instanceId: "codex", model: "gpt-5" },
-      idempotencyKey: "migrating-create",
+    port.sendMessage = async (request) => {
+      commandIds.push(request.requestId);
+      return {
+        requestId: request.requestId,
+        commandId: request.requestId,
+        status: "accepted",
+        threadId: request.threadId,
+        messageId: request.messageId,
+      };
     };
-    const key = "local::mcp-thread-migrating-create";
-    events.rememberRequest(
-      key,
-      `{"environmentId":"local","idempotencyKey":"migrating-create","modelSelection":{"instanceId":"codex","model":"gpt-5"},"projectId":"local-project","title":"Migrated chat"}`,
-      null,
-    );
-    events.markRequestDispatched(key, undefined);
-
-    const recovered = await callGatewayTool({ port, grants, events }, "t3_create_thread", request);
-    const replay = await callGatewayTool({ port, grants, events }, "t3_create_thread", request);
-
-    expect(dispatched).toEqual([
-      { requestId: "mcp-request-migrating-create", threadId: "mcp-thread-migrating-create" },
-    ]);
-    expect(recovered).toMatchObject({
-      status: "accepted",
-      requestId: "mcp-request-migrating-create",
-      threadId: "mcp-thread-migrating-create",
+    const input = {
+      environmentId: "local",
+      idempotencyKey: "create-send-key",
+    };
+    const created = await callGatewayTool({ port, grants, events }, "t3_create_thread", {
+      ...input,
+      projectId: "local-project",
+      title: "Created chat",
+      modelSelection: { instanceId: "codex", model: "gpt-5" },
     });
-    expect(replay).toEqual(recovered);
+    await callGatewayTool({ port, grants, events }, "t3_send_message", {
+      ...input,
+      threadId: created.threadId,
+      text: "Run once",
+    });
+
+    expect(commandIds).toHaveLength(2);
+    expect(commandIds[0]).not.toBe(commandIds[1]);
     events.close();
   });
 

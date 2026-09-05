@@ -1034,9 +1034,10 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
       const stored = db
         .prepare("SELECT dispatchContext FROM idempotency WHERE key = ?")
         .get(key) as { dispatchContext: string | null } | undefined;
-      return stored?.dispatchContext === null || stored?.dispatchContext === undefined
-        ? undefined
-        : (JSON.parse(stored.dispatchContext) as T);
+      if (stored?.dispatchContext === null || stored?.dispatchContext === undefined)
+        return undefined;
+      const parsed = JSON.parse(stored.dispatchContext) as T | null;
+      return parsed === null ? undefined : parsed;
     },
     markRequestDispatched: (key: string, dispatchContext: unknown): void => {
       db.prepare(

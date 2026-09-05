@@ -320,6 +320,8 @@ export function createBridgeRuntimePort(input: {
       getPullRequest: (environmentId, ref) => invoke("getPullRequest", [environmentId, ref]),
       getPullRequestActivity: (environmentId, ref) =>
         invoke("getPullRequestActivity", [environmentId, ref]),
+      getCommandReceipts: (environmentId, commandIds) =>
+        invoke("getCommandReceipts", [environmentId, commandIds]),
       createThread: (request) => invoke("createThread", [request]),
       sendMessage: (request) => invoke("sendMessage", [request]),
       controlThread: (request) => invoke("controlThread", [request]),
