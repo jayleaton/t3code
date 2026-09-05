@@ -1,3 +1,5 @@
+import * as NodeCrypto from "node:crypto";
+
 import {
   GatewayError,
   type GatewayApprovalDecision,
@@ -143,6 +145,18 @@ function environmentWithScope(
 
 function idFor(kind: string, idempotencyKey: string): string {
   return `mcp-${kind}-${idempotencyKey}`;
+}
+
+function scopedIdFor(
+  kind: string,
+  environmentId: string,
+  aggregateId: string,
+  idempotencyKey: string,
+): string {
+  const digest = NodeCrypto.createHash("sha256")
+    .update(stablePayload({ version: 2, environmentId, aggregateId, idempotencyKey }))
+    .digest("hex");
+  return `mcp-${kind}-v2-${digest}`;
 }
 
 function requireEventStore(context: GatewayToolContext): GatewayEventStore {
@@ -738,21 +752,29 @@ export async function callGatewayTool(
       const requestedRevision = Number(input.planRevision);
       const modifications = Array.isArray(input.modifications) ? input.modifications : [];
       const execute = requireOperationPort(context);
+      const authoritativeRequestId = scopedIdFor(
+        "approval-plan",
+        environmentId,
+        threadId,
+        idempotencyKey,
+      );
+      const legacyRequestId = idFor("approval-plan", idempotencyKey);
       return withIdempotency(
         context,
         `${environmentId}::${threadId}::${idFor("approval-plan", idempotencyKey)}`,
         idempotencyCommandPayload("approval.modify", input),
         (prepared) => {
-          const authoritativeRequestId = idFor("approval-plan", idempotencyKey);
           const dispatch = prepared ?? {
             payload: { threadId, planRevision: requestedRevision, modifications },
             requestId: authoritativeRequestId,
           };
-          if (dispatch.requestId !== authoritativeRequestId) {
+          if (
+            dispatch.requestId !== authoritativeRequestId &&
+            dispatch.requestId !== legacyRequestId
+          ) {
             throw new GatewayError({
               code: "idempotency_conflict",
-              message:
-                "This approval request predates scoped command identity and cannot be recovered safely.",
+              message: "This approval request has no recoverable authoritative command identity.",
               retryable: false,
               environmentId,
               requestId: authoritativeRequestId,
@@ -836,7 +858,7 @@ export async function callGatewayTool(
           }
           return {
             payload: { threadId, planRevision: requestedRevision, modifications },
-            requestId: idFor("approval-plan", idempotencyKey),
+            requestId: authoritativeRequestId,
           };
         },
       );
@@ -939,17 +961,25 @@ export async function callGatewayTool(
         t3_publish_pr: "pr.publish",
       };
       const execute = requireOperationPort(context);
+      const authoritativeRequestId = scopedIdFor(
+        "operation",
+        environmentId,
+        requiredString(input, "projectId"),
+        idempotencyKey,
+      );
+      const legacyRequestId = idFor("operation", idempotencyKey);
       return withIdempotency(
         context,
         `${environmentId}::${idFor("operation", idempotencyKey)}`,
         idempotencyCommandPayload(operations[name] as string, input),
         (prepared) => {
-          const authoritativeRequestId = idFor("operation", idempotencyKey);
-          if (prepared?.requestId !== authoritativeRequestId) {
+          if (
+            prepared?.requestId !== authoritativeRequestId &&
+            prepared?.requestId !== legacyRequestId
+          ) {
             throw new GatewayError({
               code: "idempotency_conflict",
-              message:
-                "This operation predates scoped command identity and cannot be recovered safely.",
+              message: "This operation has no recoverable authoritative command identity.",
               retryable: false,
               environmentId,
               requestId: authoritativeRequestId,
@@ -962,7 +992,7 @@ export async function callGatewayTool(
             requestId: prepared.requestId,
           });
         },
-        () => ({ requestId: idFor("operation", idempotencyKey) }),
+        () => ({ requestId: authoritativeRequestId }),
       );
     }
     case "t3_create_thread": {
@@ -970,174 +1000,203 @@ export async function callGatewayTool(
       const idempotencyKey = requiredIdempotencyKey(input);
       const profileName = typeof input.profile === "string" ? input.profile.trim() : "";
       const profileIdInput = typeof input.profileId === "string" ? input.profileId.trim() : "";
+      const legacyIdentity = {
+        threadId: idFor("thread", idempotencyKey),
+        requestId: idFor("request", idempotencyKey),
+      };
+      const currentThreadId = scopedIdFor("thread", environmentId, "create", idempotencyKey);
+      const currentIdentity = {
+        threadId: currentThreadId,
+        requestId: scopedIdFor("request", environmentId, currentThreadId, idempotencyKey),
+      };
+      const buildRequest = async (identity: typeof currentIdentity) => {
+        const profiles = await authoritativeProfiles(context, environmentId);
+        const profile =
+          profileIdInput !== ""
+            ? profiles.find((candidate) => candidate.profileId === profileIdInput)
+            : profileName === ""
+              ? undefined
+              : profiles.find((candidate) => candidate.name === profileName);
+        if ((profileName !== "" || profileIdInput !== "") && profile === undefined) {
+          throw new GatewayError({
+            code: "invalid_input",
+            message: `Unknown gateway profile ${profileIdInput || profileName}.`,
+            retryable: false,
+          });
+        }
+        if (
+          profile !== undefined &&
+          (typeof profile.profileId !== "string" ||
+            profile.profileId.trim() === "" ||
+            !Number.isInteger(profile.revision))
+        ) {
+          throw new GatewayError({
+            code: "invalid_input",
+            message: `Gateway profile ${profile.name} is not a server-owned revisioned profile.`,
+            retryable: false,
+            environmentId,
+          });
+        }
+        const authoritativeProfileRef =
+          profile === undefined
+            ? undefined
+            : { profileId: profile.profileId as string, revision: profile.revision as number };
+        if (
+          profile !== undefined &&
+          Array.isArray(profile.environmentIds) &&
+          !profile.environmentIds.includes(environmentId)
+        ) {
+          throw new GatewayError({
+            code: "scope_required",
+            message: `Profile ${profile.name} is not allowed in environment ${environmentId}.`,
+            retryable: false,
+            environmentId,
+            details: { profileId: profile.profileId, permission: "environment-allowlist" },
+          });
+        }
+        if (profile?.runtimeMode === "read-only") {
+          throw new GatewayError({
+            code: "scope_required",
+            message: `Profile ${profile.name} is read-only and cannot create a thread.`,
+            retryable: false,
+            environmentId,
+            details: { profileId: profile.profileId, permission: "read-only" },
+          });
+        }
+        const hasThreadModel = input.modelSelection !== undefined;
+        const profileModelSelection = hasThreadModel
+          ? undefined
+          : profile === undefined
+            ? undefined
+            : context.port.resolveProfileModelSelection === undefined
+              ? profile.modelSelection
+              : await context.port.resolveProfileModelSelection(environmentId, profile);
+        const rawModelSelection = input.modelSelection ?? profileModelSelection;
+        // Settings profiles persist readable labels, not routing keys. Resolve
+        // those labels against the selected environment's live catalog at this
+        // authoritative create boundary; only a missing/ambiguous profile pair
+        // remains unresolved. With no selected profile or explicit override,
+        // the server-owned provider/global default chain remains authoritative.
+        if (rawModelSelection === undefined && profile !== undefined) {
+          throw new GatewayError({
+            code: "invalid_input",
+            message: `Profile ${profile?.name ?? "requested"} provider/model is no longer uniquely available (provider: ${profile?.providerLabel ?? "unselected"}, model: ${profile?.modelLabel ?? "unselected"}); re-select the profile in Settings.`,
+            retryable: false,
+            environmentId,
+            details: { profileId: profile?.profileId },
+          });
+        }
+        const modelSelection =
+          rawModelSelection === undefined ? undefined : record(rawModelSelection);
+        const hasThreadRuntimeMode = input.runtimeMode !== undefined;
+        const hasThreadInteractionMode = input.interactionMode !== undefined;
+        const requestedRuntimeMode = input.runtimeMode ?? profile?.runtimeMode;
+        const requestedInteractionMode = input.interactionMode ?? profile?.interactionMode;
+        const resolvedRuntimeMode:
+          | "approval-required"
+          | "auto"
+          | "auto-accept-edits"
+          | "full-access" =
+          requestedRuntimeMode === "auto-accept-edits" ||
+          requestedRuntimeMode === "auto" ||
+          requestedRuntimeMode === "full-access"
+            ? requestedRuntimeMode
+            : "approval-required";
+        const resolvedInteractionMode: "plan" | "default" =
+          requestedInteractionMode === "plan" ? "plan" : "default";
+        const reasoningEffort =
+          typeof input.reasoningEffort === "string"
+            ? input.reasoningEffort
+            : profile?.reasoningEffort;
+        const inheritedOptions = Array.isArray(modelSelection?.options)
+          ? modelSelection.options.flatMap((candidate) => {
+              const option = record(candidate);
+              return option !== undefined &&
+                typeof option.id === "string" &&
+                (typeof option.value === "string" || typeof option.value === "boolean")
+                ? [{ id: option.id, value: option.value }]
+                : [];
+            })
+          : [];
+        const modelOptions =
+          reasoningEffort === undefined
+            ? inheritedOptions
+            : [
+                ...inheritedOptions.filter((option) => option.id !== "reasoningEffort"),
+                { id: "reasoningEffort", value: reasoningEffort },
+              ];
+        return {
+          environmentId,
+          projectId: requiredString(input, "projectId"),
+          threadId: identity.threadId,
+          title: requiredString(input, "title"),
+          ...(modelSelection === undefined
+            ? {}
+            : {
+                modelSelection: {
+                  instanceId: requiredString(modelSelection, "instanceId"),
+                  model: requiredString(modelSelection, "model"),
+                  ...(modelOptions.length === 0 ? {} : { options: modelOptions }),
+                },
+              }),
+          ...(resolvedRuntimeMode === undefined ? {} : { runtimeMode: resolvedRuntimeMode }),
+          ...(resolvedInteractionMode === undefined
+            ? {}
+            : { interactionMode: resolvedInteractionMode }),
+          ...(authoritativeProfileRef === undefined
+            ? {}
+            : {
+                profileSelection: {
+                  ...authoritativeProfileRef,
+                  overrideFields: [
+                    ...(hasThreadModel ? (["modelSelection"] as const) : []),
+                    ...(hasThreadRuntimeMode ? (["runtimeMode"] as const) : []),
+                    ...(hasThreadInteractionMode ? (["interactionMode"] as const) : []),
+                    ...(input.reasoningEffort !== undefined ? (["reasoningEffort"] as const) : []),
+                  ],
+                },
+              }),
+          requestId: identity.requestId,
+        };
+      };
       return withIdempotency(
         context,
         `${environmentId}::${idFor("thread", idempotencyKey)}`,
         input,
-        async () => {
-          const profiles = await authoritativeProfiles(context, environmentId);
-          const profile =
-            profileIdInput !== ""
-              ? profiles.find((candidate) => candidate.profileId === profileIdInput)
-              : profileName === ""
-                ? undefined
-                : profiles.find((candidate) => candidate.name === profileName);
-          if ((profileName !== "" || profileIdInput !== "") && profile === undefined) {
-            throw new GatewayError({
-              code: "invalid_input",
-              message: `Unknown gateway profile ${profileIdInput || profileName}.`,
-              retryable: false,
-            });
-          }
-          if (
-            profile !== undefined &&
-            (typeof profile.profileId !== "string" ||
-              profile.profileId.trim() === "" ||
-              !Number.isInteger(profile.revision))
-          ) {
-            throw new GatewayError({
-              code: "invalid_input",
-              message: `Gateway profile ${profile.name} is not a server-owned revisioned profile.`,
-              retryable: false,
-              environmentId,
-            });
-          }
-          const authoritativeProfileRef =
-            profile === undefined
-              ? undefined
-              : { profileId: profile.profileId as string, revision: profile.revision as number };
-          if (
-            profile !== undefined &&
-            Array.isArray(profile.environmentIds) &&
-            !profile.environmentIds.includes(environmentId)
-          ) {
-            throw new GatewayError({
-              code: "scope_required",
-              message: `Profile ${profile.name} is not allowed in environment ${environmentId}.`,
-              retryable: false,
-              environmentId,
-              details: { profileId: profile.profileId, permission: "environment-allowlist" },
-            });
-          }
-          if (profile?.runtimeMode === "read-only") {
-            throw new GatewayError({
-              code: "scope_required",
-              message: `Profile ${profile.name} is read-only and cannot create a thread.`,
-              retryable: false,
-              environmentId,
-              details: { profileId: profile.profileId, permission: "read-only" },
-            });
-          }
-          const hasThreadModel = input.modelSelection !== undefined;
-          const profileModelSelection = hasThreadModel
-            ? undefined
-            : profile === undefined
-              ? undefined
-              : context.port.resolveProfileModelSelection === undefined
-                ? profile.modelSelection
-                : await context.port.resolveProfileModelSelection(environmentId, profile);
-          const rawModelSelection = input.modelSelection ?? profileModelSelection;
-          // Settings profiles persist readable labels, not routing keys. Resolve
-          // those labels against the selected environment's live catalog at this
-          // authoritative create boundary; only a missing/ambiguous profile pair
-          // remains unresolved. With no selected profile or explicit override,
-          // the server-owned provider/global default chain remains authoritative.
-          if (rawModelSelection === undefined && profile !== undefined) {
-            throw new GatewayError({
-              code: "invalid_input",
-              message: `Profile ${profile?.name ?? "requested"} provider/model is no longer uniquely available (provider: ${profile?.providerLabel ?? "unselected"}, model: ${profile?.modelLabel ?? "unselected"}); re-select the profile in Settings.`,
-              retryable: false,
-              environmentId,
-              details: { profileId: profile?.profileId },
-            });
-          }
-          const modelSelection =
-            rawModelSelection === undefined ? undefined : record(rawModelSelection);
-          const hasThreadRuntimeMode = input.runtimeMode !== undefined;
-          const hasThreadInteractionMode = input.interactionMode !== undefined;
-          const requestedRuntimeMode = input.runtimeMode ?? profile?.runtimeMode;
-          const requestedInteractionMode = input.interactionMode ?? profile?.interactionMode;
-          const resolvedRuntimeMode =
-            requestedRuntimeMode === "auto-accept-edits" ||
-            requestedRuntimeMode === "auto" ||
-            requestedRuntimeMode === "full-access"
-              ? requestedRuntimeMode
-              : "approval-required";
-          const resolvedInteractionMode = requestedInteractionMode === "plan" ? "plan" : "default";
-          const reasoningEffort =
-            typeof input.reasoningEffort === "string"
-              ? input.reasoningEffort
-              : profile?.reasoningEffort;
-          const inheritedOptions = Array.isArray(modelSelection?.options)
-            ? modelSelection.options.flatMap((candidate) => {
-                const option = record(candidate);
-                return option !== undefined &&
-                  typeof option.id === "string" &&
-                  (typeof option.value === "string" || typeof option.value === "boolean")
-                  ? [{ id: option.id, value: option.value }]
-                  : [];
-              })
-            : [];
-          const modelOptions =
-            reasoningEffort === undefined
-              ? inheritedOptions
-              : [
-                  ...inheritedOptions.filter((option) => option.id !== "reasoningEffort"),
-                  { id: "reasoningEffort", value: reasoningEffort },
-                ];
-          return context.port.createThread({
-            environmentId,
-            projectId: requiredString(input, "projectId"),
-            threadId: idFor("thread", idempotencyKey),
-            title: requiredString(input, "title"),
-            ...(modelSelection === undefined
-              ? {}
-              : {
-                  modelSelection: {
-                    instanceId: requiredString(modelSelection, "instanceId"),
-                    model: requiredString(modelSelection, "model"),
-                    ...(modelOptions.length === 0 ? {} : { options: modelOptions }),
-                  },
-                }),
-            ...(resolvedRuntimeMode === undefined ? {} : { runtimeMode: resolvedRuntimeMode }),
-            ...(resolvedInteractionMode === undefined
-              ? {}
-              : { interactionMode: resolvedInteractionMode }),
-            ...(authoritativeProfileRef === undefined
-              ? {}
-              : {
-                  profileSelection: {
-                    ...authoritativeProfileRef,
-                    overrideFields: [
-                      ...(hasThreadModel ? (["modelSelection"] as const) : []),
-                      ...(hasThreadRuntimeMode ? (["runtimeMode"] as const) : []),
-                      ...(hasThreadInteractionMode ? (["interactionMode"] as const) : []),
-                      ...(input.reasoningEffort !== undefined
-                        ? (["reasoningEffort"] as const)
-                        : []),
-                    ],
-                  },
-                }),
-            requestId: idFor("thread", idempotencyKey),
-          });
-        },
+        async (prepared) =>
+          context.port.createThread(prepared ?? (await buildRequest(legacyIdentity))),
+        () => buildRequest(currentIdentity),
       );
     }
     case "t3_send_message": {
       const environmentId = environmentWithScope(context, input, "send");
       const idempotencyKey = requiredIdempotencyKey(input);
+      const threadId = requiredString(input, "threadId");
+      const authoritativeRequestId = scopedIdFor(
+        "request",
+        environmentId,
+        threadId,
+        idempotencyKey,
+      );
+      const authoritativeMessageId = scopedIdFor(
+        "message",
+        environmentId,
+        threadId,
+        idempotencyKey,
+      );
       return withIdempotency(
         context,
-        `${environmentId}::${requiredString(input, "threadId")}::${idFor("request", idempotencyKey)}`,
+        `${environmentId}::${threadId}::${idFor("request", idempotencyKey)}`,
         idempotencyCommandPayload("message.send", input),
-        () =>
+        (prepared) =>
           context.port.sendMessage({
             environmentId,
-            threadId: requiredString(input, "threadId"),
+            threadId,
             text: requiredString(input, "text"),
-            messageId: idFor("message", idempotencyKey),
-            requestId: idFor("request", idempotencyKey),
+            messageId: prepared?.messageId ?? idFor("message", idempotencyKey),
+            requestId: prepared?.requestId ?? idFor("request", idempotencyKey),
           }),
+        () => ({ requestId: authoritativeRequestId, messageId: authoritativeMessageId }),
       );
     }
     case "t3_control_thread": {
@@ -1156,18 +1215,32 @@ export async function callGatewayTool(
         });
       }
       const action = rawAction as GatewayThreadControlAction;
+      const threadId = requiredString(input, "threadId");
+      const authoritativeRequestId = scopedIdFor(
+        "request",
+        environmentId,
+        threadId,
+        idempotencyKey,
+      );
+      const authoritativeMessageId = scopedIdFor(
+        "message",
+        environmentId,
+        threadId,
+        idempotencyKey,
+      );
       return withIdempotency(
         context,
-        `${environmentId}::${requiredString(input, "threadId")}::${idFor("request", idempotencyKey)}`,
+        `${environmentId}::${threadId}::${idFor("request", idempotencyKey)}`,
         idempotencyCommandPayload("thread.control", input),
-        () =>
+        (prepared) =>
           context.port.controlThread({
             environmentId,
-            threadId: requiredString(input, "threadId"),
+            threadId,
             action,
-            requestId: idFor("request", idempotencyKey),
-            messageId: idFor("message", idempotencyKey),
+            requestId: prepared?.requestId ?? idFor("request", idempotencyKey),
+            messageId: prepared?.messageId ?? idFor("message", idempotencyKey),
           }),
+        () => ({ requestId: authoritativeRequestId, messageId: authoritativeMessageId }),
       );
     }
     case "t3_respond_to_approval": {
@@ -1187,20 +1260,28 @@ export async function callGatewayTool(
       }
       const decision = rawDecision as GatewayApprovalDecision;
       const threadId = requiredString(input, "threadId");
+      const authoritativeRequestId = scopedIdFor(
+        "request",
+        environmentId,
+        threadId,
+        idempotencyKey,
+      );
       return withIdempotency(
         context,
         `${environmentId}::${threadId}::${idFor("request", idempotencyKey)}`,
         idempotencyCommandPayload(`approval.respond.${decision}`, input),
-        () =>
+        (prepared) =>
           context.port.respondToApproval({
             environmentId,
             threadId,
             approvalRequestId: requiredString(input, "approvalRequestId"),
             decision,
-            requestId: idFor("request", idempotencyKey),
+            requestId: prepared?.requestId ?? idFor("request", idempotencyKey),
           }),
         async () => {
-          if (decision !== "accept" && decision !== "acceptForSession") return;
+          if (decision !== "accept" && decision !== "acceptForSession") {
+            return { requestId: authoritativeRequestId };
+          }
           const approvalRequestId = requiredString(input, "approvalRequestId");
           const thread = await context.port.getThread(environmentId, threadId);
           const plan = approvalPlan(thread);
@@ -1232,6 +1313,7 @@ export async function callGatewayTool(
               environmentId,
             });
           }
+          return { requestId: authoritativeRequestId };
         },
       );
     }
@@ -1244,6 +1326,13 @@ export async function callGatewayTool(
       const requestedRevision = Number(input.planRevision);
       const decision: GatewayApprovalDecision =
         name === "t3_approve_actions" ? "accept" : "decline";
+      const authoritativeRequestId = scopedIdFor(
+        "approval-plan",
+        environmentId,
+        threadId,
+        idempotencyKey,
+      );
+      const legacyRequestId = idFor("approval-plan", idempotencyKey);
       return withIdempotency(
         context,
         `${environmentId}::${threadId}::${idFor("approval-plan", idempotencyKey)}`,
@@ -1257,7 +1346,6 @@ export async function callGatewayTool(
               environmentId,
             });
           }
-          const authoritativeRequestId = idFor("approval-plan", idempotencyKey);
           const dispatch = prepared ?? {
             approvalPlanId: `plan-${threadId}`,
             revision: requestedRevision,
@@ -1266,11 +1354,13 @@ export async function callGatewayTool(
             pending: 0,
             requestId: authoritativeRequestId,
           };
-          if (dispatch.requestId !== authoritativeRequestId) {
+          if (
+            dispatch.requestId !== authoritativeRequestId &&
+            dispatch.requestId !== legacyRequestId
+          ) {
             throw new GatewayError({
               code: "idempotency_conflict",
-              message:
-                "This approval request predates scoped command identity and cannot be recovered safely.",
+              message: "This approval request has no recoverable authoritative command identity.",
               retryable: false,
               environmentId,
               requestId: authoritativeRequestId,
@@ -1336,7 +1426,7 @@ export async function callGatewayTool(
             actionIds: selected.map((action) => action.approvalActionId as string),
             decision,
             pending: plan.actions.length - selected.length,
-            requestId: idFor("approval-plan", idempotencyKey),
+            requestId: authoritativeRequestId,
           };
         },
       );
