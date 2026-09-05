@@ -38,6 +38,7 @@ import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsL
 import { useAtomValue } from "@effect/atom-react";
 import {
   getMcpGatewayGrants,
+  getMcpGatewayStatus,
   getMcpGatewayStatusSnapshot,
   getMcpGatewayToken,
   isMcpGatewayEnabled,
@@ -782,7 +783,9 @@ export function McpGatewaySettings() {
   const profiles = usePrimarySettings((settings) => settings.mcpGatewayProfiles);
   const providers = useAtomValue(primaryServerProvidersAtom);
   const updatePrimarySettings = useUpdatePrimarySettings();
-  const [status, setStatus] = useState<McpGatewayUiState>(enabled ? "connecting" : "disabled");
+  const [status, setStatus] = useState<McpGatewayUiState>(() =>
+    enabled ? getMcpGatewayStatus() : "disabled",
+  );
   const [statusSnapshot, setStatusSnapshot] = useState(getMcpGatewayStatusSnapshot);
 
   useEffect(() => {

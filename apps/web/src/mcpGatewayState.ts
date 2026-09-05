@@ -38,6 +38,10 @@ export const MCP_GATEWAY_CONFIGURABLE_SCOPES: ReadonlyArray<GatewayScope> = GATE
 const GATEWAY_SCOPES = new Set<GatewayScope>(MCP_GATEWAY_CONFIGURABLE_SCOPES);
 let currentMcpGatewayStatus: McpGatewayUiState = "disabled";
 
+export function getMcpGatewayStatus(): McpGatewayUiState {
+  return currentMcpGatewayStatus;
+}
+
 function sanitizeMcpGatewayGrants(value: unknown): McpGatewayGrants {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
   const grants: Record<string, ReadonlyArray<GatewayScope>> = {};
