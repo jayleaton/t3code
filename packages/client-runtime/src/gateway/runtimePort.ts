@@ -68,12 +68,15 @@ const shellSnapshot = (environmentId: EnvironmentId) =>
     );
   });
 
-const threadSnapshot = (environmentId: EnvironmentId, threadId: ThreadId) =>
+const threadSnapshot = (environmentId: EnvironmentId, threadId: ThreadId, turnLimit?: number) =>
   Effect.gen(function* () {
     const registry = yield* EnvironmentRegistry;
     return yield* registry.run(
       environmentId,
-      subscribe(ORCHESTRATION_WS_METHODS.subscribeThread, { threadId, turnLimit: 100 }).pipe(
+      subscribe(ORCHESTRATION_WS_METHODS.subscribeThread, {
+        threadId,
+        ...(turnLimit === undefined ? {} : { turnLimit }),
+      }).pipe(
         Stream.filter((item) => item.kind === "snapshot"),
         Stream.runHead,
         Effect.map(
@@ -606,8 +609,12 @@ export function createGatewayRuntimePort(runtime: GatewayEffectRuntime): Gateway
         snapshotAt: snapshot.updatedAt,
       })),
     getThread: (rawEnvironmentId, rawThreadId) =>
+      run(
+        threadSnapshot(EnvironmentId.make(rawEnvironmentId), ThreadId.make(rawThreadId), 100),
+      ).then((snapshot) => gatewayThreadProjection(snapshot.thread)),
+    hasThreadMessage: (rawEnvironmentId, rawThreadId, rawMessageId) =>
       run(threadSnapshot(EnvironmentId.make(rawEnvironmentId), ThreadId.make(rawThreadId))).then(
-        (snapshot) => gatewayThreadProjection(snapshot.thread),
+        (snapshot) => snapshot.thread.messages.some((message) => message.id === rawMessageId),
       ),
     createAssetUrl: (rawEnvironmentId, resource) =>
       run(

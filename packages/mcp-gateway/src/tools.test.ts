@@ -1501,48 +1501,79 @@ describe("gateway v3 event delivery tools", () => {
     },
   );
 
-  it("replays a historical send only when its message exists authoritatively", async () => {
-    const events = createGatewayEventStore();
-    const input = {
-      environmentId: "local",
-      threadId: "thread-1",
-      text: "Already stored",
-      idempotencyKey: "verified-historical-send",
-    };
-    const key = "local::thread-1::mcp-request-verified-historical-send";
-    const historicalRequestId = `mcp-request-v2-${NodeCrypto.createHash("sha256")
-      .update(
-        JSON.stringify({
-          aggregateId: "thread-1",
-          environmentId: "local",
-          idempotencyKey: "verified-historical-send",
-          version: 2,
-        }),
-      )
-      .digest("hex")}`;
-    const receipt = {
-      requestId: historicalRequestId,
-      commandId: historicalRequestId,
-      status: "accepted",
-      threadId: "thread-1",
-      messageId: "message-1",
-    };
-    events.rememberRequest(
-      key,
-      `{"input":{"environmentId":"local","idempotencyKey":"verified-historical-send","text":"Already stored","threadId":"thread-1"},"operation":"message.send"}`,
-      null,
-    );
-    events.completeRequest(key, receipt);
-    const port = makePort();
-    port.sendMessage = async () => {
-      throw new Error("A completed historical send must replay without dispatch.");
-    };
+  it.each(["completed", "dispatched"] as const)(
+    "replays a historical %s send when its message exists outside the bounded projection",
+    async (state) => {
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-mcp-send-replay-"));
+      const file = NodePath.join(directory, "gateway.sqlite");
+      const input = {
+        environmentId: "local",
+        threadId: "thread-1",
+        text: "Already stored",
+        idempotencyKey: "verified-historical-send",
+      };
+      const key = "local::thread-1::mcp-request-verified-historical-send";
+      const historicalRequestId = `mcp-request-v2-${NodeCrypto.createHash("sha256")
+        .update(
+          JSON.stringify({
+            aggregateId: "thread-1",
+            environmentId: "local",
+            idempotencyKey: "verified-historical-send",
+            version: 2,
+          }),
+        )
+        .digest("hex")}`;
+      const receipt = {
+        requestId: historicalRequestId,
+        commandId: historicalRequestId,
+        status: "accepted" as const,
+        threadId: "thread-1",
+        messageId: "message-1",
+      };
+      let events = createGatewayEventStore({ file });
+      events.rememberRequest(
+        key,
+        `{"input":{"environmentId":"local","idempotencyKey":"verified-historical-send","text":"Already stored","threadId":"thread-1"},"operation":"message.send"}`,
+        null,
+      );
+      if (state === "completed") events.completeRequest(key, receipt);
+      else {
+        events.markRequestDispatched(key, {
+          requestId: historicalRequestId,
+          messageId: "message-1",
+        });
+      }
+      events.close();
 
-    await expect(
-      callGatewayTool({ port, grants, events }, "t3_send_message", input),
-    ).resolves.toEqual(receipt);
-    events.close();
-  });
+      const sends: string[] = [];
+      const hasThreadMessageCalls: Array<ReadonlyArray<string>> = [];
+      const port = makePort();
+      port.getThread = async () => ({ id: "thread-1", messages: [] });
+      port.hasThreadMessage = async (...args) => {
+        hasThreadMessageCalls.push(args);
+        return true;
+      };
+      port.sendMessage = async (request) => {
+        sends.push(request.requestId);
+        return receipt;
+      };
+      events = createGatewayEventStore({ file });
+      await expect(
+        callGatewayTool({ port, grants, events }, "t3_send_message", input),
+      ).resolves.toEqual(receipt);
+      expect(hasThreadMessageCalls).toEqual([["local", "thread-1", "message-1"]]);
+      expect(sends).toEqual(state === "dispatched" ? [historicalRequestId] : []);
+      events.close();
+
+      events = createGatewayEventStore({ file });
+      await expect(
+        callGatewayTool({ port, grants, events }, "t3_send_message", input),
+      ).resolves.toEqual(receipt);
+      expect(sends).toEqual(state === "dispatched" ? [historicalRequestId] : []);
+      events.close();
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    },
+  );
 
   it("replays a resolved label-only profile without re-reading the mutable catalog", async () => {
     const creates: Array<{ model: string; runtimeMode: string }> = [];

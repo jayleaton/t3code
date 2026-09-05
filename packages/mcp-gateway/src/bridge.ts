@@ -315,6 +315,8 @@ export function createBridgeRuntimePort(input: {
       listProjects: (environmentId) => invoke("listProjects", [environmentId]),
       listThreads: (environmentId) => invoke("listThreads", [environmentId]),
       getThread: (environmentId, threadId) => invoke("getThread", [environmentId, threadId]),
+      hasThreadMessage: (environmentId, threadId, messageId) =>
+        invoke("hasThreadMessage", [environmentId, threadId, messageId]),
       createAssetUrl: (environmentId, resource) =>
         invoke("createAssetUrl", [environmentId, resource]),
       getPullRequest: (environmentId, ref) => invoke("getPullRequest", [environmentId, ref]),

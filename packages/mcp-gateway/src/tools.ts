@@ -450,15 +450,18 @@ async function assertRecoverableHistoricalSend(
     });
   }
   const messageId = typeof stored?.messageId === "string" ? stored.messageId : undefined;
-  const thread = await context.port.getThread(environmentId, threadId);
-  const messages = Array.isArray(thread.messages) ? thread.messages : [];
-  const messageExists = messages.some(
-    (message) =>
-      typeof message === "object" &&
-      message !== null &&
-      "id" in message &&
-      message.id === messageId,
-  );
+  if (messageId === undefined || context.port.hasThreadMessage === undefined) {
+    throw new GatewayError({
+      code: "idempotency_conflict",
+      message:
+        "This historical send receipt cannot be verified until the connected runtime supports authoritative message lookup.",
+      retryable: false,
+      environmentId,
+      requestId,
+      details: { threadId, messageId },
+    });
+  }
+  const messageExists = await context.port.hasThreadMessage(environmentId, threadId, messageId);
   if (!messageExists) {
     throw new GatewayError({
       code: "idempotency_conflict",

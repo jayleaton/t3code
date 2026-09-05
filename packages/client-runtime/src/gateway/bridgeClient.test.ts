@@ -126,6 +126,55 @@ describe("gateway bridge client", () => {
     bridge.stop();
   });
 
+  it("forwards authoritative receipt and message lookup methods", async () => {
+    const socket = new FakeSocket();
+    const token = "test-token-123456789";
+    const getCommandReceipts = vi.fn(async () => [{ commandId: "command-1" }]);
+    const hasThreadMessage = vi.fn(async () => true);
+    const bridge = connectGatewayBridge({
+      port: {
+        ...unusedPort,
+        getCommandReceipts,
+        hasThreadMessage,
+      } as unknown as GatewayRuntimePort,
+      token,
+      url: "ws://127.0.0.1:47631",
+      createSocket: () => socket,
+    });
+    const nonce = "c".repeat(64);
+    socket.emit("message", JSON.stringify({ type: "challenge", nonce }));
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    socket.emit(
+      "message",
+      JSON.stringify({ type: "authenticated", proof: await proof(token, `server:${nonce}`) }),
+    );
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(2));
+
+    socket.emit(
+      "message",
+      JSON.stringify({ id: 1, method: "getCommandReceipts", args: ["local", ["command-1"]] }),
+    );
+    socket.emit(
+      "message",
+      JSON.stringify({
+        id: 2,
+        method: "hasThreadMessage",
+        args: ["local", "thread-1", "message-1"],
+      }),
+    );
+
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(4));
+    expect(getCommandReceipts).toHaveBeenCalledWith("local", ["command-1"]);
+    expect(hasThreadMessage).toHaveBeenCalledWith("local", "thread-1", "message-1");
+    expect(socket.sent.map((message) => JSON.parse(message))).toEqual(
+      expect.arrayContaining([
+        { id: 1, result: [{ commandId: "command-1" }] },
+        { id: 2, result: true },
+      ]),
+    );
+    bridge.stop();
+  });
+
   it("subscribes only readable environments from durable sidecar cursors", async () => {
     const socket = new FakeSocket();
     const token = "test-token-123456789";
