@@ -1,8 +1,14 @@
+// @effect-diagnostics nodeBuiltinImport:off - exercises durable SQLite replay across a real store reopen.
 import { describe, expect, it } from "@effect/vitest";
+
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
 import { createGatewayEventStore } from "./events.ts";
 import {
   GatewayError,
+  type GatewayMutationResult,
   type GatewayProfile,
   type GatewayRuntimePort,
   type GatewayThreadControlAction,
@@ -459,20 +465,25 @@ describe("gateway chat tools", () => {
 
   it("fails closed when a pending destructive approval falls outside the projected activity window", async () => {
     const approvals: Array<{ requestId: string; decision: string }> = [];
-    // Simulates gatewayThreadProjection's newest-1,000 activity slice at
-    // runtimePort.ts: the approval.requested for approval-1 is gone while the
-    // request is still pending at the runtime.
-    const filler = Array.from({ length: 1_000 }, (_, index) => ({
-      id: `activity-${index}`,
-      sequence: index + 1,
-      kind: "info",
-      summary: "filler",
-    }));
+    // Faithfully models gatewayThreadProjection's newest-1,000 activity slice:
+    // approval.requested exists in the source snapshot but is omitted from the
+    // DTO consumed by this package after 1,000 newer unique activities.
+    const sourceActivities = [
+      {
+        id: "approval-1",
+        sequence: 1,
+        kind: "approval.requested",
+        payload: { requestId: "approval-1", requestKind: "command", detail: "Run command" },
+      },
+      ...Array.from({ length: 1_000 }, (_, index) => ({
+        id: `activity-${index + 2}`,
+        sequence: index + 2,
+        kind: "info",
+        summary: "filler",
+      })),
+    ];
     const context = {
-      port: makePort({
-        approvals,
-        threadActivities: [...filler, ...filler],
-      }),
+      port: makePort({ approvals, threadActivities: sourceActivities.slice(-1_000) }),
       grants: { local: ["read", "approval"] },
     } as const;
 
@@ -482,6 +493,7 @@ describe("gateway chat tools", () => {
         threadId: "thread-1",
         approvalRequestId: "approval-1",
         decision: "accept",
+        confirmDestructive: true,
         idempotencyKey: "approval-truncated-1",
       }),
     ).rejects.toMatchObject({ code: "stale_plan" });
@@ -515,6 +527,174 @@ describe("gateway chat tools", () => {
     });
     expect(approvals).toEqual([{ requestId: "approval-2", decision: "acceptForSession" }]);
   });
+
+  it.each(["accept", "acceptForSession"] as const)(
+    "replays a resolved %s receipt after reopening the durable store and rejects changed payloads",
+    async (decision) => {
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-mcp-approval-"));
+      const file = NodePath.join(directory, "events.sqlite");
+      const activities: Array<Record<string, unknown>> = [
+        {
+          id: "approval-1",
+          sequence: 1,
+          kind: "approval.requested",
+          payload: { requestId: "approval-1", requestKind: "command", detail: "Run command" },
+        },
+      ];
+      const approvals: Array<{ requestId: string; decision: string }> = [];
+      const port = makePort({ approvals, threadActivities: activities });
+      port.respondToApproval = async (request) => {
+        approvals.push({ requestId: request.approvalRequestId, decision: request.decision });
+        activities.push({
+          id: "approval-resolved-1",
+          sequence: 2,
+          kind: "approval.resolved",
+          payload: { requestId: request.approvalRequestId },
+        });
+        return {
+          requestId: request.requestId,
+          commandId: request.requestId,
+          status: "accepted",
+          threadId: request.threadId,
+        };
+      };
+      const request = {
+        environmentId: "local",
+        threadId: "thread-1",
+        approvalRequestId: "approval-1",
+        decision,
+        confirmDestructive: true,
+        idempotencyKey: `approval-replay-${decision}`,
+      };
+      let events = createGatewayEventStore({ file });
+      try {
+        const first = await callGatewayTool(
+          { port, grants, events },
+          "t3_respond_to_approval",
+          request,
+        );
+        events.close();
+        events = createGatewayEventStore({ file });
+
+        await expect(
+          callGatewayTool({ port, grants, events }, "t3_respond_to_approval", request),
+        ).resolves.toEqual(first);
+        await expect(
+          callGatewayTool({ port, grants, events }, "t3_respond_to_approval", {
+            ...request,
+            confirmDestructive: false,
+          }),
+        ).rejects.toMatchObject({ code: "idempotency_conflict" });
+        expect(approvals).toHaveLength(1);
+      } finally {
+        events.close();
+        NodeFS.rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["accept", "acceptForSession"] as const)(
+    "replays an in-flight %s response after the approval resolves",
+    async (decision) => {
+      const activities: Array<Record<string, unknown>> = [
+        {
+          id: "approval-1",
+          sequence: 1,
+          kind: "approval.requested",
+          payload: { requestId: "approval-1", requestKind: "command", detail: "Run command" },
+        },
+      ];
+      const events = createGatewayEventStore();
+      const response = Promise.withResolvers<GatewayMutationResult>();
+      let dispatches = 0;
+      const port = makePort({ threadActivities: activities });
+      port.respondToApproval = async (request) => {
+        dispatches += 1;
+        activities.push({
+          id: "approval-resolved-1",
+          sequence: 2,
+          kind: "approval.resolved",
+          payload: { requestId: request.approvalRequestId },
+        });
+        return response.promise;
+      };
+      const request = {
+        environmentId: "local",
+        threadId: "thread-1",
+        approvalRequestId: "approval-1",
+        decision,
+        confirmDestructive: true,
+        idempotencyKey: `approval-in-flight-${decision}`,
+      };
+
+      const first = callGatewayTool({ port, grants, events }, "t3_respond_to_approval", request);
+      await Promise.resolve();
+      const replay = callGatewayTool({ port, grants, events }, "t3_respond_to_approval", request);
+      response.resolve({
+        requestId: `mcp-request-${request.idempotencyKey}`,
+        status: "accepted",
+        threadId: "thread-1",
+        commandId: `mcp-request-${request.idempotencyKey}`,
+      });
+
+      await expect(replay).resolves.toEqual(await first);
+      expect(dispatches).toBe(1);
+      events.close();
+    },
+  );
+
+  it.each(["accept", "acceptForSession"] as const)(
+    "rechecks approval grants before replaying a resolved %s receipt",
+    async (decision) => {
+      const activities: Array<Record<string, unknown>> = [
+        {
+          id: "approval-1",
+          sequence: 1,
+          kind: "approval.requested",
+          payload: { requestId: "approval-1", requestKind: "command", detail: "Run command" },
+        },
+      ];
+      const events = createGatewayEventStore();
+      let approvalGranted = true;
+      const port = makePort({ threadActivities: activities });
+      port.respondToApproval = async (request) => {
+        activities.push({
+          id: "approval-resolved-1",
+          sequence: 2,
+          kind: "approval.resolved",
+          payload: { requestId: request.approvalRequestId },
+        });
+        return {
+          requestId: request.requestId,
+          status: "accepted",
+          threadId: request.threadId,
+          commandId: request.requestId,
+        };
+      };
+      const context = {
+        port,
+        events,
+        grants: () => ({ local: approvalGranted ? (["approval"] as const) : ([] as const) }),
+      };
+      const request = {
+        environmentId: "local",
+        threadId: "thread-1",
+        approvalRequestId: "approval-1",
+        decision,
+        confirmDestructive: true,
+        idempotencyKey: `approval-revoked-${decision}`,
+      };
+
+      await callGatewayTool(context, "t3_respond_to_approval", request);
+      approvalGranted = false;
+      await expect(
+        callGatewayTool(context, "t3_respond_to_approval", request),
+      ).rejects.toMatchObject({
+        code: "scope_required",
+      });
+      events.close();
+    },
+  );
 
   it("rejects unknown environments before invoking the runtime", async () => {
     await expect(
