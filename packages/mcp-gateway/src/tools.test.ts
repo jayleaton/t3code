@@ -785,6 +785,133 @@ describe("gateway chat tools", () => {
     },
   );
 
+  it.each([
+    ["t3_reject_actions", "t3_approve_actions", false],
+    ["t3_approve_actions", "t3_reject_actions", false],
+    ["t3_reject_actions", "t3_approve_actions", true],
+    ["t3_approve_actions", "t3_reject_actions", true],
+  ] as const)(
+    "rejects completed opposite operation reuse from %s to %s (reopen=%s)",
+    async (firstTool, oppositeTool, reopen) => {
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-mcp-identity-"));
+      const file = NodePath.join(directory, "events.sqlite");
+      const approvalBatches: Array<ReadonlyArray<{ approvalRequestId: string; decision: string }>> =
+        [];
+      const port = makePort({ pendingApprovalPlan: true, approvalBatches });
+      const request = {
+        environmentId: "local",
+        threadId: "thread-1",
+        planRevision: 10,
+        actionIds: ["approval-1"],
+        ...(firstTool === "t3_approve_actions" ? { confirmDestructive: true } : {}),
+        idempotencyKey: `opposite-completed-${firstTool}-${String(reopen)}`,
+      };
+      let events = createGatewayEventStore({ file });
+      try {
+        await callGatewayTool({ port, grants, events }, firstTool, request);
+        if (reopen) {
+          events.close();
+          events = createGatewayEventStore({ file });
+        }
+
+        await expect(
+          callGatewayTool({ port, grants, events }, oppositeTool, request),
+        ).rejects.toMatchObject({ code: "idempotency_conflict" });
+        expect(approvalBatches).toEqual([
+          [
+            {
+              approvalRequestId: "approval-1",
+              decision: firstTool === "t3_approve_actions" ? "accept" : "decline",
+            },
+          ],
+        ]);
+      } finally {
+        events.close();
+        NodeFS.rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    ["t3_reject_actions", "t3_approve_actions"],
+    ["t3_approve_actions", "t3_reject_actions"],
+  ] as const)(
+    "rejects in-flight opposite operation reuse from %s to %s",
+    async (firstTool, oppositeTool) => {
+      const response = Promise.withResolvers<GatewayMutationResult>();
+      const entered = Promise.withResolvers<void>();
+      const approvalBatches: Array<ReadonlyArray<{ approvalRequestId: string; decision: string }>> =
+        [];
+      const port = makePort({ pendingApprovalPlan: true, approvalBatches });
+      port.respondToApprovals = async (request) => {
+        approvalBatches.push(request.responses);
+        entered.resolve();
+        return response.promise;
+      };
+      const events = createGatewayEventStore();
+      const request = {
+        environmentId: "local",
+        threadId: "thread-1",
+        planRevision: 10,
+        actionIds: ["approval-1"],
+        ...(firstTool === "t3_approve_actions" ? { confirmDestructive: true } : {}),
+        idempotencyKey: `opposite-in-flight-${firstTool}`,
+      };
+      const first = callGatewayTool({ port, grants, events }, firstTool, request);
+      await entered.promise;
+      const opposite = callGatewayTool({ port, grants, events }, oppositeTool, request);
+      response.resolve({
+        requestId: `mcp-request-${request.idempotencyKey}`,
+        commandId: `mcp-request-${request.idempotencyKey}`,
+        status: "accepted",
+        threadId: "thread-1",
+      });
+
+      await first;
+      await expect(opposite).rejects.toMatchObject({ code: "idempotency_conflict" });
+      expect(approvalBatches).toHaveLength(1);
+      events.close();
+    },
+  );
+
+  it.each(["completed", "dispatched"] as const)(
+    "fails closed for ambiguous legacy grouped approval rows in %s state",
+    async (state) => {
+      const approvalBatches: Array<ReadonlyArray<{ approvalRequestId: string; decision: string }>> =
+        [];
+      const port = makePort({ pendingApprovalPlan: true, approvalBatches });
+      const events = createGatewayEventStore();
+      const request = {
+        environmentId: "local",
+        threadId: "thread-1",
+        planRevision: 10,
+        actionIds: ["approval-1"],
+        idempotencyKey: `legacy-ambiguous-${state}`,
+      };
+      const key = `local::thread-1::mcp-approval-plan-${request.idempotencyKey}`;
+      const legacyPayload =
+        `{"actionIds":["approval-1"],"environmentId":"local","idempotencyKey":` +
+        `"${request.idempotencyKey}","planRevision":10,"threadId":"thread-1"}`;
+      events.rememberRequest(key, legacyPayload, null);
+      if (state === "completed") {
+        events.completeRequest(key, { rejected: 1 });
+      } else {
+        events.markRequestDispatched(key, {
+          approvalPlanId: "plan-thread-1",
+          revision: 10,
+          actionIds: ["approval-1"],
+          pending: 1,
+        });
+      }
+
+      await expect(
+        callGatewayTool({ port, grants, events }, "t3_reject_actions", request),
+      ).rejects.toMatchObject({ code: "idempotency_conflict" });
+      expect(approvalBatches).toEqual([]);
+      events.close();
+    },
+  );
+
   it.each(["t3_approve_actions", "t3_reject_actions", "t3_modify_actions"] as const)(
     "joins an in-flight %s receipt after the approval plan resolves",
     async (toolName) => {
