@@ -143,6 +143,33 @@ function environmentWithScope(
   return environmentWithScopes(context, input, [scope]);
 }
 
+function environmentWithAnyScope(
+  context: GatewayToolContext,
+  input: Record<string, unknown>,
+  acceptedScopes: ReadonlyArray<GatewayScope>,
+): string {
+  const environmentId = requiredString(input, "environmentId");
+  const scopes = currentGrants(context.grants)[environmentId];
+  if (scopes === undefined) {
+    throw new GatewayError({
+      code: "unknown_environment",
+      message: `Environment ${environmentId} is not granted to this host.`,
+      retryable: false,
+      environmentId,
+    });
+  }
+  if (!acceptedScopes.some((scope) => scopes.includes(scope))) {
+    throw new GatewayError({
+      code: "scope_required",
+      message: `One of scopes ${acceptedScopes.join(" or ")} is required for environment ${environmentId}.`,
+      retryable: false,
+      environmentId,
+      details: { requiredScopes: acceptedScopes, missingScopes: acceptedScopes },
+    });
+  }
+  return environmentId;
+}
+
 function idFor(kind: string, idempotencyKey: string): string {
   return `mcp-${kind}-${idempotencyKey}`;
 }
@@ -1311,7 +1338,10 @@ export async function callGatewayTool(
       );
     }
     case "t3_control_thread": {
-      const environmentId = environmentWithScope(context, input, "lifecycle");
+      // `control` was shipped before the explicit v3 `lifecycle` scope. Keep
+      // it as a narrow compatibility grant for thread control instead of
+      // silently expanding it to any other v3 authority.
+      const environmentId = environmentWithAnyScope(context, input, ["control", "lifecycle"]);
       const idempotencyKey = requiredIdempotencyKey(input);
       const rawAction = requiredString(input, "action");
       if (

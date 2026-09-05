@@ -40,6 +40,8 @@ import {
   getMcpGatewayGrants,
   getMcpGatewayToken,
   isMcpGatewayEnabled,
+  MCP_GATEWAY_BASELINE_SCOPES,
+  MCP_GATEWAY_CONFIGURABLE_SCOPES,
   MCP_GATEWAY_STATE_EVENT,
   type McpGatewayGrants,
   type McpGatewayUiState,
@@ -49,28 +51,28 @@ import {
 } from "../../mcpGatewayState";
 
 /**
- * Scope set applied by the machine-level `On` baseline and offered in the
- * per-machine tweak menu (spec §2/§9.2: Web Settings keeps per-environment
- * `read`, `create`, and `send` grants).
+ * Least-privilege scopes applied by the machine-level `On` baseline. The
+ * per-machine menu exposes the full v3 contract separately so additional
+ * authority is never granted implicitly.
  */
-const GRANTED_SCOPES: ReadonlyArray<GatewayScope> = ["read", "create", "send"];
-
 const SCOPE_LABELS: Record<GatewayScope, string> = {
-  read: "Read",
-  create: "Create",
-  send: "Send",
-  control: "Control",
-  lifecycle: "Lifecycle",
-  approval: "Approval",
-  artifact: "Artifact",
-  review: "Review",
-  admin: "Admin",
-  delivery: "Delivery",
+  read: "Read environments and threads",
+  create: "Create threads",
+  send: "Send messages",
+  control: "Control active work",
+  lifecycle: "Pause, retry, and restart work",
+  approval: "Review and decide approvals",
+  artifact: "Retrieve thread artifacts",
+  review: "Read and update code reviews",
+  admin: "Change repositories and access",
+  delivery: "Manage subscriptions and webhooks",
 };
 
 const UNSELECTED_PROVIDER = "—";
 
-const GATEWAY_SCOPES: ReadonlyArray<GatewayScope> = GRANTED_SCOPES;
+const ADVANCED_SCOPES = MCP_GATEWAY_CONFIGURABLE_SCOPES.filter(
+  (scope) => !MCP_GATEWAY_BASELINE_SCOPES.includes(scope),
+);
 
 export interface McpGrantEnvironmentRow {
   readonly environmentId: string;
@@ -107,7 +109,7 @@ export function toggleMcpGatewayGrantForAll(
     environments.every((environment) => isGrantOn(grants, environment.environmentId));
   for (const environment of environments) {
     if (allOn) delete next[environment.environmentId];
-    else next[environment.environmentId] = [...GRANTED_SCOPES];
+    else next[environment.environmentId] = [...MCP_GATEWAY_BASELINE_SCOPES];
   }
   return next;
 }
@@ -216,7 +218,7 @@ export function McpEnvironmentGrantMatrix({
                         setEnvironmentScopes(
                           grants,
                           environment.environmentId,
-                          value === "on" ? GRANTED_SCOPES : [],
+                          value === "on" ? MCP_GATEWAY_BASELINE_SCOPES : [],
                         ),
                       );
                     }}
@@ -226,8 +228,8 @@ export function McpEnvironmentGrantMatrix({
                   </MenuRadioGroup>
                   <MenuSeparator />
                   <MenuGroup>
-                    <MenuGroupLabel>Adjust capabilities</MenuGroupLabel>
-                    {GATEWAY_SCOPES.map((scope: GatewayScope) => (
+                    <MenuGroupLabel>Default capabilities</MenuGroupLabel>
+                    {MCP_GATEWAY_BASELINE_SCOPES.map((scope: GatewayScope) => (
                       <MenuCheckboxItem
                         key={scope}
                         checked={scopes.includes(scope)}
@@ -243,6 +245,28 @@ export function McpEnvironmentGrantMatrix({
                         }}
                       >
                         {SCOPE_LABELS[scope] ?? scope}
+                      </MenuCheckboxItem>
+                    ))}
+                  </MenuGroup>
+                  <MenuSeparator />
+                  <MenuGroup>
+                    <MenuGroupLabel>Additional capabilities (grant explicitly)</MenuGroupLabel>
+                    {ADVANCED_SCOPES.map((scope: GatewayScope) => (
+                      <MenuCheckboxItem
+                        key={scope}
+                        checked={scopes.includes(scope)}
+                        onCheckedChange={(checked) => {
+                          onChange(
+                            updateMcpGatewayGrant(
+                              grants,
+                              environment.environmentId,
+                              scope,
+                              checked,
+                            ),
+                          );
+                        }}
+                      >
+                        {SCOPE_LABELS[scope]}
                       </MenuCheckboxItem>
                     ))}
                   </MenuGroup>

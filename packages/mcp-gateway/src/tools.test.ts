@@ -289,6 +289,36 @@ describe("gateway chat tools", () => {
     ).rejects.toMatchObject({ code: "scope_required", environmentId: "local" });
   });
 
+  it("honors and revokes the explicit control compatibility scope", async () => {
+    let enabled = false;
+    const controls: Array<{ action: GatewayThreadControlAction; requestId: string }> = [];
+    const context = {
+      port: makePort({ controls }),
+      grants: () => ({ local: enabled ? (["control"] as const) : ([] as const) }),
+    };
+    const request = {
+      environmentId: "local",
+      threadId: "thread-1",
+      action: "stop",
+      idempotencyKey: "control-compat-1",
+    };
+
+    await expect(callGatewayTool(context, "t3_control_thread", request)).rejects.toMatchObject({
+      code: "scope_required",
+      details: { missingScopes: ["control", "lifecycle"] },
+    });
+    enabled = true;
+    await expect(callGatewayTool(context, "t3_control_thread", request)).resolves.toMatchObject({
+      status: "accepted",
+    });
+    expect(controls).toHaveLength(1);
+    enabled = false;
+    await expect(callGatewayTool(context, "t3_control_thread", request)).rejects.toMatchObject({
+      code: "scope_required",
+    });
+    expect(controls).toHaveLength(1);
+  });
+
   it("queries replayable progress history and artifact metadata", async () => {
     const context = { port: makePort(), grants };
     const history = await callGatewayTool(context, "t3_get_thread_history", {

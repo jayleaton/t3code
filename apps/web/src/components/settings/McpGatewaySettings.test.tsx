@@ -11,6 +11,10 @@ import {
   updateMcpGatewayGrant,
 } from "./McpGatewaySettings";
 import {
+  MCP_GATEWAY_BASELINE_SCOPES,
+  MCP_GATEWAY_CONFIGURABLE_SCOPES,
+} from "../../mcpGatewayState";
+import {
   formatMcpGatewayProfileSummary,
   type McpGatewayProfile,
 } from "@t3tools/contracts/settings";
@@ -67,6 +71,30 @@ const codexProvider = {
 } as unknown as ServerProvider;
 
 describe("MCP environment grant matrix", () => {
+  it("offers all v3 capabilities while keeping ordinary enable and select-all least privilege", () => {
+    expect(MCP_GATEWAY_CONFIGURABLE_SCOPES).toEqual([
+      "read",
+      "create",
+      "send",
+      "control",
+      "lifecycle",
+      "approval",
+      "artifact",
+      "review",
+      "admin",
+      "delivery",
+    ]);
+    expect(MCP_GATEWAY_BASELINE_SCOPES).toEqual(["read", "create", "send"]);
+    expect(toggleMcpGatewayGrantForAll({}, environments)[environments[0]!.environmentId]).toEqual([
+      "read",
+      "create",
+      "send",
+    ]);
+    expect(updateMcpGatewayGrant({}, environments[0]!.environmentId, "admin", true)).toEqual({
+      [environments[0]!.environmentId]: ["admin"],
+    });
+  });
+
   it("updates scopes by exact registry id without changing other environment grants", () => {
     expect(
       updateMcpGatewayGrant(grants, "2549ba75-2a91-4554-8baa-88e6ae0efa48", "send", true),

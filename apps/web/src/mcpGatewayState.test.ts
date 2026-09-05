@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   getMcpGatewayGrants,
+  MCP_GATEWAY_CONFIGURABLE_SCOPES,
   getMcpGatewayToken,
   MCP_GATEWAY_GRANTS_KEY,
   MCP_GATEWAY_TOKEN_KEY,
@@ -81,26 +82,28 @@ describe("MCP gateway grants", () => {
     expect(getMcpGatewayToken()).toBe("session-token-123456");
   });
 
-  it("strips all non-baseline scopes from loaded and saved grants", () => {
+  it("preserves every explicit v3 scope across save and reload", () => {
+    expect(MCP_GATEWAY_CONFIGURABLE_SCOPES).toEqual([
+      "read",
+      "create",
+      "send",
+      "control",
+      "lifecycle",
+      "approval",
+      "artifact",
+      "review",
+      "admin",
+      "delivery",
+    ]);
     setMcpGatewayGrants({
-      "a534b83f-a352-44d8-aedc-c4230c179390": ["read", "delivery", "control"],
+      "a534b83f-a352-44d8-aedc-c4230c179390": [...MCP_GATEWAY_CONFIGURABLE_SCOPES],
     });
 
     expect(JSON.parse(localStorage.getItem(MCP_GATEWAY_GRANTS_KEY) ?? "null")).toEqual({
-      "a534b83f-a352-44d8-aedc-c4230c179390": ["read"],
+      "a534b83f-a352-44d8-aedc-c4230c179390": MCP_GATEWAY_CONFIGURABLE_SCOPES,
     });
     expect(getMcpGatewayGrants()).toEqual({
-      "a534b83f-a352-44d8-aedc-c4230c179390": ["read"],
-    });
-
-    localStorage.setItem(
-      MCP_GATEWAY_GRANTS_KEY,
-      JSON.stringify({
-        "2549ba75-2a91-4554-8baa-88e6ae0efa48": ["create", "delivery", "control"],
-      }),
-    );
-    expect(getMcpGatewayGrants()).toEqual({
-      "2549ba75-2a91-4554-8baa-88e6ae0efa48": ["create"],
+      "a534b83f-a352-44d8-aedc-c4230c179390": MCP_GATEWAY_CONFIGURABLE_SCOPES,
     });
   });
 });

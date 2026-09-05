@@ -9,8 +9,9 @@ export const MCP_GATEWAY_STATE_EVENT = "t3code:mcp-gateway-state";
 export type McpGatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
 export type McpGatewayUiState = "disabled" | "connecting" | "running" | "degraded";
 
-const GATEWAY_SCOPES = new Set<GatewayScope>(GATEWAY_SCOPE_VALUES);
-const MCP_GATEWAY_GRANTED_SCOPES = new Set<GatewayScope>(["read", "create", "send"]);
+export const MCP_GATEWAY_BASELINE_SCOPES: ReadonlyArray<GatewayScope> = ["read", "create", "send"];
+export const MCP_GATEWAY_CONFIGURABLE_SCOPES: ReadonlyArray<GatewayScope> = GATEWAY_SCOPE_VALUES;
+const GATEWAY_SCOPES = new Set<GatewayScope>(MCP_GATEWAY_CONFIGURABLE_SCOPES);
 let currentMcpGatewayStatus: McpGatewayUiState = "disabled";
 
 function sanitizeMcpGatewayGrants(value: unknown): McpGatewayGrants {
@@ -22,10 +23,7 @@ function sanitizeMcpGatewayGrants(value: unknown): McpGatewayGrants {
       (scope) => typeof scope === "string" && GATEWAY_SCOPES.has(scope as GatewayScope),
     );
     if (!isValid) continue;
-    const scopes = [...new Set(candidate)].filter(
-      (scope): scope is GatewayScope =>
-        typeof scope === "string" && MCP_GATEWAY_GRANTED_SCOPES.has(scope as GatewayScope),
-    );
+    const scopes = [...new Set(candidate)] as ReadonlyArray<GatewayScope>;
     if (scopes.length > 0) grants[environmentId] = scopes;
   }
   return grants;
