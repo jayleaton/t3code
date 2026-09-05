@@ -1131,43 +1131,48 @@ export async function callGatewayTool(
         });
       }
       const decision = rawDecision as GatewayApprovalDecision;
-      if (decision === "accept" || decision === "acceptForSession") {
-        const threadId = requiredString(input, "threadId");
-        const approvalRequestId = requiredString(input, "approvalRequestId");
-        const thread = await context.port.getThread(environmentId, threadId);
-        const plan = approvalPlan(thread);
-        const action = plan.actions.find(
-          (candidate) => candidate.approvalActionId === approvalRequestId,
-        );
-        // Fail closed: an action missing from the reconstructed plan (unknown,
-        // already resolved, or truncated out of the newest-1,000 activity
-        // window) must never be treated as safe to dispatch.
-        if (action === undefined) {
-          throw new GatewayError({
-            code: "stale_plan",
-            message: `Approval request ${approvalRequestId} is not pending in the current approval plan. Re-fetch the plan and retry.`,
-            retryable: false,
-            environmentId,
-            details: { approvalPlanId: plan.approvalPlanId, currentRevision: plan.revision },
-          });
-        }
-        if (action.requiresDestructiveConfirmation === true && input.confirmDestructive !== true) {
-          throw new GatewayError({
-            code: "destructive_confirmation_required",
-            message: `Action ${String(action.approvalActionId)} requires confirmDestructive: true.`,
-            retryable: false,
-            environmentId,
-          });
-        }
-      }
+      const threadId = requiredString(input, "threadId");
       return withIdempotency(
         context,
-        `${environmentId}::${requiredString(input, "threadId")}::${idFor("request", idempotencyKey)}`,
+        `${environmentId}::${threadId}::${idFor("request", idempotencyKey)}`,
         input,
         async () => {
+          if (decision === "accept" || decision === "acceptForSession") {
+            const approvalRequestId = requiredString(input, "approvalRequestId");
+            const thread = await context.port.getThread(environmentId, threadId);
+            const plan = approvalPlan(thread);
+            const action = plan.actions.find(
+              (candidate) => candidate.approvalActionId === approvalRequestId,
+            );
+            // Fail closed for new dispatches: an action missing from the
+            // reconstructed plan (unknown, resolved, or truncated out of the
+            // newest-1,000 activity window) must never be treated as safe.
+            // Durable and in-flight retries are handled by withIdempotency
+            // before this operation runs, after the current grant check above.
+            if (action === undefined) {
+              throw new GatewayError({
+                code: "stale_plan",
+                message: `Approval request ${approvalRequestId} is not pending in the current approval plan. Re-fetch the plan and retry.`,
+                retryable: false,
+                environmentId,
+                details: { approvalPlanId: plan.approvalPlanId, currentRevision: plan.revision },
+              });
+            }
+            if (
+              action.requiresDestructiveConfirmation === true &&
+              input.confirmDestructive !== true
+            ) {
+              throw new GatewayError({
+                code: "destructive_confirmation_required",
+                message: `Action ${String(action.approvalActionId)} requires confirmDestructive: true.`,
+                retryable: false,
+                environmentId,
+              });
+            }
+          }
           const result = await context.port.respondToApproval({
             environmentId,
-            threadId: requiredString(input, "threadId"),
+            threadId,
             approvalRequestId: requiredString(input, "approvalRequestId"),
             decision,
             requestId: idFor("request", idempotencyKey),
