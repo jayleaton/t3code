@@ -696,6 +696,350 @@ describe("gateway chat tools", () => {
     },
   );
 
+  it.each(["t3_approve_actions", "t3_reject_actions", "t3_modify_actions"] as const)(
+    "replays resolved and reopened %s receipts before validating mutable plan state",
+    async (toolName) => {
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-mcp-grouped-"));
+      const file = NodePath.join(directory, "events.sqlite");
+      const activities: Array<Record<string, unknown>> = [
+        {
+          id: "approval-1",
+          sequence: 1,
+          kind: "approval.requested",
+          payload: { requestId: "approval-1", requestKind: "command", detail: "Run command" },
+        },
+      ];
+      let approvalGranted = true;
+      let dispatches = 0;
+      const port = makePort({ threadActivities: activities });
+      const accept = (requestId: string, threadId: string) => {
+        dispatches += 1;
+        activities.push({
+          id: "approval-resolved-1",
+          sequence: 2,
+          kind: "approval.resolved",
+          payload: { requestId: "approval-1" },
+        });
+        return { requestId, commandId: requestId, status: "accepted" as const, threadId };
+      };
+      port.respondToApprovals = async (request) => accept(request.requestId, request.threadId);
+      port.executeOperation = async (request) => ({
+        accepted: true,
+        requestId: accept(request.requestId ?? "", "thread-1").requestId,
+      });
+      const request =
+        toolName === "t3_modify_actions"
+          ? {
+              environmentId: "local",
+              threadId: "thread-1",
+              planRevision: 1,
+              modifications: [{ actionId: "approval-1", fields: { decision: "decline" } }],
+              idempotencyKey: `grouped-replay-${toolName}`,
+            }
+          : {
+              environmentId: "local",
+              threadId: "thread-1",
+              planRevision: 1,
+              actionIds: ["approval-1"],
+              ...(toolName === "t3_approve_actions" ? { confirmDestructive: true } : {}),
+              idempotencyKey: `grouped-replay-${toolName}`,
+            };
+      const context = () => ({
+        port,
+        events,
+        grants: () => ({ local: approvalGranted ? (["approval"] as const) : ([] as const) }),
+      });
+      let events = createGatewayEventStore({ file });
+      try {
+        const first = await callGatewayTool(context(), toolName, request);
+        events.close();
+        events = createGatewayEventStore({ file });
+
+        await expect(callGatewayTool(context(), toolName, request)).resolves.toEqual(first);
+        const changed =
+          toolName === "t3_modify_actions"
+            ? {
+                ...request,
+                modifications: [{ actionId: "approval-1", fields: { decision: "accept" } }],
+              }
+            : { ...request, actionIds: ["approval-other"] };
+        await expect(callGatewayTool(context(), toolName, changed)).rejects.toMatchObject({
+          code: "idempotency_conflict",
+        });
+        approvalGranted = false;
+        await expect(callGatewayTool(context(), toolName, request)).rejects.toMatchObject({
+          code: "scope_required",
+        });
+        approvalGranted = true;
+        await expect(
+          callGatewayTool(context(), toolName, {
+            ...request,
+            idempotencyKey: `${request.idempotencyKey}-new`,
+          }),
+        ).rejects.toMatchObject({ code: "stale_plan" });
+        expect(dispatches).toBe(1);
+      } finally {
+        events.close();
+        NodeFS.rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["t3_approve_actions", "t3_reject_actions", "t3_modify_actions"] as const)(
+    "joins an in-flight %s receipt after the approval plan resolves",
+    async (toolName) => {
+      const activities: Array<Record<string, unknown>> = [
+        {
+          id: "approval-1",
+          sequence: 1,
+          kind: "approval.requested",
+          payload: { requestId: "approval-1", requestKind: "command", detail: "Run command" },
+        },
+      ];
+      const response = Promise.withResolvers<Record<string, unknown>>();
+      const entered = Promise.withResolvers<void>();
+      let dispatches = 0;
+      const port = makePort({ threadActivities: activities });
+      const accept = () => {
+        dispatches += 1;
+        activities.push({
+          id: "approval-resolved-1",
+          sequence: 2,
+          kind: "approval.resolved",
+          payload: { requestId: "approval-1" },
+        });
+        entered.resolve();
+        return response.promise;
+      };
+      port.respondToApprovals = async (request) => {
+        const result = await accept();
+        return {
+          requestId: request.requestId,
+          commandId: request.requestId,
+          status: "accepted",
+          threadId: request.threadId,
+          ...result,
+        };
+      };
+      port.executeOperation = async () => accept();
+      const request =
+        toolName === "t3_modify_actions"
+          ? {
+              environmentId: "local",
+              threadId: "thread-1",
+              planRevision: 1,
+              modifications: [{ actionId: "approval-1", fields: { decision: "decline" } }],
+              idempotencyKey: `grouped-in-flight-${toolName}`,
+            }
+          : {
+              environmentId: "local",
+              threadId: "thread-1",
+              planRevision: 1,
+              actionIds: ["approval-1"],
+              ...(toolName === "t3_approve_actions" ? { confirmDestructive: true } : {}),
+              idempotencyKey: `grouped-in-flight-${toolName}`,
+            };
+      const events = createGatewayEventStore();
+      const context = { port, grants, events };
+      const first = callGatewayTool(context, toolName, request);
+      await entered.promise;
+      const replay = callGatewayTool(context, toolName, request);
+      const changed =
+        toolName === "t3_modify_actions"
+          ? {
+              ...request,
+              modifications: [{ actionId: "approval-1", fields: { decision: "accept" } }],
+            }
+          : { ...request, actionIds: ["approval-other"] };
+      await expect(callGatewayTool(context, toolName, changed)).rejects.toMatchObject({
+        code: "idempotency_conflict",
+      });
+      response.resolve({ accepted: true });
+
+      await expect(replay).resolves.toEqual(await first);
+      expect(dispatches).toBe(1);
+      events.close();
+    },
+  );
+
+  it.each(["t3_approve_actions", "t3_reject_actions", "t3_modify_actions"] as const)(
+    "recovers an authoritative %s receipt after response loss and store reopen",
+    async (toolName) => {
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-mcp-group-lost-"));
+      const file = NodePath.join(directory, "events.sqlite");
+      const activities: Array<Record<string, unknown>> = [
+        {
+          id: "approval-1",
+          sequence: 1,
+          kind: "approval.requested",
+          payload: { requestId: "approval-1", requestKind: "command", detail: "Run command" },
+        },
+      ];
+      const receipts = new Map<string, Record<string, unknown>>();
+      let sideEffects = 0;
+      let loseResponse = true;
+      const port = makePort({ threadActivities: activities });
+      const accept = async (requestId: string) => {
+        const previous = receipts.get(requestId);
+        if (previous !== undefined) return previous;
+        sideEffects += 1;
+        activities.push({
+          id: "approval-resolved-1",
+          sequence: 2,
+          kind: "approval.resolved",
+          payload: { requestId: "approval-1" },
+        });
+        const receipt = { accepted: true, requestId };
+        receipts.set(requestId, receipt);
+        if (loseResponse) throw new Error("transport disconnected after authoritative acceptance");
+        return receipt;
+      };
+      port.respondToApprovals = async (request) => ({
+        requestId: request.requestId,
+        commandId: request.requestId,
+        status: "accepted",
+        threadId: request.threadId,
+        ...(await accept(request.requestId)),
+      });
+      port.executeOperation = async (request) => accept(request.requestId ?? "");
+      const request =
+        toolName === "t3_modify_actions"
+          ? {
+              environmentId: "local",
+              threadId: "thread-1",
+              planRevision: 1,
+              modifications: [{ actionId: "approval-1", fields: { decision: "decline" } }],
+              idempotencyKey: `grouped-lost-${toolName}`,
+            }
+          : {
+              environmentId: "local",
+              threadId: "thread-1",
+              planRevision: 1,
+              actionIds: ["approval-1"],
+              ...(toolName === "t3_approve_actions" ? { confirmDestructive: true } : {}),
+              idempotencyKey: `grouped-lost-${toolName}`,
+            };
+      let events = createGatewayEventStore({ file });
+      try {
+        await expect(callGatewayTool({ port, grants, events }, toolName, request)).rejects.toThrow(
+          "transport disconnected after authoritative acceptance",
+        );
+        events.close();
+        events = createGatewayEventStore({ file });
+        loseResponse = false;
+
+        await expect(
+          callGatewayTool({ port, grants, events }, toolName, request),
+        ).resolves.toMatchObject(
+          toolName === "t3_modify_actions"
+            ? { accepted: true }
+            : {
+                approvalPlanId: "plan-thread-1",
+                revision: 1,
+                pending: 0,
+                receipt: { requestId: `mcp-request-${request.idempotencyKey}` },
+              },
+        );
+        expect(sideEffects).toBe(1);
+      } finally {
+        events.close();
+        NodeFS.rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["accept", "acceptForSession"] as const)(
+    "recovers an accepted %s after the runtime response is lost and the store reopens",
+    async (decision) => {
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-mcp-lost-"));
+      const file = NodePath.join(directory, "events.sqlite");
+      const activities: Array<Record<string, unknown>> = [
+        {
+          id: "approval-1",
+          sequence: 1,
+          kind: "approval.requested",
+          payload: { requestId: "approval-1", requestKind: "command", detail: "Run command" },
+        },
+      ];
+      const receipts = new Map<string, GatewayMutationResult>();
+      let sideEffects = 0;
+      let loseResponse = true;
+      const port = makePort({ threadActivities: activities });
+      port.respondToApproval = async (request) => {
+        const previous = receipts.get(request.requestId);
+        if (previous !== undefined) return previous;
+        sideEffects += 1;
+        activities.push({
+          id: "approval-resolved-1",
+          sequence: 2,
+          kind: "approval.resolved",
+          payload: { requestId: request.approvalRequestId },
+        });
+        const receipt = {
+          requestId: request.requestId,
+          commandId: request.requestId,
+          status: "accepted" as const,
+          threadId: request.threadId,
+        };
+        receipts.set(request.requestId, receipt);
+        if (loseResponse) throw new Error("transport disconnected after authoritative acceptance");
+        return receipt;
+      };
+      const request = {
+        environmentId: "local",
+        threadId: "thread-1",
+        approvalRequestId: "approval-1",
+        decision,
+        confirmDestructive: true,
+        idempotencyKey: `approval-lost-${decision}`,
+      };
+      let events = createGatewayEventStore({ file });
+      try {
+        await expect(
+          callGatewayTool({ port, grants, events }, "t3_respond_to_approval", request),
+        ).rejects.toThrow("transport disconnected after authoritative acceptance");
+        events.close();
+        events = createGatewayEventStore({ file });
+        loseResponse = false;
+
+        await expect(
+          callGatewayTool({ port, grants, events }, "t3_respond_to_approval", request),
+        ).resolves.toEqual(receipts.get(`mcp-request-${request.idempotencyKey}`));
+        expect(sideEffects).toBe(1);
+      } finally {
+        events.close();
+        NodeFS.rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("does not recover a null request whose validation failed before dispatch", async () => {
+    const events = createGatewayEventStore();
+    const approvals: Array<{ requestId: string; decision: string }> = [];
+    const context = { port: makePort({ approvals }), grants, events };
+    const request = {
+      environmentId: "local",
+      threadId: "thread-1",
+      approvalRequestId: "approval-1",
+      decision: "accept",
+      confirmDestructive: true,
+      idempotencyKey: "approval-validation-failed",
+    };
+
+    await expect(callGatewayTool(context, "t3_respond_to_approval", request)).rejects.toMatchObject(
+      {
+        code: "stale_plan",
+      },
+    );
+    await expect(callGatewayTool(context, "t3_respond_to_approval", request)).rejects.toMatchObject(
+      {
+        code: "stale_plan",
+      },
+    );
+    expect(approvals).toEqual([]);
+    events.close();
+  });
+
   it("rejects unknown environments before invoking the runtime", async () => {
     await expect(
       callGatewayTool({ port: makePort(), grants }, "t3_list_threads", {
