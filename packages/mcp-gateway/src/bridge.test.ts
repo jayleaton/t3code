@@ -423,6 +423,119 @@ describe("gateway bridge", () => {
     },
   );
 
+  it.each([
+    ["t3_reject_actions", "t3_approve_actions"],
+    ["t3_approve_actions", "t3_reject_actions"],
+  ] as const)(
+    "rejects %s to %s identity changes after a real bridge disconnect and store reopen",
+    async (firstTool, oppositeTool) => {
+      const port = await unusedPort();
+      const bridge = createBridgeRuntimePort({ port, token: TOKEN, requestTimeoutMs: 100 });
+      await bridge.ready;
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-bridge-identity-"));
+      const file = NodePath.join(directory, "events.sqlite");
+      let events = createGatewayEventStore({ file });
+      const received: Array<Record<string, unknown>> = [];
+      const thread = {
+        id: "thread-1",
+        activities: [
+          {
+            id: "approval-1",
+            sequence: 1,
+            kind: "approval.requested",
+            payload: { requestId: "approval-1", requestKind: "command", detail: "Run command" },
+          },
+        ],
+      };
+      let disconnectBeforeAcceptance = true;
+      const connectRuntime = async () => {
+        const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+        const authenticated = authenticate(
+          socket,
+          (message) => {
+            const id = message.id;
+            const args = message.args as ReadonlyArray<Record<string, unknown>> | undefined;
+            if (message.method === "getThread") {
+              socket.send(JSON.stringify({ id, result: thread }));
+              return;
+            }
+            if (message.method !== "respondToApprovals") return;
+            received.push(args?.[0] ?? {});
+            if (disconnectBeforeAcceptance) {
+              socket.close(1012, "injected pre-acceptance disconnect");
+              return;
+            }
+            socket.send(
+              JSON.stringify({
+                id,
+                result: {
+                  requestId: String(args?.[0]?.requestId ?? ""),
+                  commandId: String(args?.[0]?.requestId ?? ""),
+                  status: "accepted",
+                  threadId: "thread-1",
+                },
+              }),
+            );
+          },
+          false,
+        );
+        await opened(socket);
+        await authenticated;
+        socket.send(JSON.stringify({ type: "configure", grants: { local: ["read", "approval"] } }));
+        await vi.waitFor(() => expect(bridge.getHealth().bridge).toBe("connected"));
+        return socket;
+      };
+      let runtime = await connectRuntime();
+      const request = {
+        environmentId: "local",
+        threadId: "thread-1",
+        actionIds: ["approval-1"],
+        planRevision: 1,
+        ...(firstTool === "t3_approve_actions" ? { confirmDestructive: true } : {}),
+        idempotencyKey: `bridge-opposite-${firstTool}`,
+      };
+      try {
+        await expect(
+          callGatewayTool(
+            { port: bridge.port, grants: bridge.getGrants, events },
+            firstTool,
+            request,
+          ),
+        ).rejects.toThrow("disconnected");
+        events.close();
+        events = createGatewayEventStore({ file });
+        disconnectBeforeAcceptance = false;
+        runtime = await connectRuntime();
+
+        await expect(
+          callGatewayTool(
+            { port: bridge.port, grants: bridge.getGrants, events },
+            oppositeTool,
+            request,
+          ),
+        ).rejects.toMatchObject({ code: "idempotency_conflict" });
+        await expect(
+          callGatewayTool(
+            { port: bridge.port, grants: bridge.getGrants, events },
+            "t3_approve_actions",
+            {
+              ...request,
+              confirmDestructive: undefined,
+              idempotencyKey: `${request.idempotencyKey}-fresh`,
+            },
+          ),
+        ).rejects.toMatchObject({ code: "destructive_confirmation_required" });
+        expect(received).toHaveLength(1);
+        expect(received[0]?.requestId).toBe(`mcp-request-${request.idempotencyKey}`);
+      } finally {
+        runtime.close();
+        events.close();
+        await bridge.close();
+        NodeFS.rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("times out requests that receive no runtime response", async () => {
     const port = await unusedPort();
     const bridge = createBridgeRuntimePort({ port, token: TOKEN, requestTimeoutMs: 10 });

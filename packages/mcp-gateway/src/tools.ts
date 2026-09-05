@@ -328,6 +328,10 @@ function requiredIdempotencyKey(input: Record<string, unknown>): string {
   return requiredString(input, "idempotencyKey");
 }
 
+function idempotencyCommandPayload(operation: string, input: Record<string, unknown>) {
+  return { operation, input };
+}
+
 const pendingRequests = new WeakMap<GatewayEventStore, Map<string, Promise<unknown>>>();
 
 // Memoizes a mutating command per (environmentId, threadId, requestId). On a
@@ -737,7 +741,7 @@ export async function callGatewayTool(
       return withIdempotency(
         context,
         `${environmentId}::${threadId}::${idFor("approval-plan", idempotencyKey)}`,
-        input,
+        idempotencyCommandPayload("approval.modify", input),
         (prepared) =>
           execute({
             environmentId,
@@ -923,7 +927,7 @@ export async function callGatewayTool(
       return withIdempotency(
         context,
         `${environmentId}::${idFor("operation", idempotencyKey)}`,
-        input,
+        idempotencyCommandPayload(operations[name] as string, input),
         () =>
           execute({
             environmentId,
@@ -1097,17 +1101,15 @@ export async function callGatewayTool(
       return withIdempotency(
         context,
         `${environmentId}::${requiredString(input, "threadId")}::${idFor("request", idempotencyKey)}`,
-        input,
-        async () => {
-          const result = await context.port.sendMessage({
+        idempotencyCommandPayload("message.send", input),
+        () =>
+          context.port.sendMessage({
             environmentId,
             threadId: requiredString(input, "threadId"),
             text: requiredString(input, "text"),
             messageId: idFor("message", idempotencyKey),
             requestId: idFor("request", idempotencyKey),
-          });
-          return result;
-        },
+          }),
       );
     }
     case "t3_control_thread": {
@@ -1129,17 +1131,15 @@ export async function callGatewayTool(
       return withIdempotency(
         context,
         `${environmentId}::${requiredString(input, "threadId")}::${idFor("request", idempotencyKey)}`,
-        input,
-        async () => {
-          const result = await context.port.controlThread({
+        idempotencyCommandPayload("thread.control", input),
+        () =>
+          context.port.controlThread({
             environmentId,
             threadId: requiredString(input, "threadId"),
             action,
             requestId: idFor("request", idempotencyKey),
             messageId: idFor("message", idempotencyKey),
-          });
-          return result;
-        },
+          }),
       );
     }
     case "t3_respond_to_approval": {
@@ -1162,7 +1162,7 @@ export async function callGatewayTool(
       return withIdempotency(
         context,
         `${environmentId}::${threadId}::${idFor("request", idempotencyKey)}`,
-        input,
+        idempotencyCommandPayload(`approval.respond.${decision}`, input),
         () =>
           context.port.respondToApproval({
             environmentId,
@@ -1214,13 +1214,13 @@ export async function callGatewayTool(
       const idempotencyKey = requiredIdempotencyKey(input);
       const actionIds = requiredStringArray(input, "actionIds");
       const requestedRevision = Number(input.planRevision);
+      const decision: GatewayApprovalDecision =
+        name === "t3_approve_actions" ? "accept" : "decline";
       return withIdempotency(
         context,
         `${environmentId}::${threadId}::${idFor("approval-plan", idempotencyKey)}`,
-        input,
+        idempotencyCommandPayload(`approval.respond.${decision}`, input),
         async (prepared) => {
-          const decision: GatewayApprovalDecision =
-            name === "t3_approve_actions" ? "accept" : "decline";
           if (context.port.respondToApprovals === undefined) {
             throw new GatewayError({
               code: "not_configured",
@@ -1233,6 +1233,7 @@ export async function callGatewayTool(
             approvalPlanId: `plan-${threadId}`,
             revision: requestedRevision,
             actionIds,
+            decision,
             pending: 0,
           };
           const receipt = await context.port.respondToApprovals({
@@ -1240,7 +1241,7 @@ export async function callGatewayTool(
             threadId,
             responses: dispatch.actionIds.map((approvalRequestId) => ({
               approvalRequestId,
-              decision,
+              decision: dispatch.decision,
             })),
             expectedRevision: dispatch.revision,
             requestId: idFor("request", idempotencyKey),
@@ -1248,8 +1249,8 @@ export async function callGatewayTool(
           return {
             approvalPlanId: dispatch.approvalPlanId,
             revision: dispatch.revision,
-            approved: decision === "accept" ? dispatch.actionIds.length : 0,
-            rejected: decision === "decline" ? dispatch.actionIds.length : 0,
+            approved: dispatch.decision === "accept" ? dispatch.actionIds.length : 0,
+            rejected: dispatch.decision === "decline" ? dispatch.actionIds.length : 0,
             pending: dispatch.pending,
             receipt,
           };
@@ -1293,6 +1294,7 @@ export async function callGatewayTool(
             approvalPlanId: plan.approvalPlanId,
             revision: plan.revision,
             actionIds: selected.map((action) => action.approvalActionId as string),
+            decision,
             pending: plan.actions.length - selected.length,
           };
         },
