@@ -4,10 +4,13 @@ import {
   getMcpGatewayStatus,
   getMcpGatewayToken,
   getMcpGatewayGrants,
+  getMcpGatewayProfiles,
   MCP_GATEWAY_ENABLED_KEY,
   MCP_GATEWAY_GRANTS_KEY,
+  MCP_GATEWAY_PROFILES_KEY,
   publishMcpGatewayStatus,
   setMcpGatewayGrants,
+  setMcpGatewayProfiles,
   subscribeMcpGatewayConfiguration,
 } from "./mcpGatewayState";
 
@@ -73,6 +76,40 @@ describe("MCP gateway grants", () => {
     expect(getMcpGatewayGrants()).toEqual({
       "a534b83f-a352-44d8-aedc-c4230c179390": ["read", "send"],
     });
+  });
+
+  it("persists named readable profiles and drops malformed or duplicate entries", () => {
+    setMcpGatewayProfiles([
+      {
+        name: "Andy",
+        environmentId: "local",
+        providerLabel: "OpenCode",
+        modelLabel: "GLM 5.3",
+        instanceId: "opencode",
+        model: "glm-5.3",
+        reasoningEffort: "medium",
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      },
+    ]);
+    expect(getMcpGatewayProfiles()).toEqual([
+      expect.objectContaining({
+        name: "Andy",
+        providerLabel: "OpenCode",
+        modelLabel: "GLM 5.3",
+      }),
+    ]);
+
+    const valid = JSON.parse(localStorage.getItem(MCP_GATEWAY_PROFILES_KEY) ?? "[]")[0];
+    localStorage.setItem(
+      MCP_GATEWAY_PROFILES_KEY,
+      JSON.stringify([
+        valid,
+        { ...valid, environmentId: "other" },
+        { name: "Broken", environmentId: "local", runtimeMode: "root" },
+      ]),
+    );
+    expect(getMcpGatewayProfiles()).toEqual([valid]);
   });
 
   it("returns an empty token when session storage is unavailable", () => {

@@ -3,7 +3,12 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { z } from "zod";
 
 import { GatewayError, type GatewayRuntimePort } from "./port.ts";
-import { callGatewayTool, type GatewayGrantSource, type GatewayToolContext } from "./tools.ts";
+import {
+  callGatewayTool,
+  type GatewayGrantSource,
+  type GatewayProfileSource,
+  type GatewayToolContext,
+} from "./tools.ts";
 
 const environmentId = z.string().trim().min(1);
 const threadId = z.string().trim().min(1);
@@ -31,6 +36,7 @@ function failure(error: unknown) {
 export function createMcpGateway(input: {
   readonly port: GatewayRuntimePort;
   readonly grants: GatewayGrantSource;
+  readonly profiles?: GatewayProfileSource;
 }) {
   const server = new McpServer({ name: "t3-code", version: "0.1.0" });
   const context: GatewayToolContext = input;
@@ -48,6 +54,11 @@ export function createMcpGateway(input: {
     );
   };
 
+  register(
+    "t3_list_profiles",
+    "List named T3 chat profiles. Use a profile name when creating a chat.",
+    {},
+  );
   register("t3_list_environments", "List T3 environments granted to this host.", {});
   register("t3_get_environment_status", "Get connection state for one T3 environment.", {
     environmentId,
@@ -67,13 +78,7 @@ export function createMcpGateway(input: {
     environmentId,
     projectId: z.string().trim().min(1),
     title: z.string().trim().min(1),
-    modelSelection: z
-      .object({ instanceId: z.string().trim().min(1), model: z.string().trim().min(1) })
-      .strict(),
-    runtimeMode: z
-      .enum(["approval-required", "auto-accept-edits", "auto", "full-access"])
-      .optional(),
-    interactionMode: z.enum(["default", "plan"]).optional(),
+    profile: z.string().trim().min(1),
     idempotencyKey,
   });
   register("t3_send_message", "Send a user message to an existing T3 chat.", {

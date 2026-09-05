@@ -1,15 +1,48 @@
-import { GatewayError, type GatewayRuntimePort, type GatewayScope } from "./port.ts";
+import {
+  GatewayError,
+  type GatewayProfile,
+  type GatewayRuntimePort,
+  type GatewayScope,
+} from "./port.ts";
 
 export type GatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
 export type GatewayGrantSource = GatewayGrants | (() => GatewayGrants);
 
+export type GatewayProfileSource =
+  | ReadonlyArray<GatewayProfile>
+  | (() => ReadonlyArray<GatewayProfile>);
+
 export interface GatewayToolContext {
   readonly port: GatewayRuntimePort;
   readonly grants: GatewayGrantSource;
+  readonly profiles?: GatewayProfileSource;
 }
 
 function currentGrants(source: GatewayGrantSource): GatewayGrants {
   return typeof source === "function" ? source() : source;
+}
+
+function currentProfiles(source: GatewayProfileSource | undefined): ReadonlyArray<GatewayProfile> {
+  if (source === undefined) return [];
+  return typeof source === "function" ? source() : source;
+}
+
+function runtimeModeLabel(mode: GatewayProfile["runtimeMode"]): string {
+  if (mode === "full-access") return "full access";
+  if (mode === "auto-accept-edits") return "auto-accept edits";
+  if (mode === "approval-required") return "approval required";
+  return "auto";
+}
+
+function profileDescription(profile: GatewayProfile): string {
+  return [
+    `${profile.name} = ${profile.providerLabel}`,
+    profile.modelLabel,
+    profile.reasoningEffort,
+    runtimeModeLabel(profile.runtimeMode),
+  ]
+    .filter((value): value is string => value !== undefined)
+    .join(" · ");
 }
 
 function record(input: unknown): Record<string, unknown> {
@@ -73,6 +106,18 @@ export async function callGatewayTool(
 ): Promise<any> {
   const input = record(rawInput);
   switch (name) {
+    case "t3_list_profiles":
+      return {
+        items: currentProfiles(context.profiles)
+          .filter((profile) =>
+            currentGrants(context.grants)[profile.environmentId]?.includes("create"),
+          )
+          .map((profile) => ({
+            name: profile.name,
+            environmentId: profile.environmentId,
+            description: profileDescription(profile),
+          })),
+      };
     case "t3_list_environments": {
       const environments = await context.port.listEnvironments();
       const grants = currentGrants(context.grants);
@@ -117,23 +162,44 @@ export async function callGatewayTool(
     case "t3_create_thread": {
       const environmentId = environmentWithScope(context, input, "create");
       const idempotencyKey = requiredString(input, "idempotencyKey");
-      const modelSelection = record(input.modelSelection);
+      const profileName = typeof input.profile === "string" ? input.profile.trim() : "";
+      const profile =
+        profileName === ""
+          ? undefined
+          : currentProfiles(context.profiles).find((candidate) => candidate.name === profileName);
+      if (
+        profileName !== "" &&
+        (profile === undefined || profile.environmentId !== environmentId)
+      ) {
+        throw new GatewayError({
+          code: "invalid_profile",
+          message: `Profile ${profileName} is not available for environment ${environmentId}.`,
+          retryable: false,
+          environmentId,
+        });
+      }
+      const rawModelSelection = profile === undefined ? record(input.modelSelection) : undefined;
       return context.port.createThread({
         environmentId,
         projectId: requiredString(input, "projectId"),
         threadId: idFor("thread", idempotencyKey),
         title: requiredString(input, "title"),
         modelSelection: {
-          instanceId: requiredString(modelSelection, "instanceId"),
-          model: requiredString(modelSelection, "model"),
+          instanceId: profile?.instanceId ?? requiredString(rawModelSelection!, "instanceId"),
+          model: profile?.model ?? requiredString(rawModelSelection!, "model"),
+          ...(profile?.reasoningEffort === undefined
+            ? {}
+            : { options: [{ id: "reasoningEffort", value: profile.reasoningEffort }] }),
         },
         runtimeMode:
-          input.runtimeMode === "auto-accept-edits" ||
+          profile?.runtimeMode ??
+          (input.runtimeMode === "auto-accept-edits" ||
           input.runtimeMode === "auto" ||
           input.runtimeMode === "full-access"
             ? input.runtimeMode
-            : "approval-required",
-        interactionMode: input.interactionMode === "plan" ? "plan" : "default",
+            : "approval-required"),
+        interactionMode:
+          profile?.interactionMode ?? (input.interactionMode === "plan" ? "plan" : "default"),
         requestId: idFor("create-thread", idempotencyKey),
       });
     }

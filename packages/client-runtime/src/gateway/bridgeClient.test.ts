@@ -80,11 +80,25 @@ describe("gateway bridge client", () => {
       "a534b83f-a352-44d8-aedc-c4230c179390": ["read", "create", "send"] as const,
       "2549ba75-2a91-4554-8baa-88e6ae0efa48": ["read"] as const,
     };
+    const profiles = [
+      {
+        name: "Andy",
+        environmentId: "a534b83f-a352-44d8-aedc-c4230c179390",
+        providerLabel: "OpenCode",
+        modelLabel: "GLM 5.3",
+        instanceId: "opencode",
+        model: "glm-5.3",
+        reasoningEffort: "medium",
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      },
+    ] as const;
     const onState = vi.fn();
     const bridge = connectGatewayBridge({
       port: unusedPort,
       token,
       grants,
+      profiles,
       url: "ws://127.0.0.1:47631",
       createSocket: () => socket,
       onState,
@@ -96,6 +110,7 @@ describe("gateway bridge client", () => {
     expect(socket.sent.map((message) => JSON.parse(message))).not.toContainEqual({
       type: "configure",
       grants,
+      profiles,
     });
 
     socket.emit(
@@ -110,6 +125,7 @@ describe("gateway bridge client", () => {
       expect(socket.sent.map((message) => JSON.parse(message))).toContainEqual({
         type: "configure",
         grants,
+        profiles,
       }),
     );
     expect(onState).toHaveBeenCalledWith("running");

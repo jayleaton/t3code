@@ -58,10 +58,24 @@ const grants = {
   remote: ["read", "create", "send"],
 } as const;
 
+const profiles = [
+  {
+    name: "Andy",
+    environmentId: "local",
+    providerLabel: "OpenCode",
+    modelLabel: "GLM 5.3",
+    instanceId: "opencode",
+    model: "glm-5.3",
+    reasoningEffort: "medium",
+    runtimeMode: "full-access",
+    interactionMode: "default",
+  },
+] as const;
+
 describe("gateway chat tools", () => {
   it.each(["local", "remote"])("reads, creates, and sends chats in %s", async (environmentId) => {
     const port = makePort();
-    const context = { port, grants };
+    const context = { port, grants, profiles };
 
     const listed = await callGatewayTool(context, "t3_list_threads", { environmentId });
     expect(listed).toMatchObject({ items: [] });
@@ -70,7 +84,9 @@ describe("gateway chat tools", () => {
       environmentId,
       projectId: `${environmentId}-project`,
       title: "Gateway chat",
-      modelSelection: { instanceId: "codex", model: "gpt-5" },
+      ...(environmentId === "local"
+        ? { profile: "Andy" }
+        : { modelSelection: { instanceId: "codex", model: "gpt-5" } }),
       idempotencyKey: `${environmentId}-create-1`,
     });
     expect(created).toMatchObject({ status: "accepted" });
@@ -88,6 +104,73 @@ describe("gateway chat tools", () => {
       threadId: created.threadId,
     });
     expect(read.items[0]).toMatchObject({ text: `hello from ${environmentId}` });
+  });
+
+  it("lists readable profiles without exposing provider or model routing ids", async () => {
+    const listed = await callGatewayTool(
+      { port: makePort(), grants, profiles },
+      "t3_list_profiles",
+      {},
+    );
+
+    expect(listed).toEqual({
+      items: [
+        {
+          name: "Andy",
+          environmentId: "local",
+          description: "Andy = OpenCode · GLM 5.3 · medium · full access",
+        },
+      ],
+    });
+    expect(JSON.stringify(listed)).not.toContain("opencode");
+    expect(JSON.stringify(listed)).not.toContain("glm-5.3");
+  });
+
+  it("does not list a profile after its machine create grant is revoked", async () => {
+    const listed = await callGatewayTool(
+      { port: makePort(), grants: { local: ["read"] }, profiles },
+      "t3_list_profiles",
+      {},
+    );
+
+    expect(listed).toEqual({ items: [] });
+  });
+
+  it("creates a thread from a named readable profile", async () => {
+    const port = makePort();
+    const createThread = vi.spyOn(port, "createThread");
+
+    await callGatewayTool({ port, grants, profiles }, "t3_create_thread", {
+      environmentId: "local",
+      projectId: "local-project",
+      title: "Gateway chat",
+      profile: "Andy",
+      idempotencyKey: "profile-create",
+    });
+
+    expect(createThread).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelSelection: {
+          instanceId: "opencode",
+          model: "glm-5.3",
+          options: [{ id: "reasoningEffort", value: "medium" }],
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      }),
+    );
+  });
+
+  it("rejects profiles bound to a different machine", async () => {
+    await expect(
+      callGatewayTool({ port: makePort(), grants, profiles }, "t3_create_thread", {
+        environmentId: "remote",
+        projectId: "remote-project",
+        title: "Wrong machine",
+        profile: "Andy",
+        idempotencyKey: "wrong-machine",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_profile", environmentId: "remote" });
   });
 
   it("rejects a mutation when the host has only read scope", async () => {

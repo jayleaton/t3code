@@ -16,6 +16,7 @@
     }
   },
   "scripts": {
+    "build": "vp build",
     "typecheck": "tsgo --noEmit",
     "test": "vp test run"
   },

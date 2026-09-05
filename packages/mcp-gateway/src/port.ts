@@ -2,6 +2,7 @@ import type {
   GatewayEnvironmentSummary,
   GatewayMutationResult,
   GatewayPage,
+  GatewayProfile,
   GatewayRuntimePort,
   GatewayScope,
 } from "@t3tools/client-runtime/gateway";
@@ -10,6 +11,7 @@ export type {
   GatewayEnvironmentSummary,
   GatewayMutationResult,
   GatewayPage,
+  GatewayProfile,
   GatewayRuntimePort,
   GatewayScope,
 };
@@ -17,6 +19,7 @@ export type {
 export type GatewayErrorCode =
   | "invalid_input"
   | "unknown_tool"
+  | "invalid_profile"
   | "unknown_environment"
   | "scope_required"
   | "environment_unavailable"

@@ -31,13 +31,46 @@ const port: GatewayRuntimePort = {
 describe("MCP gateway server", () => {
   it("serves structured tools over an MCP transport", async () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const gateway = createMcpGateway({ port, grants: { local: ["read", "create", "send"] } });
+    const gateway = createMcpGateway({
+      port,
+      grants: { local: ["read", "create", "send"] },
+      profiles: [
+        {
+          name: "Andy",
+          environmentId: "local",
+          providerLabel: "OpenCode",
+          modelLabel: "GLM 5.3",
+          instanceId: "opencode",
+          model: "glm-5.3",
+          reasoningEffort: "medium",
+          runtimeMode: "full-access",
+          interactionMode: "default",
+        },
+      ],
+    });
     const client = new Client({ name: "gateway-test", version: "1.0.0" });
     await gateway.connect(serverTransport);
     await client.connect(clientTransport);
 
     const listedTools = await client.listTools();
     expect(listedTools.tools.map((tool) => tool.name)).toContain("t3_list_threads");
+    expect(listedTools.tools.map((tool) => tool.name)).toContain("t3_list_profiles");
+    const createTool = listedTools.tools.find((tool) => tool.name === "t3_create_thread");
+    expect(createTool?.inputSchema).toMatchObject({
+      properties: { profile: { type: "string" } },
+      required: expect.arrayContaining(["profile"]),
+    });
+    expect(createTool?.inputSchema).not.toHaveProperty("properties.modelSelection");
+    const profiles = await client.callTool({ name: "t3_list_profiles", arguments: {} });
+    expect(profiles.structuredContent).toEqual({
+      items: [
+        {
+          name: "Andy",
+          environmentId: "local",
+          description: "Andy = OpenCode · GLM 5.3 · medium · full access",
+        },
+      ],
+    });
     const result = await client.callTool({
       name: "t3_list_threads",
       arguments: { environmentId: "local" },

@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { connectionAtomRuntime } from "./connection/runtime";
 import {
   getMcpGatewayGrants,
+  getMcpGatewayProfiles,
   getMcpGatewayToken,
   isMcpGatewayEnabled,
   publishMcpGatewayStatus,
@@ -20,23 +21,27 @@ const BRIDGE_URL = "ws://127.0.0.1:47631";
 
 export function McpGatewayHost() {
   const [configuration, setConfiguration] = useState(() => ({
+    available: (window.desktopBridge?.getMcpGatewayLaunchConfig() ?? null) !== null,
     enabled: isMcpGatewayEnabled(),
     grants: getMcpGatewayGrants(),
+    profiles: getMcpGatewayProfiles(),
     token: getMcpGatewayToken(),
   }));
 
   useEffect(() => {
     const onChange = () =>
       setConfiguration({
+        available: (window.desktopBridge?.getMcpGatewayLaunchConfig() ?? null) !== null,
         enabled: isMcpGatewayEnabled(),
         grants: getMcpGatewayGrants(),
+        profiles: getMcpGatewayProfiles(),
         token: getMcpGatewayToken(),
       });
     return subscribeMcpGatewayConfiguration(onChange);
   }, []);
 
   useEffect(() => {
-    if (!configuration.enabled || configuration.token.length < 16) {
+    if (!configuration.available || !configuration.enabled || configuration.token.length < 16) {
       publishMcpGatewayStatus(configuration.enabled ? "degraded" : "disabled");
       return;
     }
@@ -52,6 +57,7 @@ export function McpGatewayHost() {
       bridge = connectGatewayBridge({
         port: createGatewayRuntimePortFromContext(value.value),
         grants: configuration.grants,
+        profiles: configuration.profiles,
         token: configuration.token,
         url: BRIDGE_URL,
         onState: publishMcpGatewayStatus,

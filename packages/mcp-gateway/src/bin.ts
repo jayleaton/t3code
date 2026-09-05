@@ -42,6 +42,7 @@ const bridge = createBridgeRuntimePort({
 const gateway = createMcpGateway({
   port: bridge.port,
   grants: bridge.getGrants,
+  profiles: bridge.getProfiles,
 });
 const startup = await bridge.ready;
 if (startup.status === "degraded") {

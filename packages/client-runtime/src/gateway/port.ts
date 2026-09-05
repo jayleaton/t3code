@@ -1,5 +1,17 @@
 export type GatewayScope = "read" | "create" | "send";
 
+export interface GatewayProfile {
+  readonly name: string;
+  readonly environmentId: string;
+  readonly providerLabel: string;
+  readonly modelLabel: string;
+  readonly instanceId: string;
+  readonly model: string;
+  readonly reasoningEffort?: "low" | "medium" | "high" | "xhigh";
+  readonly runtimeMode: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
+  readonly interactionMode: "default" | "plan";
+}
+
 export interface GatewayEnvironmentSummary {
   readonly environmentId: string;
   readonly label: string;
@@ -34,7 +46,11 @@ export interface GatewayRuntimePort {
     readonly projectId: string;
     readonly threadId: string;
     readonly title: string;
-    readonly modelSelection: { readonly instanceId: string; readonly model: string };
+    readonly modelSelection: {
+      readonly instanceId: string;
+      readonly model: string;
+      readonly options?: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }>;
+    };
     readonly runtimeMode: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
     readonly interactionMode: "default" | "plan";
     readonly requestId: string;

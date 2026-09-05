@@ -2,7 +2,7 @@ import * as NodeCrypto from "node:crypto";
 
 import { WebSocketServer, type WebSocket } from "ws";
 
-import type { GatewayRuntimePort, GatewayScope } from "./port.ts";
+import type { GatewayProfile, GatewayRuntimePort, GatewayScope } from "./port.ts";
 
 export type GatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
 
@@ -38,6 +38,48 @@ function parseGrants(value: unknown): GatewayGrants {
   return grants;
 }
 
+const REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
+const RUNTIME_MODES = new Set(["approval-required", "auto-accept-edits", "auto", "full-access"]);
+
+function parseProfiles(value: unknown): ReadonlyArray<GatewayProfile> {
+  if (!Array.isArray(value)) throw new Error("Gateway profiles must be an array.");
+  const names = new Set<string>();
+  return value.map((candidate) => {
+    if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
+      throw new Error("Gateway profile must be an object.");
+    }
+    const profile = candidate as Record<string, unknown>;
+    for (const key of [
+      "name",
+      "environmentId",
+      "providerLabel",
+      "modelLabel",
+      "instanceId",
+      "model",
+    ]) {
+      if (typeof profile[key] !== "string" || (profile[key] as string).trim() === "") {
+        throw new Error(`Gateway profile ${key} must be a non-empty string.`);
+      }
+    }
+    if (names.has(profile.name as string)) throw new Error("Gateway profile names must be unique.");
+    names.add(profile.name as string);
+    if (
+      profile.reasoningEffort !== undefined &&
+      (typeof profile.reasoningEffort !== "string" ||
+        !REASONING_EFFORTS.has(profile.reasoningEffort))
+    ) {
+      throw new Error("Gateway profile reasoning effort is invalid.");
+    }
+    if (typeof profile.runtimeMode !== "string" || !RUNTIME_MODES.has(profile.runtimeMode)) {
+      throw new Error("Gateway profile runtime mode is invalid.");
+    }
+    if (profile.interactionMode !== "default" && profile.interactionMode !== "plan") {
+      throw new Error("Gateway profile interaction mode is invalid.");
+    }
+    return profile as unknown as GatewayProfile;
+  });
+}
+
 interface PendingRequest {
   readonly resolve: (value: any) => void;
   readonly reject: (error: Error) => void;
@@ -69,9 +111,11 @@ export function createBridgeRuntimePort(input: {
   readonly requestTimeoutMs?: number;
   readonly authenticationTimeoutMs?: number;
   readonly initialGrants?: GatewayGrants;
+  readonly initialProfiles?: ReadonlyArray<GatewayProfile>;
 }): {
   readonly port: GatewayRuntimePort;
   readonly getGrants: () => GatewayGrants;
+  readonly getProfiles: () => ReadonlyArray<GatewayProfile>;
   readonly ready: Promise<GatewayBridgeStartupResult>;
   readonly close: () => Promise<void>;
 } {
@@ -99,6 +143,7 @@ export function createBridgeRuntimePort(input: {
   let client: WebSocket | null = null;
   let latestAuthenticatedGeneration = 0;
   let grants = input.initialGrants ?? {};
+  let profiles = input.initialProfiles ?? [];
   let nextId = 1;
   const pending = new Map<number, PendingRequest>();
 
@@ -148,11 +193,13 @@ export function createBridgeRuntimePort(input: {
             return;
           }
           const nextGrants = parseGrants(response.grants);
+          const nextProfiles = parseProfiles(response.profiles ?? []);
           if (client !== null && client !== socket) {
             rejectPending("T3 gateway client was replaced.");
             client.close(1012, "Replaced by a newly configured T3 client runtime.");
           }
           grants = nextGrants;
+          profiles = nextProfiles;
           client = socket;
           configured = true;
           authenticationSignal.removeEventListener("abort", onAuthenticationTimeout);
@@ -204,6 +251,7 @@ export function createBridgeRuntimePort(input: {
 
   return {
     getGrants: () => grants,
+    getProfiles: () => profiles,
     ready,
     port: {
       listEnvironments: () => invoke("listEnvironments", []),
