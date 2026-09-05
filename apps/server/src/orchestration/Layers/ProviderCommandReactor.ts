@@ -1749,7 +1749,7 @@ const make = Effect.gen(function* () {
       action !== "restart"
     )
       return;
-    const thread = yield* resolveThread(event.payload.threadId);
+    const thread = yield* resolveThreadDetail(event.payload.threadId);
     if (!thread) return;
 
     if (action === "pause" || action === "cancel") {

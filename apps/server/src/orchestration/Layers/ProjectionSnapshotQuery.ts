@@ -3141,17 +3141,6 @@ pending_approval_requests AS (
         return Option.none<OrchestrationThread>();
       }
 
-      const selectedActivityRows = [
-        ...new Map(
-          [...activityRows, ...pinnedActivityRows].map((row) => [row.activityId, row] as const),
-        ).values(),
-      ].toSorted(
-        (left, right) =>
-          (left.sequence ?? -1) - (right.sequence ?? -1) ||
-          left.createdAt.localeCompare(right.createdAt) ||
-          left.activityId.localeCompare(right.activityId),
-      );
-
       const messages = messageRows.map((row) => {
         const message = {
           id: row.messageId,
@@ -3204,21 +3193,7 @@ pending_approval_requests AS (
         deletedAt: null,
         messages,
         proposedPlans: proposedPlanRows.map(mapProposedPlanRow),
-        activities: selectedActivityRows.map((row) => {
-          const activity = {
-            id: row.activityId,
-            tone: row.tone,
-            kind: row.kind,
-            summary: row.summary,
-            payload: row.payload,
-            turnId: row.turnId,
-            createdAt: row.createdAt,
-          };
-          if (row.sequence !== null) {
-            return Object.assign(activity, { sequence: row.sequence });
-          }
-          return activity;
-        }),
+        activities,
         checkpoints,
         artifacts: artifactsFromProjectionRecords(messages, checkpoints),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,

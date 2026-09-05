@@ -299,6 +299,7 @@ it.effect(
             ),
           streamDomainEvents: Stream.empty,
           subscribeDomainEvents: Effect.succeed(Stream.empty),
+          getCommandReceipts: () => Effect.succeed([]),
           latestSequence: Effect.succeed(0),
         } satisfies OrchestrationEngine.OrchestrationEngineService["Service"]),
         Effect.provide(NodeServices.layer),

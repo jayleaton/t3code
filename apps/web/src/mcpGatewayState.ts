@@ -11,6 +11,7 @@ export type McpGatewayUiState = "disabled" | "connecting" | "running" | "degrade
 
 const GATEWAY_SCOPES = new Set<GatewayScope>(GATEWAY_SCOPE_VALUES);
 const MCP_GATEWAY_GRANTED_SCOPES = new Set<GatewayScope>(["read", "create", "send"]);
+let currentMcpGatewayStatus: McpGatewayUiState = "disabled";
 
 function sanitizeMcpGatewayGrants(value: unknown): McpGatewayGrants {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
@@ -46,6 +47,31 @@ export function getMcpGatewayGrants(): McpGatewayGrants {
   } catch {
     return {};
   }
+}
+
+export function publishMcpGatewayStatus(status: McpGatewayUiState): void {
+  currentMcpGatewayStatus = status;
+  window.dispatchEvent(
+    new CustomEvent<McpGatewayUiState>(`${MCP_GATEWAY_STATE_EVENT}:status`, { detail: status }),
+  );
+}
+
+export function subscribeMcpGatewayConfiguration(onChange: () => void): () => void {
+  const onStorage = (event: StorageEvent) => {
+    if (
+      event.key === null ||
+      event.key === MCP_GATEWAY_ENABLED_KEY ||
+      event.key === MCP_GATEWAY_GRANTS_KEY
+    ) {
+      onChange();
+    }
+  };
+  window.addEventListener(MCP_GATEWAY_STATE_EVENT, onChange);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(MCP_GATEWAY_STATE_EVENT, onChange);
+    window.removeEventListener("storage", onStorage);
+  };
 }
 
 export function setMcpGatewayToken(token: string): void {
