@@ -24,6 +24,7 @@ function makePort(input?: {
   readonly profiles?: ReadonlyArray<GatewayProfile>;
   readonly pendingApprovalPlan?: boolean;
   readonly staleApprovalPlan?: boolean;
+  readonly threadActivities?: ReadonlyArray<Record<string, unknown>>;
   readonly projectOwner?: string;
 }): GatewayRuntimePort {
   const environments = ["local", "remote"] as const;
@@ -75,38 +76,40 @@ function makePort(input?: {
           attachments: [{ id: "asset-1", kind: "image", name: "result.png" }],
         },
       ],
-      activities: input?.pendingApprovalPlan
-        ? [
-            {
-              id: "approval-1",
-              sequence: 9,
-              kind: "approval.requested",
-              payload: { requestId: "approval-1", requestKind: "command", detail: "Run command" },
-            },
-            {
-              id: "approval-2",
-              sequence: 10,
-              kind: "approval.requested",
-              payload: { requestId: "approval-2", requestKind: "file-read", detail: "Read file" },
-            },
-            ...(input.staleApprovalPlan
-              ? [
-                  {
-                    id: "approval-stale",
-                    sequence: 11,
-                    kind: "provider.approval.respond.failed",
-                    payload: {
-                      requestId: "approval-1",
-                      detail: "Unknown pending approval request approval-1",
+      activities:
+        input?.threadActivities ??
+        (input?.pendingApprovalPlan
+          ? [
+              {
+                id: "approval-1",
+                sequence: 9,
+                kind: "approval.requested",
+                payload: { requestId: "approval-1", requestKind: "command", detail: "Run command" },
+              },
+              {
+                id: "approval-2",
+                sequence: 10,
+                kind: "approval.requested",
+                payload: { requestId: "approval-2", requestKind: "file-read", detail: "Read file" },
+              },
+              ...(input.staleApprovalPlan
+                ? [
+                    {
+                      id: "approval-stale",
+                      sequence: 11,
+                      kind: "provider.approval.respond.failed",
+                      payload: {
+                        requestId: "approval-1",
+                        detail: "Unknown pending approval request approval-1",
+                      },
                     },
-                  },
-                ]
-              : []),
-          ]
-        : [
-            { id: "event-1", sequence: 7, kind: "tool", summary: "Ran checks" },
-            { id: "event-2", sequence: 8, kind: "info", summary: "Completed" },
-          ],
+                  ]
+                : []),
+            ]
+          : [
+              { id: "event-1", sequence: 7, kind: "tool", summary: "Ran checks" },
+              { id: "event-2", sequence: 8, kind: "info", summary: "Completed" },
+            ]),
       checkpoints: [{ turnId: "turn-1", files: [{ path: "src/index.ts", kind: "modified" }] }],
       artifacts: [
         {
@@ -430,6 +433,87 @@ describe("gateway chat tools", () => {
       confirmDestructive: true,
     });
     expect(approvals).toEqual([{ requestId: "approval-1", decision: "accept" }]);
+  });
+
+  it("rejects destructive acceptance for approval requests absent from the plan", async () => {
+    const approvals: Array<{ requestId: string; decision: string }> = [];
+    const context = {
+      port: makePort({ approvals }),
+      grants: { local: ["read", "approval"] },
+    } as const;
+
+    // No pendingApprovalPlan: the request ID is not pending anywhere, yet it
+    // used to fall through the optional-action check and dispatch.
+    await expect(
+      callGatewayTool(context, "t3_respond_to_approval", {
+        environmentId: "local",
+        threadId: "thread-1",
+        approvalRequestId: "approval-1",
+        decision: "accept",
+        confirmDestructive: true,
+        idempotencyKey: "approval-absent-1",
+      }),
+    ).rejects.toMatchObject({ code: "stale_plan" });
+    expect(approvals).toEqual([]);
+  });
+
+  it("fails closed when a pending destructive approval falls outside the projected activity window", async () => {
+    const approvals: Array<{ requestId: string; decision: string }> = [];
+    // Simulates gatewayThreadProjection's newest-1,000 activity slice at
+    // runtimePort.ts: the approval.requested for approval-1 is gone while the
+    // request is still pending at the runtime.
+    const filler = Array.from({ length: 1_000 }, (_, index) => ({
+      id: `activity-${index}`,
+      sequence: index + 1,
+      kind: "info",
+      summary: "filler",
+    }));
+    const context = {
+      port: makePort({
+        approvals,
+        threadActivities: [...filler, ...filler],
+      }),
+      grants: { local: ["read", "approval"] },
+    } as const;
+
+    await expect(
+      callGatewayTool(context, "t3_respond_to_approval", {
+        environmentId: "local",
+        threadId: "thread-1",
+        approvalRequestId: "approval-1",
+        decision: "accept",
+        idempotencyKey: "approval-truncated-1",
+      }),
+    ).rejects.toMatchObject({ code: "stale_plan" });
+
+    await expect(
+      callGatewayTool(context, "t3_respond_to_approval", {
+        environmentId: "local",
+        threadId: "thread-1",
+        approvalRequestId: "approval-1",
+        decision: "acceptForSession",
+        confirmDestructive: true,
+        idempotencyKey: "approval-truncated-2",
+      }),
+    ).rejects.toMatchObject({ code: "stale_plan" });
+    expect(approvals).toEqual([]);
+  });
+
+  it("still dispatches non-destructive decisions for known pending actions after the fail-closed check", async () => {
+    const approvals: Array<{ requestId: string; decision: string }> = [];
+    const context = {
+      port: makePort({ approvals, pendingApprovalPlan: true }),
+      grants: { local: ["read", "approval"] },
+    } as const;
+
+    await callGatewayTool(context, "t3_respond_to_approval", {
+      environmentId: "local",
+      threadId: "thread-1",
+      approvalRequestId: "approval-2",
+      decision: "acceptForSession",
+      idempotencyKey: "approval-session-1",
+    });
+    expect(approvals).toEqual([{ requestId: "approval-2", decision: "acceptForSession" }]);
   });
 
   it("rejects unknown environments before invoking the runtime", async () => {
