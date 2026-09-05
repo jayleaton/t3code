@@ -412,7 +412,7 @@ describe("gateway bridge", () => {
             "t3_respond_to_approval",
             request,
           ),
-        ).resolves.toEqual(receipts.get(`mcp-request-${request.idempotencyKey}`));
+        ).resolves.toEqual([...receipts.values()][0]);
         expect(sideEffects).toBe(1);
       } finally {
         runtime.close();
@@ -526,7 +526,7 @@ describe("gateway bridge", () => {
           ),
         ).rejects.toMatchObject({ code: "destructive_confirmation_required" });
         expect(received).toHaveLength(1);
-        expect(received[0]?.requestId).toBe(`mcp-approval-plan-${request.idempotencyKey}`);
+        expect(received[0]?.requestId).toMatch(/^mcp-approval-plan-v2-/u);
       } finally {
         runtime.close();
         events.close();
@@ -618,10 +618,9 @@ describe("gateway bridge", () => {
       );
 
       expect(received).toHaveLength(2);
-      expect(received.map((request) => request.requestId)).toEqual([
-        `mcp-approval-plan-${idempotencyKey}`,
-        `mcp-request-${idempotencyKey}`,
-      ]);
+      expect(received[0]?.requestId).toMatch(/^mcp-approval-plan-v2-/u);
+      expect(received[1]?.requestId).toMatch(/^mcp-request-v2-/u);
+      expect(received[0]?.requestId).not.toBe(received[1]?.requestId);
     } finally {
       socket.close();
       events.close();

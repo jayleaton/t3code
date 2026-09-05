@@ -258,7 +258,8 @@ describe("gateway chat tools", () => {
     });
     expect(created).toMatchObject({
       status: "accepted",
-      requestId: `mcp-thread-${environmentId}-create-1`,
+      requestId: expect.stringMatching(/^mcp-request-v2-/u),
+      threadId: expect.stringMatching(/^mcp-thread-v2-/u),
     });
 
     const sent = await callGatewayTool(context, "t3_send_message", {
@@ -412,9 +413,47 @@ describe("gateway chat tools", () => {
       );
 
       expect(result).toMatchObject({ status: "accepted", threadId: "thread-1" });
-      expect(controls).toEqual([{ action, requestId: `mcp-request-${action}-1` }]);
+      expect(controls).toEqual([
+        { action, requestId: expect.stringMatching(/^mcp-request-v2-/u) as string },
+      ]);
     },
   );
+
+  it("scopes authoritative approval command ids to the owning thread", async () => {
+    const commandIds: string[] = [];
+    const port = makePort({ pendingApprovalPlan: true });
+    port.respondToApproval = async (request) => {
+      commandIds.push(request.requestId);
+      return {
+        requestId: request.requestId,
+        commandId: request.requestId,
+        status: "accepted",
+        threadId: request.threadId,
+      };
+    };
+    const events = createGatewayEventStore();
+    const base = {
+      environmentId: "local",
+      approvalRequestId: "approval-2",
+      decision: "decline",
+      idempotencyKey: "same-caller-key",
+    } as const;
+
+    await callGatewayTool({ port, grants, events }, "t3_respond_to_approval", {
+      ...base,
+      threadId: "thread-1",
+    });
+    await callGatewayTool({ port, grants, events }, "t3_respond_to_approval", {
+      ...base,
+      threadId: "thread-2",
+    });
+
+    expect(commandIds).toHaveLength(2);
+    expect(commandIds[0]).toMatch(/^mcp-request-v2-/u);
+    expect(commandIds[1]).toMatch(/^mcp-request-v2-/u);
+    expect(commandIds[0]).not.toBe(commandIds[1]);
+    events.close();
+  });
 
   it("requires explicit confirmation before accepting a destructive approval", async () => {
     const approvals: Array<{ requestId: string; decision: string }> = [];
@@ -1100,7 +1139,7 @@ describe("gateway chat tools", () => {
                 approvalPlanId: "plan-thread-1",
                 revision: 1,
                 pending: 0,
-                receipt: { requestId: `mcp-approval-plan-${request.idempotencyKey}` },
+                receipt: { requestId: expect.stringMatching(/^mcp-approval-plan-v2-/u) },
               },
         );
         expect(sideEffects).toBe(1);
@@ -1167,7 +1206,7 @@ describe("gateway chat tools", () => {
 
         await expect(
           callGatewayTool({ port, grants, events }, "t3_respond_to_approval", request),
-        ).resolves.toEqual(receipts.get(`mcp-request-${request.idempotencyKey}`));
+        ).resolves.toEqual([...receipts.values()][0]);
         expect(sideEffects).toBe(1);
       } finally {
         events.close();
@@ -1238,7 +1277,54 @@ describe("gateway v3 event delivery tools", () => {
     expect(creates).toEqual([
       { instanceId: "codex", model: "gpt-5", runtimeMode: "approval-required" },
     ]);
+    expect(first).toMatchObject({
+      requestId: expect.stringMatching(/^mcp-request-v2-/u),
+      threadId: expect.stringMatching(/^mcp-thread-v2-/u),
+    });
     expect(second).toEqual(first);
+  });
+
+  it("recovers an accepted pre-v2 create with its original authoritative identity", async () => {
+    const events = createGatewayEventStore();
+    const dispatched: Array<{ requestId: string; threadId: string }> = [];
+    const port = makePort();
+    port.createThread = async (request) => {
+      dispatched.push({ requestId: request.requestId, threadId: request.threadId });
+      return {
+        requestId: request.requestId,
+        commandId: request.requestId,
+        status: "accepted",
+        threadId: request.threadId,
+      };
+    };
+    const request = {
+      environmentId: "local",
+      projectId: "local-project",
+      title: "Migrated chat",
+      modelSelection: { instanceId: "codex", model: "gpt-5" },
+      idempotencyKey: "migrating-create",
+    };
+    const key = "local::mcp-thread-migrating-create";
+    events.rememberRequest(
+      key,
+      `{"environmentId":"local","idempotencyKey":"migrating-create","modelSelection":{"instanceId":"codex","model":"gpt-5"},"projectId":"local-project","title":"Migrated chat"}`,
+      null,
+    );
+    events.markRequestDispatched(key, undefined);
+
+    const recovered = await callGatewayTool({ port, grants, events }, "t3_create_thread", request);
+    const replay = await callGatewayTool({ port, grants, events }, "t3_create_thread", request);
+
+    expect(dispatched).toEqual([
+      { requestId: "mcp-request-migrating-create", threadId: "mcp-thread-migrating-create" },
+    ]);
+    expect(recovered).toMatchObject({
+      status: "accepted",
+      requestId: "mcp-request-migrating-create",
+      threadId: "mcp-thread-migrating-create",
+    });
+    expect(replay).toEqual(recovered);
+    events.close();
   });
 
   it("replays a resolved label-only profile without re-reading the mutable catalog", async () => {
@@ -1313,7 +1399,7 @@ describe("gateway v3 event delivery tools", () => {
     );
     await expect(callGatewayTool(context, "t3_send_message", request)).resolves.toMatchObject({
       status: "accepted",
-      commandId: "mcp-request-ambiguous-send-1",
+      commandId: expect.stringMatching(/^mcp-request-v2-/u),
     });
     expect(effects).toBe(1);
   });
@@ -1411,7 +1497,7 @@ describe("gateway v3 event delivery tools", () => {
 
     expect(result).toMatchObject({
       accepted: true,
-      requestId: "mcp-approval-plan-modify-approval-1",
+      requestId: expect.stringMatching(/^mcp-approval-plan-v2-/u),
     });
     expect(operations).toEqual([
       {
@@ -1730,7 +1816,7 @@ describe("gateway v3 event delivery tools", () => {
     const second = await callGatewayTool(context, "t3_update_pr", input);
 
     expect(first).toEqual(second);
-    expect(first).toMatchObject({ requestId: "mcp-operation-update-pr-1" });
+    expect(first).toMatchObject({ requestId: expect.stringMatching(/^mcp-operation-v2-/u) });
     expect(operations).toEqual([{ operation: "pr.update", payload: input }]);
   });
 });
