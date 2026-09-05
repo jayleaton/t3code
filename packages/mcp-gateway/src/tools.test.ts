@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - exercises durable SQLite replay across a real store reopen.
 import { describe, expect, it } from "@effect/vitest";
 
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -414,7 +415,7 @@ describe("gateway chat tools", () => {
 
       expect(result).toMatchObject({ status: "accepted", threadId: "thread-1" });
       expect(controls).toEqual([
-        { action, requestId: expect.stringMatching(/^mcp-request-v2-/u) as string },
+        { action, requestId: expect.stringMatching(/^mcp-thread-control-v2-/u) as string },
       ]);
     },
   );
@@ -449,8 +450,8 @@ describe("gateway chat tools", () => {
     });
 
     expect(commandIds).toHaveLength(2);
-    expect(commandIds[0]).toMatch(/^mcp-request-v2-/u);
-    expect(commandIds[1]).toMatch(/^mcp-request-v2-/u);
+    expect(commandIds[0]).toMatch(/^mcp-approval-response-v2-/u);
+    expect(commandIds[1]).toMatch(/^mcp-approval-response-v2-/u);
     expect(commandIds[0]).not.toBe(commandIds[1]);
     events.close();
   });
@@ -1387,6 +1388,162 @@ describe("gateway v3 event delivery tools", () => {
     events.close();
   });
 
+  it("uses a new authoritative command id after a historical v2 same-key create", async () => {
+    const events = createGatewayEventStore();
+    const threadId = `mcp-thread-v2-${NodeCrypto.createHash("sha256")
+      .update(
+        JSON.stringify({
+          aggregateId: "create",
+          environmentId: "local",
+          idempotencyKey: "create-send-key",
+          version: 2,
+        }),
+      )
+      .digest("hex")}`;
+    const historicalCreateRequestId = `mcp-request-v2-${NodeCrypto.createHash("sha256")
+      .update(
+        JSON.stringify({
+          aggregateId: threadId,
+          environmentId: "local",
+          idempotencyKey: "create-send-key",
+          version: 2,
+        }),
+      )
+      .digest("hex")}`;
+    const dispatched: string[] = [];
+    const port = makePort();
+    port.sendMessage = async (request) => {
+      dispatched.push(request.requestId);
+      return {
+        requestId: request.requestId,
+        commandId: request.requestId,
+        status: "accepted",
+        threadId: request.threadId,
+        messageId: request.messageId,
+      };
+    };
+
+    await callGatewayTool({ port, grants, events }, "t3_send_message", {
+      environmentId: "local",
+      threadId,
+      text: "Must not replay the create receipt",
+      idempotencyKey: "create-send-key",
+    });
+
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]).not.toBe(historicalCreateRequestId);
+    events.close();
+  });
+
+  it.each(["completed", "dispatched"] as const)(
+    "fails closed for an ambiguous historical v2 %s send row after reopen",
+    async (state) => {
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-mcp-send-upgrade-"));
+      const file = NodePath.join(directory, "gateway.sqlite");
+      const input = {
+        environmentId: "local",
+        threadId: "thread-1",
+        text: "Do not replay an ambiguous receipt",
+        idempotencyKey: "historical-send",
+      };
+      const key = "local::thread-1::mcp-request-historical-send";
+      const historicalRequestId = `mcp-request-v2-${NodeCrypto.createHash("sha256")
+        .update(
+          JSON.stringify({
+            aggregateId: "thread-1",
+            environmentId: "local",
+            idempotencyKey: "historical-send",
+            version: 2,
+          }),
+        )
+        .digest("hex")}`;
+      let events = createGatewayEventStore({ file });
+      events.rememberRequest(
+        key,
+        `{"input":{"environmentId":"local","idempotencyKey":"historical-send","text":"Do not replay an ambiguous receipt","threadId":"thread-1"},"operation":"message.send"}`,
+        null,
+      );
+      if (state === "completed") {
+        events.completeRequest(key, {
+          requestId: historicalRequestId,
+          commandId: historicalRequestId,
+          status: "accepted",
+          threadId: "thread-1",
+          messageId: "mcp-message-historical-send",
+        });
+      } else {
+        events.markRequestDispatched(key, {
+          requestId: historicalRequestId,
+          messageId: "mcp-message-historical-send",
+        });
+      }
+      events.close();
+      events = createGatewayEventStore({ file });
+      const sends: string[] = [];
+      const port = makePort();
+      port.sendMessage = async (request) => {
+        sends.push(request.requestId);
+        return {
+          requestId: request.requestId,
+          commandId: request.requestId,
+          status: "accepted",
+          threadId: request.threadId,
+          messageId: request.messageId,
+        };
+      };
+
+      await expect(
+        callGatewayTool({ port, grants, events }, "t3_send_message", input),
+      ).rejects.toMatchObject({ code: "idempotency_conflict" });
+      expect(sends).toEqual([]);
+      events.close();
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    },
+  );
+
+  it("replays a historical send only when its message exists authoritatively", async () => {
+    const events = createGatewayEventStore();
+    const input = {
+      environmentId: "local",
+      threadId: "thread-1",
+      text: "Already stored",
+      idempotencyKey: "verified-historical-send",
+    };
+    const key = "local::thread-1::mcp-request-verified-historical-send";
+    const historicalRequestId = `mcp-request-v2-${NodeCrypto.createHash("sha256")
+      .update(
+        JSON.stringify({
+          aggregateId: "thread-1",
+          environmentId: "local",
+          idempotencyKey: "verified-historical-send",
+          version: 2,
+        }),
+      )
+      .digest("hex")}`;
+    const receipt = {
+      requestId: historicalRequestId,
+      commandId: historicalRequestId,
+      status: "accepted",
+      threadId: "thread-1",
+      messageId: "message-1",
+    };
+    events.rememberRequest(
+      key,
+      `{"input":{"environmentId":"local","idempotencyKey":"verified-historical-send","text":"Already stored","threadId":"thread-1"},"operation":"message.send"}`,
+      null,
+    );
+    events.completeRequest(key, receipt);
+    const port = makePort();
+    port.sendMessage = async () => {
+      throw new Error("A completed historical send must replay without dispatch.");
+    };
+
+    await expect(
+      callGatewayTool({ port, grants, events }, "t3_send_message", input),
+    ).resolves.toEqual(receipt);
+    events.close();
+  });
+
   it("replays a resolved label-only profile without re-reading the mutable catalog", async () => {
     const creates: Array<{ model: string; runtimeMode: string }> = [];
     const profiles: ReadonlyArray<GatewayProfile> = [
@@ -1459,7 +1616,7 @@ describe("gateway v3 event delivery tools", () => {
     );
     await expect(callGatewayTool(context, "t3_send_message", request)).resolves.toMatchObject({
       status: "accepted",
-      commandId: expect.stringMatching(/^mcp-request-v2-/u),
+      commandId: expect.stringMatching(/^mcp-message-send-v2-/u),
     });
     expect(effects).toBe(1);
   });

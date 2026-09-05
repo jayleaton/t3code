@@ -416,6 +416,62 @@ async function withIdempotency<Prepared = undefined>(
   }
 }
 
+async function assertRecoverableHistoricalSend(
+  context: GatewayToolContext,
+  key: string,
+  environmentId: string,
+  threadId: string,
+  currentRequestId: string,
+  historicalRequestIds: ReadonlyArray<string>,
+): Promise<void> {
+  const events = context.events;
+  if (events === undefined) return;
+  const state = events.requestState(key);
+  if (state !== "dispatched" && state !== "completed") return;
+  const stored =
+    state === "completed"
+      ? events.recallRequest<Record<string, unknown>>(key)
+      : events.recallDispatchContext<Record<string, unknown>>(key);
+  const requestId =
+    typeof stored?.requestId === "string"
+      ? stored.requestId
+      : typeof stored?.commandId === "string"
+        ? stored.commandId
+        : undefined;
+  if (requestId === currentRequestId) return;
+  if (requestId === undefined || !historicalRequestIds.includes(requestId)) {
+    throw new GatewayError({
+      code: "idempotency_conflict",
+      message: "This send has no recoverable authoritative command identity.",
+      retryable: false,
+      environmentId,
+      requestId: currentRequestId,
+      details: { threadId },
+    });
+  }
+  const messageId = typeof stored?.messageId === "string" ? stored.messageId : undefined;
+  const thread = await context.port.getThread(environmentId, threadId);
+  const messages = Array.isArray(thread.messages) ? thread.messages : [];
+  const messageExists = messages.some(
+    (message) =>
+      typeof message === "object" &&
+      message !== null &&
+      "id" in message &&
+      message.id === messageId,
+  );
+  if (!messageExists) {
+    throw new GatewayError({
+      code: "idempotency_conflict",
+      message:
+        "This historical send receipt cannot be proven to have created its message; refusing an ambiguous replay.",
+      retryable: false,
+      environmentId,
+      requestId,
+      details: { threadId, messageId },
+    });
+  }
+}
+
 function requireOperationPort(context: GatewayToolContext) {
   if (context.port.executeOperation === undefined) {
     throw new GatewayError({
@@ -1211,8 +1267,13 @@ export async function callGatewayTool(
       const environmentId = environmentWithScope(context, input, "send");
       const idempotencyKey = requiredIdempotencyKey(input);
       const threadId = requiredString(input, "threadId");
+      const idempotencyStoreKey = `${environmentId}::${threadId}::${idFor("request", idempotencyKey)}`;
+      const historicalRequestIds = [
+        idFor("request", idempotencyKey),
+        scopedIdFor("request", environmentId, threadId, idempotencyKey),
+      ];
       const authoritativeRequestId = scopedIdFor(
-        "request",
+        "message-send",
         environmentId,
         threadId,
         idempotencyKey,
@@ -1223,9 +1284,17 @@ export async function callGatewayTool(
         threadId,
         idempotencyKey,
       );
+      await assertRecoverableHistoricalSend(
+        context,
+        idempotencyStoreKey,
+        environmentId,
+        threadId,
+        authoritativeRequestId,
+        historicalRequestIds,
+      );
       return withIdempotency(
         context,
-        `${environmentId}::${threadId}::${idFor("request", idempotencyKey)}`,
+        idempotencyStoreKey,
         idempotencyCommandPayload("message.send", input),
         (prepared) =>
           context.port.sendMessage({
@@ -1256,7 +1325,7 @@ export async function callGatewayTool(
       const action = rawAction as GatewayThreadControlAction;
       const threadId = requiredString(input, "threadId");
       const authoritativeRequestId = scopedIdFor(
-        "request",
+        "thread-control",
         environmentId,
         threadId,
         idempotencyKey,
@@ -1300,7 +1369,7 @@ export async function callGatewayTool(
       const decision = rawDecision as GatewayApprovalDecision;
       const threadId = requiredString(input, "threadId");
       const authoritativeRequestId = scopedIdFor(
-        "request",
+        "approval-response",
         environmentId,
         threadId,
         idempotencyKey,

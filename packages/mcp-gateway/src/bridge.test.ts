@@ -619,7 +619,7 @@ describe("gateway bridge", () => {
 
       expect(received).toHaveLength(2);
       expect(received[0]?.requestId).toMatch(/^mcp-approval-plan-v2-/u);
-      expect(received[1]?.requestId).toMatch(/^mcp-request-v2-/u);
+      expect(received[1]?.requestId).toMatch(/^mcp-approval-response-v2-/u);
       expect(received[0]?.requestId).not.toBe(received[1]?.requestId);
     } finally {
       socket.close();
