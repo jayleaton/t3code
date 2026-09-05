@@ -16,7 +16,11 @@ async function proof(token: string, value: string): Promise<string> {
   );
   return Array.from(signature, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
-import type { GatewayRuntimeEventSource, GatewayRuntimePort } from "./port.ts";
+import type {
+  GatewayRuntimeEventSource,
+  GatewayRuntimePort,
+  GatewayStatusSnapshot,
+} from "./port.ts";
 
 class FakeSocket implements GatewayBridgeSocket {
   readonly OPEN = 1;
@@ -120,9 +124,76 @@ describe("gateway bridge client", () => {
         type: "configure",
         grants,
         profiles,
+        capabilities: { statusSnapshots: true },
       }),
     );
     expect(onState).toHaveBeenCalledWith("running");
+    bridge.stop();
+  });
+
+  it("validates status snapshots, refreshes explicitly, and clears live state on disconnect", async () => {
+    const socket = new FakeSocket();
+    const token = "test-token-123456789";
+    const onStatusSnapshot = vi.fn<(snapshot: GatewayStatusSnapshot | null) => void>();
+    const bridge = connectGatewayBridge({
+      port: unusedPort,
+      token,
+      grants: { local: ["read", "delivery"] },
+      url: "ws://127.0.0.1:47631",
+      createSocket: () => socket,
+      onStatusSnapshot,
+    });
+    const nonce = "d".repeat(64);
+    socket.emit("message", JSON.stringify({ type: "challenge", nonce }));
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    socket.emit(
+      "message",
+      JSON.stringify({ type: "authenticated", proof: await proof(token, `server:${nonce}`) }),
+    );
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(2));
+    socket.emit("message", JSON.stringify({ type: "configured", cursors: { local: 0 } }));
+    const snapshot = {
+      schemaVersion: "3",
+      capturedAt: "2026-09-05T00:00:00.000Z",
+      live: true,
+      stale: false,
+      retention: { maxEventsPerEnvironment: 100_000, maxAgeDays: 7 },
+      environments: [
+        {
+          environmentId: "local",
+          latestSequence: 9,
+          oldestRetainedSequence: 4,
+          retainedEventCount: 6,
+          deliveryAccess: true,
+          subscriptions: [],
+          subscriptionCount: 0,
+          webhooks: [],
+          webhookCount: 0,
+          deliveries: { pending: 0, inFlight: 0, acked: 0, failed: 0 },
+          deliveryFailureCount: 0,
+        },
+      ],
+    } satisfies GatewayStatusSnapshot;
+    await vi.waitFor(() => expect(bridge.requestStatus()).toBe(true));
+    onStatusSnapshot.mockClear();
+    socket.emit("message", JSON.stringify({ type: "status.snapshot", snapshot }));
+    await vi.waitFor(() => expect(onStatusSnapshot).toHaveBeenCalledWith(snapshot));
+
+    socket.emit(
+      "message",
+      JSON.stringify({
+        type: "status.snapshot",
+        snapshot: { ...snapshot, environments: Array(101).fill(snapshot.environments[0]) },
+      }),
+    );
+    expect(onStatusSnapshot).toHaveBeenCalledTimes(1);
+    bridge.requestStatus();
+    expect(socket.sent.map((message) => JSON.parse(message))).toContainEqual({
+      type: "status.request",
+      requestId: expect.stringMatching(/^status-/u),
+    });
+    socket.emit("close");
+    expect(onStatusSnapshot).toHaveBeenLastCalledWith(null);
     bridge.stop();
   });
 
@@ -201,6 +272,7 @@ describe("gateway bridge client", () => {
         type: "configure",
         grants: { granted: ["read"], webhookOnly: ["delivery"] },
         profiles: [],
+        capabilities: { statusSnapshots: true },
       }),
     );
     expect(subscribe).not.toHaveBeenCalled();

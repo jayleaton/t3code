@@ -6,10 +6,12 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   McpEnvironmentGrantMatrix,
+  McpGatewayOperationalStatus,
   McpProfileList,
   toggleMcpGatewayGrantForAll,
   updateMcpGatewayGrant,
 } from "./McpGatewaySettings";
+import type { GatewayStatusSnapshot } from "@t3tools/client-runtime/gateway";
 import {
   MCP_GATEWAY_BASELINE_SCOPES,
   MCP_GATEWAY_CONFIGURABLE_SCOPES,
@@ -299,5 +301,118 @@ describe("MCP named profiles", () => {
     expect(markup).toContain('aria-label="Profile model"');
     expect(markup).toContain('aria-label="Profile reasoning effort"');
     expect(markup).toContain('aria-label="Profile runtime mode"');
+  });
+});
+
+describe("MCP gateway operational status", () => {
+  const base: GatewayStatusSnapshot = {
+    schemaVersion: "3",
+    capturedAt: "2026-09-05T00:00:00.000Z",
+    live: true,
+    stale: false,
+    retention: { maxEventsPerEnvironment: 100_000, maxAgeDays: 7 },
+    environments: [],
+  };
+
+  it("renders truthful sidecar values and safe delivery inventory", async () => {
+    (
+      globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    const onRefresh = vi.fn();
+    const snapshot: GatewayStatusSnapshot = {
+      ...base,
+      environments: [
+        {
+          environmentId: "env-safe",
+          latestSequence: 41,
+          oldestRetainedSequence: 7,
+          retainedEventCount: 35,
+          deliveryAccess: true,
+          subscriptionCount: 1,
+          subscriptions: [
+            {
+              subscriptionId: "sub-safe",
+              ackedSequence: 40,
+              pendingEventCount: 1,
+              status: "active",
+            },
+          ],
+          webhookCount: 1,
+          webhooks: [
+            {
+              webhookId: "whk-safe",
+              ackedSequence: 39,
+              status: "degraded",
+              deliveries: { pending: 1, inFlight: 0, acked: 4, failed: 2 },
+            },
+          ],
+          deliveries: { pending: 1, inFlight: 0, acked: 4, failed: 2 },
+          deliveryFailureCount: 2,
+        },
+      ],
+    };
+    await act(async () => {
+      root.render(
+        <McpGatewayOperationalStatus
+          state="running"
+          snapshot={snapshot}
+          labels={{ "env-safe": "Disposable fixture" }}
+          onRefresh={onRefresh}
+        />,
+      );
+    });
+    expect(container.textContent).toContain("Cursor 41; retained 35; oldest 7");
+    expect(container.textContent).toContain("sub-safe — active; cursor 40; 1 pending");
+    expect(container.textContent).toContain("whk-safe — degraded; cursor 39; 1 pending, 2 failed");
+    expect(container.textContent).not.toContain("http");
+    (container.querySelector("button") as HTMLButtonElement).click();
+    expect(onRefresh).toHaveBeenCalledOnce();
+    await act(async () => root.unmount());
+  });
+
+  it("shows disconnected, loading, stale, empty, and permission-needed states", () => {
+    expect(
+      renderToStaticMarkup(
+        <McpGatewayOperationalStatus state="degraded" snapshot={null} onRefresh={vi.fn()} />,
+      ),
+    ).toContain("disconnected or degraded");
+    expect(
+      renderToStaticMarkup(
+        <McpGatewayOperationalStatus state="connecting" snapshot={null} onRefresh={vi.fn()} />,
+      ),
+    ).toContain("Loading operational status");
+    expect(
+      renderToStaticMarkup(
+        <McpGatewayOperationalStatus
+          state="running"
+          snapshot={{ ...base, stale: true }}
+          onRefresh={vi.fn()}
+        />,
+      ),
+    ).toContain("Status is stale");
+    expect(
+      renderToStaticMarkup(
+        <McpGatewayOperationalStatus state="running" snapshot={base} onRefresh={vi.fn()} />,
+      ),
+    ).toContain("No readable environments");
+    const readOnly = {
+      ...base,
+      environments: [
+        {
+          environmentId: "read-only",
+          latestSequence: 0,
+          oldestRetainedSequence: null,
+          retainedEventCount: 0,
+          deliveryAccess: false,
+        },
+      ],
+    } satisfies GatewayStatusSnapshot;
+    expect(
+      renderToStaticMarkup(
+        <McpGatewayOperationalStatus state="running" snapshot={readOnly} onRefresh={vi.fn()} />,
+      ),
+    ).toContain("Delivery permission needed");
   });
 });

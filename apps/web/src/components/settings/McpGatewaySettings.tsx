@@ -1,4 +1,4 @@
-import type { GatewayScope } from "@t3tools/client-runtime/gateway";
+import type { GatewayScope, GatewayStatusSnapshot } from "@t3tools/client-runtime/gateway";
 import {
   formatMcpGatewayProfileSummary,
   MCP_GATEWAY_RUNTIME_MODE_LABELS,
@@ -38,11 +38,13 @@ import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsL
 import { useAtomValue } from "@effect/atom-react";
 import {
   getMcpGatewayGrants,
+  getMcpGatewayStatusSnapshot,
   getMcpGatewayToken,
   isMcpGatewayEnabled,
   MCP_GATEWAY_BASELINE_SCOPES,
   MCP_GATEWAY_CONFIGURABLE_SCOPES,
   MCP_GATEWAY_STATE_EVENT,
+  requestMcpGatewayStatusSnapshot,
   type McpGatewayGrants,
   type McpGatewayUiState,
   setMcpGatewayEnabled,
@@ -281,6 +283,113 @@ export function McpEnvironmentGrantMatrix({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+export function McpGatewayOperationalStatus({
+  state,
+  snapshot,
+  labels = {},
+  onRefresh,
+}: {
+  readonly state: McpGatewayUiState;
+  readonly snapshot: GatewayStatusSnapshot | null;
+  readonly labels?: Readonly<Record<string, string>>;
+  readonly onRefresh: () => void;
+}) {
+  const disconnected = state === "disabled" || state === "degraded";
+  return (
+    <div className="space-y-3" aria-label="MCP gateway operational status">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-sm font-medium">Operational status</div>
+        <Button size="sm" variant="outline" onClick={onRefresh} disabled={state !== "running"}>
+          Refresh
+        </Button>
+      </div>
+      {disconnected ? (
+        <p className="text-sm text-muted-foreground">
+          {state === "disabled" ? "Gateway disabled." : "Gateway disconnected or degraded."}
+        </p>
+      ) : snapshot === null ? (
+        <p className="text-sm text-muted-foreground">Loading operational status…</p>
+      ) : !snapshot.live || snapshot.stale ? (
+        <p className="text-sm text-destructive">
+          Status is stale; live sidecar data is unavailable.
+        </p>
+      ) : snapshot.environments.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No readable environments are currently granted.
+        </p>
+      ) : (
+        <>
+          <p className="text-xs text-muted-foreground">
+            Live as of {snapshot.capturedAt}. Retention:{" "}
+            {snapshot.retention.maxEventsPerEnvironment} events per environment for{" "}
+            {snapshot.retention.maxAgeDays} days.
+          </p>
+          {snapshot.environments.map((environment) => (
+            <div key={environment.environmentId} className="rounded-lg border p-3 text-sm">
+              <div className="font-medium">
+                {labels[environment.environmentId] ?? "Environment"}
+              </div>
+              <div className="break-all font-mono text-xs text-muted-foreground">
+                {environment.environmentId}
+              </div>
+              <div className="mt-2 text-xs">
+                Cursor {environment.latestSequence}; retained {environment.retainedEventCount};
+                oldest {environment.oldestRetainedSequence ?? "none"}
+              </div>
+              {!environment.deliveryAccess ? (
+                <div className="mt-2 text-xs text-muted-foreground">
+                  Delivery permission needed to view subscriptions, webhooks, and queue health.
+                </div>
+              ) : (
+                <div className="mt-2 space-y-2 text-xs">
+                  <div>
+                    Delivery queue: {environment.deliveries?.pending ?? 0} pending,{" "}
+                    {environment.deliveries?.inFlight ?? 0} in flight,{" "}
+                    {environment.deliveries?.acked ?? 0} acknowledged,{" "}
+                    {environment.deliveries?.failed ?? 0} failed;{" "}
+                    {environment.deliveryFailureCount ?? 0} recorded failures.
+                  </div>
+                  <div>
+                    Subscriptions ({environment.subscriptionCount ?? 0})
+                    {environment.subscriptionsTruncated ? " — first 100 shown" : ""}
+                  </div>
+                  {(environment.subscriptions ?? []).length === 0 ? (
+                    <div className="text-muted-foreground">No subscriptions.</div>
+                  ) : (
+                    (environment.subscriptions ?? []).map((subscription) => (
+                      <div
+                        key={subscription.subscriptionId}
+                        className="rounded border px-2 py-1 font-mono"
+                      >
+                        {subscription.subscriptionId} — {subscription.status}; cursor{" "}
+                        {subscription.ackedSequence}; {subscription.pendingEventCount} pending
+                      </div>
+                    ))
+                  )}
+                  <div>
+                    Webhooks ({environment.webhookCount ?? 0})
+                    {environment.webhooksTruncated ? " — first 100 shown" : ""}
+                  </div>
+                  {(environment.webhooks ?? []).length === 0 ? (
+                    <div className="text-muted-foreground">No webhooks.</div>
+                  ) : (
+                    (environment.webhooks ?? []).map((webhook) => (
+                      <div key={webhook.webhookId} className="rounded border px-2 py-1 font-mono">
+                        {webhook.webhookId} — {webhook.status}; cursor {webhook.ackedSequence};{" "}
+                        {webhook.deliveries.pending} pending, {webhook.deliveries.failed} failed
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </>
+      )}
     </div>
   );
 }
@@ -674,11 +783,19 @@ export function McpGatewaySettings() {
   const providers = useAtomValue(primaryServerProvidersAtom);
   const updatePrimarySettings = useUpdatePrimarySettings();
   const [status, setStatus] = useState<McpGatewayUiState>(enabled ? "connecting" : "disabled");
+  const [statusSnapshot, setStatusSnapshot] = useState(getMcpGatewayStatusSnapshot);
 
   useEffect(() => {
     const onStatus = (event: Event) => setStatus((event as CustomEvent<McpGatewayUiState>).detail);
     window.addEventListener(`${MCP_GATEWAY_STATE_EVENT}:status`, onStatus);
     return () => window.removeEventListener(`${MCP_GATEWAY_STATE_EVENT}:status`, onStatus);
+  }, []);
+
+  useEffect(() => {
+    const onSnapshot = (event: Event) =>
+      setStatusSnapshot((event as CustomEvent<GatewayStatusSnapshot | null>).detail);
+    window.addEventListener(`${MCP_GATEWAY_STATE_EVENT}:snapshot`, onSnapshot);
+    return () => window.removeEventListener(`${MCP_GATEWAY_STATE_EVENT}:snapshot`, onSnapshot);
   }, []);
 
   const grantsDirty =
@@ -769,6 +886,22 @@ export function McpGatewaySettings() {
             environments={environmentRows}
             grants={pendingGrants ?? savedGrants}
             onChange={setPendingGrants}
+          />
+        </SettingsRow>
+        <SettingsRow
+          id="mcp-gateway-operational-status"
+          title="Events and delivery"
+          description="Live event retention, cursors, subscriptions, webhooks, and delivery queue health from the authenticated local companion."
+        >
+          <McpGatewayOperationalStatus
+            state={status}
+            snapshot={statusSnapshot}
+            labels={Object.fromEntries(
+              environmentRows.map((row) => [row.environmentId, row.label]),
+            )}
+            onRefresh={() => {
+              requestMcpGatewayStatusSnapshot();
+            }}
           />
         </SettingsRow>
         <SettingsRow

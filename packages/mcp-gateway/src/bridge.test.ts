@@ -720,6 +720,115 @@ describe("gateway bridge", () => {
     }
   });
 
+  it("filters authenticated status snapshots, applies revocation, and keeps old clients quiet", async () => {
+    const port = await unusedPort();
+    const events = createGatewayEventStore({ file: ":memory:", allowPrivateWebhookTargets: true });
+    events.registerWebhook({
+      environmentId: "current",
+      url: "http://127.0.0.1/hook?secret=hidden",
+    });
+    events.emit({ environmentId: "current", type: "thread.started" });
+    events.emit({ environmentId: "other", type: "thread.started" });
+    const bridge = createBridgeRuntimePort({
+      port,
+      token: TOKEN,
+      getStatusSnapshot: events.statusSnapshot,
+      onStatusChange: events.onStatusChange,
+    });
+    const messages: Array<Record<string, unknown>> = [];
+    const client = new WebSocket(`ws://127.0.0.1:${port}`);
+    const authenticated = authenticate(client, (message) => messages.push(message), false);
+    await opened(client);
+    await authenticated;
+    client.send(
+      JSON.stringify({
+        type: "configure",
+        grants: { current: ["read"], other: ["delivery"] },
+        capabilities: { statusSnapshots: true },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(messages.some((message) => message.type === "status.snapshot")).toBe(true),
+    );
+    const initial = messages.find((message) => message.type === "status.snapshot") as {
+      snapshot: { environments: Array<Record<string, unknown>> };
+    };
+    expect(initial.snapshot.environments).toHaveLength(1);
+    expect(initial.snapshot.environments[0]).toMatchObject({
+      environmentId: "current",
+      deliveryAccess: false,
+    });
+    expect(initial.snapshot.environments[0]).not.toHaveProperty("webhooks");
+    expect(JSON.stringify(initial)).not.toContain("secret=hidden");
+    messages.length = 0;
+    client.send(JSON.stringify({ type: "status.request", requestId: "refresh-1" }));
+    await vi.waitFor(() =>
+      expect(messages.some((message) => message.requestId === "refresh-1")).toBe(true),
+    );
+
+    messages.length = 0;
+    client.send(
+      JSON.stringify({
+        type: "configure",
+        grants: { current: ["read", "delivery"] },
+        capabilities: { statusSnapshots: true },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(messages.some((message) => message.type === "status.snapshot")).toBe(true),
+    );
+    expect(JSON.stringify(messages)).toContain("webhookCount");
+    messages.length = 0;
+    events.subscribe({ environmentId: "current" });
+    events.subscribe({ environmentId: "current" });
+    await vi.waitFor(() =>
+      expect(messages.filter((message) => message.type === "status.snapshot")).toHaveLength(1),
+    );
+    expect(JSON.stringify(messages)).toContain('"subscriptionCount":2');
+    messages.length = 0;
+    client.send(
+      JSON.stringify({
+        type: "configure",
+        grants: { current: ["read"] },
+        capabilities: { statusSnapshots: true },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(messages.some((message) => message.type === "status.snapshot")).toBe(true),
+    );
+    expect(JSON.stringify(messages)).not.toContain("webhookCount");
+    client.close();
+
+    const oldMessages: Array<Record<string, unknown>> = [];
+    const oldClient = new WebSocket(`ws://127.0.0.1:${port}`);
+    const oldAuthenticated = authenticate(oldClient, (message) => oldMessages.push(message), false);
+    await opened(oldClient);
+    await oldAuthenticated;
+    oldClient.send(JSON.stringify({ type: "configure", grants: { current: ["read"] } }));
+    await vi.waitFor(() =>
+      expect(oldMessages.some((message) => message.type === "configured")).toBe(true),
+    );
+    events.emit({ environmentId: "current", type: "thread.completed" });
+    await Promise.resolve();
+    expect(oldMessages.some((message) => message.type === "status.snapshot")).toBe(false);
+    oldClient.close();
+    events.close();
+    await bridge.close();
+  });
+
+  it("refuses status requests before authentication", async () => {
+    const port = await unusedPort();
+    const bridge = createBridgeRuntimePort({ port, token: TOKEN });
+    const client = new WebSocket(`ws://127.0.0.1:${port}`);
+    const challenged = new Promise<void>((resolve) => client.once("message", () => resolve()));
+    await opened(client);
+    await challenged;
+    const didClose = closed(client);
+    client.send(JSON.stringify({ type: "status.request", requestId: "preauth" }));
+    await didClose;
+    await bridge.close();
+  });
+
   it("times out requests that receive no runtime response", async () => {
     const port = await unusedPort();
     const bridge = createBridgeRuntimePort({ port, token: TOKEN, requestTimeoutMs: 10 });

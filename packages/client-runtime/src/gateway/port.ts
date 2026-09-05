@@ -109,6 +109,162 @@ export interface GatewayRuntimeEventSource {
   ): () => void;
 }
 
+export interface GatewayStatusSubscription {
+  readonly subscriptionId: string;
+  readonly ackedSequence: number;
+  readonly pendingEventCount: number;
+  readonly status: "active" | "caught-up" | "cursor-expired";
+}
+
+export interface GatewayStatusWebhook {
+  readonly webhookId: string;
+  readonly ackedSequence: number;
+  readonly status: "healthy" | "pending" | "degraded";
+  readonly deliveries: {
+    readonly pending: number;
+    readonly inFlight: number;
+    readonly acked: number;
+    readonly failed: number;
+  };
+}
+
+export interface GatewayStatusEnvironment {
+  readonly environmentId: string;
+  readonly latestSequence: number;
+  readonly oldestRetainedSequence: number | null;
+  readonly retainedEventCount: number;
+  readonly deliveryAccess: boolean;
+  readonly subscriptions?: ReadonlyArray<GatewayStatusSubscription>;
+  readonly subscriptionCount?: number;
+  readonly subscriptionsTruncated?: boolean;
+  readonly webhooks?: ReadonlyArray<GatewayStatusWebhook>;
+  readonly webhookCount?: number;
+  readonly webhooksTruncated?: boolean;
+  readonly deliveries?: GatewayStatusWebhook["deliveries"];
+  readonly deliveryFailureCount?: number;
+}
+
+export interface GatewayStatusSnapshot {
+  readonly schemaVersion: "3";
+  readonly capturedAt: string;
+  readonly live: boolean;
+  readonly stale: boolean;
+  readonly retention: {
+    readonly maxEventsPerEnvironment: number;
+    readonly maxAgeDays: number;
+  };
+  readonly environments: ReadonlyArray<GatewayStatusEnvironment>;
+}
+
+const STATUS_ROW_LIMIT = 100;
+
+function statusRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function statusString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 200;
+}
+
+function statusCount(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function statusDeliveryCounts(value: unknown): value is GatewayStatusWebhook["deliveries"] {
+  const row = statusRecord(value);
+  return (
+    row !== undefined &&
+    statusCount(row.pending) &&
+    statusCount(row.inFlight) &&
+    statusCount(row.acked) &&
+    statusCount(row.failed)
+  );
+}
+
+/** Fail-closed validator for additive sidecar status snapshots. */
+export function parseGatewayStatusSnapshot(value: unknown): GatewayStatusSnapshot | undefined {
+  const root = statusRecord(value);
+  if (root === undefined || JSON.stringify(value).length > 256_000) return undefined;
+  const retention = statusRecord(root.retention);
+  if (
+    root.schemaVersion !== "3" ||
+    !statusString(root.capturedAt) ||
+    typeof root.live !== "boolean" ||
+    typeof root.stale !== "boolean" ||
+    retention === undefined ||
+    !statusCount(retention.maxEventsPerEnvironment) ||
+    !statusCount(retention.maxAgeDays) ||
+    !Array.isArray(root.environments) ||
+    root.environments.length > STATUS_ROW_LIMIT
+  ) {
+    return undefined;
+  }
+  for (const candidate of root.environments) {
+    const environment = statusRecord(candidate);
+    if (
+      environment === undefined ||
+      !statusString(environment.environmentId) ||
+      !statusCount(environment.latestSequence) ||
+      (environment.oldestRetainedSequence !== null &&
+        !statusCount(environment.oldestRetainedSequence)) ||
+      !statusCount(environment.retainedEventCount) ||
+      typeof environment.deliveryAccess !== "boolean"
+    ) {
+      return undefined;
+    }
+    if (!environment.deliveryAccess) {
+      if (
+        environment.subscriptions !== undefined ||
+        environment.webhooks !== undefined ||
+        environment.deliveries !== undefined
+      )
+        return undefined;
+      continue;
+    }
+    if (
+      !Array.isArray(environment.subscriptions) ||
+      environment.subscriptions.length > STATUS_ROW_LIMIT ||
+      !statusCount(environment.subscriptionCount) ||
+      !Array.isArray(environment.webhooks) ||
+      environment.webhooks.length > STATUS_ROW_LIMIT ||
+      !statusCount(environment.webhookCount) ||
+      !statusDeliveryCounts(environment.deliveries) ||
+      !statusCount(environment.deliveryFailureCount)
+    ) {
+      return undefined;
+    }
+    for (const item of environment.subscriptions) {
+      const subscription = statusRecord(item);
+      if (
+        subscription === undefined ||
+        !statusString(subscription.subscriptionId) ||
+        !statusCount(subscription.ackedSequence) ||
+        !statusCount(subscription.pendingEventCount) ||
+        (subscription.status !== "active" &&
+          subscription.status !== "caught-up" &&
+          subscription.status !== "cursor-expired")
+      )
+        return undefined;
+    }
+    for (const item of environment.webhooks) {
+      const webhook = statusRecord(item);
+      if (
+        webhook === undefined ||
+        !statusString(webhook.webhookId) ||
+        !statusCount(webhook.ackedSequence) ||
+        (webhook.status !== "healthy" &&
+          webhook.status !== "pending" &&
+          webhook.status !== "degraded") ||
+        !statusDeliveryCounts(webhook.deliveries)
+      )
+        return undefined;
+    }
+  }
+  return value as GatewayStatusSnapshot;
+}
+
 export interface GatewayRuntimePort {
   listEnvironments(): Promise<ReadonlyArray<GatewayEnvironmentSummary>>;
   getEnvironmentStatus(environmentId: string): Promise<Record<string, unknown>>;

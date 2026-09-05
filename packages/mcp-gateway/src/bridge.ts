@@ -2,12 +2,13 @@ import * as NodeCrypto from "node:crypto";
 
 import { WebSocketServer, type WebSocket } from "ws";
 
-import { GATEWAY_SCOPE_VALUES } from "./port.ts";
+import { GATEWAY_SCOPE_VALUES, parseGatewayStatusSnapshot } from "./port.ts";
 import type {
   GatewayProfile,
   GatewayRuntimeEvent,
   GatewayRuntimePort,
   GatewayScope,
+  GatewayStatusSnapshot,
 } from "./port.ts";
 
 export type GatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
@@ -107,6 +108,8 @@ export function createBridgeRuntimePort(input: {
   readonly initialGrants?: GatewayGrants;
   readonly getEventCursor?: (environmentId: string) => number;
   readonly onEvent?: (event: GatewayRuntimeEvent) => void;
+  readonly getStatusSnapshot?: (grants: GatewayGrants) => GatewayStatusSnapshot;
+  readonly onStatusChange?: (listener: () => void) => () => void;
 }): {
   readonly port: GatewayRuntimePort;
   readonly getGrants: () => GatewayGrants;
@@ -150,6 +153,8 @@ export function createBridgeRuntimePort(input: {
   let latestAuthenticatedGeneration = 0;
   let grants = input.initialGrants ?? {};
   let profiles: ReadonlyArray<GatewayProfile> = [];
+  let supportsStatusSnapshots = false;
+  let statusNotificationQueued = false;
   let nextId = 1;
   const pending = new Map<number, PendingRequest>();
 
@@ -160,6 +165,34 @@ export function createBridgeRuntimePort(input: {
     }
     pending.clear();
   };
+
+  const sendStatusSnapshot = (requestId?: string) => {
+    if (
+      client === null ||
+      client.readyState !== client.OPEN ||
+      !supportsStatusSnapshots ||
+      input.getStatusSnapshot === undefined
+    )
+      return;
+    const snapshot = parseGatewayStatusSnapshot(input.getStatusSnapshot(grants));
+    if (snapshot === undefined) return;
+    client.send(
+      JSON.stringify({
+        type: "status.snapshot",
+        ...(requestId === undefined ? {} : { requestId }),
+        snapshot,
+      }),
+    );
+  };
+
+  const unsubscribeStatus = input.onStatusChange?.(() => {
+    if (statusNotificationQueued) return;
+    statusNotificationQueued = true;
+    queueMicrotask(() => {
+      statusNotificationQueued = false;
+      sendStatusSnapshot();
+    });
+  });
 
   server.on("connection", (socket) => {
     let authenticated = false;
@@ -206,6 +239,12 @@ export function createBridgeRuntimePort(input: {
           }
           grants = nextGrants;
           profiles = nextProfiles;
+          const capabilities = response.capabilities;
+          supportsStatusSnapshots =
+            typeof capabilities === "object" &&
+            capabilities !== null &&
+            !Array.isArray(capabilities) &&
+            (capabilities as Record<string, unknown>).statusSnapshots === true;
           client = socket;
           configured = true;
           authenticationSignal.removeEventListener("abort", onAuthenticationTimeout);
@@ -216,6 +255,21 @@ export function createBridgeRuntimePort(input: {
             ]),
           );
           socket.send(JSON.stringify({ type: "configured", cursors }));
+          sendStatusSnapshot();
+          return;
+        }
+        if (response.type === "status.request") {
+          if (
+            client !== socket ||
+            !configured ||
+            !supportsStatusSnapshots ||
+            typeof response.requestId !== "string" ||
+            response.requestId.length === 0 ||
+            response.requestId.length > 200
+          ) {
+            return;
+          }
+          sendStatusSnapshot(response.requestId);
           return;
         }
         if (response.type === "event") {
@@ -259,6 +313,7 @@ export function createBridgeRuntimePort(input: {
       authenticationSignal.removeEventListener("abort", onAuthenticationTimeout);
       if (client !== socket) return;
       client = null;
+      supportsStatusSnapshots = false;
       rejectPending("T3 gateway client disconnected.");
     });
   });
@@ -333,6 +388,7 @@ export function createBridgeRuntimePort(input: {
     },
     close: () =>
       new Promise((resolve, reject) => {
+        unsubscribeStatus?.();
         rejectPending("Gateway stopped.");
         client?.close(1001, "Gateway stopped.");
         server.close((error) => (error === undefined ? resolve() : reject(error)));

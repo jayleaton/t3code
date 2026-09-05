@@ -13,6 +13,8 @@ import {
   getMcpGatewayToken,
   isMcpGatewayEnabled,
   publishMcpGatewayStatus,
+  publishMcpGatewayStatusSnapshot,
+  setMcpGatewayStatusRequester,
   subscribeMcpGatewayConfiguration,
 } from "./mcpGatewayState";
 import { appAtomRegistry } from "./rpc/atomRegistry";
@@ -41,6 +43,8 @@ export function McpGatewayHost() {
   useEffect(() => {
     if (!configuration.available || !configuration.enabled || configuration.token.length < 16) {
       publishMcpGatewayStatus(configuration.enabled ? "degraded" : "disabled");
+      publishMcpGatewayStatusSnapshot(null);
+      setMcpGatewayStatusRequester(null);
       return;
     }
 
@@ -59,7 +63,9 @@ export function McpGatewayHost() {
         token: configuration.token,
         url: BRIDGE_URL,
         onState: publishMcpGatewayStatus,
+        onStatusSnapshot: publishMcpGatewayStatusSnapshot,
       });
+      setMcpGatewayStatusRequester(() => bridge?.requestStatus() ?? false);
       unsubscribe?.();
       unsubscribe = null;
     };
@@ -71,6 +77,8 @@ export function McpGatewayHost() {
       stopped = true;
       unsubscribe?.();
       bridge?.stop();
+      setMcpGatewayStatusRequester(null);
+      publishMcpGatewayStatusSnapshot(null);
       unmountRuntime();
     };
   }, [configuration]);

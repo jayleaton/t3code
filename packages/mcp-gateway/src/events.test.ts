@@ -22,6 +22,51 @@ function makeStore() {
 }
 
 describe("gateway event store", () => {
+  it("reports bounded truthful status from store state and current grants", () => {
+    const store = createGatewayEventStore({
+      retentionEvents: 25,
+      retentionDays: 3,
+      allowPrivateWebhookTargets: true,
+      now: () => "2026-09-05T00:00:00.000Z",
+    });
+    store.emit({ environmentId: "read-only", type: "thread.started" });
+    store.registerWebhook({
+      environmentId: "delivery",
+      url: "http://127.0.0.1/hook?secret=no",
+    });
+    store.emit({ environmentId: "delivery", type: "thread.started" });
+    const subscription = store.subscribe({ environmentId: "delivery", afterSequence: 0 });
+    const snapshot = store.statusSnapshot({
+      "read-only": ["read"],
+      delivery: ["read", "delivery"],
+      hidden: ["delivery"],
+    });
+
+    expect(snapshot.retention).toEqual({ maxEventsPerEnvironment: 25, maxAgeDays: 3 });
+    expect(snapshot.environments.map((item) => item.environmentId)).toEqual([
+      "delivery",
+      "read-only",
+    ]);
+    expect(snapshot.environments[0]).toMatchObject({
+      latestSequence: 1,
+      retainedEventCount: 1,
+      deliveryAccess: true,
+      subscriptionCount: 1,
+      webhookCount: 1,
+      deliveries: { pending: 1, inFlight: 0, acked: 0, failed: 0 },
+      subscriptions: [{ subscriptionId: subscription.subscriptionId, ackedSequence: 0 }],
+    });
+    expect(snapshot.environments[1]).toMatchObject({
+      deliveryAccess: false,
+      latestSequence: 1,
+      retainedEventCount: 1,
+    });
+    expect(snapshot.environments[1]).not.toHaveProperty("subscriptions");
+    expect(JSON.stringify(snapshot)).not.toContain("secret=no");
+    expect(JSON.stringify(snapshot)).not.toContain("127.0.0.1");
+    store.close();
+  });
+
   it("migrates legacy idempotency rows without treating unknown null rows as dispatched", () => {
     const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-events-migrate-"));
     const file = NodePath.join(directory, "events.sqlite");

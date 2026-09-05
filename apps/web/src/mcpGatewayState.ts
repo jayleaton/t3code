@@ -1,10 +1,34 @@
 import { GATEWAY_SCOPE_VALUES } from "@t3tools/client-runtime/gateway";
-import type { GatewayScope } from "@t3tools/client-runtime/gateway";
+import type { GatewayScope, GatewayStatusSnapshot } from "@t3tools/client-runtime/gateway";
 
 export const MCP_GATEWAY_ENABLED_KEY = "t3code:mcp-gateway-enabled";
 export const MCP_GATEWAY_TOKEN_KEY = "t3code:mcp-gateway-bridge-token";
 export const MCP_GATEWAY_GRANTS_KEY = "t3code:mcp-gateway-grants";
 export const MCP_GATEWAY_STATE_EVENT = "t3code:mcp-gateway-state";
+
+let gatewayStatusSnapshot: GatewayStatusSnapshot | null = null;
+let requestGatewayStatus: (() => boolean) | null = null;
+
+export function getMcpGatewayStatusSnapshot(): GatewayStatusSnapshot | null {
+  return gatewayStatusSnapshot;
+}
+
+export function publishMcpGatewayStatusSnapshot(snapshot: GatewayStatusSnapshot | null): void {
+  gatewayStatusSnapshot = snapshot;
+  window.dispatchEvent(
+    new CustomEvent<GatewayStatusSnapshot | null>(`${MCP_GATEWAY_STATE_EVENT}:snapshot`, {
+      detail: snapshot,
+    }),
+  );
+}
+
+export function setMcpGatewayStatusRequester(requester: (() => boolean) | null): void {
+  requestGatewayStatus = requester;
+}
+
+export function requestMcpGatewayStatusSnapshot(): boolean {
+  return requestGatewayStatus?.() ?? false;
+}
 
 export type McpGatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
 export type McpGatewayUiState = "disabled" | "connecting" | "running" | "degraded";

@@ -68,6 +68,8 @@ const bridge = createBridgeRuntimePort({
   initialGrants,
   getEventCursor: eventStore.latestSequence,
   onEvent: eventStore.ingest,
+  getStatusSnapshot: eventStore.statusSnapshot,
+  onStatusChange: eventStore.onStatusChange,
 });
 const gateway = createMcpGateway({
   port: bridge.port,

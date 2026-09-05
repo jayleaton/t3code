@@ -5,6 +5,7 @@ import * as NodeNet from "node:net";
 import * as NodeSqlite from "node:sqlite";
 
 import { GatewayError } from "./port.ts";
+import type { GatewayScope, GatewayStatusSnapshot } from "./port.ts";
 
 // Gatewaysidecar durable event store per the v3 product specification, sections
 // 7 and 13: immutable event payloads, per-environment monotonic sequences,
@@ -275,7 +276,8 @@ export const WEBHOOK_BACKOFF_CAP_MS = 5 * 60 * 1000;
 
 export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
   const retentionEvents = input.retentionEvents ?? 100_000;
-  const retentionMs = (input.retentionDays ?? 7) * 24 * 60 * 60 * 1000;
+  const retentionDays = input.retentionDays ?? 7;
+  const retentionMs = retentionDays * 24 * 60 * 60 * 1000;
   const retryBaseMs = input.webhookRetryBaseMs ?? 1_000;
   const now = input.now ?? nowIso;
   const newEventId = input.newEventId ?? (() => newId("evt"));
@@ -297,6 +299,10 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
     db.exec("ALTER TABLE idempotency ADD COLUMN dispatchContext TEXT");
   }
   const listeners = new Set<(event: GatewayEvent) => void>();
+  const statusListeners = new Set<() => void>();
+  const notifyStatus = () => {
+    for (const listener of statusListeners) listener();
+  };
 
   const eventFromRow = (row: Record<string, unknown>): GatewayEvent => {
     const event: GatewayEvent = {
@@ -447,6 +453,7 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
     }
     trim();
     for (const listener of listeners) listener(stored);
+    notifyStatus();
     return stored;
   };
 
@@ -502,6 +509,143 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
     }
   };
 
+  const statusSnapshot = (
+    grants: Readonly<Record<string, ReadonlyArray<GatewayScope>>>,
+  ): GatewayStatusSnapshot => {
+    const environments = Object.entries(grants)
+      .filter(([, scopes]) => scopes.includes("read"))
+      .map(([environmentId]) => environmentId)
+      .toSorted()
+      .slice(0, 100)
+      .map((environmentId) => {
+        const eventStats = db
+          .prepare(
+            "SELECT COUNT(*) AS count, MIN(sequence) AS oldest FROM events WHERE environmentId = ?",
+          )
+          .get(environmentId) as { count: number; oldest: number | null };
+        const latestSequence =
+          (
+            db
+              .prepare("SELECT lastSequence FROM sequences WHERE environmentId = ?")
+              .get(environmentId) as { lastSequence: number } | undefined
+          )?.lastSequence ?? 0;
+        const base = {
+          environmentId,
+          latestSequence,
+          oldestRetainedSequence: eventStats.oldest,
+          retainedEventCount: eventStats.count,
+          deliveryAccess: grants[environmentId]?.includes("delivery") === true,
+        };
+        if (!base.deliveryAccess) return base;
+
+        const subscriptionRows = db
+          .prepare(
+            "SELECT subscriptionId, typesJson, ackedSequence FROM subscriptions WHERE environmentId = ? ORDER BY subscriptionId LIMIT 100",
+          )
+          .all(environmentId) as Array<{
+          subscriptionId: string;
+          typesJson: string | null;
+          ackedSequence: number;
+        }>;
+        const subscriptionCount = (
+          db
+            .prepare("SELECT COUNT(*) AS count FROM subscriptions WHERE environmentId = ?")
+            .get(environmentId) as { count: number }
+        ).count;
+        const subscriptions = subscriptionRows.map((row) => {
+          const types =
+            row.typesJson === null ? [] : (JSON.parse(row.typesJson) as ReadonlyArray<string>);
+          const placeholders = types.map(() => "?").join(",");
+          const pendingEventCount = (
+            db
+              .prepare(
+                types.length === 0
+                  ? "SELECT COUNT(*) AS count FROM events WHERE environmentId = ? AND sequence > ?"
+                  : `SELECT COUNT(*) AS count FROM events WHERE environmentId = ? AND sequence > ? AND type IN (${placeholders})`,
+              )
+              .get(environmentId, row.ackedSequence, ...types) as { count: number }
+          ).count;
+          return {
+            subscriptionId: row.subscriptionId,
+            ackedSequence: row.ackedSequence,
+            pendingEventCount,
+            status: cursorExpired(environmentId, row.ackedSequence)
+              ? ("cursor-expired" as const)
+              : pendingEventCount === 0
+                ? ("caught-up" as const)
+                : ("active" as const),
+          };
+        });
+
+        const webhookRows = db
+          .prepare(
+            "SELECT webhookId, ackedSequence FROM webhooks WHERE environmentId = ? ORDER BY webhookId LIMIT 100",
+          )
+          .all(environmentId) as Array<{ webhookId: string; ackedSequence: number }>;
+        const webhookCount = (
+          db
+            .prepare("SELECT COUNT(*) AS count FROM webhooks WHERE environmentId = ?")
+            .get(environmentId) as { count: number }
+        ).count;
+        const deliveryCounts = (webhookId?: string) => {
+          const rows = db
+            .prepare(
+              `SELECT state, COUNT(*) AS count FROM deliveries
+               WHERE ${webhookId === undefined ? "webhookId IN (SELECT webhookId FROM webhooks WHERE environmentId = ?)" : "webhookId = ?"}
+               GROUP BY state`,
+            )
+            .all(webhookId ?? environmentId) as Array<{
+            state: GatewayDeliveryState;
+            count: number;
+          }>;
+          const counts = { pending: 0, inFlight: 0, acked: 0, failed: 0 };
+          for (const row of rows) {
+            if (row.state === "in-flight") counts.inFlight = row.count;
+            else counts[row.state] = row.count;
+          }
+          return counts;
+        };
+        const webhooks = webhookRows.map((row) => {
+          const deliveries = deliveryCounts(row.webhookId);
+          return {
+            webhookId: row.webhookId,
+            ackedSequence: row.ackedSequence,
+            status:
+              deliveries.failed > 0
+                ? ("degraded" as const)
+                : deliveries.pending > 0 || deliveries.inFlight > 0
+                  ? ("pending" as const)
+                  : ("healthy" as const),
+            deliveries,
+          };
+        });
+        const deliveryFailureCount = (
+          db
+            .prepare("SELECT COUNT(*) AS count FROM delivery_failures WHERE environmentId = ?")
+            .get(environmentId) as { count: number }
+        ).count;
+        return {
+          ...base,
+          subscriptions,
+          subscriptionCount,
+          ...(subscriptionCount > subscriptions.length ? { subscriptionsTruncated: true } : {}),
+          webhooks,
+          webhookCount,
+          ...(webhookCount > webhooks.length ? { webhooksTruncated: true } : {}),
+          deliveries: deliveryCounts(),
+          deliveryFailureCount,
+        };
+      });
+    return {
+      schemaVersion: "3",
+      capturedAt: now(),
+      live: true,
+      stale: false,
+      retention: { maxEventsPerEnvironment: retentionEvents, maxAgeDays: retentionDays },
+      environments,
+    };
+  };
+
   return {
     /** Live delivery hook. Durable subscription cursors remain in SQLite; the
      * callback is only the transport used while an MCP session is connected. */
@@ -509,6 +653,11 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    onStatusChange: (listener: () => void): (() => void) => {
+      statusListeners.add(listener);
+      return () => statusListeners.delete(listener);
+    },
+    statusSnapshot,
     matchingSubscriptions: (event: GatewayEvent): ReadonlyArray<string> => {
       const rows = db
         .prepare(
@@ -625,6 +774,7 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
         subscription.types === undefined ? null : JSON.stringify(subscription.types),
         subscription.ackedSequence,
       );
+      notifyStatus();
       return subscription;
     },
     subscriptionById: (subscriptionId: string): GatewaySubscription | undefined => {
@@ -696,6 +846,7 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
         next.ackedSequence,
         subscriptionId,
       );
+      notifyStatus();
       return next;
     },
     pendingFor: (subscriptionId: string, limit: number): ReadonlyArray<GatewayEvent> => {
@@ -771,6 +922,7 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
         webhook.types === undefined ? null : JSON.stringify(webhook.types),
         webhook.secret,
       );
+      notifyStatus();
       // The secret is returned once at registration; later reads expose only a reference.
       return { webhook: publicWebhook(webhook), secret };
     },
@@ -796,6 +948,7 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
         next.types === undefined ? null : JSON.stringify(next.types),
         webhookId,
       );
+      notifyStatus();
       return publicWebhook(next);
     },
     deleteWebhook: (environmentId: string, webhookId: string): void => {
@@ -810,6 +963,7 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
       }
       db.prepare("DELETE FROM deliveries WHERE webhookId = ?").run(webhookId);
       db.prepare("DELETE FROM webhooks WHERE webhookId = ?").run(webhookId);
+      notifyStatus();
     },
     deliveryFailureSummary: (
       environmentIds: ReadonlyArray<string>,
@@ -890,6 +1044,7 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
       db.prepare(
         "UPDATE deliveries SET state = 'in-flight', attempts = attempts + 1, nextAttemptAt = ? WHERE webhookId = ? AND eventId = ?",
       ).run(isoOffset(retryBaseMs), webhookId, eventId);
+      notifyStatus();
       const body = JSON.stringify(event);
       return {
         url: webhook.url,
@@ -926,6 +1081,7 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
         db.prepare(
           "UPDATE deliveries SET state = 'acked', lastError = NULL WHERE webhookId = ? AND eventId = ?",
         ).run(webhookId, eventId);
+        notifyStatus();
         return { done: true, deliveryFailedEvent: null };
       }
       const row = db
@@ -961,6 +1117,7 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
           attempts,
           error: failureError,
         };
+        notifyStatus();
         return { done: true, deliveryFailedEvent };
       }
       // Bounded exponential backoff with a hard cap.
@@ -969,6 +1126,7 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
       db.prepare(
         "UPDATE deliveries SET state = 'pending', nextAttemptAt = ?, lastError = ? WHERE webhookId = ? AND eventId = ?",
       ).run(nextAttemptAt, error ?? "delivery failed", webhookId, eventId);
+      notifyStatus();
       return { done: false, deliveryFailedEvent: null };
     },
     /** Rotates the webhook signing secret. The previous secret keeps verifying
