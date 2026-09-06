@@ -4,7 +4,15 @@ import { afterEach, expect, it, vi } from "vite-plus/test";
 import { McpGatewaySettings } from "./McpGatewaySettings";
 import { MCP_GATEWAY_GRANTS_KEY, MCP_GATEWAY_ENABLED_KEY } from "../../mcpGatewayState";
 
-vi.mock("../../state/environments", () => ({ useEnvironments: () => ({ environments: [] }) }));
+vi.mock("../../state/environments", () => ({
+  useEnvironments: () => ({ environments: [] }),
+  usePrimaryEnvironment: () => undefined,
+}));
+vi.mock("../../hooks/useSettings", () => ({
+  usePrimarySettings: () => [],
+  useUpdatePrimarySettings: () => vi.fn(),
+}));
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => [] }));
 
 vi.mock("./settingsLayout", () => ({
   SettingsPageContainer: ({ children }: { children: ReactNode }) => <div>{children}</div>,
@@ -33,19 +41,19 @@ it("refreshes visible gateway access when another window changes saved settings"
   );
   const renderer = await act(async () => create(<McpGatewaySettings />));
   try {
-    expect(JSON.stringify(renderer.toJSON())).toContain("No registered machines.");
+    expect(JSON.stringify(renderer.toJSON())).toContain("No registered environments.");
     await act(async () => {
       values.set(MCP_GATEWAY_GRANTS_KEY, JSON.stringify({ remote: ["read"] }));
       values.set(MCP_GATEWAY_ENABLED_KEY, "true");
       events.dispatchEvent(Object.assign(new Event("storage"), { key: MCP_GATEWAY_GRANTS_KEY }));
     });
-    expect(JSON.stringify(renderer.toJSON())).toContain("Unavailable machine");
-    expect(JSON.stringify(renderer.toJSON())).toContain("Read only");
+    expect(JSON.stringify(renderer.toJSON())).toContain("Unavailable environment");
+    expect(JSON.stringify(renderer.toJSON())).toContain("Read environments and threads");
     await act(async () => {
       values.clear();
       events.dispatchEvent(Object.assign(new Event("storage"), { key: null }));
     });
-    expect(JSON.stringify(renderer.toJSON())).toContain("No registered machines.");
+    expect(JSON.stringify(renderer.toJSON())).toContain("No registered environments.");
   } finally {
     await act(async () => renderer.unmount());
   }

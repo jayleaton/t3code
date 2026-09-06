@@ -51,6 +51,7 @@ import {
   VcsSwitchRefInput,
   VcsSwitchRefResult,
   GitCommandError,
+  VcsApplyPatchInput,
   VcsCreateRefInput,
   VcsCreateRefResult,
   VcsCreateWorktreeInput,
@@ -274,6 +275,7 @@ export const WS_METHODS = {
   vcsListRefs: "vcs.listRefs",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
+  vcsApplyPatch: "vcs.applyPatch",
   vcsCreateRef: "vcs.createRef",
   vcsSwitchRef: "vcs.switchRef",
   vcsInit: "vcs.init",
@@ -929,6 +931,11 @@ export const WsVcsRemoveWorktreeRpc = Rpc.make(WS_METHODS.vcsRemoveWorktree, {
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
 });
 
+export const WsVcsApplyPatchRpc = Rpc.make(WS_METHODS.vcsApplyPatch, {
+  payload: VcsApplyPatchInput,
+  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+});
+
 export const WsVcsCreateRefRpc = Rpc.make(WS_METHODS.vcsCreateRef, {
   payload: VcsCreateRefInput,
   success: VcsCreateRefResult,
@@ -1086,6 +1093,15 @@ export const WsOrchestrationDispatchCommandRpc = Rpc.make(
   },
 );
 
+export const WsOrchestrationGetCommandReceiptsRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.getCommandReceipts,
+  {
+    payload: OrchestrationRpcSchemas.getCommandReceipts.input,
+    success: OrchestrationRpcSchemas.getCommandReceipts.output,
+    error: Schema.Union([OrchestrationGetSnapshotError, EnvironmentAuthorizationError]),
+  },
+);
+
 export const WsOrchestrationGetWorkflowScriptRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.getWorkflowScript,
   {
@@ -1122,6 +1138,16 @@ export const WsOrchestrationGetArchivedShellSnapshotRpc = Rpc.make(
     payload: OrchestrationRpcSchemas.getArchivedShellSnapshot.input,
     success: OrchestrationRpcSchemas.getArchivedShellSnapshot.output,
     error: Schema.Union([OrchestrationGetSnapshotError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsOrchestrationSubscribeEventsRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.subscribeEvents,
+  {
+    payload: OrchestrationRpcSchemas.subscribeEvents.input,
+    success: OrchestrationRpcSchemas.subscribeEvents.output,
+    error: Schema.Union([OrchestrationGetSnapshotError, EnvironmentAuthorizationError]),
+    stream: true,
   },
 );
 
@@ -1284,6 +1310,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsListRefsRpc,
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,
+  WsVcsApplyPatchRpc,
   WsVcsCreateRefRpc,
   WsVcsSwitchRefRpc,
   WsVcsInitRpc,
@@ -1316,11 +1343,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
   WsOrchestrationDispatchCommandRpc,
+  WsOrchestrationGetCommandReceiptsRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,
   WsOrchestrationSearchThreadsRpc,
   WsOrchestrationGetArchivedShellSnapshotRpc,
+  WsOrchestrationSubscribeEventsRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,
 );

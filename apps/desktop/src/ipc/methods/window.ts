@@ -37,6 +37,7 @@ import * as ElectronTheme from "../../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
+import { readMcpGatewayBridgeTokenFromProcess } from "../../mcpGatewayCredential.ts";
 import {
   extractDistroFromUncPath,
   resolveWslPickFolderDefaultPath,
@@ -98,6 +99,15 @@ export const getMcpGatewayLaunchConfig = DesktopIpc.makeSyncIpcMethod({
       executablePath: process.execPath,
       resourcesPath: environment.resourcesPath,
     });
+  }),
+});
+
+export const getMcpGatewayBridgeToken = DesktopIpc.makeSyncIpcMethod({
+  channel: IpcChannels.GET_MCP_GATEWAY_BRIDGE_TOKEN_CHANNEL,
+  result: Schema.NullOr(Schema.String),
+  handler: Effect.fn("desktop.ipc.window.getMcpGatewayBridgeToken")(function* () {
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    return readMcpGatewayBridgeTokenFromProcess(environment.homeDirectory);
   }),
 });
 

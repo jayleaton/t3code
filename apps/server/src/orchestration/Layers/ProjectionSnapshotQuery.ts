@@ -16,6 +16,7 @@ import {
   ProjectScript,
   ProjectIconOverride,
   TurnId,
+  type OrchestrationArtifact,
   type OrchestrationCheckpointSummary,
   type OrchestrationLatestTurn,
   type OrchestrationMessage,
@@ -29,6 +30,7 @@ import {
   ProjectId,
   ThreadLinkedPullRequest,
   ThreadId,
+  ThreadProfileSnapshot,
 } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -110,6 +112,7 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
+    profileSnapshot: Schema.NullOr(Schema.fromJsonString(ThreadProfileSnapshot)),
   }),
 );
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
@@ -414,6 +417,40 @@ function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: st
       : toPersistenceSqlError(sqlOperation)(cause);
 }
 
+const artifactsFromProjectionRecords = (
+  messages: ReadonlyArray<OrchestrationMessage>,
+  checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>,
+): ReadonlyArray<OrchestrationArtifact> => [
+  ...messages.flatMap((message) =>
+    (message.attachments ?? []).map((attachment) => ({
+      artifactId: attachment.id,
+      kind: "attachment" as const,
+      sourceId: message.id,
+      name: attachment.name,
+      ...(attachment.mimeType.trim() === "" ? {} : { mimeType: attachment.mimeType }),
+      sizeBytes: attachment.sizeBytes,
+      createdAt: message.createdAt,
+      availability: "available" as const,
+    })),
+  ),
+  ...checkpoints.flatMap((checkpoint) =>
+    checkpoint.files.map((file, index) => ({
+      artifactId: `workspace-${checkpoint.turnId}-${index}`,
+      kind: "workspace-file" as const,
+      sourceId: checkpoint.turnId,
+      name: file.path.split(/[\\/]/).at(-1) ?? file.path,
+      path: file.path,
+      createdAt: checkpoint.completedAt,
+      availability:
+        file.kind === "deleted"
+          ? ("deleted" as const)
+          : checkpoint.status === "ready"
+            ? ("available" as const)
+            : ("unavailable" as const),
+    })),
+  ),
+];
+
 const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const threadBackgroundLiveness = yield* ThreadBackgroundLivenessService;
   const threadPlanProgress = yield* ThreadPlanProgressService;
@@ -487,6 +524,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          profile_snapshot_json AS "profileSnapshot",
           branch,
           worktree_path AS "worktreePath",
           linked_pull_request_json AS "linkedPullRequest",
@@ -525,6 +563,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          profile_snapshot_json AS "profileSnapshot",
           branch,
           worktree_path AS "worktreePath",
           linked_pull_request_json AS "linkedPullRequest",
@@ -565,6 +604,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          profile_snapshot_json AS "profileSnapshot",
           branch,
           worktree_path AS "worktreePath",
           linked_pull_request_json AS "linkedPullRequest",
@@ -1054,6 +1094,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          profile_snapshot_json AS "profileSnapshot",
           branch,
           worktree_path AS "worktreePath",
           linked_pull_request_json AS "linkedPullRequest",
@@ -2019,6 +2060,7 @@ pending_approval_requests AS (
                 modelSelection: row.modelSelection,
                 runtimeMode: row.runtimeMode,
                 interactionMode: row.interactionMode,
+                ...(row.profileSnapshot === null ? {} : { profileSnapshot: row.profileSnapshot }),
                 branch: row.branch,
                 worktreePath: row.worktreePath,
                 ...(row.linkedPullRequest === null
@@ -2041,6 +2083,10 @@ pending_approval_requests AS (
                 proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
                 activities: activitiesByThread.get(row.threadId) ?? [],
                 checkpoints: checkpointsByThread.get(row.threadId) ?? [],
+                artifacts: artifactsFromProjectionRecords(
+                  messagesByThread.get(row.threadId) ?? [],
+                  checkpointsByThread.get(row.threadId) ?? [],
+                ),
                 session: sessionsByThread.get(row.threadId) ?? null,
               }));
 
@@ -2232,6 +2278,7 @@ pending_approval_requests AS (
                   modelSelection: row.modelSelection,
                   runtimeMode: row.runtimeMode,
                   interactionMode: row.interactionMode,
+                  ...(row.profileSnapshot === null ? {} : { profileSnapshot: row.profileSnapshot }),
                   branch: row.branch,
                   worktreePath: row.worktreePath,
                   ...(row.linkedPullRequest === null
@@ -2254,6 +2301,7 @@ pending_approval_requests AS (
                   proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
                   activities: [],
                   checkpoints: [],
+                  artifacts: [],
                   session: sessionByThread.get(row.threadId) ?? null,
                 });
               }
@@ -2372,6 +2420,9 @@ pending_approval_requests AS (
                       modelSelection: row.modelSelection,
                       runtimeMode: row.runtimeMode,
                       interactionMode: row.interactionMode,
+                      ...(row.profileSnapshot === null
+                        ? {}
+                        : { profileSnapshot: row.profileSnapshot }),
                       branch: row.branch,
                       worktreePath: row.worktreePath,
                       ...(row.linkedPullRequest === null
@@ -2520,6 +2571,7 @@ pending_approval_requests AS (
                 modelSelection: row.modelSelection,
                 runtimeMode: row.runtimeMode,
                 interactionMode: row.interactionMode,
+                ...(row.profileSnapshot === null ? {} : { profileSnapshot: row.profileSnapshot }),
                 branch: row.branch,
                 worktreePath: row.worktreePath,
                 ...(row.linkedPullRequest === null
@@ -3089,6 +3141,31 @@ pending_approval_requests AS (
         return Option.none<OrchestrationThread>();
       }
 
+      const messages = messageRows.map((row) => {
+        const message = {
+          id: row.messageId,
+          role: row.role,
+          text: row.text,
+          turnId: row.turnId,
+          streaming: row.isStreaming === 1,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
+        };
+        if (row.attachments !== null) {
+          return Object.assign(message, { attachments: row.attachments });
+        }
+        return message;
+      });
+      const checkpoints = checkpointRows.map((row) => ({
+        turnId: row.turnId,
+        checkpointTurnCount: row.checkpointTurnCount,
+        checkpointRef: row.checkpointRef,
+        status: row.status,
+        files: row.files,
+        assistantMessageId: row.assistantMessageId,
+        completedAt: row.completedAt,
+      }));
+
       const thread = {
         id: threadRow.value.threadId,
         projectId: threadRow.value.projectId,
@@ -3114,32 +3191,11 @@ pending_approval_requests AS (
         pinOrderKey: threadRow.value.pinOrderKey ?? null,
         titleRegeneration: mapTitleRegeneration(threadRow.value),
         deletedAt: null,
-        messages: messageRows.map((row) => {
-          const message = {
-            id: row.messageId,
-            role: row.role,
-            text: row.text,
-            turnId: row.turnId,
-            streaming: row.isStreaming === 1,
-            createdAt: row.createdAt,
-            updatedAt: row.updatedAt,
-          };
-          if (row.attachments !== null) {
-            return Object.assign(message, { attachments: row.attachments });
-          }
-          return message;
-        }),
+        messages,
         proposedPlans: proposedPlanRows.map(mapProposedPlanRow),
         activities,
-        checkpoints: checkpointRows.map((row) => ({
-          turnId: row.turnId,
-          checkpointTurnCount: row.checkpointTurnCount,
-          checkpointRef: row.checkpointRef,
-          status: row.status,
-          files: row.files,
-          assistantMessageId: row.assistantMessageId,
-          completedAt: row.completedAt,
-        })),
+        checkpoints,
+        artifacts: artifactsFromProjectionRecords(messages, checkpoints),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
       };
 

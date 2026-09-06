@@ -1,5 +1,6 @@
 import {
   connectGatewayBridge,
+  createGatewayRuntimeEventSourceFromContext,
   createGatewayRuntimePortFromContext,
 } from "@t3tools/client-runtime/gateway";
 import * as Option from "effect/Option";
@@ -11,10 +12,11 @@ import { openDesktopGatewayThread } from "./mcpGatewayNavigation";
 import { connectionAtomRuntime } from "./connection/runtime";
 import {
   getMcpGatewayGrants,
-  getMcpGatewayProfiles,
   getMcpGatewayToken,
   isMcpGatewayEnabled,
   publishMcpGatewayStatus,
+  publishMcpGatewayStatusSnapshot,
+  setMcpGatewayStatusRequester,
   subscribeMcpGatewayConfiguration,
 } from "./mcpGatewayState";
 import { appAtomRegistry } from "./rpc/atomRegistry";
@@ -26,7 +28,6 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
     available: (window.desktopBridge?.getMcpGatewayLaunchConfig() ?? null) !== null,
     enabled: isMcpGatewayEnabled(),
     grants: getMcpGatewayGrants(),
-    profiles: getMcpGatewayProfiles(),
     token: getMcpGatewayToken(),
   }));
 
@@ -36,7 +37,6 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
         available: (window.desktopBridge?.getMcpGatewayLaunchConfig() ?? null) !== null,
         enabled: isMcpGatewayEnabled(),
         grants: getMcpGatewayGrants(),
-        profiles: getMcpGatewayProfiles(),
         token: getMcpGatewayToken(),
       });
     return subscribeMcpGatewayConfiguration(onChange);
@@ -45,6 +45,8 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
   useEffect(() => {
     if (!configuration.available || !configuration.enabled || configuration.token.length < 16) {
       publishMcpGatewayStatus(configuration.enabled ? "degraded" : "disabled");
+      publishMcpGatewayStatusSnapshot(null);
+      setMcpGatewayStatusRequester(null);
       return;
     }
 
@@ -57,15 +59,17 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
       const value = AsyncResult.value(appAtomRegistry.get(connectionAtomRuntime));
       if (Option.isNone(value)) return;
       bridge = connectGatewayBridge({
-        port: createGatewayRuntimePortFromContext(value.value, async (environmentId, threadId) => {
-          await openDesktopGatewayThread(router, window.desktopBridge, environmentId, threadId);
-        }),
+        port: createGatewayRuntimePortFromContext(value.value, (environmentId, threadId) =>
+          openDesktopGatewayThread(router, window.desktopBridge, environmentId, threadId),
+        ),
+        events: createGatewayRuntimeEventSourceFromContext(value.value),
         grants: configuration.grants,
-        profiles: configuration.profiles,
         token: configuration.token,
         url: BRIDGE_URL,
         onState: publishMcpGatewayStatus,
+        onStatusSnapshot: publishMcpGatewayStatusSnapshot,
       });
+      setMcpGatewayStatusRequester(() => bridge?.requestStatus() ?? false);
       unsubscribe?.();
       unsubscribe = null;
     };
@@ -77,6 +81,8 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
       stopped = true;
       unsubscribe?.();
       bridge?.stop();
+      setMcpGatewayStatusRequester(null);
+      publishMcpGatewayStatusSnapshot(null);
       unmountRuntime();
     };
   }, [configuration, router]);

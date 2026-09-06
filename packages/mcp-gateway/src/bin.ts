@@ -1,9 +1,12 @@
 #!/usr/bin/env node
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import * as NodeOS from "node:os";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - Gateway state path is initialized synchronously before the Effect runtime exists.
+import * as NodePath from "node:path";
 
-import { createBridgeRuntimePort } from "./bridge.ts";
+import { GATEWAY_SCOPE_VALUES } from "./port.ts";
 import type { GatewayScope } from "./port.ts";
-import { createMcpGateway } from "./server.ts";
+import { connectSharedGateway, launchSharedOwner, proxyMcpStdio } from "./sharedLauncher.ts";
+import { startSharedGatewayOwner, type SharedGatewayConfig } from "./sharedOwner.ts";
 
 function parseGrants(
   raw: string | undefined,
@@ -14,7 +17,10 @@ function parseGrants(
   for (const [environmentId, scopes] of Object.entries(value)) {
     if (
       !Array.isArray(scopes) ||
-      scopes.some((scope) => scope !== "read" && scope !== "create" && scope !== "send")
+      scopes.some(
+        (scope) =>
+          typeof scope !== "string" || !GATEWAY_SCOPE_VALUES.includes(scope as GatewayScope),
+      )
     ) {
       throw new Error(`Invalid scopes for environment ${environmentId}.`);
     }
@@ -34,25 +40,63 @@ if (bridgeToken === undefined || bridgeToken.length < 16) {
 }
 
 const initialGrants = parseGrants(process.env.T3_MCP_GRANTS);
-const bridge = createBridgeRuntimePort({
+const repositoryAllowlist = (process.env.T3_MCP_REPOSITORY_ALLOWLIST ?? "jayleaton/t3code")
+  .split(",")
+  .map((repository) => repository.trim())
+  .filter((repository) => /^[^/\s]+\/[^/\s]+$/u.test(repository));
+if (repositoryAllowlist.length === 0) {
+  throw new Error("T3_MCP_REPOSITORY_ALLOWLIST must contain owner/repository entries.");
+}
+const retentionEvents = Number.parseInt(process.env.T3_MCP_EVENT_RETENTION ?? "100000", 10);
+if (!Number.isInteger(retentionEvents) || retentionEvents < 1) {
+  throw new Error("T3_MCP_EVENT_RETENTION must be a positive integer.");
+}
+const stateDirectory = process.env.T3CODE_HOME ?? NodePath.join(NodeOS.homedir(), ".t3code");
+const stateFile =
+  process.env.T3_MCP_STATE_FILE ?? NodePath.join(stateDirectory, "mcp-gateway-v3.sqlite");
+const config: SharedGatewayConfig = {
   port: bridgePort,
   token: bridgeToken,
+  stateFile,
+  retentionEvents,
+  repositoryAllowlist,
   initialGrants,
-});
-const gateway = createMcpGateway({
-  port: bridge.port,
-  grants: bridge.getGrants,
-  profiles: bridge.getProfiles,
-});
-const startup = await bridge.ready;
-if (startup.status === "degraded") {
-  process.stderr.write(`${JSON.stringify({ component: "t3-mcp-gateway", ...startup })}\n`);
-}
-await gateway.connect(new StdioServerTransport());
-
-const shutdown = async () => {
-  await gateway.close();
-  await bridge.close();
 };
-process.once("SIGINT", () => void shutdown());
-process.once("SIGTERM", () => void shutdown());
+
+try {
+  if (process.argv.includes("--shared-owner")) {
+    const owner = await startSharedGatewayOwner(config, {
+      onIdle: () => {
+        void owner?.close();
+      },
+    });
+    // The launcher waits for this receipt, rather than guessing when the port is ready.
+    if (process.send !== undefined) {
+      await new Promise<void>((resolve, reject) =>
+        process.send?.({ type: "ready" }, (error: Error | null) =>
+          error ? reject(error) : resolve(),
+        ),
+      );
+    }
+    if (owner !== undefined) {
+      const stop = () => {
+        void owner.close();
+      };
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+    }
+  } else {
+    const remote = await connectSharedGateway(config, async () => {
+      await launchSharedOwner(process.argv[1]!, config);
+    });
+    await proxyMcpStdio(remote);
+  }
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (process.send !== undefined && process.connected) {
+    process.send({ type: "error", message });
+    process.disconnect();
+  }
+  process.stderr.write(`t3-mcp-gateway: ${message}\n`);
+  process.exitCode = 1;
+}

@@ -1,26 +1,47 @@
+import {
+  GATEWAY_SCOPE_VALUES,
+  hasGatewayScopes,
+  parseGatewayStatusSnapshot,
+} from "@t3tools/client-runtime/gateway";
 import type {
+  GatewayApprovalDecision,
   GatewayEnvironmentSummary,
   GatewayMutationResult,
   GatewayPage,
   GatewayProfile,
+  GatewayRuntimeEvent,
   GatewayRuntimePort,
   GatewayScope,
+  GatewayStatusSnapshot,
+  GatewayThreadControlAction,
 } from "@t3tools/client-runtime/gateway";
 
+export { GATEWAY_SCOPE_VALUES, hasGatewayScopes, parseGatewayStatusSnapshot };
 export type {
+  GatewayApprovalDecision,
   GatewayEnvironmentSummary,
   GatewayMutationResult,
   GatewayPage,
   GatewayProfile,
+  GatewayRuntimeEvent,
   GatewayRuntimePort,
   GatewayScope,
+  GatewayStatusSnapshot,
+  GatewayThreadControlAction,
 };
 
 export type GatewayErrorCode =
   | "invalid_input"
   | "unknown_tool"
-  | "invalid_profile"
+  | "not_configured"
   | "unknown_environment"
+  | "unknown_subscription"
+  | "unknown_webhook"
+  | "cursor_expired"
+  | "idempotency_conflict"
+  | "request_in_progress"
+  | "stale_plan"
+  | "destructive_confirmation_required"
   | "scope_required"
   | "environment_unavailable"
   | "upstream_failure";

@@ -2,7 +2,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "@effect/vitest";
 
-import type { GatewayRuntimePort } from "./port.ts";
+import { createGatewayEventStore } from "./events.ts";
+import type { GatewayRuntimePort, GatewayScope } from "./port.ts";
 import { createMcpGateway } from "./server.ts";
 
 const port: GatewayRuntimePort = {
@@ -14,6 +15,9 @@ const port: GatewayRuntimePort = {
   listProjects: async () => ({ items: [], snapshotAt: "snapshot-1" }),
   listThreads: async () => ({ items: [], snapshotAt: "snapshot-1" }),
   getThread: async (environmentId, threadId) => ({ environmentId, id: threadId, messages: [] }),
+  createAssetUrl: async () => ({ relativeUrl: "/asset", expiresAt: 1_800_000_000_000 }),
+  getPullRequest: async () => ({}),
+  getPullRequestActivity: async () => ({}),
   createThread: async (input) => ({
     requestId: input.requestId,
     commandId: input.requestId,
@@ -27,6 +31,18 @@ const port: GatewayRuntimePort = {
     threadId: input.threadId,
     messageId: input.messageId,
   }),
+  controlThread: async (input) => ({
+    requestId: input.requestId,
+    commandId: input.requestId,
+    status: "accepted",
+    threadId: input.threadId,
+  }),
+  respondToApproval: async (input) => ({
+    requestId: input.requestId,
+    commandId: input.requestId,
+    status: "accepted",
+    threadId: input.threadId,
+  }),
 };
 
 describe("MCP gateway server", () => {
@@ -38,11 +54,10 @@ describe("MCP gateway server", () => {
       profiles: [
         {
           name: "Andy",
-          environmentId: "local",
+          environmentIds: ["local"],
           providerLabel: "OpenCode",
           modelLabel: "GLM 5.3",
-          instanceId: "opencode",
-          model: "glm-5.3",
+          modelSelection: { instanceId: "opencode", model: "glm-5.3" },
           reasoningEffort: "medium",
           runtimeMode: "full-access",
           interactionMode: "default",
@@ -54,39 +69,32 @@ describe("MCP gateway server", () => {
     await client.connect(clientTransport);
 
     const listedTools = await client.listTools();
-    expect(listedTools.tools.map((tool) => tool.name)).toContain("t3_list_threads");
-    expect(listedTools.tools.map((tool) => tool.name)).toContain("t3_list_profiles");
-    const createTool = listedTools.tools.find((tool) => tool.name === "t3_create_thread");
-    expect(createTool?.inputSchema).toMatchObject({
-      properties: { profile: { type: "string" } },
-      required: expect.arrayContaining(["profile"]),
-    });
-    expect(createTool?.inputSchema).not.toHaveProperty("properties.modelSelection");
-    const profiles = await client.callTool({ name: "t3_list_profiles", arguments: {} });
-    expect(profiles.structuredContent).toEqual({
-      items: [
-        {
-          name: "Andy",
-          environmentId: "local",
-          description: "Andy = OpenCode · GLM 5.3 · medium · full access",
-        },
-      ],
-    });
+    const toolNames = listedTools.tools.map((tool) => tool.name);
+    expect(toolNames).toHaveLength(51);
+    expect(toolNames).toContain("t3_list_threads");
+    expect(toolNames).toEqual(
+      expect.arrayContaining([
+        "t3_summarize_thread",
+        "t3_list_profiles",
+        "t3_get_artifact",
+        "t3_get_approval_plan",
+        "t3_approve_actions",
+        "t3_reject_actions",
+        "t3_rotate_webhook_secret",
+        "t3_get_pr",
+        "t3_get_pr_checks",
+        "t3_list_review_comments",
+      ]),
+    );
     const result = await client.callTool({
       name: "t3_list_threads",
       arguments: { environmentId: "local" },
     });
     expect(result.isError).not.toBe(true);
-    expect(result.structuredContent).toEqual({ items: [], snapshotAt: "snapshot-1" });
-    const opened = await client.callTool({
-      name: "t3_open_thread",
-      arguments: { environmentId: "local", threadId: "chat" },
-    });
-    expect(opened.isError).not.toBe(true);
-    expect(opened.structuredContent).toEqual({
-      environmentId: "local",
-      threadId: "chat",
-      status: "succeeded",
+    expect(result.structuredContent).toMatchObject({
+      schemaVersion: "3",
+      data: { items: [], snapshotAt: "snapshot-1" },
+      warnings: [],
     });
 
     await client.close();
@@ -102,21 +110,26 @@ describe("MCP gateway server", () => {
     await client.connect(clientTransport);
 
     const before = await client.callTool({ name: "t3_list_environments", arguments: {} });
-    expect(before.structuredContent).toEqual({ items: [], snapshotAt: "runtime" });
+    expect(before.structuredContent).toMatchObject({
+      schemaVersion: "3",
+      data: { items: [], snapshotAt: "runtime" },
+    });
 
     grants = { local: ["read", "create", "send"] };
     const after = await client.callTool({ name: "t3_list_environments", arguments: {} });
-    expect(after.structuredContent).toEqual({
-      items: [
-        {
-          environmentId: "local",
-          label: "Local",
-          targetKind: "primary",
-          connectionState: "connected",
-          grantedScopes: ["read", "create", "send"],
-        },
-      ],
-      snapshotAt: "runtime",
+    expect(after.structuredContent).toMatchObject({
+      schemaVersion: "3",
+      data: {
+        items: [
+          {
+            environmentId: "local",
+            label: "Local",
+            targetKind: "primary",
+            connectionState: "connected",
+          },
+        ],
+        snapshotAt: "runtime",
+      },
     });
 
     await client.close();
@@ -140,21 +153,165 @@ describe("MCP gateway server", () => {
       },
     });
     expect(result.isError).toBe(true);
-    expect(result.content).toEqual([
-      {
-        type: "text",
-        text: JSON.stringify({
-          code: "scope_required",
-          message: "Scope send is required for environment local.",
-          retryable: false,
-          environmentId: "local",
-          requestId: undefined,
-          details: { requiredScope: "send", grantedScopes: ["read"] },
-        }),
+    expect(result.structuredContent).toMatchObject({
+      schemaVersion: "3",
+      error: {
+        code: "scope_required",
+        message: "Scope send is required for environment local.",
+        retryable: false,
+        environmentId: "local",
+        requestId: "send-1",
+        details: { requiredScopes: ["send"], missingScopes: ["send"] },
       },
-    ]);
+    });
 
     await client.close();
     await gateway.close();
+  });
+
+  it("pushes durable subscription events over the connected MCP transport", async () => {
+    const events = createGatewayEventStore();
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    let currentGrants: Record<string, ReadonlyArray<GatewayScope>> = { local: ["read"] };
+    const gateway = createMcpGateway({ port, grants: () => currentGrants, events });
+    const client = new Client({ name: "gateway-test", version: "1.0.0" });
+    const notifications: unknown[] = [];
+    client.fallbackNotificationHandler = async (notification) => {
+      if (notification.method === "notifications/t3/events")
+        notifications.push(notification.params);
+    };
+    await gateway.connect(serverTransport);
+    await client.connect(clientTransport);
+    events.emit({ environmentId: "local", type: "thread.progress", threadId: "thread-1" });
+    events.emit({ environmentId: "local", type: "thread.started", threadId: "thread-1" });
+
+    const subscribed = await client.callTool({
+      name: "t3_subscribe_events",
+      arguments: { environmentId: "local", afterSequence: 0, types: ["thread.started"] },
+    });
+    const subscriptionId = (subscribed.structuredContent as { data: { subscriptionId: string } })
+      .data.subscriptionId;
+    events.emit({ environmentId: "local", type: "thread.started", threadId: "thread-1" });
+
+    await expect.poll(() => notifications).toHaveLength(2);
+    expect(notifications).toEqual([
+      expect.objectContaining({
+        subscriptionId,
+        event: expect.objectContaining({
+          environmentId: "local",
+          sequence: 2,
+          type: "thread.started",
+        }),
+      }),
+      expect.objectContaining({
+        subscriptionId,
+        event: expect.objectContaining({
+          environmentId: "local",
+          sequence: 3,
+          type: "thread.started",
+        }),
+      }),
+    ]);
+    await client.callTool({
+      name: "t3_ack_events",
+      arguments: { environmentId: "local", subscriptionId, throughSequence: 3 },
+    });
+    const replay = await client.callTool({
+      name: "t3_replay_events",
+      arguments: { environmentId: "local", subscriptionId },
+    });
+    expect(replay.structuredContent).toMatchObject({
+      schemaVersion: "3",
+      data: { subscriptionId, items: [], ackedSequence: 3 },
+    });
+
+    currentGrants = {};
+    events.emit({ environmentId: "local", type: "thread.started", threadId: "thread-1" });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(notifications).toHaveLength(2);
+
+    currentGrants = { local: ["read"] };
+    events.emit({ environmentId: "local", type: "thread.started", threadId: "thread-1" });
+    await expect.poll(() => notifications).toHaveLength(3);
+    expect(notifications.slice(2)).toEqual([
+      expect.objectContaining({
+        subscriptionId,
+        event: expect.objectContaining({ sequence: 5, type: "thread.started" }),
+      }),
+    ]);
+    const revokedReplay = await client.callTool({
+      name: "t3_replay_events",
+      arguments: { environmentId: "local", subscriptionId },
+    });
+    expect(revokedReplay.structuredContent).toMatchObject({
+      schemaVersion: "3",
+      data: {
+        subscriptionId,
+        items: [expect.objectContaining({ sequence: 5, type: "thread.started" })],
+        ackedSequence: 4,
+      },
+    });
+
+    await client.close();
+    await gateway.close();
+    events.close();
+  });
+
+  it("replays and resumes a durable subscription after MCP reconnect", async () => {
+    const events = createGatewayEventStore();
+    const connect = async () => {
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const gateway = createMcpGateway({ port, grants: { local: ["read"] }, events });
+      const client = new Client({ name: "gateway-test", version: "1.0.0" });
+      const notifications: unknown[] = [];
+      client.fallbackNotificationHandler = async (notification) => {
+        if (notification.method === "notifications/t3/events")
+          notifications.push(notification.params);
+      };
+      await gateway.connect(serverTransport);
+      await client.connect(clientTransport);
+      return { client, gateway, notifications };
+    };
+
+    const first = await connect();
+    const subscribed = await first.client.callTool({
+      name: "t3_subscribe_events",
+      arguments: { environmentId: "local", afterSequence: 0 },
+    });
+    const subscriptionId = (subscribed.structuredContent as { data: { subscriptionId: string } })
+      .data.subscriptionId;
+    events.emit({ environmentId: "local", type: "thread.started", threadId: "thread-1" });
+    await expect.poll(() => first.notifications).toHaveLength(1);
+    await first.client.callTool({
+      name: "t3_ack_events",
+      arguments: { environmentId: "local", subscriptionId, throughSequence: 1 },
+    });
+    await first.client.close();
+    await first.gateway.close();
+
+    events.emit({ environmentId: "local", type: "thread.progress", threadId: "thread-1" });
+    const second = await connect();
+    await second.client.callTool({
+      name: "t3_replay_events",
+      arguments: { environmentId: "local", subscriptionId },
+    });
+    events.emit({ environmentId: "local", type: "thread.completed", threadId: "thread-1" });
+
+    await expect.poll(() => second.notifications).toHaveLength(2);
+    expect(second.notifications).toEqual([
+      expect.objectContaining({
+        subscriptionId,
+        event: expect.objectContaining({ sequence: 2, type: "thread.progress" }),
+      }),
+      expect.objectContaining({
+        subscriptionId,
+        event: expect.objectContaining({ sequence: 3, type: "thread.completed" }),
+      }),
+    ]);
+
+    await second.client.close();
+    await second.gateway.close();
+    events.close();
   });
 });

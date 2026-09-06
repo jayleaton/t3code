@@ -1,7 +1,14 @@
 import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 
-import type { GatewayProfile, GatewayRuntimePort, GatewayScope } from "./port.ts";
+import type {
+  GatewayProfile,
+  GatewayRuntimeEventSource,
+  GatewayRuntimePort,
+  GatewayScope,
+  GatewayStatusSnapshot,
+} from "./port.ts";
+import { parseGatewayStatusSnapshot } from "./port.ts";
 
 export type GatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
 
@@ -25,11 +32,22 @@ const METHODS = new Set<keyof GatewayRuntimePort>([
   "openThread",
   "listEnvironments",
   "getEnvironmentStatus",
+  "listProfiles",
+  "resolveProfileModelSelection",
   "listProjects",
   "listThreads",
   "getThread",
+  "hasThreadMessage",
+  "createAssetUrl",
+  "getPullRequest",
+  "getPullRequestActivity",
+  "getCommandReceipts",
   "createThread",
   "sendMessage",
+  "controlThread",
+  "respondToApprovals",
+  "respondToApproval",
+  "executeOperation",
 ]);
 
 async function proof(token: string, value: string): Promise<string> {
@@ -49,20 +67,27 @@ async function proof(token: string, value: string): Promise<string> {
 
 export function connectGatewayBridge(input: {
   readonly port: GatewayRuntimePort;
+  readonly events?: GatewayRuntimeEventSource;
   readonly grants?: GatewayGrants;
   readonly profiles?: ReadonlyArray<GatewayProfile>;
   readonly url: string;
   readonly token: string;
   readonly createSocket?: (url: string) => GatewayBridgeSocket;
   readonly onState?: (state: GatewayBridgeState) => void;
+  readonly onStatusSnapshot?: (snapshot: GatewayStatusSnapshot | null) => void;
   readonly reconnectDelayMs?: number;
 }) {
   let socket: GatewayBridgeSocket | null = null;
   let reconnectFiber: Fiber.Fiber<void, never> | null = null;
+  let unsubscribeEvents: (() => void) | null = null;
   let stopped = false;
+  let statusRequestId = 0;
+  let configured = false;
 
   const connect = () => {
     if (stopped) return;
+    configured = false;
+    input.onStatusSnapshot?.(null);
     input.onState?.("connecting");
     const next =
       input.createSocket?.(input.url) ?? (new WebSocket(input.url) as GatewayBridgeSocket);
@@ -70,11 +95,19 @@ export function connectGatewayBridge(input: {
     let expectedServerProof: string | null = null;
     socket = next;
     next.addEventListener("error", () => {
-      if (socket === next && !stopped) input.onState?.("degraded");
+      if (socket === next && !stopped) {
+        configured = false;
+        input.onStatusSnapshot?.(null);
+        input.onState?.("degraded");
+      }
     });
     next.addEventListener("close", () => {
       if (socket !== next || stopped) return;
       socket = null;
+      configured = false;
+      input.onStatusSnapshot?.(null);
+      unsubscribeEvents?.();
+      unsubscribeEvents = null;
       input.onState?.("degraded");
       reconnectFiber = Effect.runFork(
         Effect.sleep(input.reconnectDelayMs ?? 1_000).pipe(Effect.tap(() => Effect.sync(connect))),
@@ -118,20 +151,67 @@ export function connectGatewayBridge(input: {
             }
             authenticated = true;
             expectedServerProof = null;
+            configured = false;
+            input.onStatusSnapshot?.(null);
             next.send(
               JSON.stringify({
                 type: "configure",
                 grants: input.grants ?? {},
                 profiles: input.profiles ?? [],
+                capabilities: { statusSnapshots: true },
               }),
             );
             return;
           }
-          if (!authenticated) throw new Error("Gateway bridge is not authenticated.");
           if (candidate.type === "configured") {
+            if (
+              !authenticated ||
+              typeof candidate.cursors !== "object" ||
+              candidate.cursors === null ||
+              Array.isArray(candidate.cursors)
+            ) {
+              throw new Error("Invalid gateway bridge cursor configuration.");
+            }
+            const environmentIds = Object.entries(input.grants ?? {})
+              .filter(([, scopes]) => scopes.includes("read"))
+              .map(([environmentId]) => environmentId);
+            const rawCursors = candidate.cursors as Record<string, unknown>;
+            const afterSequenceByEnvironment: Record<string, number> = {};
+            for (const environmentId of environmentIds) {
+              const cursor = rawCursors[environmentId];
+              if (!Number.isInteger(cursor) || (cursor as number) < 0) {
+                throw new Error(`Invalid gateway bridge cursor for environment ${environmentId}.`);
+              }
+              afterSequenceByEnvironment[environmentId] = cursor as number;
+            }
+            const allowedEnvironmentIds = new Set(environmentIds);
+            unsubscribeEvents?.();
+            unsubscribeEvents =
+              input.events?.subscribe(
+                (runtimeEvent) => {
+                  if (
+                    allowedEnvironmentIds.has(runtimeEvent.environmentId) &&
+                    socket === next &&
+                    next.readyState === next.OPEN
+                  ) {
+                    next.send(JSON.stringify({ type: "event", event: runtimeEvent }));
+                  }
+                },
+                { environmentIds, afterSequenceByEnvironment },
+              ) ?? null;
+            configured = true;
             input.onState?.("running");
             return;
           }
+          if (candidate.type === "status.snapshot") {
+            if (!authenticated || !configured) {
+              throw new Error("Gateway bridge status arrived before configuration.");
+            }
+            const snapshot = parseGatewayStatusSnapshot(candidate.snapshot);
+            if (snapshot !== undefined) input.onStatusSnapshot?.(snapshot);
+            return;
+          }
+          if (!authenticated) throw new Error("Gateway bridge is not authenticated.");
           if (
             typeof candidate.id !== "number" ||
             !Number.isInteger(candidate.id) ||
@@ -153,7 +233,11 @@ export function connectGatewayBridge(input: {
               error: error instanceof Error ? error.message : String(error),
             }),
           );
-          if (!authenticated) next.close();
+          if (!configured) {
+            input.onStatusSnapshot?.(null);
+            input.onState?.("degraded");
+            next.close();
+          }
         }
       })();
     });
@@ -161,10 +245,22 @@ export function connectGatewayBridge(input: {
 
   connect();
   return {
+    requestStatus: (): boolean => {
+      const active = socket;
+      if (active === null || !configured || active.readyState !== active.OPEN) return false;
+      active.send(
+        JSON.stringify({ type: "status.request", requestId: `status-${++statusRequestId}` }),
+      );
+      return true;
+    },
     stop: () => {
       stopped = true;
+      configured = false;
+      input.onStatusSnapshot?.(null);
       reconnectFiber?.interruptUnsafe();
       reconnectFiber = null;
+      unsubscribeEvents?.();
+      unsubscribeEvents = null;
       const active = socket;
       socket = null;
       active?.close();

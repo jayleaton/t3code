@@ -43,6 +43,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     if (typeof result !== "object" || result === null) return null;
     return result as ReturnType<DesktopBridge["getMcpGatewayLaunchConfig"]>;
   },
+  getMcpGatewayBridgeToken: () => {
+    const result = ipcRenderer.sendSync(IpcChannels.GET_MCP_GATEWAY_BRIDGE_TOKEN_CHANNEL);
+    return typeof result === "string" ? result : null;
+  },
   getClientPlatform: () => clientPlatform,
   getSystemLocale: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_SYSTEM_LOCALE_CHANNEL);
