@@ -447,6 +447,77 @@ describe("MCP named profiles", () => {
     }
   });
 
+  it.each(["provider", "model"] as const)(
+    "blocks an edited profile when a duplicate %s label appears and recovers when removed",
+    async (duplicateKind) => {
+      (
+        globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+      ).IS_REACT_ACT_ENVIRONMENT = true;
+      const container = document.createElement("div");
+      const root = createRoot(container);
+      const onChange = vi.fn();
+      const render = (providers: ReadonlyArray<ServerProvider>) =>
+        act(async () =>
+          root.render(
+            <McpProfileList profiles={[andyProfile]} providers={providers} onChange={onChange} />,
+          ),
+        );
+      const save = () =>
+        [...container.querySelectorAll("button")].find((button) =>
+          button.textContent?.includes("Update Andy"),
+        );
+      const duplicateCatalog =
+        duplicateKind === "provider"
+          ? [codexProvider, { ...codexProvider, instanceId: "codex-second" } as ServerProvider]
+          : [
+              {
+                ...codexProvider,
+                models: [
+                  ...codexProvider.models,
+                  { ...codexProvider.models[0]!, slug: "other-model" },
+                ],
+              },
+            ];
+      try {
+        await render([codexProvider]);
+        await act(async () =>
+          (
+            container.querySelector('[aria-label="Edit Andy profile"]') as HTMLButtonElement
+          ).click(),
+        );
+        expect(save()).toHaveProperty("disabled", false);
+        await render(duplicateCatalog);
+        expect(container.textContent).toContain("unavailable — re-select");
+        expect(container.textContent).toContain("Multiple providers or models share these names");
+        expect(save()).toHaveProperty("disabled", true);
+        await act(async () => save()?.click());
+        expect(onChange).not.toHaveBeenCalled();
+        await act(async () =>
+          (
+            container.querySelector('[aria-label="Edit Andy profile"]') as HTMLButtonElement
+          ).click(),
+        );
+        expect(save()).toHaveProperty("disabled", true);
+        await render([codexProvider]);
+        await act(async () =>
+          (
+            container.querySelector('[aria-label="Edit Andy profile"]') as HTMLButtonElement
+          ).click(),
+        );
+        expect(save()).toHaveProperty("disabled", false);
+        await act(async () => save()?.click());
+        expect(onChange).toHaveBeenCalledWith([
+          expect.objectContaining({
+            providerLabel: andyProfile.providerLabel,
+            modelLabel: andyProfile.modelLabel,
+          }),
+        ]);
+      } finally {
+        await act(async () => root.unmount());
+      }
+    },
+  );
+
   it("provider and model pickers come from the live provider catalog", () => {
     const markup = renderToStaticMarkup(
       <McpProfileList profiles={[]} providers={[codexProvider]} onChange={vi.fn()} />,

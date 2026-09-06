@@ -91,14 +91,25 @@ const threadSnapshot = (environmentId: EnvironmentId, threadId: ThreadId, turnLi
  * Resolves persisted readable profile labels against a live provider catalog.
  * Exactly one enabled/available provider + model pair must match; duplicate
  * labels stay unresolved rather than routing a thread ambiguously. Legacy
- * profiles without labels retain their persisted routing snapshot.
+ * profiles without labels validate their persisted routing snapshot against
+ * the same live catalog.
  */
 export function resolveGatewayProfileModelSelection(
-  profile: GatewayProfile,
+  profile: Pick<GatewayProfile, "providerLabel" | "modelLabel" | "modelSelection">,
   providers: ReadonlyArray<ServerProvider>,
 ): GatewayProfileModelSelection | undefined {
   if (profile.providerLabel === undefined || profile.modelLabel === undefined) {
-    return profile.modelSelection as GatewayProfileModelSelection | undefined;
+    const selection = profile.modelSelection;
+    if (selection === undefined) return undefined;
+    const matches = providers.filter(
+      (provider) =>
+        provider.instanceId === selection.instanceId &&
+        provider.enabled &&
+        provider.status === "ready" &&
+        provider.availability !== "unavailable" &&
+        provider.models.some((model) => model.slug === selection.model),
+    );
+    return matches.length === 1 ? selection : undefined;
   }
   const matches = providers.flatMap((provider) => {
     const providerLabel = provider.displayName?.trim() || provider.driver;

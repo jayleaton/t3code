@@ -26,6 +26,7 @@ class FakeSocket implements GatewayBridgeSocket {
   readonly OPEN = 1;
   readonly readyState = 1;
   readonly sent: string[] = [];
+  private readonly sentListeners = new Set<() => void>();
   closed = false;
   private readonly listeners = new Map<
     string,
@@ -40,6 +41,19 @@ class FakeSocket implements GatewayBridgeSocket {
 
   send(data: string): void {
     this.sent.push(data);
+    for (const listener of this.sentListeners) listener();
+  }
+
+  waitForSent(count: number): Promise<void> {
+    return new Promise((resolve) => {
+      const listener = () => {
+        if (this.sent.length < count) return;
+        this.sentListeners.delete(listener);
+        resolve();
+      };
+      this.sentListeners.add(listener);
+      listener();
+    });
   }
 
   close(): void {
@@ -127,7 +141,98 @@ describe("gateway bridge client", () => {
         capabilities: { statusSnapshots: true },
       }),
     );
-    expect(onState).toHaveBeenCalledWith("running");
+    expect(onState.mock.calls).toEqual([["connecting"]]);
+    expect(bridge.requestStatus()).toBe(false);
+    socket.emit(
+      "message",
+      JSON.stringify({
+        type: "configured",
+        cursors: {
+          "a534b83f-a352-44d8-aedc-c4230c179390": 0,
+          "2549ba75-2a91-4554-8baa-88e6ae0efa48": 0,
+        },
+      }),
+    );
+    expect(onState.mock.calls).toEqual([["connecting"], ["running"]]);
+    expect(bridge.requestStatus()).toBe(true);
+    bridge.stop();
+  });
+
+  it.each([
+    { name: "missing cursors", response: { type: "configured" }, grants: {} },
+    { name: "array cursors", response: { type: "configured", cursors: [] }, grants: {} },
+    {
+      name: "invalid readable environment cursor",
+      response: { type: "configured", cursors: { local: -1 } },
+      grants: { local: ["read"] as const },
+    },
+    {
+      name: "configuration error response",
+      response: { id: -1, error: "Invalid configuration." },
+      grants: {},
+    },
+  ])("degrades and closes an incomplete handshake with $name", async ({ response, grants }) => {
+    const socket = new FakeSocket();
+    const token = "test-token-123456789";
+    const onState = vi.fn();
+    const onStatusSnapshot = vi.fn();
+    const subscribe = vi.fn<GatewayRuntimeEventSource["subscribe"]>(() => () => undefined);
+    const bridge = connectGatewayBridge({
+      port: unusedPort,
+      events: { subscribe } as unknown as GatewayRuntimeEventSource,
+      token,
+      grants,
+      url: "ws://127.0.0.1:47631",
+      createSocket: () => socket,
+      onState,
+      onStatusSnapshot,
+    });
+    const nonce = "e".repeat(64);
+    socket.emit("message", JSON.stringify({ type: "challenge", nonce }));
+    await socket.waitForSent(1);
+    socket.emit(
+      "message",
+      JSON.stringify({ type: "authenticated", proof: await proof(token, `server:${nonce}`) }),
+    );
+    await socket.waitForSent(2);
+
+    socket.emit("message", JSON.stringify(response));
+
+    expect(onState.mock.calls).toEqual([["connecting"], ["degraded"]]);
+    expect(onStatusSnapshot).toHaveBeenLastCalledWith(null);
+    expect(bridge.requestStatus()).toBe(false);
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(socket.closed).toBe(true);
+    bridge.stop();
+  });
+
+  it("never reports running when the server closes to reject configuration", async () => {
+    const socket = new FakeSocket();
+    const token = "test-token-123456789";
+    const onState = vi.fn();
+    const onStatusSnapshot = vi.fn();
+    const bridge = connectGatewayBridge({
+      port: unusedPort,
+      token,
+      url: "ws://127.0.0.1:47631",
+      createSocket: () => socket,
+      onState,
+      onStatusSnapshot,
+    });
+    const nonce = "f".repeat(64);
+    socket.emit("message", JSON.stringify({ type: "challenge", nonce }));
+    await socket.waitForSent(1);
+    socket.emit(
+      "message",
+      JSON.stringify({ type: "authenticated", proof: await proof(token, `server:${nonce}`) }),
+    );
+    await socket.waitForSent(2);
+
+    socket.emit("close");
+
+    expect(onState.mock.calls).toEqual([["connecting"], ["degraded"]]);
+    expect(onStatusSnapshot).toHaveBeenLastCalledWith(null);
+    expect(bridge.requestStatus()).toBe(false);
     bridge.stop();
   });
 

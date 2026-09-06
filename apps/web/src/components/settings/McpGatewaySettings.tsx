@@ -1,5 +1,9 @@
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
-import type { GatewayScope, GatewayStatusSnapshot } from "@t3tools/client-runtime/gateway";
+import {
+  resolveGatewayProfileModelSelection,
+  type GatewayScope,
+  type GatewayStatusSnapshot,
+} from "@t3tools/client-runtime/gateway";
 import {
   formatMcpGatewayProfileSummary,
   MCP_GATEWAY_RUNTIME_MODE_LABELS,
@@ -599,15 +603,13 @@ export function McpProfileList({
 
   const startEdit = (profile: McpGatewayProfile) => {
     setEditingProfileId(profile.profileId);
+    const selection = catalogConnected
+      ? resolveGatewayProfileModelSelection(profile, providers)
+      : undefined;
     const entry = providerEntries.find(
-      (candidate) =>
-        candidate.label === profile.providerLabel &&
-        candidate.models.some((model) => model.name === profile.modelLabel),
+      (candidate) => candidate.instanceId === selection?.instanceId,
     );
-    const model =
-      entry === undefined
-        ? null
-        : (entry.models.find((candidate) => candidate.name === profile.modelLabel)?.slug ?? null);
+    const model = selection?.model ?? null;
     setDraft({
       name: profile.name,
       driverKind: entry?.driverKind ?? null,
@@ -633,22 +635,28 @@ export function McpProfileList({
   const duplicateName = profiles.some(
     (profile) => profile.profileId !== editingProfileId && profile.name === draft.name.trim(),
   );
+  const selectedModel = selectedEntry?.models.find((model) => model.slug === draft.model);
+  const draftSelection =
+    selectedEntry === undefined || selectedModel === undefined
+      ? undefined
+      : resolveGatewayProfileModelSelection(
+          { providerLabel: selectedEntry.label, modelLabel: selectedModel.name },
+          providers,
+        );
+  const ambiguousSelection = selectedModel !== undefined && draftSelection === undefined;
   const canSave =
     draft.name.trim() !== "" &&
     !duplicateName &&
     selectedEntry?.isReady === true &&
-    selectedEntry.models.some((model) => model.slug === draft.model);
+    draftSelection?.instanceId === selectedEntry.instanceId &&
+    draftSelection.model === draft.model;
 
   return (
     <div className="space-y-3">
       {profiles.map((profile) => {
-        const entry = providerEntries.find(
-          (candidate) => candidate.label === profile.providerLabel,
-        );
-        const modelStillExists =
-          profile.modelLabel !== undefined &&
-          (entry?.models.some((candidate) => candidate.name === profile.modelLabel) ?? false);
-        const unavailable = entry === undefined || !modelStillExists;
+        const unavailable =
+          !catalogConnected ||
+          resolveGatewayProfileModelSelection(profile, providers) === undefined;
         return (
           <div
             key={profile.name}
@@ -822,6 +830,12 @@ export function McpProfileList({
           The saved provider or model is no longer offered. Re-select both before saving.
         </p>
       ) : null}
+      {ambiguousSelection ? (
+        <p className="text-xs text-destructive" role="note">
+          Multiple providers or models share these names. Choose a provider and model with a unique
+          name combination before saving.
+        </p>
+      ) : null}
       {duplicateName ? (
         <p className="text-xs text-destructive" role="note">
           A profile named {draft.name.trim()} already exists.
@@ -835,7 +849,7 @@ export function McpProfileList({
           onClick={() => {
             const entry = selectedEntry;
             const model = entry?.models.find((candidate) => candidate.slug === draft.model);
-            if (entry === undefined || model === undefined) return;
+            if (!canSave || entry === undefined || model === undefined) return;
             const now = new globalThis.Date().toISOString();
             const name = draft.name.trim();
             // The edited profile is tracked by its stable profileId, never

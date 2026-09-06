@@ -65,6 +65,38 @@ describe("Gateway Runtime Port", () => {
     ).toBeUndefined();
   });
 
+  it("validates legacy routing snapshots against the live catalog and preserves options", () => {
+    const selection = {
+      instanceId: "codex-main",
+      model: "gpt-5.6-sol",
+      options: [{ id: "reasoningEffort", value: "medium" }],
+    };
+    const profile = { modelSelection: selection };
+    const provider = {
+      instanceId: "codex-main",
+      driver: "codex",
+      enabled: true,
+      availability: "available",
+      status: "ready",
+      models: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
+    } as unknown as ServerProvider;
+
+    expect(resolveGatewayProfileModelSelection(profile, [provider])).toEqual(selection);
+    for (const providers of [
+      [],
+      [{ ...provider, instanceId: "another-instance" }],
+      [{ ...provider, status: "error" }],
+      [{ ...provider, status: "disabled" }],
+      [{ ...provider, enabled: false }],
+      [{ ...provider, availability: "unavailable" }],
+      [{ ...provider, models: [] }],
+    ]) {
+      expect(
+        resolveGatewayProfileModelSelection(profile, providers as ReadonlyArray<ServerProvider>),
+      ).toBeUndefined();
+    }
+  });
+
   it("projects bounded authoritative lifecycle metadata without leaking raw activity payloads", () => {
     const projected = gatewayEventFromOrchestration(
       environmentId,

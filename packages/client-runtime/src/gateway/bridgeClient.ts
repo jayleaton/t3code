@@ -160,14 +160,14 @@ export function connectGatewayBridge(input: {
                 capabilities: { statusSnapshots: true },
               }),
             );
-            input.onState?.("running");
             return;
           }
           if (candidate.type === "configured") {
             if (
               !authenticated ||
               typeof candidate.cursors !== "object" ||
-              candidate.cursors === null
+              candidate.cursors === null ||
+              Array.isArray(candidate.cursors)
             ) {
               throw new Error("Invalid gateway bridge cursor configuration.");
             }
@@ -184,7 +184,6 @@ export function connectGatewayBridge(input: {
               afterSequenceByEnvironment[environmentId] = cursor as number;
             }
             const allowedEnvironmentIds = new Set(environmentIds);
-            configured = true;
             unsubscribeEvents?.();
             unsubscribeEvents =
               input.events?.subscribe(
@@ -199,6 +198,8 @@ export function connectGatewayBridge(input: {
                 },
                 { environmentIds, afterSequenceByEnvironment },
               ) ?? null;
+            configured = true;
+            input.onState?.("running");
             return;
           }
           if (candidate.type === "status.snapshot") {
@@ -231,7 +232,11 @@ export function connectGatewayBridge(input: {
               error: error instanceof Error ? error.message : String(error),
             }),
           );
-          if (!authenticated) next.close();
+          if (!configured) {
+            input.onStatusSnapshot?.(null);
+            input.onState?.("degraded");
+            next.close();
+          }
         }
       })();
     });
