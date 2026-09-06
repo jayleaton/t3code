@@ -56,7 +56,7 @@ describe("webhook delivery network policy", () => {
     await worker.runOnce();
     expect(sender).toHaveBeenCalledOnce();
     expect(store.webhookById(webhook.webhookId)?.ackedSequence).toBe(1);
-    worker.stop();
+    await worker.stop();
     store.close();
   });
 
@@ -83,7 +83,37 @@ describe("webhook delivery network policy", () => {
 
     expect(sender).toHaveBeenCalledOnce();
     expect(sender.mock.calls[0]?.[0].url).toBe("https://example.com/allowed");
-    worker.stop();
+    await worker.stop();
+    store.close();
+  });
+
+  it("drains an in-flight delivery before the owner closes its store", async () => {
+    const store = createGatewayEventStore();
+    store.registerWebhook({ environmentId: "local", url: "https://example.com/hook" });
+    store.emit({ environmentId: "local", type: "thread.completed" });
+    store.emit({ environmentId: "local", type: "thread.completed" });
+    const started = Promise.withResolvers<void>();
+    let attempts = 0;
+    const finish = Promise.withResolvers<{ ok: boolean; retryable: boolean }>();
+    const worker = startWebhookDeliveryWorker(store, {
+      isAuthorized: () => true,
+      sender: async () => {
+        attempts += 1;
+        started.resolve();
+        return finish.promise;
+      },
+    });
+    await started.promise;
+    let stopped = false;
+    const drained = worker.stop().then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    finish.resolve({ ok: true, retryable: false });
+    await drained;
+    expect(stopped).toBe(true);
+    expect(attempts).toBe(1);
     store.close();
   });
 

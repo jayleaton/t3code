@@ -110,6 +110,8 @@ export function createBridgeRuntimePort(input: {
   readonly onEvent?: (event: GatewayRuntimeEvent) => void;
   readonly getStatusSnapshot?: (grants: GatewayGrants) => GatewayStatusSnapshot;
   readonly onStatusChange?: (listener: () => void) => () => void;
+  /** Separate MCP sessions never participate in T3 runtime authentication or replacement. */
+  readonly onMcpConnection?: (socket: WebSocket) => void;
 }): {
   readonly port: GatewayRuntimePort;
   readonly getGrants: () => GatewayGrants;
@@ -194,7 +196,12 @@ export function createBridgeRuntimePort(input: {
     });
   });
 
-  server.on("connection", (socket) => {
+  server.on("connection", (socket, request) => {
+    if (request.url === "/mcp") {
+      if (input.onMcpConnection !== undefined) input.onMcpConnection(socket);
+      else socket.close(1008, "This gateway does not support shared MCP sessions.");
+      return;
+    }
     let authenticated = false;
     let configured = false;
     let authenticationGeneration = 0;
@@ -390,7 +397,7 @@ export function createBridgeRuntimePort(input: {
       new Promise((resolve, reject) => {
         unsubscribeStatus?.();
         rejectPending("Gateway stopped.");
-        client?.close(1001, "Gateway stopped.");
+        for (const socket of server.clients) socket.terminate();
         server.close((error) => (error === undefined ? resolve() : reject(error)));
       }),
   };

@@ -138,43 +138,46 @@ export function startWebhookDeliveryWorker(
     readonly sender?: (target: WebhookTarget) => Promise<WebhookSendResult>;
     readonly isAuthorized: (environmentId: string) => boolean;
   },
-): { readonly stop: () => void; readonly runOnce: () => Promise<void> } {
+): { readonly stop: () => Promise<void>; readonly runOnce: () => Promise<void> } {
   const sender = input.sender ?? fetchWebhookSender;
   let stopped = false;
-  let running = false;
-  const runOnce = async () => {
-    if (stopped || running) return;
-    running = true;
-    try {
-      const batchSize = input.batchSize ?? 32;
-      const excludedEnvironmentIds = new Set<string>();
-      let attempted = 0;
-      while (attempted < batchSize) {
-        const due = store.dueDeliveries(batchSize - attempted, [...excludedEnvironmentIds]);
-        if (due.length === 0) break;
-        for (const delivery of due) {
-          const webhook = store.webhookById(delivery.webhookId);
-          if (webhook === undefined) continue;
-          if (!input.isAuthorized(webhook.environmentId)) {
-            excludedEnvironmentIds.add(webhook.environmentId);
-            continue;
-          }
-          const target = store.buildDelivery(delivery.webhookId, delivery.eventId);
-          if (target === undefined) continue;
-          attempted += 1;
-          const result = await sender(target);
-          store.reportDeliveryAttempt(
-            delivery.webhookId,
-            delivery.eventId,
-            { ok: result.ok, retryable: result.retryable },
-            result.error,
-            result.ackedSequence,
-          );
+  let activeRun: Promise<void> | undefined;
+  const deliverBatch = async () => {
+    const batchSize = input.batchSize ?? 32;
+    const excludedEnvironmentIds = new Set<string>();
+    let attempted = 0;
+    while (attempted < batchSize) {
+      if (stopped) return;
+      const due = store.dueDeliveries(batchSize - attempted, [...excludedEnvironmentIds]);
+      if (due.length === 0) break;
+      for (const delivery of due) {
+        if (stopped) return;
+        const webhook = store.webhookById(delivery.webhookId);
+        if (webhook === undefined) continue;
+        if (!input.isAuthorized(webhook.environmentId)) {
+          excludedEnvironmentIds.add(webhook.environmentId);
+          continue;
         }
+        const target = store.buildDelivery(delivery.webhookId, delivery.eventId);
+        if (target === undefined) continue;
+        attempted += 1;
+        const result = await sender(target);
+        store.reportDeliveryAttempt(
+          delivery.webhookId,
+          delivery.eventId,
+          { ok: result.ok, retryable: result.retryable },
+          result.error,
+          result.ackedSequence,
+        );
       }
-    } finally {
-      running = false;
     }
+  };
+  const runOnce = (): Promise<void> => {
+    if (stopped) return Promise.resolve();
+    activeRun ??= deliverBatch().finally(() => {
+      activeRun = undefined;
+    });
+    return activeRun;
   };
   // @effect-diagnostics-next-line globalTimers:off - This worker is a Node sidecar lifecycle loop, not an Effect service.
   const timer = NodeTimers.setInterval(() => void runOnce(), input.intervalMs ?? 1_000);
@@ -182,9 +185,10 @@ export function startWebhookDeliveryWorker(
   void runOnce();
   return {
     runOnce,
-    stop: () => {
+    stop: async () => {
       stopped = true;
       NodeTimers.clearInterval(timer);
+      await activeRun;
     },
   };
 }
