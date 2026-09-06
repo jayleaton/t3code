@@ -57,6 +57,8 @@ export interface RpcSession {
 export interface RpcSessionOptions {
   readonly environmentThemes?: boolean;
   readonly usageLimitSources?: boolean;
+  /** This client answers /usage-limits itself, so the server may advertise it. */
+  readonly usageLimitsCommand?: boolean;
 }
 
 export class RpcSessionFactory extends Context.Service<
@@ -147,6 +149,7 @@ function mapSessionRpcError(
   }
 }
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.fn("RpcSessionFactory.make")(function* (
   options: RpcSessionOptions = {},
 ) {
@@ -154,6 +157,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
   const serverConfigInput: ServerConfigSubscriptionInput = {
     ...(options.environmentThemes === true ? { environmentThemes: true } : {}),
     ...(options.usageLimitSources === true ? { usageLimitSources: true } : {}),
+    ...(options.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
   };
 
   const connect = Effect.fnUntraced(function* (connection: PreparedConnection) {
@@ -387,5 +391,3 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
 
 export const layerWithOptions = (options: RpcSessionOptions) =>
   Layer.effect(RpcSessionFactory, make(options));
-
-export const layer = layerWithOptions({});

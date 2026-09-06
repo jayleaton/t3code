@@ -1,7 +1,9 @@
 import * as Effect from "effect/Effect";
+import branchPullRequest from "./048_ProjectionThreadBranchPullRequest.ts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 export default Effect.gen(function* () {
+  yield* branchPullRequest;
   const sql = yield* SqlClient.SqlClient;
   const columns = yield* sql<{ readonly name: string }>`
     PRAGMA table_info(projection_threads)
