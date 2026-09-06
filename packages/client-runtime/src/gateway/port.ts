@@ -55,6 +55,17 @@ export interface GatewayProfile {
   readonly updatedAt?: string | undefined;
 }
 
+export type GatewayProfileInput = Pick<
+  GatewayProfile,
+  | "name"
+  | "providerLabel"
+  | "modelLabel"
+  | "reasoningEffort"
+  | "runtimeMode"
+  | "interactionMode"
+  | "environmentIds"
+>;
+
 export interface GatewayProfileModelSelection {
   readonly instanceId: string;
   readonly model: string;
@@ -266,6 +277,19 @@ export function parseGatewayStatusSnapshot(value: unknown): GatewayStatusSnapsho
 }
 
 export interface GatewayRuntimePort {
+  openAgents?(environmentId: string): Promise<{ status: "succeeded" }>;
+  createProfile?(environmentId: string, profile: GatewayProfileInput): Promise<GatewayProfile>;
+  updateProfile?(
+    environmentId: string,
+    profileId: string,
+    patch: { readonly [K in keyof GatewayProfileInput]?: GatewayProfileInput[K] | undefined },
+  ): Promise<GatewayProfile>;
+  deleteProfile?(
+    environmentId: string,
+    profileId: string,
+  ): Promise<{ profileId: string; status: "succeeded" }>;
+  replicateProfiles?(environmentId: string, profiles: ReadonlyArray<GatewayProfile>): Promise<void>;
+
   openThread(
     environmentId: string,
     threadId: string,

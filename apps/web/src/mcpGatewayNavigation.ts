@@ -14,3 +14,12 @@ export async function openDesktopGatewayThread(
   });
   await desktop.revealWindow();
 }
+
+export async function openDesktopGatewayAgents(
+  router: Pick<AppRouter, "navigate">,
+  desktop: Pick<DesktopBridge, "revealWindow"> | undefined,
+): Promise<void> {
+  if (!desktop?.revealWindow) throw new Error("Desktop window focus is unavailable.");
+  await router.navigate({ to: "/agents" });
+  await desktop.revealWindow();
+}

@@ -65,3 +65,16 @@ describe("desktop gateway navigation", () => {
     ).rejects.toThrow("window closed");
   });
 });
+
+it("opens the Agents board before revealing the desktop", async () => {
+  const { openDesktopGatewayAgents } = await import("./mcpGatewayNavigation");
+  const navigation = deferred();
+  const router = { navigate: vi.fn(() => navigation.promise) };
+  const desktop = { revealWindow: vi.fn(async () => {}) };
+  const result = openDesktopGatewayAgents(router, desktop);
+  expect(router.navigate).toHaveBeenCalledWith({ to: "/agents" });
+  expect(desktop.revealWindow).not.toHaveBeenCalled();
+  navigation.resolve();
+  await result;
+  expect(desktop.revealWindow).toHaveBeenCalledOnce();
+});

@@ -211,6 +211,36 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("replicates stamped profile revisions and resumes local revision ownership", () =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      const profile = {
+        profileId: "shared-write",
+        name: "Write",
+        revision: 7,
+        providerLabel: "Codex",
+        modelLabel: "GPT",
+        runtimeMode: "approval-required" as const,
+        interactionMode: "default" as const,
+        createdAt: "2026-09-01T00:00:00.000Z",
+        updatedAt: "2026-09-06T00:00:00.000Z",
+      };
+      const replicated = yield* settings.updateSettings({ mcpGatewayProfiles: [profile] }, true);
+      assert.deepEqual(replicated.mcpGatewayProfiles, [profile]);
+      const edited = yield* settings.updateSettings({
+        mcpGatewayProfiles: [{ ...profile, name: "Review" }],
+      });
+      assert.equal(edited.mcpGatewayProfiles[0]?.revision, 8);
+      const repeated = yield* settings.updateSettings(
+        { mcpGatewayProfiles: edited.mcpGatewayProfiles },
+        true,
+      );
+      assert.deepEqual(repeated.mcpGatewayProfiles, edited.mcpGatewayProfiles);
+      const deleted = yield* settings.updateSettings({ mcpGatewayProfiles: [] }, true);
+      assert.deepEqual(deleted.mcpGatewayProfiles, []);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("rejects duplicate gateway profile names at the server boundary", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;

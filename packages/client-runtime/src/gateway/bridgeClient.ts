@@ -30,6 +30,11 @@ export interface GatewayBridgeSocket {
 
 const METHODS = new Set<keyof GatewayRuntimePort>([
   "openThread",
+  "openAgents",
+  "createProfile",
+  "updateProfile",
+  "deleteProfile",
+  "replicateProfiles",
   "listEnvironments",
   "getEnvironmentStatus",
   "listProfiles",

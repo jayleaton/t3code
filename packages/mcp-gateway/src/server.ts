@@ -31,9 +31,45 @@ const pr = {
 };
 const webhook = { environmentId, webhookId: z.string().trim().min(1) };
 
+const profileFields = {
+  name: z.string().trim().min(1).max(200),
+  providerLabel: z.string().trim().min(1),
+  modelLabel: z.string().trim().min(1),
+  reasoningEffort: z.string().trim().min(1).optional(),
+  runtimeMode: z.enum([
+    "approval-required",
+    "auto-accept-edits",
+    "auto",
+    "full-access",
+    "read-only",
+  ]),
+  interactionMode: z.enum(["default", "plan"]),
+  environmentIds: z.array(z.string().trim().min(1)).optional(),
+};
+
 type ToolSpec = readonly [description: string, inputSchema: z.ZodRawShape];
 
 const TOOL_SPECS = {
+  t3_create_profile: [
+    "Create a named agent profile without starting a session. Requires create or admin access. Shares to connected machines with the same grant.",
+    { environmentId, ...profileFields },
+  ],
+  t3_update_profile: [
+    "Update an agent by profileId. New threads use the new revision; existing threads stay unchanged.",
+    {
+      environmentId,
+      profileId: z.string().trim().min(1),
+      patch: z.object(profileFields).partial().strict(),
+    },
+  ],
+  t3_delete_profile: [
+    "Delete an agent profile, retaining its threads.",
+    { environmentId, profileId: z.string().trim().min(1) },
+  ],
+  t3_open_agents: [
+    "Open the Agents board in the connected desktop app and reveal its window.",
+    { environmentId },
+  ],
   t3_list_environments: ["List T3 environments granted to this host.", optionalRequestContext],
   t3_get_environment_status: [
     "Get connection state for one T3 environment.",
@@ -53,7 +89,12 @@ const TOOL_SPECS = {
   ],
   t3_list_threads: [
     "List chats in one T3 environment.",
-    { environmentId, projectId: z.string().trim().min(1).optional(), ...optionalRequestContext },
+    {
+      environmentId,
+      projectId: z.string().trim().min(1).optional(),
+      profileId: z.string().trim().min(1).optional(),
+      ...optionalRequestContext,
+    },
   ],
   t3_open_thread: [
     "Open a local or remote chat in the connected desktop app and reveal its window. Requires read access; does not start or stop a turn.",
@@ -102,7 +143,7 @@ const TOOL_SPECS = {
     },
   ],
   t3_create_thread: [
-    "Create a chat with an immutable resolved profile snapshot.",
+    "Create a chat with an immutable resolved profile snapshot. For agent/voice tasks, pass profileId from t3_list_profiles.",
     {
       environmentId,
       projectId: z.string().trim().min(1),

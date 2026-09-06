@@ -7,6 +7,7 @@ import {
   ProjectId,
   ThreadId,
   ThreadLinkedPullRequest,
+  ThreadProfileSnapshot,
   TurnId,
   ProviderInstanceId,
 } from "@t3tools/contracts";
@@ -28,6 +29,8 @@ import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts"
 import { encodeThreadDetailPageCursor } from "../threadDetailCursor.ts";
 import { projectThreadDetailSnapshot } from "../ActivityPayloadProjection.ts";
 import { makeSqlStatementCounter } from "../../../integration/SqlStatementCounter.integration.ts";
+
+const encodeProfileSnapshot = Schema.encodeEffect(Schema.fromJsonString(ThreadProfileSnapshot));
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
@@ -522,6 +525,32 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       if (threadDetail._tag === "Some") {
         assert.deepEqual(threadDetail.value, snapshot.threads[0]);
       }
+
+      const profileSnapshot = {
+        profileId: "write",
+        profileName: "Write",
+        revision: 2,
+        effectiveSource: {
+          modelSelection: "profile",
+          runtimeMode: "profile",
+          interactionMode: "profile",
+          reasoningEffort: "profile",
+        },
+      } as const;
+      const profileJson = yield* encodeProfileSnapshot(profileSnapshot);
+      yield* sql`UPDATE projection_threads SET profile_snapshot_json = ${profileJson} WHERE thread_id = 'thread-1'`;
+      const agentShell = yield* snapshotQuery.getThreadShellById(ThreadId.make("thread-1"));
+      const agentDetail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"));
+      assert.deepEqual(Option.getOrThrow(agentShell).profileSnapshot, profileSnapshot);
+      assert.deepEqual(Option.getOrThrow(agentDetail).profileSnapshot, profileSnapshot);
+      assert.deepEqual(
+        (yield* snapshotQuery.getShellSnapshot()).threads[0]?.profileSnapshot,
+        profileSnapshot,
+      );
+      assert.deepEqual(
+        (yield* snapshotQuery.getSnapshot()).threads[0]?.profileSnapshot,
+        profileSnapshot,
+      );
 
       const commandSnapshot = yield* snapshotQuery.getCommandReadModel();
       assert.deepEqual(commandSnapshot.threads[0]?.branchPullRequest, branchPullRequest);

@@ -2289,3 +2289,130 @@ describe("gateway v3 readable profiles", () => {
     });
   });
 });
+
+describe("agent profile tools", () => {
+  function profilesPort() {
+    let profiles: GatewayProfile[] = [];
+    const port: GatewayRuntimePort = {
+      ...makePort(),
+      listProfiles: async () => profiles,
+      createProfile: vi.fn(async (_environmentId, input) => {
+        const profile = { ...input, profileId: "write", revision: 1 };
+        profiles = [...profiles, profile];
+        return profile;
+      }),
+      updateProfile: vi.fn(async (_environmentId, id, patch) => {
+        const current = profiles.find((profile) => profile.profileId === id)!;
+        const profile = {
+          ...current,
+          ...patch,
+          revision: (current.revision ?? 0) + 1,
+        } as GatewayProfile;
+        profiles = profiles.map((item) => (item.profileId === id ? profile : item));
+        return profile;
+      }),
+      deleteProfile: vi.fn(async (_environmentId, id) => {
+        profiles = profiles.filter((profile) => profile.profileId !== id);
+        return { profileId: id, status: "succeeded" as const };
+      }),
+      replicateProfiles: vi.fn(async () => {}),
+      openAgents: vi.fn(async () => ({ status: "succeeded" as const })),
+    };
+    return port;
+  }
+  const input = {
+    environmentId: "local",
+    name: "Write",
+    providerLabel: "OpenCode",
+    modelLabel: "GLM Flash",
+    runtimeMode: "approval-required",
+    interactionMode: "default",
+  };
+
+  it("creates, updates and deletes profiles without dispatching a thread, and shares only to granted machines", async () => {
+    const port = profilesPort();
+    const createThread = vi.spyOn(port, "createThread");
+    const context = { port, grants: { local: ["create"], remote: ["read"] } as const };
+    const created = await callGatewayTool(context, "t3_create_profile", input);
+    expect(created).toMatchObject({
+      profile: { profileId: "write", revision: 1, providerLabel: "OpenCode" },
+    });
+    expect(port.replicateProfiles).not.toHaveBeenCalled();
+    const shared = { port, grants: { local: ["admin"], remote: ["create"] } as const };
+    expect(
+      await callGatewayTool(shared, "t3_update_profile", {
+        environmentId: "local",
+        profileId: "write",
+        patch: { providerLabel: "Codex", modelLabel: "GPT" },
+      }),
+    ).toMatchObject({ profile: { revision: 2, providerLabel: "Codex" } });
+    expect(port.replicateProfiles).toHaveBeenCalledWith("remote", [
+      expect.objectContaining({ profileId: "write", revision: 2 }),
+    ]);
+    await callGatewayTool(shared, "t3_delete_profile", {
+      environmentId: "local",
+      profileId: "write",
+    });
+    expect(port.replicateProfiles).toHaveBeenLastCalledWith("remote", []);
+    expect(createThread).not.toHaveBeenCalled();
+  });
+
+  it("rejects unauthorized or malformed edits before writing", async () => {
+    const port = profilesPort();
+    await expect(
+      callGatewayTool({ port, grants: { local: ["read"] } }, "t3_create_profile", input),
+    ).rejects.toMatchObject({ code: "scope_required" });
+    await expect(
+      callGatewayTool({ port, grants: { local: ["create"] } }, "t3_update_profile", {
+        environmentId: "local",
+        profileId: "write",
+        patch: { revision: 900 },
+      }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(port.createProfile).not.toHaveBeenCalled();
+    expect(port.updateProfile).not.toHaveBeenCalled();
+  });
+
+  it("reports partial sync failure without pretending the source save failed", async () => {
+    const port = profilesPort();
+    port.replicateProfiles = async () => {
+      throw new Error("offline");
+    };
+    expect(
+      await callGatewayTool(
+        { port, grants: { local: ["create"], remote: ["create"] } },
+        "t3_create_profile",
+        input,
+      ),
+    ).toMatchObject({
+      profile: { profileId: "write" },
+      sync: { failedEnvironmentIds: ["remote"] },
+    });
+  });
+
+  it("filters thread lists by both project and profile and scopes desktop navigation", async () => {
+    const port = profilesPort();
+    port.listThreads = async () => ({
+      snapshotAt: "now",
+      items: [
+        { id: "match", projectId: "p", profileSnapshot: { profileId: "write" } },
+        { id: "other-project", projectId: "q", profileSnapshot: { profileId: "write" } },
+        { id: "other-agent", projectId: "p", profileSnapshot: { profileId: "review" } },
+        { id: "no-agent", projectId: "p" },
+      ],
+    });
+    const context = { port, grants: { local: ["read"] } as const };
+    expect(
+      await callGatewayTool(context, "t3_list_threads", {
+        environmentId: "local",
+        projectId: "p",
+        profileId: "write",
+      }),
+    ).toMatchObject({ items: [{ id: "match" }] });
+    await callGatewayTool(context, "t3_open_agents", { environmentId: "local" });
+    expect(port.openAgents).toHaveBeenCalledWith("local");
+    await expect(
+      callGatewayTool({ port, grants: {} }, "t3_open_agents", { environmentId: "local" }),
+    ).rejects.toMatchObject({ code: "unknown_environment" });
+  });
+});

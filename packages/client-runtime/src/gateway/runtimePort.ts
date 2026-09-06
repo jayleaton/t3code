@@ -8,14 +8,17 @@ import {
   ProviderInstanceId,
   ThreadId,
   WS_METHODS,
+  McpGatewayProfile,
   type OrchestrationEvent,
   type OrchestrationShellSnapshot,
   type OrchestrationThreadDetailSnapshot,
   type ServerProvider,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -44,12 +47,14 @@ export interface GatewayEffectRuntime {
 export function createGatewayRuntimePortFromContext(
   context: Context.Context<EnvironmentRegistry | Crypto.Crypto>,
   openThread?: (environmentId: string, threadId: string) => Promise<void>,
+  openAgents?: () => Promise<void>,
 ): GatewayRuntimePort {
   return createGatewayRuntimePort(
     {
       runPromise: (effect) => Effect.runPromiseWith(context)(effect),
     },
     openThread,
+    openAgents,
   );
 }
 
@@ -337,6 +342,7 @@ function gatewayThreadShellProjection(thread: OrchestrationShellSnapshot["thread
   return {
     id: thread.id,
     projectId: thread.projectId,
+    profileSnapshot: thread.profileSnapshot,
     title: thread.title,
     status: gatewayStatusFromThread(thread),
     latestTurn: thread.latestTurn,
@@ -398,12 +404,16 @@ function gatewayActivity(
   };
 }
 
+const decodeProfile = Schema.decodeUnknownSync(McpGatewayProfile);
+const decodeProfiles = Schema.decodeUnknownEffect(Schema.Array(McpGatewayProfile));
+
 export function gatewayThreadProjection(thread: OrchestrationThreadDetailSnapshot["thread"]) {
   return {
     id: thread.id,
     projectId: thread.projectId,
     title: thread.title,
     modelSelection: thread.modelSelection,
+    profileSnapshot: thread.profileSnapshot,
     runtimeMode: thread.runtimeMode,
     interactionMode: thread.interactionMode,
     latestTurn: thread.latestTurn,
@@ -561,11 +571,102 @@ export function createGatewayRuntimeEventSourceFromContext(
 export function createGatewayRuntimePort(
   runtime: GatewayEffectRuntime,
   openThread?: (environmentId: string, threadId: string) => Promise<void>,
+  openAgents?: () => Promise<void>,
 ): GatewayRuntimePort {
   const run = <A, E>(effect: Effect.Effect<A, E, EnvironmentRegistry | Crypto.Crypto>) =>
     runtime.runPromise(effect);
 
+  // Serialize profile read/modify/write operations issued by this host.
+  let profileQueue: Promise<unknown> = Promise.resolve();
+  const mutateProfiles = (
+    rawEnvironmentId: string,
+    mutate: (profiles: ReadonlyArray<McpGatewayProfile>) => ReadonlyArray<McpGatewayProfile>,
+  ) => {
+    const operation = profileQueue.then(() =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          const environmentId = EnvironmentId.make(rawEnvironmentId);
+          const settings = yield* registry.run(
+            environmentId,
+            request(WS_METHODS.serverGetSettings, {}),
+          );
+          return yield* registry.run(
+            environmentId,
+            request(WS_METHODS.serverUpdateSettings, {
+              patch: { mcpGatewayProfiles: mutate(settings.mcpGatewayProfiles) },
+            }),
+          );
+        }),
+      ),
+    );
+    profileQueue = operation.catch(() => undefined);
+    return operation;
+  };
   return {
+    openAgents: async () => {
+      if (!openAgents) throw new Error("Desktop agents navigation is unavailable in this runtime.");
+      await openAgents();
+      return { status: "succeeded" };
+    },
+    createProfile: async (environmentId, input) => {
+      const profileId = await run(
+        Effect.gen(function* () {
+          const crypto = yield* Crypto.Crypto;
+          return yield* crypto.randomUUIDv4;
+        }),
+      );
+      const now = await run(DateTime.now.pipe(Effect.map(DateTime.formatIso)));
+      const profile = decodeProfile({
+        ...input,
+        profileId,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      });
+      const settings = await mutateProfiles(environmentId, (profiles) => [...profiles, profile]);
+      return settings.mcpGatewayProfiles.find((item) => item.profileId === profileId)!;
+    },
+    updateProfile: async (environmentId, profileId, patch) => {
+      const settings = await mutateProfiles(environmentId, (profiles) => {
+        if (!profiles.some((profile) => profile.profileId === profileId))
+          throw new Error(`Agent ${profileId} was not found.`);
+        return profiles.map((profile) =>
+          profile.profileId === profileId
+            ? decodeProfile({
+                ...profile,
+                ...patch,
+                ...(patch.providerLabel !== undefined || patch.modelLabel !== undefined
+                  ? { modelSelection: undefined }
+                  : {}),
+              })
+            : profile,
+        );
+      });
+      return settings.mcpGatewayProfiles.find((profile) => profile.profileId === profileId)!;
+    },
+    deleteProfile: async (environmentId, profileId) => {
+      await mutateProfiles(environmentId, (profiles) =>
+        profiles.filter((profile) => profile.profileId !== profileId),
+      );
+      return { profileId, status: "succeeded" };
+    },
+    replicateProfiles: async (environmentId, profiles) => {
+      await run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          yield* registry.run(
+            EnvironmentId.make(environmentId),
+            request(WS_METHODS.serverUpdateSettings, {
+              patch: {
+                mcpGatewayProfiles: yield* decodeProfiles(profiles),
+              },
+              replicateProfiles: true,
+            }),
+          );
+        }),
+      );
+    },
     openThread: async (environmentId, threadId) => {
       if (!openThread) throw new Error("Desktop chat navigation is unavailable in this runtime.");
       const snapshot = await run(

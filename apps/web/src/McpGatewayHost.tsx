@@ -8,7 +8,7 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import { useEffect, useState } from "react";
 
 import type { AppRouter } from "./router";
-import { openDesktopGatewayThread } from "./mcpGatewayNavigation";
+import { openDesktopGatewayThread, openDesktopGatewayAgents } from "./mcpGatewayNavigation";
 import { connectionAtomRuntime } from "./connection/runtime";
 import {
   getMcpGatewayGrants,
@@ -59,8 +59,11 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
       const value = AsyncResult.value(appAtomRegistry.get(connectionAtomRuntime));
       if (Option.isNone(value)) return;
       bridge = connectGatewayBridge({
-        port: createGatewayRuntimePortFromContext(value.value, (environmentId, threadId) =>
-          openDesktopGatewayThread(router, window.desktopBridge, environmentId, threadId),
+        port: createGatewayRuntimePortFromContext(
+          value.value,
+          (environmentId, threadId) =>
+            openDesktopGatewayThread(router, window.desktopBridge, environmentId, threadId),
+          () => openDesktopGatewayAgents(router, window.desktopBridge),
         ),
         events: createGatewayRuntimeEventSourceFromContext(value.value),
         grants: configuration.grants,

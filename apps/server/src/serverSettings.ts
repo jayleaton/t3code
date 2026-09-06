@@ -202,6 +202,7 @@ export class ServerSettingsService extends Context.Service<
     /** Patch settings and persist. Returns the new full settings object. */
     readonly updateSettings: (
       patch: ServerSettingsPatch,
+      replicateProfiles?: boolean,
     ) => Effect.Effect<ServerSettings, ServerSettingsError>;
 
     /** Stream of settings change events. */
@@ -239,7 +240,7 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
       start: Effect.void,
       ready: Effect.void,
       getSettings: Ref.get(currentSettingsRef).pipe(Effect.map(resolveTextGenerationProvider)),
-      updateSettings: (patch) =>
+      updateSettings: (patch, replicateProfiles = false) =>
         Effect.gen(function* () {
           const currentSettings = yield* Ref.get(currentSettingsRef);
           yield* validateMcpGatewayProfileNames(patch, "<memory>");
@@ -247,7 +248,7 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
           const nextSettings = yield* normalizeServerSettings(
             applyServerSettingsPatch(
               currentSettings,
-              withServerOwnedMcpGatewayProfiles(currentSettings, patch, now),
+              withServerOwnedMcpGatewayProfiles(currentSettings, patch, now, replicateProfiles),
             ),
           );
           yield* Ref.set(currentSettingsRef, nextSettings);
@@ -349,8 +350,9 @@ function withServerOwnedMcpGatewayProfiles(
   current: ServerSettings,
   patch: ServerSettingsPatch,
   now: string,
+  replicateProfiles = false,
 ): ServerSettingsPatch {
-  if (patch.mcpGatewayProfiles === undefined) return patch;
+  if (patch.mcpGatewayProfiles === undefined || replicateProfiles) return patch;
   const profiles = patch.mcpGatewayProfiles.map((candidate): McpGatewayProfile => {
     const existing = current.mcpGatewayProfiles.find(
       (profile) => profile.profileId === candidate.profileId,
@@ -891,7 +893,7 @@ const make = Effect.gen(function* () {
       Effect.flatMap(materializeProviderEnvironmentSecrets),
       Effect.map(resolveTextGenerationProvider),
     ),
-    updateSettings: (patch) =>
+    updateSettings: (patch, replicateProfiles = false) =>
       writeSemaphore.withPermits(1)(
         Effect.gen(function* () {
           const current = yield* getSettingsFromCache;
@@ -901,7 +903,7 @@ const make = Effect.gen(function* () {
             current,
             applyServerSettingsPatch(
               current,
-              withServerOwnedMcpGatewayProfiles(current, patch, now),
+              withServerOwnedMcpGatewayProfiles(current, patch, now, replicateProfiles),
             ),
           );
           const next = yield* normalizeServerSettings(nextPersisted);

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import * as NodeCrypto from "node:crypto";
 
 import {
@@ -26,6 +27,45 @@ export interface GatewayToolContext {
     readonly bridge: "connected" | "disconnected" | "degraded";
     readonly degradedReasons: ReadonlyArray<string>;
   };
+}
+
+const profileInput = z.object({
+  name: z.string().trim().min(1).max(200),
+  providerLabel: z.string().trim().min(1),
+  modelLabel: z.string().trim().min(1),
+  reasoningEffort: z.string().trim().min(1).optional(),
+  runtimeMode: z.enum([
+    "approval-required",
+    "auto-accept-edits",
+    "auto",
+    "full-access",
+    "read-only",
+  ]),
+  interactionMode: z.enum(["default", "plan"]),
+  environmentIds: z.array(z.string().trim().min(1)).optional(),
+});
+
+async function shareProfiles(context: GatewayToolContext, sourceId: string) {
+  const profiles = await authoritativeProfiles(context, sourceId);
+  const environments = await context.port.listEnvironments();
+  const failedEnvironmentIds: string[] = [];
+  const grants = currentGrants(context.grants);
+  for (const environment of environments) {
+    const id = environment.environmentId;
+    if (
+      id === sourceId ||
+      environment.connectionState !== "connected" ||
+      !grants[id]?.some((scope) => scope === "create" || scope === "admin")
+    )
+      continue;
+    try {
+      if (!context.port.replicateProfiles) throw new Error("Profile sharing unavailable.");
+      await context.port.replicateProfiles(id, profiles);
+    } catch {
+      failedEnvironmentIds.push(id);
+    }
+  }
+  return { failedEnvironmentIds };
 }
 
 function currentGrants(source: GatewayGrantSource): GatewayGrants {
@@ -626,6 +666,53 @@ export async function callGatewayTool(
         clock: "runtime",
       };
     }
+    case "t3_create_profile": {
+      const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);
+      if (!context.port.createProfile)
+        throw new Error("Profile creation is unavailable in this runtime.");
+      const parsed = profileInput.safeParse(input);
+      if (!parsed.success)
+        throw new GatewayError({
+          code: "invalid_input",
+          message: parsed.error.message,
+          retryable: false,
+        });
+      const profile = await context.port.createProfile(environmentId, parsed.data);
+      return { profile, sync: await shareProfiles(context, environmentId) };
+    }
+    case "t3_update_profile": {
+      const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);
+      if (!context.port.updateProfile)
+        throw new Error("Profile editing is unavailable in this runtime.");
+      const parsed = profileInput.partial().strict().safeParse(input.patch);
+      if (!parsed.success)
+        throw new GatewayError({
+          code: "invalid_input",
+          message: parsed.error.message,
+          retryable: false,
+        });
+      const profile = await context.port.updateProfile(
+        environmentId,
+        requiredString(input, "profileId"),
+        parsed.data,
+      );
+      return { profile, sync: await shareProfiles(context, environmentId) };
+    }
+    case "t3_delete_profile": {
+      const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);
+      if (!context.port.deleteProfile)
+        throw new Error("Profile deletion is unavailable in this runtime.");
+      const result = await context.port.deleteProfile(
+        environmentId,
+        requiredString(input, "profileId"),
+      );
+      return { ...result, sync: await shareProfiles(context, environmentId) };
+    }
+    case "t3_open_agents": {
+      const environmentId = environmentWithScope(context, input, "read");
+      if (!context.port.openAgents) throw new Error("Desktop agents navigation is unavailable.");
+      return context.port.openAgents(environmentId);
+    }
     case "t3_list_projects": {
       const environmentId = environmentWithScope(context, input, "read");
       return context.port.listProjects(environmentId);
@@ -634,9 +721,17 @@ export async function callGatewayTool(
       const environmentId = environmentWithScope(context, input, "read");
       const page = await context.port.listThreads(environmentId);
       const projectId = typeof input.projectId === "string" ? input.projectId : undefined;
-      return projectId === undefined
-        ? page
-        : { ...page, items: page.items.filter((thread) => thread.projectId === projectId) };
+      const profileId = typeof input.profileId === "string" ? input.profileId : undefined;
+      return {
+        ...page,
+        items: page.items.filter((thread) => {
+          const snapshot = thread.profileSnapshot as { profileId?: string } | undefined;
+          return (
+            (projectId === undefined || thread.projectId === projectId) &&
+            (profileId === undefined || snapshot?.profileId === profileId)
+          );
+        }),
+      };
     }
     case "t3_open_thread": {
       const environmentId = environmentWithScope(context, input, "read");
@@ -686,6 +781,7 @@ export async function callGatewayTool(
         items: (await authoritativeProfiles(context, environmentId)).filter(
           (profile) =>
             !Array.isArray(profile.environmentIds) ||
+            profile.environmentIds.length === 0 ||
             profile.environmentIds.includes(environmentId),
         ),
         snapshotAt: "runtime",
@@ -1141,6 +1237,7 @@ export async function callGatewayTool(
         if (
           profile !== undefined &&
           Array.isArray(profile.environmentIds) &&
+          profile.environmentIds.length > 0 &&
           !profile.environmentIds.includes(environmentId)
         ) {
           throw new GatewayError({

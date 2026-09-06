@@ -66,6 +66,7 @@ describe("pickSharedServerSettings", () => {
       Object.keys(pickSharedServerSettings(DEFAULT_SERVER_SETTINGS, restartCapabilities)).sort(),
     ).toEqual([
       "continueThreadsAfterServerUpdate",
+      "mcpGatewayProfiles",
       "newWorktreesStartFromOrigin",
       "sidebarAutoSettleAfterDays",
       "sidebarAutoSettleOnMerge",
@@ -91,6 +92,7 @@ describe("filterSharedServerPatch", () => {
       ).toEqual({ sidebarAutoSettleAfterDays: 7 });
       expect(pickSharedServerSettings(DEFAULT_SERVER_SETTINGS, capabilities)).not.toHaveProperty(
         "continueThreadsAfterServerUpdate",
+        "mcpGatewayProfiles",
       );
     },
   );
@@ -260,4 +262,44 @@ describe("findSharedSettingsMismatches", () => {
     });
     expect(mismatches).toEqual([]);
   });
+});
+
+it("shares the complete profile list, detects revisions drifting, and propagates deletions", () => {
+  const profiles = [
+    {
+      profileId: "write",
+      name: "Write",
+      revision: 2,
+      providerLabel: "Codex",
+      modelLabel: "GPT",
+      runtimeMode: "approval-required" as const,
+      interactionMode: "default" as const,
+      createdAt: "2026-09-06T00:00:00.000Z",
+      updatedAt: "2026-09-06T01:00:00.000Z",
+    },
+  ];
+  expect(splitSharedServerPatch({ mcpGatewayProfiles: profiles })).toEqual({
+    sharedPatch: { mcpGatewayProfiles: profiles },
+    localPatch: {},
+  });
+  expect(splitSharedServerPatch({ mcpGatewayProfiles: [] }).sharedPatch).toEqual({
+    mcpGatewayProfiles: [],
+  });
+  expect(
+    findSharedSettingsMismatches({
+      primaryEnvironmentId: primaryId,
+      primarySettings: { ...DEFAULT_SERVER_SETTINGS, mcpGatewayProfiles: profiles },
+      environments: [
+        {
+          environmentId: laptopId,
+          label: "Laptop",
+          syncEligible: true,
+          settings: {
+            ...DEFAULT_SERVER_SETTINGS,
+            mcpGatewayProfiles: [{ ...profiles[0]!, revision: 1 }],
+          },
+        },
+      ],
+    }),
+  ).toEqual([{ environmentId: laptopId, label: "Laptop" }]);
 });

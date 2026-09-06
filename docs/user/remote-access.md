@@ -201,7 +201,7 @@ for controlling work, handling approvals, retrieving artifacts, managing reviews
 
 The assistant can use named profiles for new threads, inspect work and approvals, control thread
 lifecycle, and subscribe to events or webhook delivery when permitted. Profiles are managed in the
-gateway settings; changing a profile does not change existing threads. Use `t3_list_environments`
+gateway settings or the Agents board; changing a profile does not change existing threads. Use `t3_list_environments`
 to check the environment IDs and effective grants seen by the assistant. Permission errors also
 report the granted and missing scopes.
 
@@ -212,3 +212,22 @@ with your MCP assistant. Grant the environment read access. Your assistant can u
 with the environment and thread IDs to open that chat and bring this desktop window forward.
 The remote machine supplies the chat; the desktop connected to the gateway displays it. Opening a
 chat does not start or stop its agent. The desktop app must already be running and connected.
+
+### Organize work by agent
+
+Open **Open agents** in the command palette, or visit `/agents`. Create a named agent, choose its
+provider, model, thinking, and allowed machines, then start a task or an empty chat. Clicking a
+card opens the conversation; **Back to agents** returns to the board. Settled work stays visible
+in its agent column. Deleting an agent keeps its conversations under **Removed agents**.
+
+Profiles are shared across clients connected to the same server. Edits also copy to connected
+environments that support shared settings. Disconnected machines need **Apply to all** in Settings
+after reconnecting. Each target resolves the provider and model locally; an unavailable or
+ambiguous selection must be re-selected before starting a thread. Profile changes apply only to
+new threads.
+
+MCP assistants can use `t3_create_profile`, `t3_update_profile`, and `t3_delete_profile` with create
+or admin access. Profile writes share only to connected environments with one of those grants;
+check the returned sync failures. Use `profileId` with `t3_create_thread` for voice-driven agent
+tasks, and filter `t3_list_threads` by the same ID to continue work. `t3_open_agents` opens the
+board in the connected desktop window with read access.

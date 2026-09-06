@@ -70,11 +70,15 @@ describe("MCP gateway server", () => {
 
     const listedTools = await client.listTools();
     const toolNames = listedTools.tools.map((tool) => tool.name);
-    expect(toolNames).toHaveLength(51);
+    expect(toolNames).toHaveLength(55);
     expect(toolNames).toContain("t3_list_threads");
     expect(toolNames).toEqual(
       expect.arrayContaining([
         "t3_summarize_thread",
+        "t3_create_profile",
+        "t3_update_profile",
+        "t3_delete_profile",
+        "t3_open_agents",
         "t3_list_profiles",
         "t3_get_artifact",
         "t3_get_approval_plan",

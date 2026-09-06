@@ -2943,6 +2943,9 @@ pending_approval_requests AS (
         modelSelection: threadRow.value.modelSelection,
         runtimeMode: threadRow.value.runtimeMode,
         interactionMode: threadRow.value.interactionMode,
+        ...(threadRow.value.profileSnapshot === null
+          ? {}
+          : { profileSnapshot: threadRow.value.profileSnapshot }),
         branch: threadRow.value.branch,
         worktreePath: threadRow.value.worktreePath,
         branchPullRequest: threadRow.value.branchPullRequest,
@@ -3250,6 +3253,9 @@ pending_approval_requests AS (
         modelSelection: threadRow.value.modelSelection,
         runtimeMode: threadRow.value.runtimeMode,
         interactionMode: threadRow.value.interactionMode,
+        ...(threadRow.value.profileSnapshot === null
+          ? {}
+          : { profileSnapshot: threadRow.value.profileSnapshot }),
         branch: threadRow.value.branch,
         worktreePath: threadRow.value.worktreePath,
         branchPullRequest: threadRow.value.branchPullRequest,

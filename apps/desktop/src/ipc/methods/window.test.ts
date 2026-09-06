@@ -229,10 +229,10 @@ describe("revealWindow", () => {
 
   it.effect("fails when the sender has no window", () =>
     Effect.gen(function* () {
-      const result = yield* Effect.flip(
-        revealWindow.handler(undefined, { sender: {} as Electron.WebContents }),
-      );
-      assert.equal(result._tag, "DesktopWindowUnavailable");
+      const result = yield* revealWindow
+        .handler(undefined, { sender: {} as Electron.WebContents })
+        .pipe(Effect.match({ onFailure: (error) => error._tag, onSuccess: () => "succeeded" }));
+      assert.equal(result, "DesktopWindowUnavailable");
     }).pipe(
       Effect.provide(
         Layer.mock(ElectronWindow.ElectronWindow)({

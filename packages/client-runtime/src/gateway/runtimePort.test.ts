@@ -333,6 +333,7 @@ describe("Gateway Runtime Port", () => {
       id: "thread-1",
       projectId: "project-1",
       title: "Thread",
+      profileSnapshot: { profileId: "write", revision: 1 },
       modelSelection: { instanceId: "codex", model: "gpt" },
       runtimeMode: "full-access",
       interactionMode: "default",
@@ -392,6 +393,7 @@ describe("Gateway Runtime Port", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
     } as never);
+    expect(projected.profileSnapshot).toEqual({ profileId: "write", revision: 1 });
 
     expect(projected.session).not.toHaveProperty("lastError");
     expect(projected.activities[0]?.payload).toEqual({});
