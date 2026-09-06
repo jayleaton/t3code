@@ -2416,3 +2416,57 @@ describe("agent profile tools", () => {
     ).rejects.toMatchObject({ code: "unknown_environment" });
   });
 });
+
+describe("agent handoff permissions", () => {
+  const input = {
+    sourceEnvironmentId: "source",
+    sourceThreadId: "plan",
+    environmentId: "target",
+    projectId: "project",
+    profileId: "code",
+    handoffId: "018e1000-0000-4000-8000-000000000001",
+    title: "Code",
+    summary: "Plan",
+    prompt: "Implement",
+    files: ["plan.md"],
+  };
+  it("requires source artifact access and target create, send, and artifact access before transferring", async () => {
+    const port = makePort();
+    port.handoffThread = vi.fn(async () => ({
+      environmentId: "target",
+      threadId: "new",
+      briefPath: "brief.md",
+      status: "sent" as const,
+      sourceSettlement: "confirmation-required" as const,
+    }));
+    await expect(
+      callGatewayTool(
+        { port, grants: { source: ["read"], target: ["create", "send", "artifact"] } },
+        "t3_handoff_thread",
+        input,
+      ),
+    ).rejects.toMatchObject({ code: "scope_required" });
+    expect(port.handoffThread).not.toHaveBeenCalled();
+    await callGatewayTool(
+      { port, grants: { source: ["read", "artifact"], target: ["create", "send", "artifact"] } },
+      "t3_handoff_thread",
+      input,
+    );
+    expect(port.handoffThread).toHaveBeenCalledWith(input);
+  });
+  it("requires a separate confirmed settlement call", async () => {
+    const port = makePort();
+    port.settleThread = vi.fn(async () => ({ status: "succeeded" as const }));
+    const context = { port, grants: { source: ["lifecycle"] } as const };
+    await expect(
+      callGatewayTool(context, "t3_settle_thread", { environmentId: "source", threadId: "plan" }),
+    ).rejects.toThrow("Ask the user");
+    expect(port.settleThread).not.toHaveBeenCalled();
+    await callGatewayTool(context, "t3_settle_thread", {
+      environmentId: "source",
+      threadId: "plan",
+      confirmed: true,
+    });
+    expect(port.settleThread).toHaveBeenCalledWith("source", "plan");
+  });
+});

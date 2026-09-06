@@ -132,6 +132,7 @@ export function resolveThreadCreateProfile<
     profileSnapshot: {
       profileId: profile.profileId,
       profileName: profile.name,
+      ...(profile.systemPrompt === undefined ? {} : { systemPrompt: profile.systemPrompt }),
       revision: profile.revision,
       ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
       effectiveSource: {

@@ -1,3 +1,4 @@
+import { performAgentHandoff } from "./handoff.ts";
 import {
   ApprovalRequestId,
   CommandId,
@@ -30,6 +31,7 @@ import {
   respondToThreadApproval,
   respondToThreadApprovals,
   startThreadTurn,
+  settleThread,
 } from "../operations/commands.ts";
 import { request, runStream, subscribe } from "../rpc/client.ts";
 import type {
@@ -603,7 +605,60 @@ export function createGatewayRuntimePort(
     profileQueue = operation.catch(() => undefined);
     return operation;
   };
-  return {
+  const port: GatewayRuntimePort = {
+    settleThread: (environmentId, threadId) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          const crypto = yield* Crypto.Crypto;
+          yield* registry.run(
+            EnvironmentId.make(environmentId),
+            settleThread({
+              threadId: ThreadId.make(threadId),
+              commandId: CommandId.make(yield* crypto.randomUUIDv4),
+            }),
+          );
+          return { status: "succeeded" as const };
+        }),
+      ),
+    handoffThread: async (input) => {
+      const source = await run(shellSnapshot(EnvironmentId.make(input.sourceEnvironmentId)));
+      const thread = source.threads.find((t) => t.id === input.sourceThreadId);
+      const project = source.projects.find((p) => p.id === thread?.projectId);
+      if (!thread || !project) throw new Error("Source thread or project is unavailable.");
+      const target = await run(shellSnapshot(EnvironmentId.make(input.environmentId)));
+      const targetProject = target.projects.find((p) => p.id === input.projectId);
+      if (!targetProject) throw new Error("Destination project is unavailable.");
+      return performAgentHandoff(port, input, {
+        readSource: (path) =>
+          run(
+            Effect.gen(function* () {
+              const registry = yield* EnvironmentRegistry;
+              return yield* registry.run(
+                EnvironmentId.make(input.sourceEnvironmentId),
+                request(WS_METHODS.projectsReadFile, {
+                  cwd: thread.worktreePath ?? project.workspaceRoot,
+                  relativePath: path,
+                }),
+              );
+            }),
+          ),
+        writeBrief: (path, contents) =>
+          run(
+            Effect.gen(function* () {
+              const registry = yield* EnvironmentRegistry;
+              yield* registry.run(
+                EnvironmentId.make(input.environmentId),
+                request(WS_METHODS.projectsWriteFile, {
+                  cwd: targetProject.workspaceRoot,
+                  relativePath: path,
+                  contents,
+                }),
+              );
+            }),
+          ),
+      });
+    },
     openAgents: async () => {
       if (!openAgents) throw new Error("Desktop agents navigation is unavailable in this runtime.");
       await openAgents();
@@ -1189,4 +1244,5 @@ export function createGatewayRuntimePort(
         }),
       ),
   };
+  return port;
 }

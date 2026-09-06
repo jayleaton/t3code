@@ -449,3 +449,15 @@
     font-size: 12px;
   }
 }
+
+.agent-dialog {
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+}
+/* Keep ChatView's positioned controls inside its pane, below the agents toolbar. */
+.agents-chat {
+  contain: layout;
+}
+.agents-backbar {
+  flex-shrink: 0;
+}

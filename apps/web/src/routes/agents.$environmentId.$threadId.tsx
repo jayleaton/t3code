@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { AgentHandoffDialog } from "../components/agents/AgentHandoffDialog";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowLeftIcon } from "lucide-react";
 import ChatView from "../components/ChatView";
@@ -12,6 +14,7 @@ export function AgentsThreadView({
   environmentId: string;
   threadId: string;
 }) {
+  const [handoff, setHandoff] = useState(false);
   const threadRef = resolveThreadRouteRef({ environmentId, threadId });
   const shell = useThreadShell(threadRef);
   const detail = useThreadDetail(threadRef);
@@ -28,7 +31,24 @@ export function AgentsThreadView({
           <ArrowLeftIcon size={14} />
           Back to agents
         </Link>
+        <button
+          className="ml-auto rounded-md border px-3 py-1"
+          disabled={!detail}
+          onClick={() => setHandoff(true)}
+        >
+          Hand off
+        </button>
       </div>
+      {handoff && detail && (
+        <AgentHandoffDialog
+          sourceEnvironmentId={environmentId}
+          sourceThreadId={threadId}
+          initialSummary={
+            detail.messages.findLast((message) => message.role === "assistant")?.text ?? ""
+          }
+          onClose={() => setHandoff(false)}
+        />
+      )}
       <div className="agents-chat">
         {threadRef && status !== "deleted" ? (
           <ChatView

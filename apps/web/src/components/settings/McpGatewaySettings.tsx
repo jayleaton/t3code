@@ -514,6 +514,7 @@ export function McpGatewayOperationalStatus({
 }
 
 interface ProfileDraft {
+  readonly systemPrompt: string;
   readonly name: string;
   readonly driverKind: ProviderDriverKind | null;
   readonly instanceId: string | null;
@@ -525,6 +526,7 @@ interface ProfileDraft {
 }
 
 const EMPTY_DRAFT: ProfileDraft = {
+  systemPrompt: "",
   name: "",
   driverKind: null,
   instanceId: null,
@@ -626,6 +628,7 @@ export function McpProfileList({
     const model = selection?.model ?? null;
     setDraft({
       name: profile.name,
+      systemPrompt: profile.systemPrompt ?? "",
       driverKind: entry?.driverKind ?? null,
       instanceId: entry?.instanceId ?? null,
       providerLabel: profile.providerLabel ?? "",
@@ -714,6 +717,16 @@ export function McpProfileList({
         );
       })}
 
+      <label className="grid gap-2 text-sm">
+        System prompt
+        <textarea
+          className="min-h-28 rounded-md border p-3"
+          maxLength={32000}
+          value={draft.systemPrompt}
+          onChange={(event) => setDraft({ ...draft, systemPrompt: event.target.value })}
+          placeholder="Agent role, workflow, and expected output"
+        />
+      </label>
       <div className="grid gap-2 sm:grid-cols-2">
         <Input
           value={draft.name}
@@ -884,6 +897,8 @@ export function McpProfileList({
             const profile: McpGatewayProfile = {
               profileId: previous?.profileId ?? `profile_${randomUUID()}`,
               name,
+              systemPrompt: draft.systemPrompt,
+              ...(previous?.environmentIds ? { environmentIds: previous.environmentIds } : {}),
               providerLabel: entry.label,
               modelLabel: model.name,
               ...(draft.reasoningEffort === null ? {} : { reasoningEffort: draft.reasoningEffort }),

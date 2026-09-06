@@ -1,3 +1,5 @@
+import * as Path from "effect/Path";
+import { syncAgentInstructionFile } from "../../provider/AgentInstructionFiles.ts";
 import {
   type ChatAttachment,
   CommandId,
@@ -327,6 +329,7 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry;
   const gitWorkflow = yield* GitWorkflowService;
   const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
@@ -1867,6 +1870,30 @@ const make = Effect.gen(function* () {
         return;
       case "thread.settled": {
         const thread = yield* projectionSnapshotQuery.getThreadShellById(event.payload.threadId);
+        if (
+          Option.isSome(thread) &&
+          thread.value.settledAt !== null &&
+          thread.value.profileSnapshot?.systemPrompt
+        ) {
+          const project = yield* resolveProject(thread.value.projectId);
+          const cwd = thread.value.worktreePath ?? project?.workspaceRoot;
+          if (cwd)
+            yield* syncAgentInstructionFile({
+              cwd,
+              threadId: thread.value.id,
+              instructions: thread.value.profileSnapshot.systemPrompt,
+              settled: true,
+            }).pipe(
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, path),
+              Effect.catchCause((cause) =>
+                Effect.logWarning("Agent instruction cleanup failed", {
+                  threadId: thread.value.id,
+                  cause,
+                }),
+              ),
+            );
+        }
         if (
           Option.isNone(thread) ||
           thread.value.session == null ||

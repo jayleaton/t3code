@@ -383,6 +383,7 @@ describe("ClaudeAdapterLive", () => {
         threadId: THREAD_ID,
         provider: ProviderDriverKind.make("claudeAgent"),
         runtimeMode: "full-access",
+        agentInstructions: "Act as the planning agent.",
       });
 
       const createInput = harness.getLastCreateQueryInput();
@@ -391,7 +392,7 @@ describe("ClaudeAdapterLive", () => {
         type: "preset",
         preset: "claude_code",
         append:
-          "<runtime_info>In case you're asked: you are running in T3 Code through the Claude Code harness. No need to mention this otherwise. You can embed images and videos in your response using Markdown with absolute file paths.</runtime_info>",
+          "<runtime_info>In case you're asked: you are running in T3 Code through the Claude Code harness. No need to mention this otherwise. You can embed images and videos in your response using Markdown with absolute file paths.</runtime_info>\n\n# Assigned agent instructions\n\nAct as the planning agent.",
       });
       assert.equal(createInput?.options.permissionMode, "bypassPermissions");
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, true);

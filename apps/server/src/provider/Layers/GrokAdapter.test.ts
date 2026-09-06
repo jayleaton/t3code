@@ -233,6 +233,7 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       yield* adapter.sendTurn({
         threadId,
         input: "Second prompt",
+        agentInstructions: "Act as the research agent.",
         modelSelection: {
           instanceId: ProviderInstanceId.make("grok"),
           model: "grok-4.6",
@@ -271,6 +272,7 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       assert.include(prompts[1]?.[1]?.text, "Grok harness, as grok-4.6");
       assert.include(prompts[1]?.[1]?.text, "with low reasoning effort");
       assert.include(prompts[1]?.[1]?.text, "embed images and videos");
+      assert.include(prompts[1]?.[1]?.text, "Act as the research agent.");
     }),
   );
 

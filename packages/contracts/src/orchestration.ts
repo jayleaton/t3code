@@ -502,6 +502,7 @@ export const ThreadLinkedPullRequest = Schema.Struct({
 });
 export type ThreadLinkedPullRequest = typeof ThreadLinkedPullRequest.Type;
 export const ThreadProfileSnapshot = Schema.Struct({
+  systemPrompt: Schema.optional(Schema.String.check(Schema.isMaxLength(32_000))),
   profileId: Schema.NullOr(TrimmedNonEmptyString),
   profileName: Schema.NullOr(TrimmedNonEmptyString),
   revision: Schema.NullOr(NonNegativeInt),

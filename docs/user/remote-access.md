@@ -216,7 +216,8 @@ chat does not start or stop its agent. The desktop app must already be running a
 ### Organize work by agent
 
 Open **Open agents** in the command palette, or visit `/agents`. Create a named agent, choose its
-provider, model, thinking, and allowed machines, then start a task or an empty chat. Clicking a
+provider, model, thinking, allowed machines, and a system prompt describing its role and workflow,
+then start a task or an empty chat. Clicking a
 card opens the conversation; **Back to agents** returns to the board. Settled work stays visible
 in its agent column. Deleting an agent keeps its conversations under **Removed agents**.
 
@@ -231,3 +232,23 @@ or admin access. Profile writes share only to connected environments with one of
 check the returned sync failures. Use `profileId` with `t3_create_thread` for voice-driven agent
 tasks, and filter `t3_list_threads` by the same ID to continue work. `t3_open_agents` opens the
 board in the connected desktop window with read access.
+
+Each chat keeps the agent instructions it started with, including after the agent is edited or
+deleted. When work starts, T3 places that chat’s generated `AGENT.md` in its own directory under
+`.agents/t3/` in the workspace. This runtime directory is ignored by Git. Settling removes that
+generated file; continuing the conversation
+restores its original instructions. Other chats and project-owned instruction files are left
+alone. Edit the agent in the app to change instructions for future chats.
+
+Use **Hand off** inside an agent chat to move from planning to implementation or from code to
+review. Review the prefilled latest response, select any workspace-relative text files such as
+`plan.md`, choose the destination agent and project, and give it a task. The new chat receives a
+Markdown brief with the summary and copied file contents, including across machines. After a
+successful handoff, choose whether to settle the source conversation. Plans and handoff briefs
+remain available when the source settles; only its generated agent instructions are cleaned up.
+
+MCP assistants can use `t3_handoff_thread` for the same transfer. Reuse the handoff UUID when
+retrying, and inspect the returned status: `created` means the new chat exists but delivery needs
+recovery. Settlement is a separate `t3_settle_thread` call after the user confirms. Handoff needs
+read access on the source, artifact access when copying files, and create/send/artifact access on
+the destination; settlement needs lifecycle access.

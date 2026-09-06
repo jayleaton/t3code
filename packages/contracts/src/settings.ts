@@ -845,6 +845,7 @@ export const BackgroundActivitySettings = Schema.Struct({
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
 export const McpGatewayProfile = Schema.Struct({
+  systemPrompt: Schema.optional(Schema.String.check(Schema.isMaxLength(32_000))),
   profileId: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
   revision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),

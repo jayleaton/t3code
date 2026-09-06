@@ -19,6 +19,7 @@ export function AgentEditor({
   onSave: (profile: McpGatewayProfile) => Promise<boolean | undefined>;
   onClose: () => void;
 }) {
+  const [systemPrompt, setSystemPrompt] = useState(profile?.systemPrompt ?? "");
   const [name, setName] = useState(profile?.name ?? "");
   const [providerLabel, setProviderLabel] = useState(profile?.providerLabel ?? "");
   const [modelLabel, setModelLabel] = useState(profile?.modelLabel ?? "");
@@ -74,6 +75,7 @@ export function AgentEditor({
               const saved = await onSave({
                 profileId: profile?.profileId ?? randomUUID(),
                 name: name.trim(),
+                systemPrompt,
                 revision: profile?.revision ?? 1,
                 providerLabel,
                 modelLabel,
@@ -103,6 +105,19 @@ export function AgentEditor({
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
+          </label>
+          <label>
+            System prompt
+            <textarea
+              rows={6}
+              maxLength={32000}
+              value={systemPrompt}
+              onChange={(event) => setSystemPrompt(event.target.value)}
+              placeholder="Describe this agent’s role, workflow, and expected output…"
+            />
+            <span className="text-xs text-muted-foreground">
+              Applied to new chats. Existing chats keep the instructions they started with.
+            </span>
           </label>
           <div className="agent-form-grid">
             <label>

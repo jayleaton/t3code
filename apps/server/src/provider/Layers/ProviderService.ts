@@ -1,3 +1,5 @@
+import * as Path from "effect/Path";
+import { syncAgentInstructionFile } from "../AgentInstructionFiles.ts";
 /**
  * ProviderServiceLive - Cross-provider orchestration layer.
  *
@@ -331,11 +333,38 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const projectionQuery = yield* Effect.serviceOption(
     ProjectionSnapshotQuery.ProjectionSnapshotQuery,
   );
+  const resolveAgentInstructions = Effect.fn("ProviderService.resolveAgentInstructions")(
+    function* (threadId: ThreadId) {
+      if (Option.isNone(projectionQuery)) return undefined;
+      const thread = yield* projectionQuery.value.getThreadShellById(threadId);
+      if (Option.isNone(thread)) return undefined;
+      const instructions = thread.value.profileSnapshot?.systemPrompt;
+      if (thread.value.profileSnapshot?.profileId && thread.value.settledAt === null) {
+        const project = yield* projectionQuery.value.getProjectShellById(thread.value.projectId);
+        const cwd =
+          thread.value.worktreePath ??
+          (Option.isSome(project) ? project.value.workspaceRoot : undefined);
+        if (cwd)
+          yield* syncAgentInstructionFile({
+            cwd,
+            threadId,
+            instructions: instructions ?? "",
+            settled: false,
+          }).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+          );
+      }
+      return instructions;
+    },
+    Effect.catch((cause) => toValidationError("ProviderService.agentInstructions", String(cause))),
+  );
   const issueMcpCredential =
     options?.issueMcpCredential ?? McpSessionRegistry.issueActiveMcpCredential;
   const revokeMcpCredential =
     options?.revokeMcpCredential ?? McpSessionRegistry.revokeActiveMcpThread;
   const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const pendingCompactions = new Map<ThreadId, PendingCompaction>();
   const timedOutNativeCompactions = new Set<ThreadId>();
@@ -1049,6 +1078,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const resumed = yield* adapter
         .startSession({
           threadId: input.binding.threadId,
+          agentInstructions: yield* resolveAgentInstructions(input.binding.threadId),
           provider: input.binding.provider,
           providerInstanceId: bindingInstanceId,
           ...(persistedCwd ? { cwd: persistedCwd } : {}),
@@ -1280,6 +1310,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const session = yield* adapter
           .startSession({
             ...input,
+            agentInstructions: yield* resolveAgentInstructions(threadId),
             providerInstanceId: resolvedInstanceId,
             ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
             ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
@@ -1389,8 +1420,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             .filter((part): part is string => typeof part === "string" && part.length > 0)
             .join("\n\n");
 
+    const agentInstructions = yield* resolveAgentInstructions(parsed.threadId);
     const input = {
       ...parsed,
+      ...(agentInstructions === undefined ? {} : { agentInstructions }),
       ...(inputTextWithAttachmentPaths !== undefined
         ? { input: inputTextWithAttachmentPaths }
         : {}),

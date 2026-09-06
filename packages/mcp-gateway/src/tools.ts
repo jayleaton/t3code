@@ -29,10 +29,24 @@ export interface GatewayToolContext {
   };
 }
 
+export const handoffInputSchema = z.object({
+  sourceEnvironmentId: z.string().min(1),
+  sourceThreadId: z.string().min(1),
+  environmentId: z.string().min(1),
+  projectId: z.string().min(1),
+  profileId: z.string().min(1),
+  handoffId: z.string().uuid(),
+  title: z.string().max(200),
+  summary: z.string().trim().min(1).max(64000),
+  prompt: z.string().trim().min(1).max(16000),
+  files: z.array(z.string().min(1)).max(10).optional(),
+});
+
 const profileInput = z.object({
   name: z.string().trim().min(1).max(200),
   providerLabel: z.string().trim().min(1),
   modelLabel: z.string().trim().min(1),
+  systemPrompt: z.string().max(32_000).optional(),
   reasoningEffort: z.string().trim().min(1).optional(),
   runtimeMode: z.enum([
     "approval-required",
@@ -665,6 +679,26 @@ export async function callGatewayTool(
         ],
         clock: "runtime",
       };
+    }
+    case "t3_handoff_thread": {
+      const parsed = handoffInputSchema.parse(input);
+      environmentWithScopes(context, parsed, ["create", "send", "artifact"]);
+      environmentWithScopes(
+        context,
+        { environmentId: parsed.sourceEnvironmentId },
+        parsed.files?.length ? ["read", "artifact"] : ["read"],
+      );
+      if (!context.port.handoffThread)
+        throw new Error("Agent handoff is unavailable in this runtime.");
+      return context.port.handoffThread(parsed);
+    }
+    case "t3_settle_thread": {
+      const environmentId = environmentWithScope(context, input, "lifecycle");
+      if (input.confirmed !== true)
+        throw new Error("Ask the user before settling the source conversation.");
+      if (!context.port.settleThread)
+        throw new Error("Thread settlement is unavailable in this runtime.");
+      return context.port.settleThread(environmentId, requiredString(input, "threadId"));
     }
     case "t3_create_profile": {
       const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);

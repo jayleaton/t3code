@@ -93,6 +93,7 @@ describe("canonicalizeClientCommandTimestamps", () => {
     const profile = {
       profileId: "profile-andy",
       name: "Andy",
+      systemPrompt: "Plan first. Write a plan.md file.",
       revision: 2,
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
       reasoningEffort: "high",
@@ -111,6 +112,7 @@ describe("canonicalizeClientCommandTimestamps", () => {
       runtimeMode: "auto-accept-edits",
       interactionMode: "plan",
       profileSnapshot: {
+        systemPrompt: "Plan first. Write a plan.md file.",
         profileId: "profile-andy",
         profileName: "Andy",
         revision: 2,

@@ -1,3 +1,4 @@
+import type { AgentHandoffInput, AgentHandoffResult } from "./handoff.ts";
 export const GATEWAY_SCOPE_VALUES = [
   "read",
   "create",
@@ -30,6 +31,7 @@ export type GatewayThreadControlAction =
 export type GatewayApprovalDecision = "accept" | "acceptForSession" | "decline" | "cancel";
 
 export interface GatewayProfile {
+  readonly systemPrompt?: string | undefined;
   readonly profileId?: string | undefined;
   readonly name: string;
   /**
@@ -61,6 +63,7 @@ export type GatewayProfileInput = Pick<
   | "providerLabel"
   | "modelLabel"
   | "reasoningEffort"
+  | "systemPrompt"
   | "runtimeMode"
   | "interactionMode"
   | "environmentIds"
@@ -277,6 +280,8 @@ export function parseGatewayStatusSnapshot(value: unknown): GatewayStatusSnapsho
 }
 
 export interface GatewayRuntimePort {
+  handoffThread?(input: AgentHandoffInput): Promise<AgentHandoffResult>;
+  settleThread?(environmentId: string, threadId: string): Promise<{ status: "succeeded" }>;
   openAgents?(environmentId: string): Promise<{ status: "succeeded" }>;
   createProfile?(environmentId: string, profile: GatewayProfileInput): Promise<GatewayProfile>;
   updateProfile?(

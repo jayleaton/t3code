@@ -7,6 +7,7 @@ import { z } from "zod";
 import { GatewayError, type GatewayRuntimePort } from "./port.ts";
 import {
   callGatewayTool,
+  handoffInputSchema,
   type GatewayGrantSource,
   type GatewayProfileSource,
   type GatewayToolContext,
@@ -35,6 +36,7 @@ const profileFields = {
   name: z.string().trim().min(1).max(200),
   providerLabel: z.string().trim().min(1),
   modelLabel: z.string().trim().min(1),
+  systemPrompt: z.string().max(32_000).optional(),
   reasoningEffort: z.string().trim().min(1).optional(),
   runtimeMode: z.enum([
     "approval-required",
@@ -50,6 +52,14 @@ const profileFields = {
 type ToolSpec = readonly [description: string, inputSchema: z.ZodRawShape];
 
 const TOOL_SPECS = {
+  t3_handoff_thread: [
+    "Hand work to a new agent chat: save a Markdown brief with a reviewed summary and selected source file contents, then send the destination task. Use a stable handoffId UUID for retries. Source conversation remains intact. After success ASK the user whether to settle it; never infer approval. A created status means delivery failed: open the returned thread to recover rather than making another chat.",
+    handoffInputSchema.shape,
+  ],
+  t3_settle_thread: [
+    "Settle a conversation only after the user explicitly chooses to settle it. Requires lifecycle scope. Does not delete the conversation. Do not call automatically after a handoff.",
+    { environmentId, threadId, confirmed: z.literal(true) },
+  ],
   t3_create_profile: [
     "Create a named agent profile without starting a session. Requires create or admin access. Shares to connected machines with the same grant.",
     { environmentId, ...profileFields },
