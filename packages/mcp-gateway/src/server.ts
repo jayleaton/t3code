@@ -68,6 +68,11 @@ export function createMcpGateway(input: {
     environmentId,
     projectId: z.string().trim().min(1).optional(),
   });
+  register(
+    "t3_open_thread",
+    "Open a local or remote chat in the desktop app connected to this gateway and reveal its window. Requires read access; does not start or stop a turn.",
+    { environmentId, threadId },
+  );
   register("t3_get_thread", "Read one T3 chat and its messages.", { environmentId, threadId });
   register("t3_get_messages", "Read recent messages from one T3 chat.", {
     environmentId,

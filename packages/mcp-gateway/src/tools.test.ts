@@ -9,6 +9,11 @@ function makePort(): GatewayRuntimePort {
     environments.map((environmentId) => [environmentId, []]),
   );
   return {
+    openThread: async (environmentId, threadId) => ({
+      environmentId,
+      threadId,
+      status: "succeeded",
+    }),
     listEnvironments: async () =>
       environments.map((environmentId) => ({
         environmentId,
@@ -73,6 +78,32 @@ const profiles = [
 ] as const;
 
 describe("gateway chat tools", () => {
+  it("uses current per-environment read grants for opening chats", async () => {
+    const port = makePort();
+    const open = vi.spyOn(port, "openThread");
+    let current: Record<string, readonly ("read" | "send")[]> = {
+      remote: ["send"],
+      local: ["read"],
+    };
+    const context = { port, grants: () => current };
+    await expect(
+      callGatewayTool(context, "t3_open_thread", { environmentId: "remote", threadId: "chat" }),
+    ).rejects.toMatchObject({
+      code: "scope_required",
+      details: { requiredScope: "read", grantedScopes: ["send"] },
+    });
+    expect(open).not.toHaveBeenCalled();
+    current = { ...current, remote: ["read"] };
+    await expect(
+      callGatewayTool(context, "t3_open_thread", { environmentId: "remote", threadId: "chat" }),
+    ).resolves.toEqual({ environmentId: "remote", threadId: "chat", status: "succeeded" });
+    current = { local: ["read"] };
+    await expect(
+      callGatewayTool(context, "t3_open_thread", { environmentId: "remote", threadId: "chat" }),
+    ).rejects.toMatchObject({ code: "unknown_environment" });
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["local", "remote"])("reads, creates, and sends chats in %s", async (environmentId) => {
     const port = makePort();
     const context = { port, grants, profiles };

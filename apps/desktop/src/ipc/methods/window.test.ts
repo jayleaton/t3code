@@ -11,6 +11,7 @@ import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import {
+  revealWindow,
   getLocalEnvironmentBootstraps,
   getWindowFullscreenState,
   pickProjectFavicon,
@@ -210,5 +211,34 @@ describe("pickProjectFavicon", () => {
         ],
       ]);
     }),
+  );
+});
+
+describe("revealWindow", () => {
+  it.effect("reveals the requesting renderer's window rather than the focused window", () => {
+    const window = { isDestroyed: () => false } as Electron.BrowserWindow;
+    const sender = {} as Electron.WebContents;
+    const reveal = vi.fn(() => Effect.void);
+    const fromWebContents = vi.fn(() => Effect.succeed(Option.some(window)));
+    return Effect.gen(function* () {
+      yield* revealWindow.handler(undefined, { sender });
+      assert.deepEqual(fromWebContents.mock.calls, [[sender]]);
+      assert.deepEqual(reveal.mock.calls, [[window]]);
+    }).pipe(Effect.provide(Layer.mock(ElectronWindow.ElectronWindow)({ fromWebContents, reveal })));
+  });
+
+  it.effect("fails when the sender has no window", () =>
+    Effect.gen(function* () {
+      const result = yield* Effect.flip(
+        revealWindow.handler(undefined, { sender: {} as Electron.WebContents }),
+      );
+      assert.equal(result._tag, "DesktopWindowUnavailable");
+    }).pipe(
+      Effect.provide(
+        Layer.mock(ElectronWindow.ElectronWindow)({
+          fromWebContents: () => Effect.succeed(Option.none()),
+        }),
+      ),
+    ),
   );
 });

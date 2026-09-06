@@ -101,6 +101,29 @@ export const getMcpGatewayLaunchConfig = DesktopIpc.makeSyncIpcMethod({
   }),
 });
 
+class DesktopWindowUnavailable extends Schema.TaggedErrorClass<DesktopWindowUnavailable>()(
+  "DesktopWindowUnavailable",
+  { message: Schema.String },
+) {}
+
+export const revealWindow = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.REVEAL_WINDOW_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.window.revealWindow")(function* (_input, event) {
+    const electronWindow = yield* ElectronWindow.ElectronWindow;
+    const window = event?.sender
+      ? yield* electronWindow.fromWebContents(event.sender)
+      : Option.none();
+    if (Option.isNone(window) || window.value.isDestroyed()) {
+      return yield* new DesktopWindowUnavailable({
+        message: "The requesting desktop window is unavailable.",
+      });
+    }
+    yield* electronWindow.reveal(window.value);
+  }),
+});
+
 export const getSystemLocale = DesktopIpc.makeSyncIpcMethod({
   channel: IpcChannels.GET_SYSTEM_LOCALE_CHANNEL,
   result: Schema.String,

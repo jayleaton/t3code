@@ -27,10 +27,14 @@ export interface GatewayEffectRuntime {
 
 export function createGatewayRuntimePortFromContext(
   context: Context.Context<EnvironmentRegistry | Crypto.Crypto>,
+  openThread?: (environmentId: string, threadId: string) => Promise<void>,
 ): GatewayRuntimePort {
-  return createGatewayRuntimePort({
-    runPromise: (effect) => Effect.runPromiseWith(context)(effect),
-  });
+  return createGatewayRuntimePort(
+    {
+      runPromise: (effect) => Effect.runPromiseWith(context)(effect),
+    },
+    openThread,
+  );
 }
 
 function targetKind(tag: string): string {
@@ -68,11 +72,25 @@ const threadSnapshot = (environmentId: EnvironmentId, threadId: ThreadId) =>
     );
   });
 
-export function createGatewayRuntimePort(runtime: GatewayEffectRuntime): GatewayRuntimePort {
+export function createGatewayRuntimePort(
+  runtime: GatewayEffectRuntime,
+  openThread?: (environmentId: string, threadId: string) => Promise<void>,
+): GatewayRuntimePort {
   const run = <A, E>(effect: Effect.Effect<A, E, EnvironmentRegistry | Crypto.Crypto>) =>
     runtime.runPromise(effect);
 
   return {
+    openThread: async (environmentId, threadId) => {
+      if (!openThread) throw new Error("Desktop chat navigation is unavailable in this runtime.");
+      const snapshot = await run(
+        threadSnapshot(EnvironmentId.make(environmentId), ThreadId.make(threadId)),
+      );
+      if (snapshot.thread.id !== threadId || snapshot.thread.deletedAt !== null) {
+        throw new Error(`Thread ${threadId} was not found.`);
+      }
+      await openThread(environmentId, threadId);
+      return { environmentId, threadId, status: "succeeded" };
+    },
     listEnvironments: () =>
       run(
         Effect.gen(function* () {

@@ -128,6 +128,8 @@ describe("gateway bridge client", () => {
         profiles,
       }),
     );
+    expect(onState).not.toHaveBeenCalledWith("running");
+    socket.emit("message", JSON.stringify({ type: "configured" }));
     expect(onState).toHaveBeenCalledWith("running");
     bridge.stop();
   });

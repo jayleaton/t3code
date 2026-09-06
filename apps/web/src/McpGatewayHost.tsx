@@ -6,6 +6,8 @@ import * as Option from "effect/Option";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useEffect, useState } from "react";
 
+import type { AppRouter } from "./router";
+import { openDesktopGatewayThread } from "./mcpGatewayNavigation";
 import { connectionAtomRuntime } from "./connection/runtime";
 import {
   getMcpGatewayGrants,
@@ -19,7 +21,7 @@ import { appAtomRegistry } from "./rpc/atomRegistry";
 
 const BRIDGE_URL = "ws://127.0.0.1:47631";
 
-export function McpGatewayHost() {
+export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
   const [configuration, setConfiguration] = useState(() => ({
     available: (window.desktopBridge?.getMcpGatewayLaunchConfig() ?? null) !== null,
     enabled: isMcpGatewayEnabled(),
@@ -55,7 +57,9 @@ export function McpGatewayHost() {
       const value = AsyncResult.value(appAtomRegistry.get(connectionAtomRuntime));
       if (Option.isNone(value)) return;
       bridge = connectGatewayBridge({
-        port: createGatewayRuntimePortFromContext(value.value),
+        port: createGatewayRuntimePortFromContext(value.value, async (environmentId, threadId) => {
+          await openDesktopGatewayThread(router, window.desktopBridge, environmentId, threadId);
+        }),
         grants: configuration.grants,
         profiles: configuration.profiles,
         token: configuration.token,
@@ -75,7 +79,7 @@ export function McpGatewayHost() {
       bridge?.stop();
       unmountRuntime();
     };
-  }, [configuration]);
+  }, [configuration, router]);
 
   return null;
 }

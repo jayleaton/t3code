@@ -16,7 +16,7 @@ export function AppRoot({ router }: { readonly router: AppRouter }) {
   return (
     <AppAtomRegistryProvider>
       <RouterProvider router={router} />
-      <McpGatewayHost />
+      <McpGatewayHost router={router} />
       <PreviewAutomationHosts />
       <ElectronBrowserHost />
       <QuitHoldOverlay />

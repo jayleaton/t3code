@@ -22,6 +22,7 @@ export interface GatewayBridgeSocket {
 }
 
 const METHODS = new Set<keyof GatewayRuntimePort>([
+  "openThread",
   "listEnvironments",
   "getEnvironmentStatus",
   "listProjects",
@@ -124,10 +125,13 @@ export function connectGatewayBridge(input: {
                 profiles: input.profiles ?? [],
               }),
             );
-            input.onState?.("running");
             return;
           }
           if (!authenticated) throw new Error("Gateway bridge is not authenticated.");
+          if (candidate.type === "configured") {
+            input.onState?.("running");
+            return;
+          }
           if (
             typeof candidate.id !== "number" ||
             !Number.isInteger(candidate.id) ||

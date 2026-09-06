@@ -169,3 +169,11 @@ Include the diagnostic message and trace ID when reporting a persistent failure.
 
 For a connection that still fails after linking, check the date and time on both
 devices. For server version warnings, follow [Updating T3 Code](./updating.md).
+
+## Open a remote chat through MCP
+
+In the installed desktop app, connect the remote environment and configure **Settings → MCP Gateway**
+with your MCP assistant. Grant the environment read access. Your assistant can use `t3_open_thread`
+with the environment and thread IDs to open that chat and bring this desktop window forward.
+The remote machine supplies the chat; the desktop connected to the gateway displays it. Opening a
+chat does not start or stop its agent. The desktop app must already be running and connected.

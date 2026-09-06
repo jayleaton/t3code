@@ -5,7 +5,7 @@ import * as Effect from "effect/Effect";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import { EnvironmentRegistry } from "../connection/registry.ts";
-import { createGatewayRuntimePortFromContext } from "./runtimePort.ts";
+import { createGatewayRuntimePort, createGatewayRuntimePortFromContext } from "./runtimePort.ts";
 
 const environmentId = EnvironmentId.make("remote-1");
 const testCrypto = Crypto.make({
@@ -68,4 +68,63 @@ describe("Gateway Runtime Port", () => {
       );
     }),
   );
+});
+
+describe("opening a desktop chat", () => {
+  it.each(["local", "remote"])(
+    "validates the thread and awaits desktop navigation for %s",
+    async (target) => {
+      const navigation = Promise.withResolvers<void>();
+      const open = vi.fn(() => navigation.promise);
+      const runPromise = vi.fn(async () => ({ thread: { id: "chat", deletedAt: null } }));
+      const port = createGatewayRuntimePort(
+        { runPromise } as unknown as import("./runtimePort.ts").GatewayEffectRuntime,
+        open,
+      );
+      let finished = false;
+      const result = port.openThread(target, "chat").then((value) => {
+        finished = true;
+        return value;
+      });
+      await Promise.resolve();
+      expect(runPromise).toHaveBeenCalledOnce();
+      expect(open).toHaveBeenCalledWith(target, "chat");
+      expect(finished).toBe(false);
+      navigation.resolve();
+      await expect(result).resolves.toEqual({
+        environmentId: target,
+        threadId: "chat",
+        status: "succeeded",
+      });
+    },
+  );
+
+  it.each([
+    { id: "other", deletedAt: null },
+    { id: "chat", deletedAt: "2026-09-01" },
+  ])("rejects an unavailable thread", async (thread) => {
+    const open = vi.fn(async () => {});
+    const port = createGatewayRuntimePort(
+      {
+        runPromise: async () => ({ thread }),
+      } as unknown as import("./runtimePort.ts").GatewayEffectRuntime,
+      open,
+    );
+    await expect(port.openThread("remote", "chat")).rejects.toThrow("not found");
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("propagates connection failure without navigating", async () => {
+    const open = vi.fn(async () => {});
+    const port = createGatewayRuntimePort(
+      {
+        runPromise: async () => {
+          throw new Error("offline");
+        },
+      },
+      open,
+    );
+    await expect(port.openThread("remote", "chat")).rejects.toThrow("offline");
+    expect(open).not.toHaveBeenCalled();
+  });
 });

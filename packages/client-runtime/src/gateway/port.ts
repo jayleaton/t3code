@@ -36,6 +36,10 @@ export interface GatewayMutationResult {
 }
 
 export interface GatewayRuntimePort {
+  openThread(
+    environmentId: string,
+    threadId: string,
+  ): Promise<{ environmentId: string; threadId: string; status: "succeeded" }>;
   listEnvironments(): Promise<ReadonlyArray<GatewayEnvironmentSummary>>;
   getEnvironmentStatus(environmentId: string): Promise<Record<string, unknown>>;
   listProjects(environmentId: string): Promise<GatewayPage<Record<string, unknown>>>;

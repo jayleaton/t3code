@@ -202,6 +202,7 @@ export function createBridgeRuntimePort(input: {
           profiles = nextProfiles;
           client = socket;
           configured = true;
+          socket.send(JSON.stringify({ type: "configured" }));
           authenticationSignal.removeEventListener("abort", onAuthenticationTimeout);
           return;
         }
@@ -254,6 +255,7 @@ export function createBridgeRuntimePort(input: {
     getProfiles: () => profiles,
     ready,
     port: {
+      openThread: (environmentId, threadId) => invoke("openThread", [environmentId, threadId]),
       listEnvironments: () => invoke("listEnvironments", []),
       getEnvironmentStatus: (environmentId) => invoke("getEnvironmentStatus", [environmentId]),
       listProjects: (environmentId) => invoke("listProjects", [environmentId]),

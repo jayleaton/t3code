@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "@effect/vitest";
 import WebSocket from "ws";
 
 import { createBridgeRuntimePort } from "./bridge.ts";
+import { callGatewayTool } from "./tools.ts";
 
 const TOKEN = "test-token-123456789";
 
@@ -57,9 +58,11 @@ function authenticate(
         }
         if (configure) {
           socket.send(JSON.stringify({ type: "configure", grants: {} }));
-          const configuredSignal = AbortSignal.timeout(10);
-          configuredSignal.addEventListener("abort", () => resolve(), { once: true });
         } else resolve();
+        return;
+      }
+      if (message.type === "configured") {
+        resolve();
         return;
       }
       onRequest?.(message);
@@ -254,4 +257,57 @@ describe("gateway bridge", () => {
     client.close();
     await bridge.close();
   });
+});
+
+it("enforces acknowledged grant updates when opening a remote chat through the bridge", async () => {
+  const port = await unusedPort();
+  const bridge = createBridgeRuntimePort({ port, token: TOKEN });
+  const client = new WebSocket(`ws://127.0.0.1:${port}`);
+  const requests: Record<string, unknown>[] = [];
+  const authenticated = authenticate(
+    client,
+    (request) => {
+      requests.push(request);
+      client.send(
+        JSON.stringify({
+          id: request.id,
+          result: { environmentId: "remote", threadId: "chat", status: "succeeded" },
+        }),
+      );
+    },
+    false,
+  );
+  try {
+    await opened(client);
+    await authenticated;
+    const configure = async (grants: Record<string, readonly string[]>) => {
+      const acknowledged = new Promise<void>((resolve) => {
+        client.once("message", (raw) => {
+          expect(JSON.parse(raw.toString())).toEqual({ type: "configured" });
+          resolve();
+        });
+      });
+      client.send(JSON.stringify({ type: "configure", grants }));
+      await acknowledged;
+    };
+    const context = { port: bridge.port, grants: bridge.getGrants };
+    await configure({ remote: ["send"] });
+    await expect(
+      callGatewayTool(context, "t3_open_thread", { environmentId: "remote", threadId: "chat" }),
+    ).rejects.toMatchObject({ code: "scope_required" });
+    expect(requests).toEqual([]);
+    await configure({ remote: ["read"] });
+    await expect(
+      callGatewayTool(context, "t3_open_thread", { environmentId: "remote", threadId: "chat" }),
+    ).resolves.toEqual({ environmentId: "remote", threadId: "chat", status: "succeeded" });
+    expect(requests).toEqual([{ id: 1, method: "openThread", args: ["remote", "chat"] }]);
+    await configure({ remote: ["send"] });
+    await expect(
+      callGatewayTool(context, "t3_open_thread", { environmentId: "remote", threadId: "chat" }),
+    ).rejects.toMatchObject({ code: "scope_required" });
+    expect(requests).toHaveLength(1);
+  } finally {
+    client.close();
+    await bridge.close();
+  }
 });

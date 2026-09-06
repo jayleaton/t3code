@@ -22,6 +22,7 @@ import {
   setMcpGatewayGrants,
   setMcpGatewayProfiles,
   setMcpGatewayToken,
+  subscribeMcpGatewayConfiguration,
 } from "../../mcpGatewayState";
 
 const ALL_GATEWAY_SCOPES = ["read", "create", "send"] as const;
@@ -503,6 +504,17 @@ export function McpGatewaySettings() {
     window.addEventListener(`${MCP_GATEWAY_STATE_EVENT}:status`, onStatus);
     return () => window.removeEventListener(`${MCP_GATEWAY_STATE_EVENT}:status`, onStatus);
   }, []);
+
+  useEffect(
+    () =>
+      subscribeMcpGatewayConfiguration(() => {
+        setEnabled(isMcpGatewayEnabled());
+        setToken(getMcpGatewayToken());
+        setGrants(getMcpGatewayGrants());
+        setProfiles(getMcpGatewayProfiles());
+      }),
+    [],
+  );
 
   if (launchConfig === null) {
     return (

@@ -6,6 +6,7 @@ import type { GatewayRuntimePort } from "./port.ts";
 import { createMcpGateway } from "./server.ts";
 
 const port: GatewayRuntimePort = {
+  openThread: async (environmentId, threadId) => ({ environmentId, threadId, status: "succeeded" }),
   listEnvironments: async () => [
     { environmentId: "local", label: "Local", targetKind: "primary", connectionState: "connected" },
   ],
@@ -77,6 +78,16 @@ describe("MCP gateway server", () => {
     });
     expect(result.isError).not.toBe(true);
     expect(result.structuredContent).toEqual({ items: [], snapshotAt: "snapshot-1" });
+    const opened = await client.callTool({
+      name: "t3_open_thread",
+      arguments: { environmentId: "local", threadId: "chat" },
+    });
+    expect(opened.isError).not.toBe(true);
+    expect(opened.structuredContent).toEqual({
+      environmentId: "local",
+      threadId: "chat",
+      status: "succeeded",
+    });
 
     await client.close();
     await gateway.close();
@@ -102,6 +113,7 @@ describe("MCP gateway server", () => {
           label: "Local",
           targetKind: "primary",
           connectionState: "connected",
+          grantedScopes: ["read", "create", "send"],
         },
       ],
       snapshotAt: "runtime",
@@ -137,7 +149,7 @@ describe("MCP gateway server", () => {
           retryable: false,
           environmentId: "local",
           requestId: undefined,
-          details: { requiredScope: "send" },
+          details: { requiredScope: "send", grantedScopes: ["read"] },
         }),
       },
     ]);

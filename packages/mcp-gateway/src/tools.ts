@@ -89,7 +89,7 @@ function environmentWithScope(
       message: `Scope ${scope} is required for environment ${environmentId}.`,
       retryable: false,
       environmentId,
-      details: { requiredScope: scope },
+      details: { requiredScope: scope, grantedScopes: scopes },
     });
   }
   return environmentId;
@@ -122,9 +122,12 @@ export async function callGatewayTool(
       const environments = await context.port.listEnvironments();
       const grants = currentGrants(context.grants);
       return {
-        items: environments.filter(
-          (environment) => grants[environment.environmentId] !== undefined,
-        ),
+        items: environments
+          .filter((environment) => grants[environment.environmentId] !== undefined)
+          .map((environment) => ({
+            ...environment,
+            grantedScopes: grants[environment.environmentId],
+          })),
         snapshotAt: "runtime",
       };
     }
@@ -143,6 +146,10 @@ export async function callGatewayTool(
       return projectId === undefined
         ? page
         : { ...page, items: page.items.filter((thread) => thread.projectId === projectId) };
+    }
+    case "t3_open_thread": {
+      const environmentId = environmentWithScope(context, input, "read");
+      return context.port.openThread(environmentId, requiredString(input, "threadId"));
     }
     case "t3_get_thread": {
       const environmentId = environmentWithScope(context, input, "read");
