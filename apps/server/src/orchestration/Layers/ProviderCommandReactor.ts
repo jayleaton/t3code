@@ -2,6 +2,7 @@ import {
   type ChatAttachment,
   CommandId,
   EventId,
+  MessageId,
   type ModelSelection,
   type OrchestrationEvent,
   ProviderDriverKind,
@@ -68,6 +69,7 @@ type ProviderIntentEvent = Extract<
       | "thread.runtime-mode-set"
       | "thread.turn-start-requested"
       | "thread.turn-interrupt-requested"
+      | "thread.activity-appended"
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
       | "thread.session-stop-requested"
@@ -1691,6 +1693,131 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const appendLifecycleReceipt = (input: {
+    readonly threadId: ThreadId;
+    readonly action: "cancel" | "stop" | "pause" | "resume" | "retry" | "restart";
+    readonly attemptId?: string;
+    readonly createdAt: string;
+  }) =>
+    Effect.all({
+      commandId: serverCommandId(`lifecycle-${input.action}-completed`),
+      eventId: serverEventId(),
+    }).pipe(
+      Effect.flatMap(({ commandId, eventId }) =>
+        orchestrationEngine.dispatch({
+          type: "thread.activity.append",
+          commandId,
+          threadId: input.threadId,
+          activity: {
+            id: eventId,
+            tone: "info",
+            kind: `lifecycle.${input.action}.completed`,
+            summary: `${input.action[0]?.toUpperCase()}${input.action.slice(1)} accepted`,
+            payload: {
+              action: input.action,
+              ...(input.attemptId === undefined ? {} : { attemptId: input.attemptId }),
+            },
+            turnId: null,
+            createdAt: input.createdAt,
+          },
+          createdAt: input.createdAt,
+        }),
+      ),
+    );
+
+  const processLifecycleRequested = Effect.fn("processLifecycleRequested")(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.activity-appended" }>,
+  ) {
+    if (
+      !event.payload.activity.kind.startsWith("lifecycle.") ||
+      !event.payload.activity.kind.endsWith(".requested")
+    )
+      return;
+    const payload =
+      typeof event.payload.activity.payload === "object" &&
+      event.payload.activity.payload !== null &&
+      !Array.isArray(event.payload.activity.payload)
+        ? (event.payload.activity.payload as Record<string, unknown>)
+        : {};
+    const action = payload.action;
+    if (
+      action !== "cancel" &&
+      action !== "stop" &&
+      action !== "pause" &&
+      action !== "resume" &&
+      action !== "retry" &&
+      action !== "restart"
+    )
+      return;
+    const thread = yield* resolveThreadDetail(event.payload.threadId);
+    if (!thread) return;
+
+    if (action === "pause" || action === "cancel") {
+      yield* providerService.interruptTurn({ threadId: thread.id });
+      yield* appendLifecycleReceipt({
+        threadId: thread.id,
+        action,
+        ...(typeof payload.attemptId === "string" ? { attemptId: payload.attemptId } : {}),
+        createdAt: event.occurredAt,
+      });
+      return;
+    }
+    if (action === "stop" || action === "restart") {
+      if (thread.session && thread.session.status !== "stopped") {
+        yield* providerService.stopSession({ threadId: thread.id });
+      }
+      if (action === "stop") {
+        yield* setThreadSession({
+          threadId: thread.id,
+          session: {
+            threadId: thread.id,
+            status: "stopped",
+            providerName: thread.session?.providerName ?? null,
+            ...(thread.session?.providerInstanceId === undefined
+              ? {}
+              : { providerInstanceId: thread.session.providerInstanceId }),
+            runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+            activeTurnId: null,
+            lastError: thread.session?.lastError ?? null,
+            updatedAt: event.occurredAt,
+          },
+          createdAt: event.occurredAt,
+        });
+        yield* appendLifecycleReceipt({
+          threadId: thread.id,
+          action,
+          ...(typeof payload.attemptId === "string" ? { attemptId: payload.attemptId } : {}),
+          createdAt: event.occurredAt,
+        });
+        return;
+      }
+    }
+
+    const previous = thread.messages.findLast((message) => message.role === "user");
+    if (previous === undefined || typeof payload.messageId !== "string") return;
+    yield* orchestrationEngine.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make(`${String(event.commandId ?? event.eventId)}:execute`),
+      threadId: thread.id,
+      message: {
+        messageId: MessageId.make(payload.messageId),
+        role: "user",
+        text: previous.text,
+        attachments: previous.attachments ?? [],
+      },
+      modelSelection: thread.modelSelection,
+      runtimeMode: thread.runtimeMode,
+      interactionMode: thread.interactionMode,
+      createdAt: event.occurredAt,
+    });
+    yield* appendLifecycleReceipt({
+      threadId: thread.id,
+      action,
+      ...(typeof payload.attemptId === "string" ? { attemptId: payload.attemptId } : {}),
+      createdAt: event.occurredAt,
+    });
+  });
+
   const processDomainEvent = Effect.fn("processDomainEvent")(function* (
     event: ProviderIntentEvent,
   ) {
@@ -1724,6 +1851,9 @@ const make = Effect.gen(function* () {
         return;
       case "thread.turn-interrupt-requested":
         yield* processTurnInterruptRequested(event);
+        return;
+      case "thread.activity-appended":
+        yield* processLifecycleRequested(event);
         return;
       case "thread.approval-response-requested":
         yield* processApprovalResponseRequested(event);
@@ -1788,6 +1918,9 @@ const make = Effect.gen(function* () {
         event.type === "thread.runtime-mode-set" ||
         event.type === "thread.turn-start-requested" ||
         event.type === "thread.turn-interrupt-requested" ||
+        (event.type === "thread.activity-appended" &&
+          event.payload.activity.kind.startsWith("lifecycle.") &&
+          event.payload.activity.kind.endsWith(".requested")) ||
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
         event.type === "thread.session-stop-requested" ||

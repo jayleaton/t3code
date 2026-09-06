@@ -169,3 +169,29 @@ Include the diagnostic message and trace ID when reporting a persistent failure.
 
 For a connection that still fails after linking, check the date and time on both
 devices. For server version warnings, follow [Updating T3 Code](./updating.md).
+
+## Use MCP with connected environments
+
+Configure your assistant using the launch configuration in **Settings → MCP Gateway**, then enable
+the gateway in the desktop app. Keep that desktop connected to the environments your assistant
+needs to access.
+
+Enable access per environment and select **Save** to apply permission changes. Default access allows
+reading chats, creating threads, and sending messages. **Enable all environments** enables machines
+without removing their existing permissions; it does not grant every capability. Choose **All
+capabilities** in a machine's access menu to allow the full set, or grant individual capabilities
+for controlling work, handling approvals, retrieving artifacts, managing reviews, or event delivery.
+
+The assistant can use named profiles for new threads, inspect work and approvals, control thread
+lifecycle, and subscribe to events or webhook delivery when permitted. Profiles are managed in the
+gateway settings; changing a profile does not change existing threads. Use `t3_list_environments`
+to check the environment IDs and effective grants seen by the assistant. Permission errors also
+report the granted and missing scopes.
+
+### Open a remote chat
+
+In the installed desktop app, connect the remote environment and configure **Settings → MCP Gateway**
+with your MCP assistant. Grant the environment read access. Your assistant can use `t3_open_thread`
+with the environment and thread IDs to open that chat and bring this desktop window forward.
+The remote machine supplies the chat; the desktop connected to the gateway displays it. Opening a
+chat does not start or stop its agent. The desktop app must already be running and connected.

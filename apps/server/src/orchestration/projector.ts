@@ -334,6 +334,9 @@ export function projectEvent(
             modelSelection: payload.modelSelection,
             runtimeMode: payload.runtimeMode,
             interactionMode: payload.interactionMode,
+            ...(payload.profileSnapshot === undefined
+              ? {}
+              : { profileSnapshot: payload.profileSnapshot }),
             branch: payload.branch,
             worktreePath: payload.worktreePath,
             latestTurn: null,
@@ -349,6 +352,7 @@ export function projectEvent(
             messages: [],
             activities: [],
             checkpoints: [],
+            artifacts: [],
             session: null,
           },
           event.type,
@@ -593,11 +597,27 @@ export function projectEvent(
             )
           : [...thread.messages, message];
         const cappedMessages = messages.slice(-MAX_THREAD_MESSAGES);
+        const messageArtifacts = cappedMessages.flatMap((entry) =>
+          (entry.attachments ?? []).map((attachment) => ({
+            artifactId: attachment.id,
+            kind: "attachment" as const,
+            sourceId: entry.id,
+            name: attachment.name,
+            ...(attachment.mimeType.trim() === "" ? {} : { mimeType: attachment.mimeType }),
+            sizeBytes: attachment.sizeBytes,
+            createdAt: entry.createdAt,
+            availability: "available" as const,
+          })),
+        );
 
         return {
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             messages: cappedMessages,
+            artifacts: [
+              ...(thread.artifacts ?? []).filter((artifact) => artifact.kind !== "attachment"),
+              ...messageArtifacts,
+            ],
             updatedAt: event.occurredAt,
           }),
         };
@@ -743,6 +763,23 @@ export function projectEvent(
           .toSorted((left, right) => left.checkpointTurnCount - right.checkpointTurnCount)
           .slice(-MAX_THREAD_CHECKPOINTS);
 
+        const workspaceArtifacts = checkpoints.flatMap((entry) =>
+          entry.files.map((file, index) => ({
+            artifactId: `workspace-${entry.turnId}-${index}`,
+            kind: "workspace-file" as const,
+            sourceId: entry.turnId,
+            name: file.path.split(/[\\/]/).at(-1) ?? file.path,
+            path: file.path,
+            createdAt: entry.completedAt,
+            availability:
+              file.kind === "deleted"
+                ? ("deleted" as const)
+                : entry.status === "ready"
+                  ? ("available" as const)
+                  : ("unavailable" as const),
+          })),
+        );
+
         // Mid-turn diff updates produce placeholder checkpoints; record the
         // checkpoint, but don't settle a turn its session is still running.
         const turnStillRunning =
@@ -752,6 +789,10 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             checkpoints,
+            artifacts: [
+              ...(thread.artifacts ?? []).filter((artifact) => artifact.kind !== "workspace-file"),
+              ...workspaceArtifacts,
+            ],
             latestTurn: turnStillRunning
               ? thread.latestTurn
               : {
@@ -800,6 +841,13 @@ export function projectEvent(
             retainedTurnIds,
           ).slice(-200);
           const activities = retainThreadActivitiesAfterRevert(thread.activities, retainedTurnIds);
+          const retainedSourceIds = new Set<string>([
+            ...retainedTurnIds,
+            ...messages.map((message) => message.id),
+          ]);
+          const artifacts = (thread.artifacts ?? []).filter((artifact) =>
+            retainedSourceIds.has(artifact.sourceId),
+          );
 
           const latestCheckpoint = checkpoints.at(-1) ?? null;
           const latestTurn =
@@ -821,6 +869,7 @@ export function projectEvent(
               messages,
               proposedPlans,
               activities,
+              artifacts,
               latestTurn,
               updatedAt: event.occurredAt,
             }),

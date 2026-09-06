@@ -195,6 +195,7 @@ it.effect("creates GitHub PRs through provider-neutral input names", () =>
       headSelector: "owner:feature/provider",
       title: "Provider PR",
       bodyFile: "/tmp/body.md",
+      draft: true,
     });
 
     assert.deepStrictEqual(createInput, {
@@ -203,6 +204,7 @@ it.effect("creates GitHub PRs through provider-neutral input names", () =>
       headSelector: "owner:feature/provider",
       title: "Provider PR",
       bodyFile: "/tmp/body.md",
+      draft: true,
     });
   }),
 );

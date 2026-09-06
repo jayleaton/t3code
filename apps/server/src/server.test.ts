@@ -7839,6 +7839,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           },
           orchestrationEngine: {
             dispatch: () => Effect.succeed({ sequence: 7 }),
+            getCommandReceipts: (commandIds) =>
+              Effect.succeed(
+                commandIds.map((commandId) => ({
+                  commandId: CommandId.make(commandId),
+                  aggregateKind: "thread" as const,
+                  aggregateId: ThreadId.make("thread-1"),
+                  acceptedAt: now,
+                  resultSequence: 7,
+                  status: "accepted" as const,
+                  error: null,
+                })),
+              ),
             readEvents: () => Stream.empty,
           },
           checkpointDiffQuery: {
@@ -7872,6 +7884,25 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
       assert.equal(dispatchResult.sequence, 7);
+
+      const receiptResult = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.getCommandReceipts]({
+            commandIds: [CommandId.make("cmd-1")],
+          }),
+        ),
+      );
+      assert.deepEqual(receiptResult.receipts, [
+        {
+          commandId: CommandId.make("cmd-1"),
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          acceptedAt: now,
+          resultSequence: 7,
+          status: "accepted",
+          error: null,
+        },
+      ]);
 
       const turnDiffResult = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
@@ -8769,6 +8800,70 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(Option.getOrThrow(first).kind, "snapshot");
       assert.equal(readEventsCalls, 0);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("subscribeEvents replays through the captured head before forwarding live events", () =>
+    Effect.gen(function* () {
+      const liveEvents = yield* PubSub.unbounded<OrchestrationEvent>();
+      const event = (sequence: number, eventId: string) =>
+        ({
+          sequence,
+          eventId: EventId.make(eventId),
+          aggregateKind: "thread",
+          aggregateId: defaultThreadId,
+          occurredAt: `2026-01-01T00:00:0${sequence}.000Z`,
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          type: "thread.message-sent",
+          payload: {
+            threadId: defaultThreadId,
+            messageId: MessageId.make(`message-${sequence}`),
+            role: "user",
+            text: `Message ${sequence}`,
+            turnId: null,
+            streaming: false,
+            createdAt: `2026-01-01T00:00:0${sequence}.000Z`,
+            updatedAt: `2026-01-01T00:00:0${sequence}.000Z`,
+          },
+        }) satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+      const replayed = event(2, "event-replayed");
+      const live = event(3, "event-live");
+      let replayAfterSequence: number | undefined;
+      let replayLimit: number | undefined;
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            streamDomainEvents: Stream.fromPubSub(liveEvents),
+            latestSequence: PubSub.publish(liveEvents, live).pipe(Effect.as(2)),
+            readEvents: (afterSequence, limit) => {
+              replayAfterSequence = afterSequence;
+              replayLimit = limit;
+              return Stream.make(replayed);
+            },
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const items = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeEvents]({ afterSequence: 1 }).pipe(
+            Stream.take(2),
+            Stream.runCollect,
+          ),
+        ),
+      ).pipe(Effect.timeout("2 seconds"));
+
+      assert.deepEqual(
+        Array.from(items, (item) => item.sequence),
+        [2, 3],
+      );
+      assert.equal(replayAfterSequence, 1);
+      assert.equal(replayLimit, 1);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest), TestClock.withLive),
   );
 
   it.effect("subscribeThread replays a small thread range across a large global gap", () =>

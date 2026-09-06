@@ -26,6 +26,7 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
+  getCommandReceipts: "orchestration.getCommandReceipts",
   getWorkflowScript: "orchestration.getWorkflowScript",
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
@@ -33,6 +34,7 @@ export const ORCHESTRATION_WS_METHODS = {
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
+  subscribeEvents: "orchestration.subscribeEvents",
 } as const;
 
 export const ProviderApprovalPolicy = Schema.Literals([
@@ -351,6 +353,24 @@ export type OrchestrationProject = typeof OrchestrationProject.Type;
 export const OrchestrationMessageRole = Schema.Literals(["user", "assistant", "system"]);
 export type OrchestrationMessageRole = typeof OrchestrationMessageRole.Type;
 
+const OrchestrationArtifactPath = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(4096),
+  Schema.isPattern(/^(?![\\/])(?![a-z]:[\\/])(?!.*(?:^|[\\/])\.\.(?:[\\/]|$)).+$/i),
+);
+
+export const OrchestrationArtifact = Schema.Struct({
+  artifactId: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
+  kind: Schema.Literals(["attachment", "workspace-file"]),
+  sourceId: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
+  path: Schema.optional(OrchestrationArtifactPath),
+  mimeType: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(255))),
+  sizeBytes: Schema.optional(NonNegativeInt),
+  createdAt: IsoDateTime,
+  availability: Schema.Literals(["available", "unavailable", "deleted"]),
+});
+export type OrchestrationArtifact = typeof OrchestrationArtifact.Type;
+
 export const OrchestrationMessage = Schema.Struct({
   id: MessageId,
   role: OrchestrationMessageRole,
@@ -481,6 +501,19 @@ export const ThreadLinkedPullRequest = Schema.Struct({
   url: TrimmedNonEmptyString,
 });
 export type ThreadLinkedPullRequest = typeof ThreadLinkedPullRequest.Type;
+export const ThreadProfileSnapshot = Schema.Struct({
+  profileId: Schema.NullOr(TrimmedNonEmptyString),
+  profileName: Schema.NullOr(TrimmedNonEmptyString),
+  revision: Schema.NullOr(NonNegativeInt),
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+  effectiveSource: Schema.Struct({
+    modelSelection: Schema.Literals(["profile", "thread-override", "fallback"]),
+    runtimeMode: Schema.Literals(["profile", "thread-override", "fallback"]),
+    interactionMode: Schema.Literals(["profile", "thread-override", "fallback"]),
+    reasoningEffort: Schema.Literals(["profile", "thread-override", "fallback"]),
+  }),
+});
+export type ThreadProfileSnapshot = typeof ThreadProfileSnapshot.Type;
 
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
@@ -491,6 +524,7 @@ export const OrchestrationThread = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  profileSnapshot: Schema.optional(ThreadProfileSnapshot),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
@@ -531,6 +565,7 @@ export const OrchestrationThread = Schema.Struct({
   ),
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
+  artifacts: Schema.optional(Schema.Array(OrchestrationArtifact)),
   session: Schema.NullOr(OrchestrationSession),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
@@ -569,6 +604,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  profileSnapshot: Schema.optional(ThreadProfileSnapshot),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
@@ -786,17 +822,27 @@ const ProjectDeleteCommand = Schema.Struct({
   force: Schema.optional(Schema.Boolean),
 });
 
+export const ThreadProfileSelection = Schema.Struct({
+  profileId: TrimmedNonEmptyString,
+  revision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  overrideFields: Schema.Array(
+    Schema.Literals(["modelSelection", "runtimeMode", "interactionMode", "reasoningEffort"]),
+  ),
+});
+export type ThreadProfileSelection = typeof ThreadProfileSelection.Type;
+
 const ThreadCreateCommand = Schema.Struct({
   type: Schema.Literal("thread.create"),
   commandId: CommandId,
   threadId: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
-  modelSelection: ModelSelection,
-  runtimeMode: RuntimeMode,
-  interactionMode: ProviderInteractionMode.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
-  ),
+  modelSelection: Schema.optional(ModelSelection),
+  runtimeMode: Schema.optional(RuntimeMode),
+  interactionMode: Schema.optional(ProviderInteractionMode),
+  profileSelection: Schema.optional(ThreadProfileSelection),
+  useServerDefaults: Schema.optional(Schema.Boolean),
+  profileSnapshot: Schema.optional(ThreadProfileSnapshot),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
@@ -1002,6 +1048,37 @@ const ThreadTurnInterruptCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const ThreadLifecycleAction = Schema.Literals([
+  "cancel",
+  "stop",
+  "pause",
+  "resume",
+  "retry",
+  "restart",
+]);
+export type ThreadLifecycleAction = typeof ThreadLifecycleAction.Type;
+
+const ThreadLifecycleControlCommand = Schema.Struct({
+  type: Schema.Literal("thread.lifecycle.control"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  action: ThreadLifecycleAction,
+  attemptId: TrimmedNonEmptyString,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
+const ThreadApprovalBatchRespondCommand = Schema.Struct({
+  type: Schema.Literal("thread.approval.batch-respond"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  expectedRevision: Schema.optional(NonNegativeInt),
+  responses: Schema.Array(
+    Schema.Struct({ requestId: ApprovalRequestId, decision: ProviderApprovalDecision }),
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(100)),
+  createdAt: IsoDateTime,
+});
+
 const ThreadApprovalRespondCommand = Schema.Struct({
   type: Schema.Literal("thread.approval.respond"),
   commandId: CommandId,
@@ -1061,6 +1138,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
+  ThreadLifecycleControlCommand,
+  ThreadApprovalBatchRespondCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -1089,6 +1168,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
+  ThreadLifecycleControlCommand,
+  ThreadApprovalBatchRespondCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -1282,6 +1363,7 @@ export const ThreadCreatedPayload = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  profileSnapshot: Schema.optional(ThreadProfileSnapshot),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
@@ -1673,6 +1755,28 @@ export type OrchestrationThreadStreamItem = typeof OrchestrationThreadStreamItem
 export const OrchestrationCommandReceiptStatus = Schema.Literals(["accepted", "rejected"]);
 export type OrchestrationCommandReceiptStatus = typeof OrchestrationCommandReceiptStatus.Type;
 
+export const OrchestrationCommandReceiptRecord = Schema.Struct({
+  commandId: CommandId,
+  aggregateKind: OrchestrationAggregateKind,
+  aggregateId: Schema.Union([ProjectId, ThreadId]),
+  acceptedAt: IsoDateTime,
+  resultSequence: NonNegativeInt,
+  status: OrchestrationCommandReceiptStatus,
+  error: Schema.NullOr(Schema.String),
+});
+export type OrchestrationCommandReceiptRecord = typeof OrchestrationCommandReceiptRecord.Type;
+
+export const OrchestrationGetCommandReceiptsInput = Schema.Struct({
+  commandIds: Schema.Array(CommandId),
+});
+export type OrchestrationGetCommandReceiptsInput = typeof OrchestrationGetCommandReceiptsInput.Type;
+
+export const OrchestrationGetCommandReceiptsResult = Schema.Struct({
+  receipts: Schema.Array(OrchestrationCommandReceiptRecord),
+});
+export type OrchestrationGetCommandReceiptsResult =
+  typeof OrchestrationGetCommandReceiptsResult.Type;
+
 export const TurnCountRange = Schema.Struct({
   fromTurnCount: NonNegativeInt,
   toTurnCount: NonNegativeInt,
@@ -1829,10 +1933,19 @@ export class OrchestrationGetWorkflowScriptError extends Schema.TaggedErrorClass
   }
 }
 
+export const OrchestrationSubscribeEventsInput = Schema.Struct({
+  afterSequence: NonNegativeInt,
+});
+export type OrchestrationSubscribeEventsInput = typeof OrchestrationSubscribeEventsInput.Type;
+
 export const OrchestrationRpcSchemas = {
   dispatchCommand: {
     input: ClientOrchestrationCommand,
     output: DispatchResult,
+  },
+  getCommandReceipts: {
+    input: OrchestrationGetCommandReceiptsInput,
+    output: OrchestrationGetCommandReceiptsResult,
   },
   getWorkflowScript: {
     input: OrchestrationGetWorkflowScriptInput,
@@ -1853,6 +1966,10 @@ export const OrchestrationRpcSchemas = {
   getArchivedShellSnapshot: {
     input: Schema.Struct({}),
     output: OrchestrationShellSnapshot,
+  },
+  subscribeEvents: {
+    input: OrchestrationSubscribeEventsInput,
+    output: OrchestrationEvent,
   },
   subscribeThread: {
     input: OrchestrationSubscribeThreadInput,
