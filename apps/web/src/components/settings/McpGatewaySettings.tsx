@@ -1,3 +1,4 @@
+import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import type { GatewayScope, GatewayStatusSnapshot } from "@t3tools/client-runtime/gateway";
 import {
   formatMcpGatewayProfileSummary,
@@ -15,7 +16,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
-import { useEnvironments } from "../../state/environments";
+import { useEnvironments, usePrimaryEnvironment } from "../../state/environments";
 import { primaryServerProvidersAtom } from "../../state/server";
 import { randomUUID } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -81,6 +82,54 @@ export interface McpGrantEnvironmentRow {
   readonly environmentId: string;
   readonly label: string;
   readonly connectionState: string;
+  readonly failureReason?: EnvironmentConnectionPresentation["failureReason"];
+}
+
+function deviceConnectionText(environment: McpGrantEnvironmentRow): string {
+  if (environment.connectionState === "connected") return "Connected";
+  // Typed failure categories avoid copying tokens, URLs, or raw decoder payloads into Settings.
+  const failure = (() => {
+    switch (environment.failureReason) {
+      case "authentication":
+        return "Authentication failed — reconnect or sign in in Settings → Connections.";
+      case "permission":
+        return "Connection permission denied — review access in Settings → Connections.";
+      case "unsupported":
+        return "Incompatible connection — check client and server compatibility in Settings → Connections.";
+      case "configuration":
+        return "Connection configuration failed — review Settings → Connections.";
+      case "transport":
+        return "Transport failed — check the remote server and connection route.";
+      case "timeout":
+        return "Connection timed out — check the remote server and connection route.";
+      case "network":
+        return "Network unavailable — check network connectivity.";
+      case "relay-unavailable":
+        return "Relay unavailable — check T3 Connect in Settings → Connections.";
+      case "endpoint-unavailable":
+      case "remote-unavailable":
+        return "Remote unavailable — check the remote server and connection route.";
+      default:
+        return null;
+    }
+  })();
+  const phase = (() => {
+    switch (environment.connectionState) {
+      case "connecting":
+        return "Connecting";
+      case "reconnecting":
+        return "Reconnecting";
+      case "offline":
+        return "Disconnected — device or network offline";
+      case "available":
+        return "Disconnected — connect in Settings → Connections";
+      case "error":
+        return "Connection failed — see Settings → Connections";
+      default:
+        return "Unavailable — no current runtime connection";
+    }
+  })();
+  return failure ? `${phase}. ${failure}` : phase;
 }
 
 function scopesFor(grants: McpGatewayGrants, environmentId: string): ReadonlyArray<GatewayScope> {
@@ -141,7 +190,9 @@ export function McpEnvironmentGrantMatrix({
   environments,
   grants,
   onChange,
+  registryReady = true,
 }: {
+  readonly registryReady?: boolean;
   readonly environments: ReadonlyArray<McpGrantEnvironmentRow>;
   readonly grants: McpGatewayGrants;
   readonly onChange: (grants: McpGatewayGrants) => void;
@@ -159,6 +210,14 @@ export function McpEnvironmentGrantMatrix({
       })),
   ];
 
+  if (!registryReady) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Device connection status unavailable — loading the runtime registry.
+      </p>
+    );
+  }
+
   if (visibleEnvironments.length === 0) {
     return <p className="text-sm text-muted-foreground">No registered environments.</p>;
   }
@@ -174,6 +233,10 @@ export function McpEnvironmentGrantMatrix({
 
   return (
     <div className="space-y-3">
+      <p className="text-sm" aria-live="polite">
+        {environments.filter((environment) => environment.connectionState === "connected").length}{" "}
+        of {environments.length} registered devices connected. Access grants do not connect devices.
+      </p>
       <div className="flex items-center justify-between gap-3">
         <label className="flex items-center gap-2 text-sm">
           <Checkbox
@@ -185,7 +248,11 @@ export function McpEnvironmentGrantMatrix({
           Select all
         </label>
         <span className="text-xs text-muted-foreground">
-          {allOn ? "All listed machines on" : anyOn ? "Mixed selection" : "All listed machines off"}
+          {allOn
+            ? "Access on for all listed machines"
+            : anyOn
+              ? "Mixed selection of access grants"
+              : "Access off for all listed machines"}
         </span>
       </div>
       {visibleEnvironments.map((environment) => {
@@ -196,6 +263,9 @@ export function McpEnvironmentGrantMatrix({
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="font-medium">{environment.label}</div>
+                <div className="text-xs" aria-live="polite">
+                  {deviceConnectionText(environment)}
+                </div>
                 <div className="break-all font-mono text-xs text-muted-foreground">
                   {environment.environmentId}
                 </div>
@@ -210,7 +280,7 @@ export function McpEnvironmentGrantMatrix({
                     />
                   }
                 >
-                  <span className="min-w-0 truncate">{on ? "On" : "Off"}</span>
+                  <span className="min-w-0 truncate">{on ? "Access on" : "Access off"}</span>
                   <ChevronDownIcon className="size-3 shrink-0 opacity-50" />
                 </MenuTrigger>
                 <MenuPopup align="end" className="w-56">
@@ -292,14 +362,22 @@ export function McpGatewayOperationalStatus({
   state,
   snapshot,
   labels = {},
+  environments = [],
+  grants = {},
   onRefresh,
 }: {
   readonly state: McpGatewayUiState;
   readonly snapshot: GatewayStatusSnapshot | null;
   readonly labels?: Readonly<Record<string, string>>;
+  readonly environments?: ReadonlyArray<McpGrantEnvironmentRow>;
+  readonly grants?: McpGatewayGrants;
   readonly onRefresh: () => void;
 }) {
   const disconnected = state === "disabled" || state === "degraded";
+  const readableEnvironments =
+    snapshot?.environments.filter((environment) =>
+      scopesFor(grants, environment.environmentId).includes("read"),
+    ) ?? [];
   return (
     <div className="space-y-3" aria-label="MCP gateway operational status">
       <div className="flex items-center justify-between gap-3">
@@ -308,28 +386,39 @@ export function McpGatewayOperationalStatus({
           Refresh
         </Button>
       </div>
+      <p className="text-sm" aria-live="polite">
+        Local gateway bridge:{" "}
+        {state === "running"
+          ? "Connected"
+          : state === "connecting"
+            ? "Connecting"
+            : state === "disabled"
+              ? "Disabled"
+              : "Disconnected"}
+        . This does not indicate device connectivity.
+      </p>
       {disconnected ? (
         <p className="text-sm text-muted-foreground">
           {state === "disabled" ? "Gateway disabled." : "Gateway disconnected or degraded."}
         </p>
-      ) : snapshot === null ? (
+      ) : snapshot === null || state === "connecting" ? (
         <p className="text-sm text-muted-foreground">Loading operational status…</p>
       ) : !snapshot.live || snapshot.stale ? (
         <p className="text-sm text-destructive">
           Status is stale; live sidecar data is unavailable.
         </p>
-      ) : snapshot.environments.length === 0 ? (
+      ) : readableEnvironments.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           No readable environments are currently granted.
         </p>
       ) : (
         <>
           <p className="text-xs text-muted-foreground">
-            Live as of {snapshot.capturedAt}. Retention:{" "}
-            {snapshot.retention.maxEventsPerEnvironment} events per environment for{" "}
+            Event store as of {snapshot.capturedAt}; this does not indicate device connectivity.
+            Retention: {snapshot.retention.maxEventsPerEnvironment} events per environment for{" "}
             {snapshot.retention.maxAgeDays} days.
           </p>
-          {snapshot.environments.map((environment) => (
+          {readableEnvironments.map((environment) => (
             <div key={environment.environmentId} className="rounded-lg border p-3 text-sm">
               <div className="font-medium">
                 {labels[environment.environmentId] ?? "Environment"}
@@ -338,10 +427,21 @@ export function McpGatewayOperationalStatus({
                 {environment.environmentId}
               </div>
               <div className="mt-2 text-xs">
+                Device:{" "}
+                {deviceConnectionText(
+                  environments.find((row) => row.environmentId === environment.environmentId) ?? {
+                    environmentId: environment.environmentId,
+                    label: "Environment",
+                    connectionState: "unavailable",
+                  },
+                )}
+              </div>
+              <div className="mt-2 text-xs">
                 Cursor {environment.latestSequence}; retained {environment.retainedEventCount};
                 oldest {environment.oldestRetainedSequence ?? "none"}
               </div>
-              {!environment.deliveryAccess ? (
+              {!environment.deliveryAccess ||
+              !scopesFor(grants, environment.environmentId).includes("delivery") ? (
                 <div className="mt-2 text-xs text-muted-foreground">
                   Delivery permission needed to view subscriptions, webhooks, and queue health.
                 </div>
@@ -448,7 +548,10 @@ export function deriveProfileProviderEntries(
       driverKind: provider.driver,
       instanceId: provider.instanceId,
       label: provider.displayName?.trim() || provider.driver,
-      models: provider.models.map((model) => ({ slug: model.slug, name: model.name })),
+      models:
+        provider.status === "ready"
+          ? provider.models.map((model) => ({ slug: model.slug, name: model.name }))
+          : [],
       isReady: provider.status === "ready",
     }));
 }
@@ -466,15 +569,20 @@ function formatReasoningLabel(value: string): string {
 export function McpProfileList({
   profiles,
   providers,
+  catalogConnected = true,
   onChange,
 }: {
   readonly profiles: ReadonlyArray<McpGatewayProfile>;
   readonly providers: ReadonlyArray<ServerProvider>;
+  readonly catalogConnected?: boolean;
   readonly onChange: (profiles: ReadonlyArray<McpGatewayProfile>) => void;
 }) {
   const [draft, setDraft] = useState<ProfileDraft>(EMPTY_DRAFT);
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
-  const providerEntries = useMemo(() => deriveProfileProviderEntries(providers), [providers]);
+  const providerEntries = useMemo(
+    () => (catalogConnected ? deriveProfileProviderEntries(providers) : []),
+    [providers, catalogConnected],
+  );
   const selectedEntry =
     draft.instanceId === null
       ? undefined
@@ -528,8 +636,8 @@ export function McpProfileList({
   const canSave =
     draft.name.trim() !== "" &&
     !duplicateName &&
-    selectedEntry !== undefined &&
-    draft.model !== null;
+    selectedEntry?.isReady === true &&
+    selectedEntry.models.some((model) => model.slug === draft.model);
 
   return (
     <div className="space-y-3">
@@ -618,7 +726,11 @@ export function McpProfileList({
               </SelectItem>
             ) : (
               providerEntries.map((entry) => (
-                <SelectItem key={entry.instanceId} value={entry.instanceId}>
+                <SelectItem
+                  key={entry.instanceId}
+                  value={entry.instanceId}
+                  disabled={!entry.isReady}
+                >
                   <span className="flex w-full items-center justify-between gap-5">
                     <span>{entry.label}</span>
                     {!entry.isReady ? (
@@ -632,7 +744,7 @@ export function McpProfileList({
         </Select>
         <Select
           value={draft.model ?? UNSELECTED_PROVIDER}
-          disabled={selectedEntry === undefined}
+          disabled={selectedEntry?.isReady !== true}
           onValueChange={(value) => {
             const model = selectedEntry?.models.find((candidate) => candidate.slug === value);
             setDraft({
@@ -775,13 +887,14 @@ export function McpProfileList({
 }
 
 export function McpGatewaySettings() {
-  const { environments } = useEnvironments();
+  const { environments, isReady: registryReady } = useEnvironments();
   const [enabled, setEnabled] = useState(isMcpGatewayEnabled);
   const [token, setToken] = useState(getMcpGatewayToken);
   const [savedGrants, setSavedGrants] = useState(getMcpGatewayGrants);
   const [pendingGrants, setPendingGrants] = useState<McpGatewayGrants | null>(null);
   const profiles = usePrimarySettings((settings) => settings.mcpGatewayProfiles);
   const providers = useAtomValue(primaryServerProvidersAtom);
+  const primaryEnvironment = usePrimaryEnvironment();
   const updatePrimarySettings = useUpdatePrimarySettings();
   const [status, setStatus] = useState<McpGatewayUiState>(() =>
     enabled ? getMcpGatewayStatus() : "disabled",
@@ -809,6 +922,7 @@ export function McpGatewaySettings() {
       environmentId: environment.environmentId,
       label: environment.label,
       connectionState: environment.connection.phase,
+      failureReason: environment.connection.failureReason,
     }),
   );
 
@@ -857,7 +971,7 @@ export function McpGatewaySettings() {
           status={
             grantsDirty
               ? "Unsaved changes"
-              : `${Object.keys(savedGrants).length} machine${Object.keys(savedGrants).length === 1 ? "" : "s"} on`
+              : `${Object.keys(savedGrants).length} machine${Object.keys(savedGrants).length === 1 ? "" : "s"} with access grants`
           }
           control={
             grantsDirty ? (
@@ -887,6 +1001,7 @@ export function McpGatewaySettings() {
         >
           <McpEnvironmentGrantMatrix
             environments={environmentRows}
+            registryReady={registryReady}
             grants={pendingGrants ?? savedGrants}
             onChange={setPendingGrants}
           />
@@ -899,6 +1014,8 @@ export function McpGatewaySettings() {
           <McpGatewayOperationalStatus
             state={status}
             snapshot={statusSnapshot}
+            environments={environmentRows}
+            grants={savedGrants}
             labels={Object.fromEntries(
               environmentRows.map((row) => [row.environmentId, row.label]),
             )}
@@ -910,11 +1027,12 @@ export function McpGatewaySettings() {
         <SettingsRow
           id="mcp-gateway-profiles"
           title="Named profiles"
-          description="Save provider, model, and execution defaults for MCP-created threads. Profiles store readable selections; routing details are resolved at thread creation. Later edits never mutate existing work."
+          description="Save provider, model, and execution defaults for MCP-created threads. This editor uses the primary environment’s connected provider catalog. Profiles store readable selections; routing details are resolved on the target environment at thread creation. Later edits never mutate existing work."
         >
           <McpProfileList
             profiles={profiles}
             providers={providers}
+            catalogConnected={primaryEnvironment?.connection.phase === "connected"}
             onChange={(next) => updatePrimarySettings({ mcpGatewayProfiles: next })}
           />
         </SettingsRow>

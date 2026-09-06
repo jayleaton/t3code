@@ -40,6 +40,7 @@ describe("Gateway Runtime Port", () => {
       displayName: "Codex",
       enabled: true,
       availability: "available",
+      status: "ready",
       models: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
     } as unknown as ServerProvider;
 
@@ -48,6 +49,12 @@ describe("Gateway Runtime Port", () => {
       model: "gpt-5.6-sol",
     });
     expect(resolveGatewayProfileModelSelection(profile, [provider, provider])).toBeUndefined();
+    expect(
+      resolveGatewayProfileModelSelection(profile, [{ ...provider, status: "error" }]),
+    ).toBeUndefined();
+    expect(
+      resolveGatewayProfileModelSelection(profile, [{ ...provider, status: "disabled" }]),
+    ).toBeUndefined();
     expect(
       resolveGatewayProfileModelSelection(profile, [{ ...provider, enabled: false } as never]),
     ).toBeUndefined();

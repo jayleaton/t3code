@@ -73,6 +73,93 @@ const codexProvider = {
 } as unknown as ServerProvider;
 
 describe("MCP environment grant matrix", () => {
+  it("keeps device transport independent of grants through mixed failures and reconnects", async () => {
+    (
+      globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    const onChange = vi.fn();
+    const mixed = [
+      { environmentId: "local", label: "Local", connectionState: "connected" },
+      {
+        environmentId: "auth",
+        label: "Remote auth",
+        connectionState: "error",
+        failureReason: "authentication" as const,
+      },
+      {
+        environmentId: "schema",
+        label: "Remote schema",
+        connectionState: "error",
+        failureReason: "unsupported" as const,
+      },
+      {
+        environmentId: "socket",
+        label: "Remote socket",
+        connectionState: "reconnecting",
+        failureReason: "transport" as const,
+      },
+      { environmentId: "pending", label: "Pending", connectionState: "connecting" },
+    ];
+    try {
+      await act(async () =>
+        root.render(
+          <McpEnvironmentGrantMatrix
+            environments={mixed}
+            grants={{ auth: ["read"], schema: ["read"], removed: ["read"] }}
+            onChange={onChange}
+          />,
+        ),
+      );
+      expect(container.textContent).toContain("1 of 5 registered devices connected");
+      expect(container.textContent).toContain("Authentication failed");
+      expect(container.textContent).toContain("Incompatible connection");
+      expect(container.textContent).toContain("Transport failed");
+      expect(container.textContent).toContain("Connecting");
+      expect(container.textContent).toContain("Unavailable");
+      expect(container.querySelector('[aria-label="Access for Local"]')?.textContent).toContain(
+        "Access off",
+      );
+      expect(
+        container.querySelector('[aria-label="Access for Remote auth"]')?.textContent,
+      ).toContain("Access on");
+      await act(async () =>
+        root.render(
+          <McpEnvironmentGrantMatrix
+            environments={mixed.map((e) => ({
+              ...e,
+              connectionState: "connected",
+              failureReason: undefined,
+            }))}
+            grants={{}}
+            onChange={onChange}
+          />,
+        ),
+      );
+      expect(container.textContent).toContain("5 of 5 registered devices connected");
+      expect(container.textContent).not.toContain("Authentication failed");
+      expect(container.textContent).toContain("Access off");
+      await act(async () =>
+        root.render(
+          <McpEnvironmentGrantMatrix
+            environments={mixed.map((e) => ({
+              ...e,
+              connectionState: "offline",
+              failureReason: undefined,
+            }))}
+            grants={{ auth: ["read"] }}
+            onChange={onChange}
+          />,
+        ),
+      );
+      expect(container.textContent).toContain("0 of 5 registered devices connected");
+      expect(container.textContent).toContain("Disconnected");
+      expect(onChange).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
   it("offers all v3 capabilities while keeping ordinary enable and select-all least privilege", () => {
     expect(MCP_GATEWAY_CONFIGURABLE_SCOPES).toEqual([
       "read",
@@ -164,7 +251,7 @@ describe("MCP environment grant matrix", () => {
     const markup = renderToStaticMarkup(
       <McpEnvironmentGrantMatrix environments={environments} grants={full} onChange={vi.fn()} />,
     );
-    expect(markup).toContain("All listed machines on");
+    expect(markup).toContain("Access on for all listed machines");
   });
 
   it("keeps persisted grants for unregistered environments visible and revocable", () => {
@@ -292,6 +379,74 @@ describe("MCP named profiles", () => {
     duplicate.container.remove();
   });
 
+  it("invalidates a selected profile when the provider fails even with cached models", async () => {
+    (
+      globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    const onChange = vi.fn();
+    try {
+      await act(async () =>
+        root.render(
+          <McpProfileList
+            profiles={[andyProfile]}
+            providers={[codexProvider]}
+            onChange={onChange}
+          />,
+        ),
+      );
+      await act(async () =>
+        (container.querySelector('[aria-label="Edit Andy profile"]') as HTMLButtonElement).click(),
+      );
+      const save = () =>
+        [...container.querySelectorAll("button")].find((button) =>
+          button.textContent?.includes("Update Andy"),
+        );
+      expect(save()).toHaveProperty("disabled", false);
+      await act(async () =>
+        root.render(
+          <McpProfileList
+            profiles={[andyProfile]}
+            providers={[{ ...codexProvider, status: "error" }]}
+            onChange={onChange}
+          />,
+        ),
+      );
+      expect(container.textContent).toContain("unavailable — re-select");
+      expect(save()).toHaveProperty("disabled", true);
+      await act(async () => save()?.click());
+      expect(onChange).not.toHaveBeenCalled();
+      await act(async () =>
+        root.render(
+          <McpProfileList
+            profiles={[andyProfile]}
+            providers={[codexProvider]}
+            catalogConnected={false}
+            onChange={onChange}
+          />,
+        ),
+      );
+      expect(container.textContent).toContain("unavailable — re-select");
+      expect(save()).toHaveProperty("disabled", true);
+      await act(async () =>
+        root.render(
+          <McpProfileList
+            profiles={[andyProfile]}
+            providers={[codexProvider]}
+            onChange={onChange}
+          />,
+        ),
+      );
+      await act(async () =>
+        (container.querySelector('[aria-label="Edit Andy profile"]') as HTMLButtonElement).click(),
+      );
+      expect(save()).toHaveProperty("disabled", false);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it("provider and model pickers come from the live provider catalog", () => {
     const markup = renderToStaticMarkup(
       <McpProfileList profiles={[]} providers={[codexProvider]} onChange={vi.fn()} />,
@@ -313,6 +468,62 @@ describe("MCP gateway operational status", () => {
     retention: { maxEventsPerEnvironment: 100_000, maxAgeDays: 7 },
     environments: [],
   };
+
+  it("does not mistake a live event store for connected devices or retain revoked read access", async () => {
+    (
+      globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    const snapshot = {
+      ...base,
+      environments: [
+        {
+          environmentId: "remote",
+          latestSequence: 41,
+          retainedEventCount: 3,
+          oldestRetainedSequence: 39,
+          deliveryAccess: false,
+        },
+      ],
+    };
+    const rows = [{ environmentId: "remote", label: "Remote", connectionState: "offline" }];
+    const render = async (
+      state: "running" | "degraded" | "connecting",
+      currentGrants: Record<string, readonly "read"[]>,
+    ) => {
+      await act(async () =>
+        root.render(
+          <McpGatewayOperationalStatus
+            state={state}
+            snapshot={snapshot}
+            environments={rows}
+            grants={currentGrants}
+            onRefresh={vi.fn()}
+          />,
+        ),
+      );
+    };
+    try {
+      await render("running", { remote: ["read"] });
+      expect(container.textContent).toContain("Local gateway bridge: Connected");
+      expect(container.textContent).toContain("Device: Disconnected");
+      expect(container.textContent).toContain("Event store as of");
+      expect(container.textContent).toContain("does not indicate device connectivity");
+      expect(container.textContent).toContain("Cursor 41");
+      await render("connecting", { remote: ["read"] });
+      expect(container.textContent).toContain("Local gateway bridge: Connecting");
+      expect(container.textContent).not.toContain("Cursor 41");
+      await render("degraded", { remote: ["read"] });
+      expect(container.textContent).toContain("Local gateway bridge: Disconnected");
+      expect(container.textContent).not.toContain("Cursor 41");
+      await render("running", {});
+      expect(container.textContent).not.toContain("Cursor 41");
+      expect(container.textContent).toContain("No readable environments");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
 
   it("renders truthful sidecar values and safe delivery inventory", async () => {
     (
@@ -359,6 +570,7 @@ describe("MCP gateway operational status", () => {
           state="running"
           snapshot={snapshot}
           labels={{ "env-safe": "Disposable fixture" }}
+          grants={{ "env-safe": ["read", "delivery"] }}
           onRefresh={onRefresh}
         />,
       );
@@ -411,7 +623,12 @@ describe("MCP gateway operational status", () => {
     } satisfies GatewayStatusSnapshot;
     expect(
       renderToStaticMarkup(
-        <McpGatewayOperationalStatus state="running" snapshot={readOnly} onRefresh={vi.fn()} />,
+        <McpGatewayOperationalStatus
+          state="running"
+          snapshot={readOnly}
+          grants={{ "read-only": ["read"] }}
+          onRefresh={vi.fn()}
+        />,
       ),
     ).toContain("Delivery permission needed");
   });

@@ -104,6 +104,7 @@ export function resolveGatewayProfileModelSelection(
     const providerLabel = provider.displayName?.trim() || provider.driver;
     if (
       !provider.enabled ||
+      provider.status !== "ready" ||
       provider.availability === "unavailable" ||
       providerLabel !== profile.providerLabel
     ) {
