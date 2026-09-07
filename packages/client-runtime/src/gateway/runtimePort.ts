@@ -24,6 +24,7 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
+import { hasQueuedTurnStart } from "../state/threadSettled.ts";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import {
   controlThreadLifecycle,
@@ -191,28 +192,16 @@ function boundedRecordField(
   return value === undefined ? {} : { [key]: value };
 }
 
-function gatewayLifecycleStatus(kind: string | undefined): string | undefined {
-  if (kind === "lifecycle.pause.completed") return "paused";
-  if (kind === "lifecycle.cancel.completed") return "canceled";
-  if (kind === "lifecycle.stop.completed") return "stopped";
-  if (
-    kind === "lifecycle.resume.completed" ||
-    kind === "lifecycle.retry.completed" ||
-    kind === "lifecycle.restart.completed"
-  )
-    return "queued";
-  return undefined;
-}
-
 function gatewayStatusForActivity(kind: string | undefined, fallback: string | undefined) {
-  const lifecycleStatus = gatewayLifecycleStatus(kind);
-  if (lifecycleStatus !== undefined) return lifecycleStatus;
+  // Lifecycle receipts acknowledge provider requests; they do not prove that
+  // the active turn has ended. Prefer the projected session/turn snapshot.
   if (kind === "approval.requested") return "waiting-approval";
   if (kind === "user-input.requested") return "waiting-input";
+  if (fallback !== undefined) return fallback;
   if (kind === "turn.completed") return "completed";
   if (kind === "turn.failed" || kind === "error") return "failed";
   if (kind === "turn.interrupted") return "interrupted";
-  return fallback;
+  return undefined;
 }
 
 function gatewayNextAction(status: string | undefined): string | null | undefined {
@@ -243,18 +232,12 @@ export function gatewayEventFromOrchestration(
       ? (activity.payload as Record<string, unknown>)
       : undefined;
   const activityKind = boundedText(activity?.kind, 128);
-  const status =
-    event.type === "thread.created" || event.type === "thread.turn-start-requested"
-      ? "running"
-      : gatewayStatusForActivity(activityKind, context?.thread?.status);
-  const lifecycleStatus = gatewayLifecycleStatus(activityKind);
+  const status = gatewayStatusForActivity(activityKind, context?.thread?.status);
   const type =
     event.type === "thread.created" || event.type === "thread.turn-start-requested"
       ? "thread.started"
-      : lifecycleStatus !== undefined
-        ? activityKind === "lifecycle.cancel.completed"
-          ? "thread.canceled"
-          : "thread.state_changed"
+      : event.type === "thread.session-set"
+        ? "thread.state_changed"
         : activityKind === "approval.requested"
           ? "approval.requested"
           : activityKind === "user-input.requested"
@@ -301,9 +284,6 @@ export function gatewayEventFromOrchestration(
           }),
       ...(threadTitle === undefined ? {} : { threadTitle }),
       ...(status === undefined ? {} : { status }),
-      ...(lifecycleStatus === undefined || context?.thread?.status === undefined
-        ? {}
-        : { previousStatus: context.thread.status }),
       ...(summary === undefined ? {} : { summary }),
       ...(nextAction === undefined ? {} : { nextAction }),
       ...(activityKind === "approval.requested" || activityKind === "user-input.requested"
@@ -416,6 +396,12 @@ export function gatewayThreadProjection(thread: OrchestrationThreadDetailSnapsho
     id: thread.id,
     projectId: thread.projectId,
     title: thread.title,
+    status: gatewayStatusFromThread({
+      latestTurn: thread.latestTurn,
+      session: thread.session,
+      latestUserMessageAt:
+        thread.messages.findLast((message) => message.role === "user")?.createdAt ?? null,
+    }),
     modelSelection: thread.modelSelection,
     profileSnapshot: thread.profileSnapshot,
     settledAt: thread.settledAt,
@@ -454,18 +440,24 @@ export function gatewayThreadProjection(thread: OrchestrationThreadDetailSnapsho
   };
 }
 
-function gatewayStatusFromThread(thread: OrchestrationShellSnapshot["threads"][number]): string {
-  if (thread.latestTurn?.state === "completed") return "completed";
-  if (thread.latestTurn?.state === "error" || thread.session?.status === "error") return "failed";
-  if (thread.latestTurn?.state === "interrupted" || thread.session?.status === "interrupted")
-    return "interrupted";
-  if (
-    thread.latestTurn?.state === "running" ||
-    thread.session?.status === "running" ||
-    thread.session?.status === "starting"
-  )
+export function gatewayStatusFromThread(
+  thread: Pick<
+    OrchestrationShellSnapshot["threads"][number],
+    "latestTurn" | "session" | "latestUserMessageAt"
+  >,
+  now = DateTime.formatIso(DateTime.nowUnsafe()),
+): string {
+  if (thread.session?.status === "running" || thread.session?.status === "starting")
     return "running";
-  return "queued";
+  if (hasQueuedTurnStart(thread, { now })) return "queued";
+  if (thread.session?.status === "stopped") return "stopped";
+  if (thread.session?.status === "error") return "failed";
+  if (thread.session?.status === "interrupted") return "interrupted";
+  if (thread.latestTurn?.state === "running") return "running";
+  if (thread.latestTurn?.state === "completed") return "completed";
+  if (thread.latestTurn?.state === "error") return "failed";
+  if (thread.latestTurn?.state === "interrupted") return "interrupted";
+  return "idle";
 }
 
 function gatewayEventContext(

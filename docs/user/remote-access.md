@@ -205,6 +205,27 @@ Agents board; changing an agent does not change existing chats. Use `t3_list_env
 to check the environment IDs and effective grants seen by the assistant. Permission errors also
 report the granted and missing scopes.
 
+### Pause or stop work through MCP
+
+Default access does not include pause or stop. In **Settings → MCP Gateway**, open the target
+machine's access menu, enable **Control active work**, and select **Save**. This grants `control`
+only for that environment. The broader `lifecycle` grant also permits thread controls, but neither
+**All capabilities** nor access to other machines is needed. Use `t3_list_environments` to confirm
+that the assistant sees the updated grant. A `scope_required` error means no control was dispatched;
+`control` and `lifecycle` are alternatives, not two required grants.
+
+`t3_pause_thread` requests an interruption of the active turn; it does not suspend a provider process.
+`t3_stop_thread` requests stopping its provider session. Their `accepted` result acknowledges the
+request, not its completion. Read `t3_get_thread` or watch the subsequent session/turn events to
+confirm the outcome. An interrupted turn is reported as `interrupted`, and a stopped session as
+`stopped`. A provider can finish normally before the interruption takes effect; `completed` is a
+finished turn, not evidence that it was paused. Do not automatically resume or restart it.
+
+These controls do not delete queued messages or pause a queue. A new message awaiting turn adoption
+can still be reported as `queued` after a stop; inspect it separately before claiming all work has
+stopped. A queued-only thread with no active turn cannot be paused. Sending a chat message asking
+an agent to stop is cooperative: message acceptance alone does not prove the agent has stopped.
+
 ### Open a remote chat
 
 In the installed desktop app, connect the remote environment and configure **Settings → MCP Gateway**

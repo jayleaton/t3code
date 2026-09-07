@@ -206,7 +206,7 @@ const TOOL_SPECS = {
     },
   ],
   t3_stop_thread: [
-    "Request a cooperative thread stop.",
+    "Request stopping the thread provider session. Requires control or lifecycle scope. Accepted is not confirmed stopped: verify session status with t3_get_thread. Does not remove queued messages.",
     {
       environmentId,
       threadId,
@@ -224,7 +224,7 @@ const TOOL_SPECS = {
     },
   ],
   t3_pause_thread: [
-    "Pause current thread work.",
+    "Request interruption of active thread work. Requires control or lifecycle scope. Accepted is not confirmed paused: read the thread until its turn/session is no longer running. Does not pause queued messages or suspend a provider process.",
     {
       environmentId,
       threadId,

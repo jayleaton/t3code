@@ -14,6 +14,7 @@ import {
   gatewayEventFromOrchestration,
   resolveGatewayProfileModelSelection,
   gatewayThreadProjection,
+  gatewayStatusFromThread,
 } from "./runtimePort.ts";
 
 const environmentId = EnvironmentId.make("remote-1");
@@ -236,41 +237,94 @@ describe("Gateway Runtime Port", () => {
     }),
   );
 
-  it("maps lifecycle receipts to canonical state changes", () => {
-    const projected = gatewayEventFromOrchestration(
+  it.each(["pause", "stop", "cancel"])(
+    "does not report %s as finished from an acknowledgement",
+    (action) => {
+      const projected = gatewayEventFromOrchestration(
+        environmentId,
+        {
+          eventId: "event-lifecycle-1",
+          sequence: 5,
+          occurredAt: "2026-09-04T00:00:01.000Z",
+          type: "thread.activity-appended",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          correlationId: null,
+          payload: {
+            activity: {
+              kind: `lifecycle.${action}.completed`,
+              summary: "Pause accepted",
+              payload: { action: "pause", attemptId: "attempt-pause-1" },
+            },
+          },
+        } as never,
+        {
+          machine: "Build machine",
+          project: { id: "project-1", title: "T3 Code" },
+          thread: { title: "Fix gateway", status: "running" },
+        },
+      );
+
+      expect(projected).toMatchObject({
+        type: "thread.progress",
+        data: {
+          status: "running",
+          nextAction: "await_event",
+          activityKind: `lifecycle.${action}.completed`,
+        },
+      });
+    },
+  );
+
+  it.each([
+    ["starting", "completed", null, "running"],
+    ["running", "interrupted", null, "running"],
+    ["stopped", "running", null, "stopped"],
+    ["interrupted", "running", null, "interrupted"],
+    ["ready", "completed", "2026-09-07T00:00:01.000Z", "queued"],
+    ["stopped", "completed", "2026-09-07T00:00:01.000Z", "queued"],
+    ["ready", "completed", null, "completed"],
+    ["ready", null, null, "idle"],
+  ] as const)(
+    "reports %s session with %s turn and message %s as %s",
+    (session, turn, messageAt, expected) => {
+      expect(
+        gatewayStatusFromThread(
+          {
+            session: { status: session },
+            latestTurn:
+              turn === null
+                ? null
+                : {
+                    state: turn,
+                    requestedAt: "2026-09-07T00:00:00.000Z",
+                    startedAt: "2026-09-07T00:00:00.000Z",
+                    completedAt: turn === "completed" ? "2026-09-07T00:00:00.500Z" : null,
+                  },
+            latestUserMessageAt: messageAt,
+          } as Parameters<typeof gatewayStatusFromThread>[0],
+          "2026-09-07T00:00:02.000Z",
+        ),
+      ).toBe(expected);
+    },
+  );
+
+  it.each(["interrupted", "stopped"])("publishes observed %s session state", (status) => {
+    const event = gatewayEventFromOrchestration(
       environmentId,
       {
-        eventId: "event-lifecycle-1",
-        sequence: 5,
-        occurredAt: "2026-09-04T00:00:01.000Z",
-        type: "thread.activity-appended",
+        type: "thread.session-set",
         aggregateKind: "thread",
         aggregateId: "thread-1",
+        eventId: "session-event",
+        sequence: 6,
+        occurredAt: "2026-09-07T00:00:02.000Z",
         correlationId: null,
-        payload: {
-          activity: {
-            kind: "lifecycle.pause.completed",
-            summary: "Pause accepted",
-            payload: { action: "pause", attemptId: "attempt-pause-1" },
-          },
-        },
+        payload: {},
       } as never,
-      {
-        machine: "Build machine",
-        project: { id: "project-1", title: "T3 Code" },
-        thread: { title: "Fix gateway", status: "running" },
-      },
+      { machine: "dev-box", thread: { title: "Audit", status } },
     );
-
-    expect(projected).toMatchObject({
-      type: "thread.state_changed",
-      data: {
-        status: "paused",
-        previousStatus: "running",
-        nextAction: "resume",
-        activityKind: "lifecycle.pause.completed",
-      },
-    });
+    expect(event).toMatchObject({ type: "thread.state_changed", data: { status } });
   });
 
   it("redacts raw provider output and host paths before the bridge boundary", () => {

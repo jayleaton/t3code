@@ -227,11 +227,12 @@ function environmentWithAnyScope(
   if (!acceptedScopes.some((scope) => scopes.includes(scope))) {
     throw new GatewayError({
       code: "scope_required",
-      message: `One of scopes ${acceptedScopes.join(" or ")} is required for environment ${environmentId}.`,
+      message: `One of scopes ${acceptedScopes.join(" or ")} is required for environment ${environmentId}. The owner can enable Control active work for this machine in Settings → MCP Gateway and save. Default read/create/send access does not include thread control. No control command was dispatched.`,
       retryable: false,
       environmentId,
       details: {
         requiredScopes: acceptedScopes,
+        scopeRequirement: "any",
         missingScopes: acceptedScopes,
         grantedScopes: scopes,
       },
@@ -820,11 +821,13 @@ export async function callGatewayTool(
           ? "settled"
           : plan.actions.length > 0
             ? "waiting-approval"
-            : typeof latestTurn?.state === "string"
-              ? latestTurn.state
-              : typeof session?.status === "string"
-                ? session.status
-                : "queued";
+            : typeof thread.status === "string"
+              ? thread.status
+              : typeof latestTurn?.state === "string"
+                ? latestTurn.state
+                : typeof session?.status === "string"
+                  ? session.status
+                  : "queued";
       return {
         environmentId,
         threadId: thread.id,
@@ -835,7 +838,11 @@ export async function callGatewayTool(
         approvalPlan: plan,
         artifacts: Array.isArray(thread.artifacts) ? thread.artifacts : [],
         nextAction:
-          plan.actions.length > 0 ? "approve_actions" : status === "running" ? "await_event" : null,
+          plan.actions.length > 0
+            ? "approve_actions"
+            : status === "running" || status === "queued"
+              ? "await_event"
+              : null,
         snapshotAt: thread.updatedAt ?? "runtime",
       };
     }

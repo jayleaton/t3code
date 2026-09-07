@@ -104,6 +104,36 @@ it.layer(NodeServices.layer)("gateway lifecycle decider", (it) => {
     }),
   );
 
+  it.effect("rejects pause for a queued message without an active session", () =>
+    Effect.gen(function* () {
+      const snapshot = readModel("interrupted");
+      const thread = snapshot.threads[0]!;
+      const error = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.lifecycle.control",
+          commandId: CommandId.make("queued-pause"),
+          threadId: thread.id,
+          action: "pause",
+          attemptId: "queued-pause",
+          messageId: MessageId.make("pause-message"),
+          createdAt: NOW,
+        },
+        readModel: {
+          ...snapshot,
+          threads: [
+            {
+              ...thread,
+              latestTurn: null,
+              session: null,
+              messages: thread.messages.map((message) => ({ ...message, turnId: null })),
+            },
+          ],
+        },
+      } as never).pipe(Effect.flip);
+      expect(error).toMatchObject({ _tag: "OrchestrationCommandInvariantError" });
+    }),
+  );
+
   it.effect("rejects resume unless the thread is interrupted", () =>
     Effect.gen(function* () {
       const error = yield* decideOrchestrationCommand({

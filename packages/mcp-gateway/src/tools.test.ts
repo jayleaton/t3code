@@ -320,6 +320,32 @@ describe("gateway chat tools", () => {
     ).rejects.toMatchObject({ code: "scope_required", environmentId: "local" });
   });
 
+  it.each(["running", "queued", "stopped", "interrupted"])(
+    "summarizes authoritative %s state ahead of a stale completed turn",
+    async (status) => {
+      const result = await callGatewayTool(
+        {
+          port: {
+            ...makePort(),
+            getThread: async () => ({
+              id: "thread-1",
+              status,
+              latestTurn: { state: "completed" },
+              messages: [],
+            }),
+          },
+          grants,
+        },
+        "t3_summarize_thread",
+        { environmentId: "local", threadId: "thread-1" },
+      );
+      expect(result).toMatchObject({
+        status,
+        nextAction: status === "running" || status === "queued" ? "await_event" : null,
+      });
+    },
+  );
+
   it("honors and revokes the explicit control compatibility scope", async () => {
     let enabled = false;
     const controls: Array<{ action: GatewayThreadControlAction; requestId: string }> = [];

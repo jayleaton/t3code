@@ -46,6 +46,68 @@ const port: GatewayRuntimePort = {
 };
 
 describe("MCP gateway server", () => {
+  it.each([
+    ["pause", "control"],
+    ["stop", "control"],
+    ["pause", "lifecycle"],
+    ["stop", "lifecycle"],
+  ] as const)(
+    "requires an explicit grant for the %s alias and accepts %s scope",
+    async (action, scope) => {
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      let scopes: ReadonlyArray<GatewayScope> = ["read", "create", "send"];
+      const controls: Array<unknown> = [];
+      const gateway = createMcpGateway({
+        port: {
+          ...port,
+          controlThread: async (input) => {
+            controls.push(input);
+            return port.controlThread(input);
+          },
+        },
+        grants: () => ({ local: scopes }),
+      });
+      const client = new Client({ name: "control-regression", version: "1" });
+      await gateway.server.connect(serverTransport);
+      await client.connect(clientTransport);
+      try {
+        const request = {
+          name: `t3_${action}_thread`,
+          arguments: {
+            environmentId: "local",
+            threadId: "audit",
+            idempotencyKey: `grant-${action}`,
+          },
+        };
+        const denied = await client.callTool(request);
+        expect(denied.isError).toBe(true);
+        expect(denied.structuredContent).toMatchObject({
+          error: {
+            code: "scope_required",
+            message: expect.stringContaining("Settings → MCP Gateway"),
+            details: {
+              scopeRequirement: "any",
+              requiredScopes: ["control", "lifecycle"],
+              grantedScopes: scopes,
+            },
+          },
+        });
+        expect(controls).toHaveLength(0);
+        scopes = [...scopes, scope];
+        expect((await client.callTool(request)).structuredContent).toMatchObject({
+          data: { status: "accepted", threadId: "audit" },
+        });
+        expect(controls).toHaveLength(1);
+        scopes = ["read", "create", "send"];
+        expect((await client.callTool(request)).isError).toBe(true);
+        expect(controls).toHaveLength(1);
+      } finally {
+        await client.close();
+        await gateway.server.close();
+      }
+    },
+  );
+
   it("serves structured tools over an MCP transport", async () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const gateway = createMcpGateway({
@@ -133,7 +195,7 @@ describe("MCP gateway server", () => {
     });
 
     await client.close();
-    await gateway.close();
+    await gateway.server.close();
   });
 
   it("applies grant changes after the MCP server is already connected", async () => {
@@ -168,7 +230,7 @@ describe("MCP gateway server", () => {
     });
 
     await client.close();
-    await gateway.close();
+    await gateway.server.close();
   });
 
   it("returns structured authorization errors over MCP", async () => {
@@ -201,7 +263,7 @@ describe("MCP gateway server", () => {
     });
 
     await client.close();
-    await gateway.close();
+    await gateway.server.close();
   });
 
   it("pushes durable subscription events over the connected MCP transport", async () => {
@@ -289,7 +351,7 @@ describe("MCP gateway server", () => {
     });
 
     await client.close();
-    await gateway.close();
+    await gateway.server.close();
     events.close();
   });
 
