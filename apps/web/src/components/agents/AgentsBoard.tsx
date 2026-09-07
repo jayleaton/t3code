@@ -1,17 +1,9 @@
-import { useThreadActions } from "../../hooks/useThreadActions";
-import { readLocalApi } from "../../localApi";
-import {
-  isAtomCommandInterrupted,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
-import { toastManager } from "../ui/toast";
+import { ThreadCard } from "./ThreadCard";
+import { useAgentThreadContextMenu } from "./useAgentThreadContextMenu";
 import * as Schema from "effect/Schema";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { Menu, MenuTrigger, MenuPopup, MenuItem } from "../ui/menu";
-import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { AgentIcon, agentColors } from "./AgentIcon";
-import { PreviewCard } from "@base-ui/react/preview-card";
-import { AgentChatPreview } from "./AgentChatPreview";
 import { Link } from "@tanstack/react-router";
 import { useMemo, useState, type CSSProperties } from "react";
 import {
@@ -30,16 +22,10 @@ import type { McpGatewayProfile } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { useAgentLibrary } from "../../hooks/useAgentLibrary";
 import { useEnvironments } from "../../state/environments";
-import {
-  useThreadShells,
-  useAllEnvironmentShellsBootstrapped,
-  useProject,
-  readThreadShell,
-  readEnvironmentSupportsSettlement,
-} from "../../state/entities";
+import { useThreadShells, useAllEnvironmentShellsBootstrapped } from "../../state/entities";
 import { AgentEditor } from "./AgentEditor";
 import { AgentTaskDialog } from "./AgentTaskDialog";
-import { agentThreadStatus, groupAgentThreads } from "./agents.logic";
+import { groupAgentThreads } from "./agents.logic";
 import { SidebarMenuButton } from "../ui/sidebar";
 import { openCommandPalette } from "../../commandPaletteBus";
 import { searchSidebarThreadsByTitle } from "../Sidebar.logic";
@@ -48,88 +34,11 @@ import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialo
 const agentOrderSchema = Schema.Array(Schema.String);
 const emptyAgentOrder: readonly string[] = [];
 
-function ThreadCard({
-  thread,
-  profile,
-  onContextMenu,
-}: {
-  thread: EnvironmentThreadShell;
-  profile?: McpGatewayProfile | undefined;
-  onContextMenu: (
-    thread: EnvironmentThreadShell,
-    position: { x: number; y: number },
-  ) => Promise<void>;
-}) {
-  const project = useProject(scopeProjectRef(thread.environmentId, thread.projectId));
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const [contextMenuOpen, setContextMenuOpen] = useState(false);
-  const status = agentThreadStatus(thread);
-  const snapshot = thread.profileSnapshot;
-  const old = profile && snapshot && snapshot.revision !== profile.revision;
-  return (
-    <PreviewCard.Root open={!contextMenuOpen && previewOpen} onOpenChange={setPreviewOpen}>
-      <PreviewCard.Trigger
-        onContextMenu={(event) => {
-          event.preventDefault();
-          setPreviewOpen(false);
-          setContextMenuOpen(true);
-          void onContextMenu(thread, { x: event.clientX, y: event.clientY }).finally(() => {
-            setPreviewOpen(false);
-            setContextMenuOpen(false);
-          });
-        }}
-        delay={400}
-        render={
-          <Link
-            to="/agents/$environmentId/$threadId"
-            params={{ environmentId: thread.environmentId, threadId: thread.id }}
-          />
-        }
-        className={`agent-thread agent-thread-${status}`}
-      >
-        <div className="agent-thread-title">
-          <strong>{thread.title}</strong>
-          <span className={`agent-status agent-status-${status}`}>{status}</span>
-        </div>
-        <div className="agent-thread-meta">
-          <div className="agent-thread-location">
-            <span className="agent-thread-project">{project?.title ?? "Project unavailable"}</span>
-          </div>
-          <span>
-            {thread.session?.status === "error"
-              ? "Needs attention"
-              : new Date(thread.updatedAt).toLocaleDateString(undefined, {
-                  month: "short",
-                  day: "numeric",
-                })}
-          </span>
-        </div>
-        {old && (
-          <span className="agent-old-model">
-            Started with {thread.modelSelection.model} · v{snapshot.revision}
-          </span>
-        )}
-      </PreviewCard.Trigger>
-      <PreviewCard.Portal>
-        <PreviewCard.Positioner side="right" align="start" sideOffset={12} className="z-[140]">
-          <PreviewCard.Popup className="agent-chat-preview">
-            {previewOpen && (
-              <AgentChatPreview thread={thread} project={project?.title ?? "Project unavailable"} />
-            )}
-          </PreviewCard.Popup>
-        </PreviewCard.Positioner>
-      </PreviewCard.Portal>
-    </PreviewCard.Root>
-  );
-}
-
 function AgentThreadList({
   threads,
-  profile,
   onContextMenu,
 }: {
   threads: readonly EnvironmentThreadShell[];
-  profile?: McpGatewayProfile | undefined;
   onContextMenu: (
     thread: EnvironmentThreadShell,
     position: { x: number; y: number },
@@ -142,7 +51,6 @@ function AgentThreadList({
     <ThreadCard
       key={`${thread.environmentId}:${thread.id}`}
       thread={thread}
-      profile={profile}
       onContextMenu={onContextMenu}
     />
   );
@@ -171,41 +79,7 @@ function AgentThreadList({
 }
 
 export function AgentsBoard() {
-  const { settleThread, unsettleThread } = useThreadActions();
-  const onThreadContextMenu = async (
-    thread: EnvironmentThreadShell,
-    position: { x: number; y: number },
-  ) => {
-    const api = readLocalApi();
-    const ref = scopeThreadRef(thread.environmentId, thread.id);
-    const current = readThreadShell(ref);
-    if (!api || !current) return;
-    const settled = current.settledAt !== null;
-    try {
-      const action = await api.contextMenu.show(
-        [
-          {
-            id: settled ? "unsettle" : "settle",
-            label: settled ? "Un-settle chat" : "Settle chat",
-            icon: settled ? "circle" : "circle-check",
-            disabled: !readEnvironmentSupportsSettlement(thread.environmentId),
-          },
-        ],
-        position,
-      );
-      if (!action) return;
-      const result = await (action === "settle" ? settleThread(ref) : unsettleThread(ref));
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        throw squashAtomCommandFailure(result);
-      }
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: settled ? "Could not un-settle chat" : "Could not settle chat",
-        description: error instanceof Error ? error.message : "Try again.",
-      });
-    }
-  };
+  const onThreadContextMenu = useAgentThreadContextMenu();
   const { profiles, available, updateSettings } = useAgentLibrary();
   const [order, setOrder] = useLocalStorage(
     "t3code:agents:column-order",
@@ -255,7 +129,8 @@ export function AgentsBoard() {
         <div className="agents-search">
           <SearchIcon size={15} aria-hidden="true" />
           <input
-            type="search"
+            type="text"
+            role="searchbox"
             aria-label="Search all chats"
             placeholder="Search all chats…"
             value={query}
@@ -399,7 +274,6 @@ export function AgentsBoard() {
                 </div>
                 <AgentThreadList
                   threads={groups.get(profile.profileId) ?? []}
-                  profile={profile}
                   onContextMenu={onThreadContextMenu}
                 />
               </section>

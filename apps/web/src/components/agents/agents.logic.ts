@@ -28,5 +28,38 @@ export function agentThreadStatus(thread: EnvironmentThreadShell) {
   if (thread.session?.status === "running" || thread.latestTurn?.state === "running")
     return "running";
   if (thread.session?.status === "starting") return "queued";
-  return "chat";
+  if (thread.session?.status === "error" || thread.latestTurn?.state === "error") return "error";
+  if (thread.hasPendingApprovals || thread.hasPendingUserInput) return "attention";
+  if (thread.latestTurn?.state === "completed") return "done";
+  return "idle";
+}
+
+export function agentThreadStatusLabel(status: ReturnType<typeof agentThreadStatus>) {
+  return {
+    done: "Done",
+    running: "In progress",
+    queued: "Queued",
+    idle: "Idle",
+    error: "Error",
+    attention: "Needs input",
+  }[status];
+}
+
+export function isAgentChatInFocus(
+  thread: EnvironmentThreadShell,
+  lastVisitedAt: string | undefined,
+  selected: boolean,
+) {
+  if (selected) return true;
+  if (thread.settledAt !== null) return false;
+  const status = agentThreadStatus(thread);
+  if (status !== "done") return true;
+  const completedAt = thread.latestTurn?.completedAt;
+  if (!completedAt) return false;
+  // A chat created from the board may complete before it has ever been opened.
+  return (
+    !lastVisitedAt ||
+    !Number.isFinite(Date.parse(lastVisitedAt)) ||
+    Date.parse(completedAt) > Date.parse(lastVisitedAt)
+  );
 }

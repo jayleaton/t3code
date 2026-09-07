@@ -7,7 +7,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { useLocation, useNavigate } from "@tanstack/react-router";
+import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 
 import { isElectron } from "../env";
 import { getLocalStorageItem, removeLocalStorageItem } from "../hooks/useLocalStorage";
@@ -28,6 +28,8 @@ import {
   resolveSidebarStageFocusRingOffsetClass,
   useSidebarStageBackdropVariant,
 } from "./SidebarStageBackdrop";
+import { resolveThreadRouteRef } from "../threadRoutes";
+import { useThreadShell } from "../state/entities";
 import { useProjects } from "../state/entities";
 import {
   resolveInitialThreadSidebarWidth,
@@ -151,7 +153,12 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const pathname = useLocation({ select: (location) => location.pathname });
   const panelAnimationsSuppressed = usePanelNavigationSuppression(pathname);
   const routePanelAnimationsActive = panelAnimationsActive && !panelAnimationsSuppressed;
-  const isOnAgents = pathname === "/agents" || pathname.startsWith("/agents/");
+  const routeRef = useParams({ strict: false, select: resolveThreadRouteRef });
+  const routeThread = useThreadShell(routeRef);
+  const isOnAgents =
+    pathname === "/agents" ||
+    pathname.startsWith("/agents/") ||
+    Boolean(routeThread?.profileSnapshot);
   const isOnSettings = pathname === "/settings" || pathname.startsWith("/settings/");
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
   const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
@@ -227,6 +234,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
       <SidebarProvider
         className="h-dvh! min-h-0!"
         data-panel-animations={routePanelAnimationsActive ? "true" : "false"}
+        data-agents-view={isOnAgents ? "true" : undefined}
         defaultOpen
         style={sidebarProviderStyle}
       >

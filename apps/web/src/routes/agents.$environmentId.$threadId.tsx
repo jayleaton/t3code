@@ -1,7 +1,5 @@
-import { useState } from "react";
-import { AgentHandoffDialog } from "../components/agents/AgentHandoffDialog";
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowLeftIcon } from "lucide-react";
+import { AgentChatRail } from "../components/agents/AgentChatRail";
+import { createFileRoute } from "@tanstack/react-router";
 import ChatView from "../components/ChatView";
 import { resolveThreadRouteRef } from "../threadRoutes";
 import { resolveThreadSyncPhase } from "../threadSync";
@@ -14,7 +12,6 @@ export function AgentsThreadView({
   environmentId: string;
   threadId: string;
 }) {
-  const [handoff, setHandoff] = useState(false);
   const threadRef = resolveThreadRouteRef({ environmentId, threadId });
   const shell = useThreadShell(threadRef);
   const detail = useThreadDetail(threadRef);
@@ -26,34 +23,13 @@ export function AgentsThreadView({
   });
   return (
     <div className="agents-thread-view">
-      <div className="agents-backbar">
-        <Link to="/agents">
-          <ArrowLeftIcon size={14} />
-          Back to agents
-        </Link>
-        <button
-          className="ml-auto rounded-md border px-3 py-1"
-          disabled={!detail}
-          onClick={() => setHandoff(true)}
-        >
-          Hand off
-        </button>
-      </div>
-      {handoff && detail && (
-        <AgentHandoffDialog
-          sourceEnvironmentId={environmentId}
-          sourceThreadId={threadId}
-          initialSummary={
-            detail.messages.findLast((message) => message.role === "assistant")?.text ?? ""
-          }
-          onClose={() => setHandoff(false)}
-        />
-      )}
+      {threadRef && <AgentChatRail current={threadRef} />}
       <div className="agents-chat">
         {threadRef && status !== "deleted" ? (
           <ChatView
             environmentId={threadRef.environmentId}
             threadId={threadRef.threadId}
+            showBackToAgents
             routeKind="server"
             threadSyncPhase={phase}
           />

@@ -5,7 +5,7 @@ import {
   type McpGatewayProfile,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { agentThreadStatus, groupAgentThreads } from "./agents.logic";
+import { agentThreadStatus, groupAgentThreads, isAgentChatInFocus } from "./agents.logic";
 const profile: McpGatewayProfile = {
   profileId: "write",
   name: "Write",
@@ -65,7 +65,41 @@ describe("agent thread grouping", () => {
     expect(result.orphaned).toEqual([orphan]);
     expect(old.modelSelection.model).toBe("old-gpt");
     expect(agentThreadStatus(done)).toBe("done");
-    expect(agentThreadStatus(old)).toBe("chat");
+    expect(agentThreadStatus(old)).toBe("idle");
     expect(groupAgentThreads([], [old]).orphaned).toEqual([old]);
+  });
+});
+
+describe("agent chat focus", () => {
+  const completed = () => ({
+    ...thread("complete", "write"),
+    latestTurn: {
+      turnId: "turn" as NonNullable<ReturnType<typeof thread>["latestTurn"]>["turnId"],
+      state: "completed" as const,
+      requestedAt: "2026-09-06T00:00:00.000Z",
+      startedAt: "2026-09-06T00:00:00.000Z",
+      completedAt: "2026-09-06T00:02:00.000Z",
+      assistantMessageId: null,
+    },
+  });
+  it("keeps a never-opened completion until it is viewed, and keeps the selected chat", () => {
+    const done = completed();
+    expect(agentThreadStatus(done)).toBe("done");
+    expect(isAgentChatInFocus(done, undefined, false)).toBe(true);
+    expect(isAgentChatInFocus(done, "2026-09-06T00:01:00.000Z", false)).toBe(true);
+    expect(isAgentChatInFocus(done, "2026-09-06T00:03:00.000Z", false)).toBe(false);
+    expect(isAgentChatInFocus(done, "2026-09-06T00:03:00.000Z", true)).toBe(true);
+  });
+  it("shows idle and running chats but respects explicit settlement", () => {
+    expect(isAgentChatInFocus(thread("idle", "write"), undefined, false)).toBe(true);
+    const running = {
+      ...completed(),
+      latestTurn: { ...completed().latestTurn, state: "running" as const, completedAt: null },
+    };
+    expect(agentThreadStatus(running)).toBe("running");
+    expect(isAgentChatInFocus(running, "2026-09-06T00:03:00.000Z", false)).toBe(true);
+    const settled = { ...completed(), settledAt: "2026-09-06T00:03:00.000Z" };
+    expect(isAgentChatInFocus(settled, undefined, false)).toBe(false);
+    expect(isAgentChatInFocus(settled, undefined, true)).toBe(true);
   });
 });

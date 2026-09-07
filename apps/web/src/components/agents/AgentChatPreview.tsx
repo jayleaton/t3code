@@ -1,7 +1,13 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { AgentPreviewReply } from "./AgentPreviewReply";
+import { useLayoutEffect, useRef } from "react";
+import { Link } from "@tanstack/react-router";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { useThreadDetail, useThreadStatus } from "../../state/entities";
-import { agentThreadStatus } from "./agents.logic";
+import { useProject, useThreadDetail, useThreadStatus } from "../../state/entities";
+import { deriveDisplayedUserMessageState } from "../../lib/terminalContext";
+import ChatMarkdown from "../ChatMarkdown";
+import { shouldPreserveAssistantLineBreaks } from "../chat/MessagesTimeline.logic";
+import { agentThreadStatus, agentThreadStatusLabel } from "./agents.logic";
 
 export function AgentChatPreview({
   thread,
@@ -13,43 +19,110 @@ export function AgentChatPreview({
   const ref = scopeThreadRef(thread.environmentId, thread.id);
   const detail = useThreadDetail(ref);
   const status = useThreadStatus(ref);
-  const messages = detail?.messages.filter((message) => message.role !== "system").slice(-4) ?? [];
+  const workspace = useProject(scopeProjectRef(thread.environmentId, thread.projectId));
+  const messages = detail?.messages.filter((message) => message.role !== "system").slice(-8) ?? [];
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const following = useRef(true);
+  // Markdown and images can grow after a stream event has rendered. Follow only
+  // while the reader stays near the bottom; never pull them away from older text.
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current;
+    const content = contentRef.current;
+    if (!scroll || !content) return;
+    const follow = () => {
+      if (following.current) scroll.scrollTop = scroll.scrollHeight;
+    };
+    follow();
+    const observer = new ResizeObserver(follow);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
   return (
-    <section aria-label="Chat preview">
-      <header>
+    <section aria-label="Chat preview" className="agent-preview-chat">
+      <header className="agent-preview-header">
         <strong>{thread.title}</strong>
         <span>
-          {thread.session?.status === "error" ? "Needs attention" : agentThreadStatus(thread)}
-        </span>
-        <span>{project}</span>
-        <span>
-          {thread.profileSnapshot?.profileName ?? "Chat"} · {thread.modelSelection.model}
+          {project} · {agentThreadStatusLabel(agentThreadStatus(thread))}
         </span>
       </header>
-      {status === "cached" && <p role="status">Offline · showing saved messages</p>}
-      {!detail && (
-        <p role="status">
-          {status === "deleted" ? "This chat is no longer available." : "Loading recent messages…"}
-        </p>
-      )}
-      {detail && messages.length === 0 && <p>No messages yet.</p>}
-      <div className="agent-preview-messages">
-        {messages.map((message) => (
-          <article key={message.id}>
-            <strong>
-              {message.role === "user" ? "You" : "Agent"}
-              {message.streaming ? " · writing…" : ""}
-            </strong>
-            <p>
-              {message.text.slice(0, 1600)}
-              {message.text.length > 1600 ? "…" : ""}
+      <div
+        ref={scrollRef}
+        className="agent-preview-scroll"
+        onScroll={(event) => {
+          const node = event.currentTarget;
+          following.current = node.scrollHeight - node.scrollTop - node.clientHeight < 48;
+        }}
+      >
+        <div ref={contentRef} className="agent-preview-messages">
+          {status === "cached" && <p role="status">Offline · showing saved messages</p>}
+          {!detail && (
+            <p role="status">
+              {status === "deleted"
+                ? "This chat is no longer available."
+                : "Loading recent messages…"}
             </p>
-            {message.attachments?.length ? (
-              <small>{message.attachments.length} attachments</small>
-            ) : null}
-          </article>
-        ))}
+          )}
+          {detail && messages.length === 0 && <p>No messages yet.</p>}
+          {detail && detail.messages.length > messages.length && (
+            <p className="agent-preview-note">Recent messages · open chat for earlier history</p>
+          )}
+          {messages.map((message) => {
+            const user = message.role === "user";
+            const text = user
+              ? deriveDisplayedUserMessageState(message.text).visibleText
+              : message.text;
+            return (
+              <article
+                key={message.id}
+                className={user ? "agent-preview-user" : "agent-preview-assistant"}
+                aria-label={user ? "User message" : "Assistant message"}
+              >
+                <div className="agent-preview-role">
+                  {user ? "You" : (thread.profileSnapshot?.profileName ?? "Agent")}
+                  {message.streaming ? " · writing…" : ""}
+                </div>
+                <ChatMarkdown
+                  text={text.slice(0, 24000)}
+                  cwd={thread.worktreePath ?? workspace?.workspaceRoot}
+                  threadRef={ref}
+                  isStreaming={Boolean(message.streaming)}
+                  lineBreaks={user || shouldPreserveAssistantLineBreaks(text)}
+                />
+                {text.length > 24000 && (
+                  <p className="agent-preview-note">Open chat to read the rest of this message.</p>
+                )}
+                {message.attachments?.map((attachment) => (
+                  <div className="agent-preview-note" key={attachment.id}>
+                    {attachment.name}
+                  </div>
+                ))}
+              </article>
+            );
+          })}
+          {agentThreadStatus(thread) === "running" &&
+            !messages.some((message) => message.streaming) && (
+              <p role="status" className="agent-preview-note">
+                Agent is working…
+              </p>
+            )}
+        </div>
       </div>
+      <AgentPreviewReply
+        thread={thread}
+        onSent={() => {
+          following.current = true;
+          if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }}
+      />
+      <footer className="agent-preview-footer">
+        <Link
+          to="/agents/$environmentId/$threadId"
+          params={{ environmentId: thread.environmentId, threadId: thread.id }}
+        >
+          Open chat →
+        </Link>
+      </footer>
     </section>
   );
 }

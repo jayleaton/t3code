@@ -221,6 +221,12 @@ then start a task or an empty chat. Clicking a
 card opens the conversation; **Back to agents** returns to the board. Settled work moves into a collapsed **Settled** section
 in its agent column. Right-click a chat to settle or un-settle it. Deleting an agent keeps its conversations under **Removed agents**.
 
+Hover a chat to read its recent messages and send a follow-up without leaving the board. The
+preview updates live and shares your draft with the full chat. Attachments, approvals, and plan
+responses use the full chat. While a chat is open, the compact list shows active work and
+completed chats you have not viewed on this device. Your current chat stays visible until you
+switch away; settled chats remain on the board under **Settled**.
+
 Agents are shared across clients connected to the same server. Updated clients also synchronize
 the agent library between connected environments that support agent sync, including after reconnecting. Each target resolves the provider and model locally; an unavailable or
 ambiguous selection must be re-selected before starting a thread. Agent changes apply only to
@@ -241,14 +247,15 @@ generated file; continuing the conversation
 restores its original instructions. Other chats and project-owned instruction files are left
 alone. Edit the agent in the app to change instructions for future chats.
 
-Use **Hand off** inside an agent chat to move from planning to implementation or from code to
-review. Review the prefilled latest response, select any workspace-relative text files such as
-`plan.md`, choose the destination agent and project, and give it a task. The new chat receives a
-Markdown brief with the summary and copied file contents, including across machines. After a
-successful handoff, choose whether to settle the source conversation. Plans and handoff briefs
-remain available when the source settles; only its generated agent instructions are cleaned up.
+Use the speed control on a chat card to choose a model-supported speed tier. The setting applies
+to the next provider request, including when changed during a running turn; it does not restart
+or accelerate a response already in progress.
 
-MCP assistants can use `t3_handoff_thread` for the same transfer. Reuse the handoff UUID when
+MCP assistants can use `t3_handoff_thread` to move work from planning to implementation or from
+code to review. Supply a summary, destination agent and project, a task, and optionally
+workspace-relative text files such as `plan.md`. The destination receives a Markdown brief with
+copied file contents, including across machines. Plans and handoff briefs remain available when
+the source settles. Reuse the handoff UUID when
 retrying, and inspect the returned status: `created` means the new chat exists but delivery needs
 recovery. Settlement is a separate `t3_settle_thread` call after the user confirms. Handoff needs
 read access on the source, artifact access when copying files, and create/send/artifact access on

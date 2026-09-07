@@ -1,3 +1,6 @@
+import { formatOutgoingPrompt } from "./chat/formatOutgoingPrompt";
+import { Link } from "@tanstack/react-router";
+import { ArrowLeftIcon } from "lucide-react";
 import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
 import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
 import {
@@ -51,11 +54,7 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import {
-  applyClaudePromptEffortPrefix,
-  createModelSelection,
-  resolvePromptInjectedEffort,
-} from "@t3tools/shared/model";
+import { createModelSelection } from "@t3tools/shared/model";
 import {
   projectScriptCwd,
   projectScriptRuntimeEnv,
@@ -626,17 +625,6 @@ function pasteTextToFocusComposer(event: ClipboardEvent): string | null {
   return text.length > 0 ? text : null;
 }
 
-function formatOutgoingPrompt(params: {
-  provider: ProviderDriverKind;
-  model: string | null;
-  models: ReadonlyArray<ServerProvider["models"][number]>;
-  effort: string | null;
-  text: string;
-}): string {
-  const caps = getProviderModelCapabilities(params.models, params.model, params.provider);
-  const promptEffort = resolvePromptInjectedEffort(caps, params.effort);
-  return applyClaudePromptEffortPrefix(params.text, promptEffort);
-}
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
 
@@ -651,6 +639,7 @@ type ChatViewProps =
       threadId: ThreadId;
       onDiffPanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
+      showBackToAgents?: boolean;
       forceExpandedMobileComposer?: boolean;
       threadSyncPhase?: ThreadSyncPhase | null;
       routeKind: "server";
@@ -661,6 +650,7 @@ type ChatViewProps =
       threadId: ThreadId;
       onDiffPanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
+      showBackToAgents?: boolean;
       forceExpandedMobileComposer?: boolean;
       threadSyncPhase?: never;
       routeKind: "draft";
@@ -7790,6 +7780,22 @@ export default function ChatView(props: ChatViewProps) {
             />
           ) : null}
           {!rightPanelControlsAtRoot && !rightPanelControlsInPanel ? panelLayoutControls : null}
+          {props.showBackToAgents && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Link
+                    to="/agents"
+                    aria-label="Back to agents"
+                    className="no-drag inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                  />
+                }
+              >
+                <ArrowLeftIcon size={16} />
+              </TooltipTrigger>
+              <TooltipPopup>Back to agents</TooltipPopup>
+            </Tooltip>
+          )}
           <ChatHeader
             {...(!supportsPullRequests || activeProjectRepository === null
               ? {}
