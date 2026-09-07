@@ -40,7 +40,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
-import { buildRuntimeInstructions, withAgentInstructions } from "../RuntimeInstructions.ts";
+import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
   ProviderAdapterProcessError,
@@ -995,6 +995,9 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             runtimeMode: input.runtimeMode,
             ...(resumeSessionId ? { resumeSessionId } : {}),
             clientInfo: { name: "t3-code", version: "0.0.0" },
+            ...(input.agentInstructions?.trim()
+              ? { initializeMeta: { rules: input.agentInstructions } }
+              : {}),
             ...(mcpSession
               ? {
                   mcpServers: [
@@ -1584,14 +1587,11 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               const displayModel = currentModelId
                 ? resolveGrokAcpBaseModelId(currentModelId)
                 : undefined;
-              const runtimeInstructions = withAgentInstructions(
-                buildRuntimeInstructions({
-                  harness: "Grok",
-                  model: displayModel,
-                  reasoningEffort: normalizeGrokReasoningEffort(requestedTurnReasoningEffort),
-                }),
-                input.agentInstructions,
-              );
+              const runtimeInstructions = buildRuntimeInstructions({
+                harness: "Grok",
+                model: displayModel,
+                reasoningEffort: normalizeGrokReasoningEffort(requestedTurnReasoningEffort),
+              });
               for (let yieldAttempt = 0; yieldAttempt < 8; yieldAttempt += 1) {
                 yield* Effect.yieldNow;
               }
