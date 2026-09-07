@@ -11,6 +11,7 @@
  * @module ServerSettings
  */
 import {
+  mergeAgentLibraries,
   DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   DEFAULT_MODEL_BY_PROVIDER,
@@ -352,7 +353,32 @@ function withServerOwnedMcpGatewayProfiles(
   now: string,
   replicateProfiles = false,
 ): ServerSettingsPatch {
-  if (patch.mcpGatewayProfiles === undefined || replicateProfiles) return patch;
+  if (patch.mcpGatewayProfiles === undefined) return patch;
+  if (replicateProfiles)
+    return {
+      ...patch,
+      ...mergeAgentLibraries([
+        current,
+        {
+          mcpGatewayProfiles: patch.mcpGatewayProfiles,
+          mcpGatewayProfileDeletedAt: patch.mcpGatewayProfileDeletedAt ?? {},
+        },
+      ]),
+    };
+  const mutationTime = DateTime.formatIso(
+    DateTime.makeUnsafe(
+      Math.max(
+        Date.parse(now),
+        ...current.mcpGatewayProfiles.map((profile) => (Date.parse(profile.updatedAt) || 0) + 1),
+        ...Object.values(current.mcpGatewayProfileDeletedAt).map((at) => (Date.parse(at) || 0) + 1),
+      ),
+    ),
+  );
+  const deleted = { ...current.mcpGatewayProfileDeletedAt };
+  for (const profile of current.mcpGatewayProfiles) {
+    if (!patch.mcpGatewayProfiles.some((candidate) => candidate.profileId === profile.profileId))
+      deleted[profile.profileId] = mutationTime;
+  }
   const profiles = patch.mcpGatewayProfiles.map((candidate): McpGatewayProfile => {
     const existing = current.mcpGatewayProfiles.find(
       (profile) => profile.profileId === candidate.profileId,
@@ -376,10 +402,10 @@ function withServerOwnedMcpGatewayProfiles(
       ...candidateContent,
       revision: (existing?.revision ?? 0) + 1,
       createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
+      updatedAt: mutationTime,
     };
   });
-  return { ...patch, mcpGatewayProfiles: profiles };
+  return { ...patch, mcpGatewayProfiles: profiles, mcpGatewayProfileDeletedAt: deleted };
 }
 
 function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {

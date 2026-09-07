@@ -1848,6 +1848,11 @@ function OpenCommandPaletteDialog(props: {
         cwd,
       );
       if (existing) {
+        if (pathname === "/agents" || pathname.startsWith("/agents/")) {
+          await navigate({ to: "/agents" });
+          setOpen(false);
+          return;
+        }
         const latestThread = getLatestThreadForProject(
           threads.filter((thread) => thread.environmentId === existing.environmentId),
           existing.id,
@@ -1905,6 +1910,17 @@ function OpenCommandPaletteDialog(props: {
         return;
       }
 
+      if (pathname === "/agents" || pathname.startsWith("/agents/")) {
+        await navigate({ to: "/agents" });
+        setOpen(false);
+        toastManager.add({
+          type: "success",
+          title: "Project added",
+          description: "Select it when starting your next agent chat.",
+        });
+        return;
+      }
+
       const navigationResult = await settlePromise(() =>
         handleNewThread(scopeProjectRef(input.environmentId, projectId)),
       );
@@ -1922,6 +1938,7 @@ function OpenCommandPaletteDialog(props: {
       setOpen(false);
     },
     [
+      pathname,
       handleNewThread,
       createProject,
       environments,

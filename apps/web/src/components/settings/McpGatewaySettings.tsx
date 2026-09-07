@@ -898,6 +898,8 @@ export function McpProfileList({
               profileId: previous?.profileId ?? `profile_${randomUUID()}`,
               name,
               systemPrompt: draft.systemPrompt,
+              ...(previous?.color ? { color: previous.color } : {}),
+              ...(previous?.icon ? { icon: previous.icon } : {}),
               ...(previous?.environmentIds ? { environmentIds: previous.environmentIds } : {}),
               providerLabel: entry.label,
               modelLabel: model.name,

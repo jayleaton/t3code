@@ -5,7 +5,7 @@ import {
   createGatewayRuntimePortFromContext,
   resolveGatewayProfileModelSelection,
 } from "@t3tools/client-runtime/gateway";
-import { EnvironmentId, ThreadId, type McpGatewayProfile } from "@t3tools/contracts";
+import { type McpGatewayProfile } from "@t3tools/contracts";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { connectionAtomRuntime } from "../../connection/runtime";
 import { useEnvironments } from "../../state/environments";
@@ -16,11 +16,9 @@ import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialo
 
 export function AgentTaskDialog({
   profile,
-  kind,
   onClose,
 }: {
   profile: McpGatewayProfile;
-  kind: "Task" | "Chat";
   onClose: () => void;
 }) {
   const navigate = useNavigate();
@@ -54,11 +52,9 @@ export function AgentTaskDialog({
       }}
     >
       <DialogPopup className="agent-dialog p-6">
-        <DialogTitle>
-          New {kind.toLowerCase()} · {profile.name}
-        </DialogTitle>
+        <DialogTitle>New chat · {profile.name}</DialogTitle>
         <DialogDescription className="mt-2 text-sm text-muted-foreground">
-          Start with this agent’s current profile. Leave the prompt empty to open a chat without
+          Start with this agent’s current profile. Leave the prompt empty to create a chat without
           starting work.
         </DialogDescription>
         <form
@@ -84,10 +80,7 @@ export function AgentTaskDialog({
                 environmentId: target.environmentId,
                 projectId: project.id,
                 threadId,
-                title:
-                  title.trim() ||
-                  prompt.trim().slice(0, 100) ||
-                  `New ${profile.name} ${kind.toLowerCase()}`,
+                title: title.trim() || "New thread",
                 requestId: randomUUID(),
                 profileSelection: {
                   profileId: profile.profileId,
@@ -104,10 +97,7 @@ export function AgentTaskDialog({
                   messageId: randomUUID(),
                   requestId: randomUUID(),
                 });
-              await navigate({
-                to: "/agents/$environmentId/$threadId",
-                params: { environmentId: target.environmentId, threadId: ThreadId.make(threadId) },
-              });
+              await navigate({ to: "/agents" });
               onClose();
             } catch (cause) {
               if (createdThreadId) {
@@ -116,13 +106,7 @@ export function AgentTaskDialog({
                   title: "Thread created, message not sent",
                   description: "Open the thread and send your prompt again.",
                 });
-                await navigate({
-                  to: "/agents/$environmentId/$threadId",
-                  params: {
-                    environmentId: EnvironmentId.make(target.environmentId),
-                    threadId: ThreadId.make(createdThreadId),
-                  },
-                });
+                await navigate({ to: "/agents" });
                 onClose();
               }
               setError(cause instanceof Error ? cause.message : "Could not create thread.");
@@ -179,7 +163,7 @@ export function AgentTaskDialog({
             <input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="What are we working on?"
+              placeholder="Optional · named automatically from your message"
             />
           </label>
           <label>
@@ -210,7 +194,7 @@ export function AgentTaskDialog({
                 profile.runtimeMode === "read-only"
               }
             >
-              {busy ? "Creating…" : `Create ${kind.toLowerCase()}`}
+              {busy ? "Creating…" : "Create chat"}
             </button>
           </footer>
         </form>

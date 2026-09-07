@@ -8,7 +8,7 @@ import {
   type AgentHandoffResult,
 } from "@t3tools/client-runtime/gateway";
 import { connectionAtomRuntime } from "../../connection/runtime";
-import { usePrimarySettings } from "../../hooks/useSettings";
+import { useAgentLibrary } from "../../hooks/useAgentLibrary";
 import { useEnvironments } from "../../state/environments";
 import { useProjects } from "../../state/entities";
 import { randomUUID } from "../../lib/utils";
@@ -25,7 +25,7 @@ export function AgentHandoffDialog({
   initialSummary: string;
   onClose: () => void;
 }) {
-  const profiles = usePrimarySettings((settings) => settings.mcpGatewayProfiles);
+  const { profiles } = useAgentLibrary();
   const { environments } = useEnvironments();
   const projects = useProjects();
   const runtime = useAtomValue(connectionAtomRuntime);

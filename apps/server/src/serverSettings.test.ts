@@ -236,8 +236,10 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         true,
       );
       assert.deepEqual(repeated.mcpGatewayProfiles, edited.mcpGatewayProfiles);
-      const deleted = yield* settings.updateSettings({ mcpGatewayProfiles: [] }, true);
+      const deleted = yield* settings.updateSettings({ mcpGatewayProfiles: [] });
       assert.deepEqual(deleted.mcpGatewayProfiles, []);
+      const stale = yield* settings.updateSettings({ mcpGatewayProfiles: [profile] }, true);
+      assert.deepEqual(stale.mcpGatewayProfiles, []);
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 

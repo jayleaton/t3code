@@ -1,6 +1,8 @@
+import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import type { McpGatewayProfile, ServerProvider } from "@t3tools/contracts";
 import { MCP_GATEWAY_RUNTIME_MODE_LABELS } from "@t3tools/contracts";
-import { useState } from "react";
+import { AgentIcon, agentColors, agentIcons } from "./AgentIcon";
+import { useState, type CSSProperties } from "react";
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialog";
 import { randomUUID } from "../../lib/utils";
 
@@ -20,6 +22,18 @@ export function AgentEditor({
   onClose: () => void;
 }) {
   const [systemPrompt, setSystemPrompt] = useState(profile?.systemPrompt ?? "");
+  const [color, setColor] = useState(
+    profile?.color ??
+      agentColors[
+        Math.max(
+          0,
+          profile
+            ? profiles.findIndex((item) => item.profileId === profile.profileId)
+            : profiles.length,
+        ) % agentColors.length
+      ]!,
+  );
+  const [icon, setIcon] = useState<NonNullable<McpGatewayProfile["icon"]>>(profile?.icon ?? "orb");
   const [name, setName] = useState(profile?.name ?? "");
   const [providerLabel, setProviderLabel] = useState(profile?.providerLabel ?? "");
   const [modelLabel, setModelLabel] = useState(profile?.modelLabel ?? "");
@@ -76,6 +90,8 @@ export function AgentEditor({
                 profileId: profile?.profileId ?? randomUUID(),
                 name: name.trim(),
                 systemPrompt,
+                color,
+                icon,
                 revision: profile?.revision ?? 1,
                 providerLabel,
                 modelLabel,
@@ -106,6 +122,51 @@ export function AgentEditor({
               onChange={(e) => setName(e.target.value)}
             />
           </label>
+          <fieldset
+            className="agent-appearance"
+            style={{ "--agent-color": color } as CSSProperties}
+          >
+            <legend>Appearance</legend>
+            <div className="agent-appearance-preview">
+              <AgentIcon icon={icon} />
+              <strong>{name || "Your agent"}</strong>
+            </div>
+            <label>
+              Color
+              <input
+                type="color"
+                value={color}
+                onChange={(event) => setColor(event.target.value)}
+              />
+            </label>
+            <div className="agent-color-options">
+              {agentColors.map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-label={`Use color ${value}`}
+                  aria-pressed={color === value}
+                  style={{ background: value }}
+                  onClick={() => setColor(value)}
+                />
+              ))}
+            </div>
+            <div className="agent-icon-options" role="group" aria-label="Icon">
+              {Object.entries(agentIcons).map(([value, label]) => (
+                <Tooltip key={value}>
+                  <TooltipTrigger
+                    render={<button type="button" />}
+                    aria-label={label}
+                    aria-pressed={icon === value}
+                    onClick={() => setIcon(value as NonNullable<McpGatewayProfile["icon"]>)}
+                  >
+                    <AgentIcon icon={value as McpGatewayProfile["icon"]} />
+                  </TooltipTrigger>
+                  <TooltipPopup>{label}</TooltipPopup>
+                </Tooltip>
+              ))}
+            </div>
+          </fieldset>
           <label>
             System prompt
             <textarea

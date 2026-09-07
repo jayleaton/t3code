@@ -178,7 +178,10 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
     "--sidebar-width": `${sidebarWidth}px`,
     "--panel-animation-duration": `${panelAnimationDurationMs}ms`,
     ...(isMacosDesktop && !isWindowFullscreen
-      ? { "--workspace-controls-left": MACOS_TRAFFIC_LIGHTS_LEFT_INSET }
+      ? {
+          "--workspace-controls-left": MACOS_TRAFFIC_LIGHTS_LEFT_INSET,
+          "--agents-titlebar-left": MACOS_TRAFFIC_LIGHTS_LEFT_INSET,
+        }
       : {}),
   } as CSSProperties;
 

@@ -701,12 +701,16 @@ export function createGatewayRuntimePort(
       return settings.mcpGatewayProfiles.find((profile) => profile.profileId === profileId)!;
     },
     deleteProfile: async (environmentId, profileId) => {
-      await mutateProfiles(environmentId, (profiles) =>
+      const settings = await mutateProfiles(environmentId, (profiles) =>
         profiles.filter((profile) => profile.profileId !== profileId),
       );
-      return { profileId, status: "succeeded" };
+      return {
+        profileId,
+        status: "succeeded",
+        deletedAt: settings.mcpGatewayProfileDeletedAt[profileId],
+      };
     },
-    replicateProfiles: async (environmentId, profiles) => {
+    replicateProfiles: async (environmentId, profiles, deletedAt) => {
       await run(
         Effect.gen(function* () {
           const registry = yield* EnvironmentRegistry;
@@ -715,6 +719,7 @@ export function createGatewayRuntimePort(
             request(WS_METHODS.serverUpdateSettings, {
               patch: {
                 mcpGatewayProfiles: yield* decodeProfiles(profiles),
+                ...(deletedAt ? { mcpGatewayProfileDeletedAt: deletedAt } : {}),
               },
               replicateProfiles: true,
             }),

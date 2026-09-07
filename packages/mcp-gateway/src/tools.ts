@@ -46,6 +46,13 @@ const profileInput = z.object({
   name: z.string().trim().min(1).max(200),
   providerLabel: z.string().trim().min(1),
   modelLabel: z.string().trim().min(1),
+  color: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .optional(),
+  icon: z
+    .enum(["orb", "bot", "code", "pen", "search", "shield", "sparkles", "terminal"])
+    .optional(),
   systemPrompt: z.string().max(32_000).optional(),
   reasoningEffort: z.string().trim().min(1).optional(),
   runtimeMode: z.enum([
@@ -59,7 +66,11 @@ const profileInput = z.object({
   environmentIds: z.array(z.string().trim().min(1)).optional(),
 });
 
-async function shareProfiles(context: GatewayToolContext, sourceId: string) {
+async function shareProfiles(
+  context: GatewayToolContext,
+  sourceId: string,
+  deletedAt?: Readonly<Record<string, string>>,
+) {
   const profiles = await authoritativeProfiles(context, sourceId);
   const environments = await context.port.listEnvironments();
   const failedEnvironmentIds: string[] = [];
@@ -74,7 +85,8 @@ async function shareProfiles(context: GatewayToolContext, sourceId: string) {
       continue;
     try {
       if (!context.port.replicateProfiles) throw new Error("Profile sharing unavailable.");
-      await context.port.replicateProfiles(id, profiles);
+      if (deletedAt) await context.port.replicateProfiles(id, profiles, deletedAt);
+      else await context.port.replicateProfiles(id, profiles);
     } catch {
       failedEnvironmentIds.push(id);
     }
@@ -740,7 +752,14 @@ export async function callGatewayTool(
         environmentId,
         requiredString(input, "profileId"),
       );
-      return { ...result, sync: await shareProfiles(context, environmentId) };
+      return {
+        ...result,
+        sync: await shareProfiles(
+          context,
+          environmentId,
+          result.deletedAt ? { [result.profileId]: result.deletedAt } : undefined,
+        ),
+      };
     }
     case "t3_open_agents": {
       const environmentId = environmentWithScope(context, input, "read");

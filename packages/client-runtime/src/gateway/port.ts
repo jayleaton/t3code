@@ -31,6 +31,17 @@ export type GatewayThreadControlAction =
 export type GatewayApprovalDecision = "accept" | "acceptForSession" | "decline" | "cancel";
 
 export interface GatewayProfile {
+  readonly color?: string | undefined;
+  readonly icon?:
+    | "orb"
+    | "bot"
+    | "code"
+    | "pen"
+    | "search"
+    | "shield"
+    | "sparkles"
+    | "terminal"
+    | undefined;
   readonly systemPrompt?: string | undefined;
   readonly profileId?: string | undefined;
   readonly name: string;
@@ -64,6 +75,8 @@ export type GatewayProfileInput = Pick<
   | "modelLabel"
   | "reasoningEffort"
   | "systemPrompt"
+  | "color"
+  | "icon"
   | "runtimeMode"
   | "interactionMode"
   | "environmentIds"
@@ -292,8 +305,12 @@ export interface GatewayRuntimePort {
   deleteProfile?(
     environmentId: string,
     profileId: string,
-  ): Promise<{ profileId: string; status: "succeeded" }>;
-  replicateProfiles?(environmentId: string, profiles: ReadonlyArray<GatewayProfile>): Promise<void>;
+  ): Promise<{ profileId: string; status: "succeeded"; deletedAt?: string | undefined }>;
+  replicateProfiles?(
+    environmentId: string,
+    profiles: ReadonlyArray<GatewayProfile>,
+    deletedAt?: Readonly<Record<string, string>>,
+  ): Promise<void>;
 
   openThread(
     environmentId: string,

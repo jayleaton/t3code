@@ -845,6 +845,10 @@ export const BackgroundActivitySettings = Schema.Struct({
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
 export const McpGatewayProfile = Schema.Struct({
+  color: Schema.optional(Schema.String.check(Schema.isPattern(/^#[0-9a-fA-F]{6}$/))),
+  icon: Schema.optional(
+    Schema.Literals(["orb", "bot", "code", "pen", "search", "shield", "sparkles", "terminal"]),
+  ),
   systemPrompt: Schema.optional(Schema.String.check(Schema.isMaxLength(32_000))),
   profileId: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
@@ -1003,6 +1007,9 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
   addProjectBaseDirectory: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  mcpGatewayProfileDeletedAt: Schema.Record(Schema.String, Schema.String).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
   mcpGatewayProfiles: McpGatewayProfiles.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(
@@ -1245,6 +1252,7 @@ export const ServerSettingsPatch = Schema.Struct({
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
+  mcpGatewayProfileDeletedAt: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   mcpGatewayProfiles: Schema.optionalKey(McpGatewayProfiles),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   sourceControlWritingStyle: Schema.optionalKey(
@@ -1359,3 +1367,49 @@ export const ClientSettingsPatch = Schema.Struct({
   wordWrap: Schema.optionalKey(Schema.Boolean),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;
+
+/** Reconcile portable agents by identity; deletion wins an equal timestamp. */
+export function mergeAgentLibraries(
+  libraries: ReadonlyArray<{
+    readonly mcpGatewayProfiles: ReadonlyArray<McpGatewayProfile>;
+    readonly mcpGatewayProfileDeletedAt?: Readonly<Record<string, string>>;
+  }>,
+) {
+  const deleted: Record<string, string> = {};
+  const profiles = new Map<string, McpGatewayProfile>();
+  for (const library of libraries) {
+    for (const [id, at] of Object.entries(library.mcpGatewayProfileDeletedAt ?? {})) {
+      if (at > (deleted[id] ?? "")) deleted[id] = at;
+    }
+    for (const candidate of library.mcpGatewayProfiles) {
+      const previous = profiles.get(candidate.profileId);
+      if (
+        !previous ||
+        candidate.updatedAt > previous.updatedAt ||
+        (candidate.updatedAt === previous.updatedAt &&
+          JSON.stringify(candidate) > JSON.stringify(previous))
+      )
+        profiles.set(candidate.profileId, candidate);
+    }
+  }
+  const names = new Set<string>();
+  const result = [...profiles.values()]
+    .filter((p) => p.updatedAt > (deleted[p.profileId] ?? ""))
+    .sort(
+      (a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.profileId.localeCompare(b.profileId),
+    )
+    .filter((p) => {
+      if (names.has(p.name)) return false;
+      names.add(p.name);
+      return true;
+    })
+    .sort(
+      (a, b) => a.createdAt.localeCompare(b.createdAt) || a.profileId.localeCompare(b.profileId),
+    );
+  return {
+    mcpGatewayProfiles: result,
+    mcpGatewayProfileDeletedAt: Object.fromEntries(
+      Object.entries(deleted).sort(([a], [b]) => a.localeCompare(b)),
+    ),
+  };
+}

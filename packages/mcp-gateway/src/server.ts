@@ -36,6 +36,13 @@ const profileFields = {
   name: z.string().trim().min(1).max(200),
   providerLabel: z.string().trim().min(1),
   modelLabel: z.string().trim().min(1),
+  color: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .optional(),
+  icon: z
+    .enum(["orb", "bot", "code", "pen", "search", "shield", "sparkles", "terminal"])
+    .optional(),
   systemPrompt: z.string().max(32_000).optional(),
   reasoningEffort: z.string().trim().min(1).optional(),
   runtimeMode: z.enum([

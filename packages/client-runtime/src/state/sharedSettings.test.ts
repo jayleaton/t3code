@@ -66,6 +66,7 @@ describe("pickSharedServerSettings", () => {
       Object.keys(pickSharedServerSettings(DEFAULT_SERVER_SETTINGS, restartCapabilities)).sort(),
     ).toEqual([
       "continueThreadsAfterServerUpdate",
+      "mcpGatewayProfileDeletedAt",
       "mcpGatewayProfiles",
       "newWorktreesStartFromOrigin",
       "sidebarAutoSettleAfterDays",
@@ -92,7 +93,6 @@ describe("filterSharedServerPatch", () => {
       ).toEqual({ sidebarAutoSettleAfterDays: 7 });
       expect(pickSharedServerSettings(DEFAULT_SERVER_SETTINGS, capabilities)).not.toHaveProperty(
         "continueThreadsAfterServerUpdate",
-        "mcpGatewayProfiles",
       );
     },
   );

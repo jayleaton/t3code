@@ -453,7 +453,11 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
                 environmentId: target.environmentId,
                 input: {
                   patch: filterSharedServerPatch(
-                    { ...sharedPatch, mcpGatewayProfiles: saved.value.mcpGatewayProfiles },
+                    {
+                      ...sharedPatch,
+                      mcpGatewayProfiles: saved.value.mcpGatewayProfiles,
+                      mcpGatewayProfileDeletedAt: saved.value.mcpGatewayProfileDeletedAt,
+                    },
                     target.serverConfig?.environment.capabilities,
                   ),
                   replicateProfiles: true,
@@ -592,7 +596,7 @@ export function useSharedSettingsSync() {
   return { mismatches, applyToAll };
 }
 
-export function useUpdateEnvironmentSettings(environmentId: EnvironmentId) {
+export function useUpdateEnvironmentSettings(environmentId: EnvironmentId | null) {
   return useUpdateSettingsTarget(environmentId);
 }
 
