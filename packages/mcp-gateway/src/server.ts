@@ -59,6 +59,26 @@ const profileFields = {
 type ToolSpec = readonly [description: string, inputSchema: z.ZodRawShape];
 
 const TOOL_SPECS = {
+  t3_list_agents: [
+    "List agents from the shared Agents library available on this environment, including instructions and model settings. Use profileId to create chats or hand work to an agent.",
+    { environmentId, ...optionalRequestContext },
+  ],
+  t3_create_agent: [
+    "Create an agent in the shared Agents library without starting a session. Requires create or admin access. Shares to connected machines with the same grant.",
+    { environmentId, ...profileFields },
+  ],
+  t3_update_agent: [
+    "Update an agent by profileId. New threads use the new revision; existing threads stay unchanged.",
+    {
+      environmentId,
+      profileId: z.string().trim().min(1),
+      patch: z.object(profileFields).partial().strict(),
+    },
+  ],
+  t3_delete_agent: [
+    "Remove an agent from the shared Agents library, retaining its chats.",
+    { environmentId, profileId: z.string().trim().min(1) },
+  ],
   t3_handoff_thread: [
     "Hand work to a new agent chat: save a Markdown brief with a reviewed summary and selected source file contents, then send the destination task. Use a stable handoffId UUID for retries. Source conversation remains intact. After success ASK the user whether to settle it; never infer approval. A created status means delivery failed: open the returned thread to recover rather than making another chat.",
     handoffInputSchema.shape,
@@ -67,21 +87,9 @@ const TOOL_SPECS = {
     "Settle a conversation only after the user explicitly chooses to settle it. Requires lifecycle scope. Does not delete the conversation. Do not call automatically after a handoff.",
     { environmentId, threadId, confirmed: z.literal(true) },
   ],
-  t3_create_profile: [
-    "Create a named agent profile without starting a session. Requires create or admin access. Shares to connected machines with the same grant.",
-    { environmentId, ...profileFields },
-  ],
-  t3_update_profile: [
-    "Update an agent by profileId. New threads use the new revision; existing threads stay unchanged.",
-    {
-      environmentId,
-      profileId: z.string().trim().min(1),
-      patch: z.object(profileFields).partial().strict(),
-    },
-  ],
-  t3_delete_profile: [
-    "Delete an agent profile, retaining its threads.",
-    { environmentId, profileId: z.string().trim().min(1) },
+  t3_unsettle_thread: [
+    "Return a settled chat to active work in its agent column. Requires lifecycle scope. Does not send a message or start a turn.",
+    { environmentId, threadId },
   ],
   t3_open_agents: [
     "Open the Agents board in the connected desktop app and reveal its window.",
@@ -105,9 +113,10 @@ const TOOL_SPECS = {
     { environmentId, ...optionalRequestContext },
   ],
   t3_list_threads: [
-    "List chats in one T3 environment.",
+    "List chats in one T3 environment, optionally filtered by agent profileId, project, and active/settled state.",
     {
       environmentId,
+      state: z.enum(["all", "active", "settled"]).optional(),
       projectId: z.string().trim().min(1).optional(),
       profileId: z.string().trim().min(1).optional(),
       ...optionalRequestContext,
@@ -124,10 +133,6 @@ const TOOL_SPECS = {
   t3_summarize_thread: [
     "Summarize authoritative thread state and the next action.",
     { environmentId, threadId, ...optionalRequestContext },
-  ],
-  t3_list_profiles: [
-    "List named, revisioned gateway profiles.",
-    { environmentId, ...optionalRequestContext },
   ],
   t3_get_messages: [
     "Read recent messages from one T3 chat.",
@@ -160,7 +165,7 @@ const TOOL_SPECS = {
     },
   ],
   t3_create_thread: [
-    "Create a chat with an immutable resolved profile snapshot. For agent/voice tasks, pass profileId from t3_list_profiles.",
+    "Create a chat with an immutable resolved profile snapshot. For agent tasks, pass profileId from t3_list_agents to snapshot that agent’s instructions and settings. Then use t3_send_message to start work.",
     {
       environmentId,
       projectId: z.string().trim().min(1),

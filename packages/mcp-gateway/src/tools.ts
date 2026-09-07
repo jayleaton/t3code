@@ -712,7 +712,13 @@ export async function callGatewayTool(
         throw new Error("Thread settlement is unavailable in this runtime.");
       return context.port.settleThread(environmentId, requiredString(input, "threadId"));
     }
-    case "t3_create_profile": {
+    case "t3_unsettle_thread": {
+      const environmentId = environmentWithScope(context, input, "lifecycle");
+      if (!context.port.unsettleThread)
+        throw new Error("Thread un-settlement is unavailable in this runtime.");
+      return context.port.unsettleThread(environmentId, requiredString(input, "threadId"));
+    }
+    case "t3_create_agent": {
       const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);
       if (!context.port.createProfile)
         throw new Error("Profile creation is unavailable in this runtime.");
@@ -726,7 +732,7 @@ export async function callGatewayTool(
       const profile = await context.port.createProfile(environmentId, parsed.data);
       return { profile, sync: await shareProfiles(context, environmentId) };
     }
-    case "t3_update_profile": {
+    case "t3_update_agent": {
       const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);
       if (!context.port.updateProfile)
         throw new Error("Profile editing is unavailable in this runtime.");
@@ -744,7 +750,7 @@ export async function callGatewayTool(
       );
       return { profile, sync: await shareProfiles(context, environmentId) };
     }
-    case "t3_delete_profile": {
+    case "t3_delete_agent": {
       const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);
       if (!context.port.deleteProfile)
         throw new Error("Profile deletion is unavailable in this runtime.");
@@ -772,6 +778,7 @@ export async function callGatewayTool(
     }
     case "t3_list_threads": {
       const environmentId = environmentWithScope(context, input, "read");
+      const state = z.enum(["all", "active", "settled"]).default("all").parse(input.state);
       const page = await context.port.listThreads(environmentId);
       const projectId = typeof input.projectId === "string" ? input.projectId : undefined;
       const profileId = typeof input.profileId === "string" ? input.profileId : undefined;
@@ -781,7 +788,9 @@ export async function callGatewayTool(
           const snapshot = thread.profileSnapshot as { profileId?: string } | undefined;
           return (
             (projectId === undefined || thread.projectId === projectId) &&
-            (profileId === undefined || snapshot?.profileId === profileId)
+            (profileId === undefined || snapshot?.profileId === profileId) &&
+            (state === "all" ||
+              (state === "settled" ? thread.settledAt != null : thread.settledAt == null))
           );
         }),
       };
@@ -807,13 +816,15 @@ export async function callGatewayTool(
           ? (thread.latestTurn as Record<string, unknown>)
           : null;
       const status =
-        plan.actions.length > 0
-          ? "waiting-approval"
-          : typeof latestTurn?.state === "string"
-            ? latestTurn.state
-            : typeof session?.status === "string"
-              ? session.status
-              : "queued";
+        thread.settledAt != null
+          ? "settled"
+          : plan.actions.length > 0
+            ? "waiting-approval"
+            : typeof latestTurn?.state === "string"
+              ? latestTurn.state
+              : typeof session?.status === "string"
+                ? session.status
+                : "queued";
       return {
         environmentId,
         threadId: thread.id,
@@ -828,7 +839,7 @@ export async function callGatewayTool(
         snapshotAt: thread.updatedAt ?? "runtime",
       };
     }
-    case "t3_list_profiles": {
+    case "t3_list_agents": {
       const environmentId = environmentWithScope(context, input, "read");
       return {
         items: (await authoritativeProfiles(context, environmentId)).filter(

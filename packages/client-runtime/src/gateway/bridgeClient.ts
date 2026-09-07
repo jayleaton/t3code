@@ -33,6 +33,7 @@ const METHODS = new Set<keyof GatewayRuntimePort>([
   "openAgents",
   "handoffThread",
   "settleThread",
+  "unsettleThread",
   "createProfile",
   "updateProfile",
   "deleteProfile",

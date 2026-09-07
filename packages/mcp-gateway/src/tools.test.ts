@@ -2198,7 +2198,7 @@ describe("gateway v3 profile selection", () => {
 });
 
 describe("gateway v3 readable profiles", () => {
-  it("surfaces readable labels on t3_list_profiles without requiring routing keys", async () => {
+  it("surfaces readable labels on t3_list_agents without requiring routing keys", async () => {
     const profiles: ReadonlyArray<GatewayProfile> = [
       {
         profileId: "profile_andy",
@@ -2213,7 +2213,7 @@ describe("gateway v3 readable profiles", () => {
     ];
     const listed = await callGatewayTool(
       { port: makePort({ profiles }), grants, profiles },
-      "t3_list_profiles",
+      "t3_list_agents",
       { environmentId: "local" },
     );
     expect(listed.items).toEqual([
@@ -2329,18 +2329,18 @@ describe("agent profile tools", () => {
     interactionMode: "default",
   };
 
-  it("creates, updates and deletes profiles without dispatching a thread, and shares only to granted machines", async () => {
+  it("agent tools share one library without starting a thread", async () => {
     const port = profilesPort();
     const createThread = vi.spyOn(port, "createThread");
     const context = { port, grants: { local: ["create"], remote: ["read"] } as const };
-    const created = await callGatewayTool(context, "t3_create_profile", input);
+    const created = await callGatewayTool(context, "t3_create_agent", input);
     expect(created).toMatchObject({
       profile: { profileId: "write", revision: 1, providerLabel: "OpenCode" },
     });
     expect(port.replicateProfiles).not.toHaveBeenCalled();
     const shared = { port, grants: { local: ["admin"], remote: ["create"] } as const };
     expect(
-      await callGatewayTool(shared, "t3_update_profile", {
+      await callGatewayTool(shared, "t3_update_agent", {
         environmentId: "local",
         profileId: "write",
         patch: { providerLabel: "Codex", modelLabel: "GPT" },
@@ -2349,7 +2349,7 @@ describe("agent profile tools", () => {
     expect(port.replicateProfiles).toHaveBeenCalledWith("remote", [
       expect.objectContaining({ profileId: "write", revision: 2 }),
     ]);
-    await callGatewayTool(shared, "t3_delete_profile", {
+    await callGatewayTool(shared, "t3_delete_agent", {
       environmentId: "local",
       profileId: "write",
     });
@@ -2360,10 +2360,10 @@ describe("agent profile tools", () => {
   it("rejects unauthorized or malformed edits before writing", async () => {
     const port = profilesPort();
     await expect(
-      callGatewayTool({ port, grants: { local: ["read"] } }, "t3_create_profile", input),
+      callGatewayTool({ port, grants: { local: ["read"] } }, "t3_create_agent", input),
     ).rejects.toMatchObject({ code: "scope_required" });
     await expect(
-      callGatewayTool({ port, grants: { local: ["create"] } }, "t3_update_profile", {
+      callGatewayTool({ port, grants: { local: ["create"] } }, "t3_update_agent", {
         environmentId: "local",
         profileId: "write",
         patch: { revision: 900 },
@@ -2381,7 +2381,7 @@ describe("agent profile tools", () => {
     expect(
       await callGatewayTool(
         { port, grants: { local: ["create"], remote: ["create"] } },
-        "t3_create_profile",
+        "t3_create_agent",
         input,
       ),
     ).toMatchObject({
@@ -2468,5 +2468,67 @@ describe("agent handoff permissions", () => {
       confirmed: true,
     });
     expect(port.settleThread).toHaveBeenCalledWith("source", "plan");
+  });
+});
+
+describe("agent chat lifecycle", () => {
+  it("filters active and settled chats within the selected project and agent", async () => {
+    const port = makePort();
+    port.listThreads = async () => ({
+      snapshotAt: "now",
+      items: [
+        {
+          id: "active",
+          projectId: "project",
+          profileSnapshot: { profileId: "code" },
+          settledAt: null,
+        },
+        {
+          id: "done",
+          projectId: "project",
+          profileSnapshot: { profileId: "code" },
+          settledAt: "2026-09-07T00:00:00.000Z",
+        },
+        {
+          id: "other-agent",
+          projectId: "project",
+          profileSnapshot: { profileId: "review" },
+          settledAt: null,
+        },
+        {
+          id: "other-project",
+          projectId: "elsewhere",
+          profileSnapshot: { profileId: "code" },
+          settledAt: null,
+        },
+      ],
+    });
+    const context = { port, grants: { local: ["read"] } as const };
+    const input = { environmentId: "local", projectId: "project", profileId: "code" };
+    expect(
+      await callGatewayTool(context, "t3_list_threads", { ...input, state: "active" }),
+    ).toMatchObject({ items: [{ id: "active" }] });
+    expect(
+      await callGatewayTool(context, "t3_list_threads", { ...input, state: "settled" }),
+    ).toMatchObject({ items: [{ id: "done" }] });
+    expect(await callGatewayTool(context, "t3_list_threads", input)).toMatchObject({
+      items: [{ id: "active" }, { id: "done" }],
+    });
+    await expect(
+      callGatewayTool(context, "t3_list_threads", { ...input, state: "invalid" }),
+    ).rejects.toThrow();
+  });
+  it("requires lifecycle access to un-settle and routes to the owning environment", async () => {
+    const port = makePort();
+    port.unsettleThread = vi.fn(async () => ({ status: "succeeded" as const }));
+    const input = { environmentId: "remote", threadId: "done" };
+    await expect(
+      callGatewayTool({ port, grants: { remote: ["read"] } }, "t3_unsettle_thread", input),
+    ).rejects.toThrow();
+    expect(port.unsettleThread).not.toHaveBeenCalled();
+    await expect(
+      callGatewayTool({ port, grants: { remote: ["lifecycle"] } }, "t3_unsettle_thread", input),
+    ).resolves.toEqual({ status: "succeeded" });
+    expect(port.unsettleThread).toHaveBeenCalledWith("remote", "done");
   });
 });

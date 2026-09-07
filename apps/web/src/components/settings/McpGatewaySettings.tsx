@@ -1,28 +1,10 @@
+import { Link } from "@tanstack/react-router";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
-import {
-  resolveGatewayProfileModelSelection,
-  type GatewayScope,
-  type GatewayStatusSnapshot,
-} from "@t3tools/client-runtime/gateway";
-import {
-  formatMcpGatewayProfileSummary,
-  MCP_GATEWAY_RUNTIME_MODE_LABELS,
-  type McpGatewayProfile,
-} from "@t3tools/contracts/settings";
-import type { ProviderDriverKind, ServerProvider } from "@t3tools/contracts";
-import {
-  ArrowUpDownIcon,
-  ChevronDownIcon,
-  CircleAlertIcon,
-  ServerCogIcon,
-  Trash2Icon,
-} from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type GatewayScope, type GatewayStatusSnapshot } from "@t3tools/client-runtime/gateway";
+import { ChevronDownIcon, ServerCogIcon } from "lucide-react";
+import { useEffect, useState } from "react";
 
-import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
-import { useEnvironments, usePrimaryEnvironment } from "../../state/environments";
-import { primaryServerProvidersAtom } from "../../state/server";
-import { randomUUID } from "../../lib/utils";
+import { useEnvironments } from "../../state/environments";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
@@ -37,10 +19,8 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "../ui/menu";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
-import { useAtomValue } from "@effect/atom-react";
 import {
   getMcpGatewayGrants,
   getMcpGatewayStatus,
@@ -76,8 +56,6 @@ const SCOPE_LABELS: Record<GatewayScope, string> = {
   admin: "Change repositories and access",
   delivery: "Manage subscriptions and webhooks",
 };
-
-const UNSELECTED_PROVIDER = "—";
 
 const ADVANCED_SCOPES = MCP_GATEWAY_CONFIGURABLE_SCOPES.filter(
   (scope) => !MCP_GATEWAY_BASELINE_SCOPES.includes(scope),
@@ -513,434 +491,12 @@ export function McpGatewayOperationalStatus({
   );
 }
 
-interface ProfileDraft {
-  readonly systemPrompt: string;
-  readonly name: string;
-  readonly driverKind: ProviderDriverKind | null;
-  readonly instanceId: string | null;
-  readonly providerLabel: string;
-  readonly model: string | null;
-  readonly modelLabel: string;
-  readonly reasoningEffort: string | null;
-  readonly runtimeMode: McpGatewayProfile["runtimeMode"];
-}
-
-const EMPTY_DRAFT: ProfileDraft = {
-  systemPrompt: "",
-  name: "",
-  driverKind: null,
-  instanceId: null,
-  providerLabel: "",
-  model: null,
-  modelLabel: "",
-  reasoningEffort: null,
-  runtimeMode: "approval-required",
-};
-
-const REASONING_EFFORTS: ReadonlyArray<{ readonly value: string; readonly label: string }> = [
-  { value: "none", label: "None" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-];
-
-interface ProviderPickerEntry {
-  readonly driverKind: ProviderDriverKind;
-  readonly instanceId: string;
-  readonly label: string;
-  readonly models: ReadonlyArray<{ readonly slug: string; readonly name: string }>;
-  readonly isReady: boolean;
-}
-
-/**
- * Provider catalog for the profile pickers, projected from the live server
- * provider snapshots the rest of the app uses (spec §9.2: "populated from
- * the provider catalog T3 currently supports"). Entries are grouped by
- * driver kind so the provider dropdown shows readable display labels, and
- * the model dropdown filters to the selected instance's models.
- */
-export function deriveProfileProviderEntries(
-  providers: ReadonlyArray<ServerProvider>,
-): ReadonlyArray<ProviderPickerEntry> {
-  return providers
-    .filter((provider) => provider.enabled && provider.availability !== "unavailable")
-    .map((provider) => ({
-      driverKind: provider.driver,
-      instanceId: provider.instanceId,
-      label: provider.displayName?.trim() || provider.driver,
-      models:
-        provider.status === "ready"
-          ? provider.models.map((model) => ({ slug: model.slug, name: model.name }))
-          : [],
-      isReady: provider.status === "ready",
-    }));
-}
-
-function formatReasoningLabel(value: string): string {
-  return REASONING_EFFORTS.find((effort) => effort.value === value)?.label ?? value;
-}
-
-/**
- * Named-profile editor (spec §9.2). Provider and model are dropdowns over
- * the live catalog — users never type instance or model IDs. The persisted
- * profile stores the readable labels; the routing selection is captured in
- * the draft only and resolved at thread creation.
- */
-export function McpProfileList({
-  profiles,
-  providers,
-  catalogConnected = true,
-  onChange,
-}: {
-  readonly profiles: ReadonlyArray<McpGatewayProfile>;
-  readonly providers: ReadonlyArray<ServerProvider>;
-  readonly catalogConnected?: boolean;
-  readonly onChange: (profiles: ReadonlyArray<McpGatewayProfile>) => void;
-}) {
-  const [draft, setDraft] = useState<ProfileDraft>(EMPTY_DRAFT);
-  const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
-  const providerEntries = useMemo(
-    () => (catalogConnected ? deriveProfileProviderEntries(providers) : []),
-    [providers, catalogConnected],
-  );
-  const selectedEntry =
-    draft.instanceId === null
-      ? undefined
-      : providerEntries.find((entry) => entry.instanceId === draft.instanceId);
-  const existing =
-    editingProfileId === null
-      ? undefined
-      : profiles.find((profile) => profile.profileId === editingProfileId);
-
-  const resetDraft = () => {
-    setDraft(EMPTY_DRAFT);
-    setEditingProfileId(null);
-  };
-
-  const startEdit = (profile: McpGatewayProfile) => {
-    setEditingProfileId(profile.profileId);
-    const selection = catalogConnected
-      ? resolveGatewayProfileModelSelection(profile, providers)
-      : undefined;
-    const entry = providerEntries.find(
-      (candidate) => candidate.instanceId === selection?.instanceId,
-    );
-    const model = selection?.model ?? null;
-    setDraft({
-      name: profile.name,
-      systemPrompt: profile.systemPrompt ?? "",
-      driverKind: entry?.driverKind ?? null,
-      instanceId: entry?.instanceId ?? null,
-      providerLabel: profile.providerLabel ?? "",
-      model,
-      modelLabel: profile.modelLabel ?? "",
-      reasoningEffort: profile.reasoningEffort ?? null,
-      runtimeMode: profile.runtimeMode,
-    });
-  };
-
-  const unresolved =
-    editingProfileId !== null &&
-    existing !== undefined &&
-    (selectedEntry === undefined ||
-      draft.model === null ||
-      (existing.providerLabel !== undefined && existing.providerLabel !== selectedEntry.label) ||
-      (existing.modelLabel !== undefined &&
-        existing.modelLabel !==
-          selectedEntry.models.find((candidate) => candidate.slug === draft.model)?.name));
-
-  const duplicateName = profiles.some(
-    (profile) => profile.profileId !== editingProfileId && profile.name === draft.name.trim(),
-  );
-  const selectedModel = selectedEntry?.models.find((model) => model.slug === draft.model);
-  const draftSelection =
-    selectedEntry === undefined || selectedModel === undefined
-      ? undefined
-      : resolveGatewayProfileModelSelection(
-          { providerLabel: selectedEntry.label, modelLabel: selectedModel.name },
-          providers,
-        );
-  const ambiguousSelection = selectedModel !== undefined && draftSelection === undefined;
-  const canSave =
-    draft.name.trim() !== "" &&
-    !duplicateName &&
-    selectedEntry?.isReady === true &&
-    draftSelection?.instanceId === selectedEntry.instanceId &&
-    draftSelection.model === draft.model;
-
-  return (
-    <div className="space-y-3">
-      {profiles.map((profile) => {
-        const unavailable =
-          !catalogConnected ||
-          resolveGatewayProfileModelSelection(profile, providers) === undefined;
-        return (
-          <div
-            key={profile.name}
-            className="flex items-center justify-between gap-3 rounded-lg border p-3"
-          >
-            <div className="min-w-0 text-sm">
-              <div className="flex items-center gap-2 font-medium">
-                {profile.name}
-                {unavailable ? (
-                  <span className="inline-flex items-center gap-1 rounded-md bg-destructive/10 px-1.5 py-0.5 text-xs text-destructive">
-                    <CircleAlertIcon className="size-3" />
-                    unavailable — re-select
-                  </span>
-                ) : null}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {formatMcpGatewayProfileSummary(profile, unavailable)} · revision {profile.revision}
-              </div>
-            </div>
-            <div className="flex shrink-0 items-center gap-1">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={`Edit ${profile.name} profile`}
-                onClick={() => startEdit(profile)}
-              >
-                <ArrowUpDownIcon className="size-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={`Remove ${profile.name} profile`}
-                onClick={() =>
-                  onChange(profiles.filter((candidate) => candidate.name !== profile.name))
-                }
-              >
-                <Trash2Icon className="size-4" />
-              </Button>
-            </div>
-          </div>
-        );
-      })}
-
-      <label className="grid gap-2 text-sm">
-        System prompt
-        <textarea
-          className="min-h-28 rounded-md border p-3"
-          maxLength={32000}
-          value={draft.systemPrompt}
-          onChange={(event) => setDraft({ ...draft, systemPrompt: event.target.value })}
-          placeholder="Agent role, workflow, and expected output"
-        />
-      </label>
-      <div className="grid gap-2 sm:grid-cols-2">
-        <Input
-          value={draft.name}
-          placeholder="Profile name"
-          aria-label="Profile name"
-          onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-        />
-        <Select
-          value={draft.instanceId ?? UNSELECTED_PROVIDER}
-          onValueChange={(value) => {
-            const entry = providerEntries.find((candidate) => candidate.instanceId === value);
-            setDraft({
-              ...draft,
-              driverKind: entry?.driverKind ?? null,
-              instanceId: entry?.instanceId ?? null,
-              providerLabel: entry?.label ?? "",
-              // Provider change clears an incompatible model (spec §9.2).
-              model: null,
-              modelLabel: "",
-            });
-          }}
-        >
-          <SelectTrigger size="sm" aria-label="Profile provider">
-            <SelectValue>
-              {selectedEntry === undefined ? "Select provider" : selectedEntry.label}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectPopup className="min-w-64">
-            {providerEntries.length === 0 ? (
-              <SelectItem value={UNSELECTED_PROVIDER} disabled>
-                No providers available
-              </SelectItem>
-            ) : (
-              providerEntries.map((entry) => (
-                <SelectItem
-                  key={entry.instanceId}
-                  value={entry.instanceId}
-                  disabled={!entry.isReady}
-                >
-                  <span className="flex w-full items-center justify-between gap-5">
-                    <span>{entry.label}</span>
-                    {!entry.isReady ? (
-                      <span className="text-xs text-muted-foreground">unavailable</span>
-                    ) : null}
-                  </span>
-                </SelectItem>
-              ))
-            )}
-          </SelectPopup>
-        </Select>
-        <Select
-          value={draft.model ?? UNSELECTED_PROVIDER}
-          disabled={selectedEntry?.isReady !== true}
-          onValueChange={(value) => {
-            const model = selectedEntry?.models.find((candidate) => candidate.slug === value);
-            setDraft({
-              ...draft,
-              model: model?.slug ?? null,
-              modelLabel: model?.name ?? "",
-            });
-          }}
-        >
-          <SelectTrigger size="sm" aria-label="Profile model">
-            <SelectValue>{draft.modelLabel === "" ? "Select model" : draft.modelLabel}</SelectValue>
-          </SelectTrigger>
-          <SelectPopup className="min-w-64">
-            {(selectedEntry?.models ?? []).length === 0 ? (
-              <SelectItem value={UNSELECTED_PROVIDER} disabled>
-                No models available
-              </SelectItem>
-            ) : (
-              (selectedEntry?.models ?? []).map((model) => (
-                <SelectItem key={model.slug} value={model.slug}>
-                  {model.name}
-                </SelectItem>
-              ))
-            )}
-          </SelectPopup>
-        </Select>
-        <Select
-          value={draft.reasoningEffort ?? "default"}
-          onValueChange={(value) => {
-            setDraft({
-              ...draft,
-              reasoningEffort: value === "default" ? null : value,
-            });
-          }}
-        >
-          <SelectTrigger size="sm" aria-label="Profile reasoning effort">
-            <SelectValue>
-              {draft.reasoningEffort === null
-                ? "Default reasoning"
-                : `${formatReasoningLabel(draft.reasoningEffort)} reasoning`}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectPopup className="min-w-64">
-            <SelectItem value="default">Default reasoning</SelectItem>
-            {REASONING_EFFORTS.map((effort) => (
-              <SelectItem key={effort.value} value={effort.value}>
-                {effort.label}
-              </SelectItem>
-            ))}
-          </SelectPopup>
-        </Select>
-        <Select
-          value={draft.runtimeMode}
-          onValueChange={(value) => {
-            setDraft({ ...draft, runtimeMode: value as ProfileDraft["runtimeMode"] });
-          }}
-        >
-          <SelectTrigger size="sm" aria-label="Profile runtime mode">
-            <SelectValue>{MCP_GATEWAY_RUNTIME_MODE_LABELS[draft.runtimeMode]}</SelectValue>
-          </SelectTrigger>
-          <SelectPopup className="min-w-64">
-            {(
-              Object.keys(MCP_GATEWAY_RUNTIME_MODE_LABELS) as Array<ProfileDraft["runtimeMode"]>
-            ).map((mode) => (
-              <SelectItem key={mode} value={mode}>
-                {MCP_GATEWAY_RUNTIME_MODE_LABELS[mode]}
-              </SelectItem>
-            ))}
-          </SelectPopup>
-        </Select>
-      </div>
-
-      {unresolved ? (
-        <p className="text-xs text-destructive" role="note">
-          The saved provider or model is no longer offered. Re-select both before saving.
-        </p>
-      ) : null}
-      {ambiguousSelection ? (
-        <p className="text-xs text-destructive" role="note">
-          Multiple providers or models share these names. Choose a provider and model with a unique
-          name combination before saving.
-        </p>
-      ) : null}
-      {duplicateName ? (
-        <p className="text-xs text-destructive" role="note">
-          A profile named {draft.name.trim()} already exists.
-        </p>
-      ) : null}
-
-      <div className="flex items-center gap-2">
-        <Button
-          variant="outline"
-          disabled={!canSave}
-          onClick={() => {
-            const entry = selectedEntry;
-            const model = entry?.models.find((candidate) => candidate.slug === draft.model);
-            if (!canSave || entry === undefined || model === undefined) return;
-            const now = new globalThis.Date().toISOString();
-            const name = draft.name.trim();
-            // The edited profile is tracked by its stable profileId, never
-            // by name — renaming must not orphan the original row or mint a
-            // fresh identity (spec §9.1: renames keep profileId and history).
-            const previous = existing;
-            if (
-              profiles.some(
-                (candidate) =>
-                  candidate.profileId !== previous?.profileId && candidate.name === name,
-              )
-            ) {
-              return;
-            }
-            // Persist readable labels only. The instance/model routing keys
-            // stay in this draft — they are never serialized into the
-            // profile (spec §9.2).
-            const profile: McpGatewayProfile = {
-              profileId: previous?.profileId ?? `profile_${randomUUID()}`,
-              name,
-              systemPrompt: draft.systemPrompt,
-              ...(previous?.color ? { color: previous.color } : {}),
-              ...(previous?.icon ? { icon: previous.icon } : {}),
-              ...(previous?.environmentIds ? { environmentIds: previous.environmentIds } : {}),
-              providerLabel: entry.label,
-              modelLabel: model.name,
-              ...(draft.reasoningEffort === null ? {} : { reasoningEffort: draft.reasoningEffort }),
-              runtimeMode: draft.runtimeMode,
-              interactionMode: previous?.interactionMode ?? "default",
-              // Required wire fields are placeholders on create and preserved
-              // on edit; the server assigns revision and timestamps.
-              revision: previous?.revision ?? 1,
-              createdAt: previous?.createdAt ?? now,
-              updatedAt: previous?.updatedAt ?? now,
-            };
-            onChange([
-              ...profiles.filter((candidate) => candidate.profileId !== previous?.profileId),
-              profile,
-            ]);
-            resetDraft();
-          }}
-        >
-          {editingProfileId === null ? "Save profile" : `Update ${existing?.name ?? "profile"}`}
-        </Button>
-        {editingProfileId !== null || draft !== EMPTY_DRAFT ? (
-          <Button variant="ghost" onClick={resetDraft}>
-            Cancel
-          </Button>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
 export function McpGatewaySettings() {
   const { environments, isReady: registryReady } = useEnvironments();
   const [enabled, setEnabled] = useState(isMcpGatewayEnabled);
   const [token, setToken] = useState(getMcpGatewayToken);
   const [savedGrants, setSavedGrants] = useState(getMcpGatewayGrants);
   const [pendingGrants, setPendingGrants] = useState<McpGatewayGrants | null>(null);
-  const profiles = usePrimarySettings((settings) => settings.mcpGatewayProfiles);
-  const providers = useAtomValue(primaryServerProvidersAtom);
-  const primaryEnvironment = usePrimaryEnvironment();
-  const updatePrimarySettings = useUpdatePrimarySettings();
   const [status, setStatus] = useState<McpGatewayUiState>(() =>
     enabled ? getMcpGatewayStatus() : "disabled",
   );
@@ -1086,17 +642,15 @@ export function McpGatewaySettings() {
           />
         </SettingsRow>
         <SettingsRow
-          id="mcp-gateway-profiles"
-          title="Named profiles"
-          description="Save provider, model, and execution defaults for MCP-created threads. This editor uses the primary environment’s connected provider catalog. Profiles store readable selections; routing details are resolved on the target environment at thread creation. Later edits never mutate existing work."
-        >
-          <McpProfileList
-            profiles={profiles}
-            providers={providers}
-            catalogConnected={primaryEnvironment?.connection.phase === "connected"}
-            onChange={(next) => updatePrimarySettings({ mcpGatewayProfiles: next })}
-          />
-        </SettingsRow>
+          id="mcp-gateway-agents"
+          title="Agents"
+          description="MCP uses the shared Agents library for instructions, provider, model, and execution settings. Changes apply to new chats; existing chats keep their instructions."
+          control={
+            <Link to="/agents" className="text-sm underline underline-offset-4">
+              Manage agents
+            </Link>
+          }
+        />
         <SettingsRow
           title="Companion endpoint"
           description="Start t3-mcp-gateway in your MCP host with T3_MCP_BRIDGE_TOKEN. The companion listens only on loopback, rejects unauthenticated clients, and receives the persisted environment grants above after authentication."

@@ -334,6 +334,7 @@ describe("Gateway Runtime Port", () => {
       projectId: "project-1",
       title: "Thread",
       profileSnapshot: { profileId: "write", revision: 1 },
+      settledAt: "2026-09-07T00:00:00.000Z",
       modelSelection: { instanceId: "codex", model: "gpt" },
       runtimeMode: "full-access",
       interactionMode: "default",
@@ -393,6 +394,7 @@ describe("Gateway Runtime Port", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
     } as never);
+    expect(projected.settledAt).toBe("2026-09-07T00:00:00.000Z");
     expect(projected.profileSnapshot).toEqual({ profileId: "write", revision: 1 });
 
     expect(projected.session).not.toHaveProperty("lastError");
@@ -513,5 +515,29 @@ describe("opening a desktop chat", () => {
     );
     await expect(port.openThread("remote", "chat")).rejects.toThrow("offline");
     expect(open).not.toHaveBeenCalled();
+  });
+});
+
+it("retains settlement state in the thread list used by agent filters", async () => {
+  const port = createGatewayRuntimePort({
+    runPromise: async () => ({
+      threads: [
+        {
+          id: "chat",
+          projectId: "project",
+          profileSnapshot: { profileId: "code" },
+          title: "Done",
+          settledAt: "2026-09-07T00:00:00.000Z",
+          session: null,
+          latestTurn: null,
+        },
+      ],
+      updatedAt: "now",
+    }),
+  } as unknown as import("./runtimePort.ts").GatewayEffectRuntime);
+  expect(await port.listThreads("remote")).toMatchObject({
+    items: [
+      { id: "chat", settledAt: "2026-09-07T00:00:00.000Z", profileSnapshot: { profileId: "code" } },
+    ],
   });
 });

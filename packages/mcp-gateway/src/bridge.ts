@@ -372,6 +372,8 @@ export function createBridgeRuntimePort(input: {
       openAgents: (environmentId) => invoke("openAgents", [environmentId]),
       handoffThread: (input) => invoke("handoffThread", [input]),
       settleThread: (environmentId, threadId) => invoke("settleThread", [environmentId, threadId]),
+      unsettleThread: (environmentId, threadId) =>
+        invoke("unsettleThread", [environmentId, threadId]),
       createProfile: (environmentId, profile) => invoke("createProfile", [environmentId, profile]),
       updateProfile: (environmentId, profileId, patch) =>
         invoke("updateProfile", [environmentId, profileId, patch]),

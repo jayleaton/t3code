@@ -104,6 +104,31 @@ describe("gateway bridge", () => {
     await bridge.close();
   });
 
+  it("round-trips un-settlement through the authenticated client bridge", async () => {
+    const port = await unusedPort();
+    const bridge = createBridgeRuntimePort({ port, token: TOKEN });
+    await bridge.ready;
+    const client = new WebSocket(`ws://127.0.0.1:${port}`);
+    const requests: unknown[] = [];
+    const authenticated = authenticate(client, (message) => {
+      requests.push(message);
+      client.send(JSON.stringify({ id: message.id, result: { status: "succeeded" } }));
+    });
+    await opened(client);
+    await authenticated;
+    try {
+      await expect(bridge.port.unsettleThread!("local", "chat")).resolves.toEqual({
+        status: "succeeded",
+      });
+      expect(requests).toContainEqual(
+        expect.objectContaining({ method: "unsettleThread", args: ["local", "chat"] }),
+      );
+    } finally {
+      client.close();
+      await bridge.close();
+    }
+  });
+
   it("keeps the first bridge alive and reports a typed degraded result when the port is occupied", async () => {
     const port = await unusedPort();
     const first = createBridgeRuntimePort({ port, token: TOKEN });

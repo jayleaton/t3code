@@ -49,7 +49,18 @@ describe("MCP gateway server", () => {
   it("serves structured tools over an MCP transport", async () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const gateway = createMcpGateway({
-      port,
+      port: {
+        ...port,
+        listProfiles: async () => [
+          {
+            profileId: "code",
+            name: "Code",
+            systemPrompt: "Implement the approved plan.",
+            runtimeMode: "approval-required",
+            interactionMode: "default",
+          },
+        ],
+      },
       grants: { local: ["read", "create", "send"] },
       profiles: [
         {
@@ -70,16 +81,36 @@ describe("MCP gateway server", () => {
 
     const listedTools = await client.listTools();
     const toolNames = listedTools.tools.map((tool) => tool.name);
-    expect(toolNames).toHaveLength(57);
+    expect(toolNames).toHaveLength(58);
+    const agents = await client.callTool({
+      name: "t3_list_agents",
+      arguments: { environmentId: "local" },
+    });
+    expect(agents.isError).not.toBe(true);
+    expect(agents.structuredContent).toMatchObject({
+      data: {
+        items: [{ profileId: "code", systemPrompt: "Implement the approved plan." }],
+      },
+    });
+    expect(toolNames.some((name) => /^t3_(list|create|update|delete)_profiles?$/.test(name))).toBe(
+      false,
+    );
+    const removed = await client.callTool({
+      name: "t3_list_profiles",
+      arguments: { environmentId: "local" },
+    });
+    expect(removed.isError).toBe(true);
+
     expect(toolNames).toContain("t3_list_threads");
     expect(toolNames).toEqual(
       expect.arrayContaining([
         "t3_summarize_thread",
-        "t3_create_profile",
-        "t3_update_profile",
-        "t3_delete_profile",
+        "t3_create_agent",
+        "t3_update_agent",
+        "t3_delete_agent",
+        "t3_list_agents",
+        "t3_unsettle_thread",
         "t3_open_agents",
-        "t3_list_profiles",
         "t3_get_artifact",
         "t3_get_approval_plan",
         "t3_approve_actions",

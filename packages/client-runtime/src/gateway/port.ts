@@ -294,6 +294,7 @@ export function parseGatewayStatusSnapshot(value: unknown): GatewayStatusSnapsho
 
 export interface GatewayRuntimePort {
   handoffThread?(input: AgentHandoffInput): Promise<AgentHandoffResult>;
+  unsettleThread?(environmentId: string, threadId: string): Promise<{ status: "succeeded" }>;
   settleThread?(environmentId: string, threadId: string): Promise<{ status: "succeeded" }>;
   openAgents?(environmentId: string): Promise<{ status: "succeeded" }>;
   createProfile?(environmentId: string, profile: GatewayProfileInput): Promise<GatewayProfile>;

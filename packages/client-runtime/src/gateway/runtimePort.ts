@@ -32,6 +32,7 @@ import {
   respondToThreadApprovals,
   startThreadTurn,
   settleThread,
+  unsettleThread,
 } from "../operations/commands.ts";
 import { request, runStream, subscribe } from "../rpc/client.ts";
 import type {
@@ -345,6 +346,7 @@ function gatewayThreadShellProjection(thread: OrchestrationShellSnapshot["thread
     id: thread.id,
     projectId: thread.projectId,
     profileSnapshot: thread.profileSnapshot,
+    settledAt: thread.settledAt,
     title: thread.title,
     status: gatewayStatusFromThread(thread),
     latestTurn: thread.latestTurn,
@@ -416,6 +418,7 @@ export function gatewayThreadProjection(thread: OrchestrationThreadDetailSnapsho
     title: thread.title,
     modelSelection: thread.modelSelection,
     profileSnapshot: thread.profileSnapshot,
+    settledAt: thread.settledAt,
     runtimeMode: thread.runtimeMode,
     interactionMode: thread.interactionMode,
     latestTurn: thread.latestTurn,
@@ -606,6 +609,22 @@ export function createGatewayRuntimePort(
     return operation;
   };
   const port: GatewayRuntimePort = {
+    unsettleThread: (environmentId, threadId) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          const crypto = yield* Crypto.Crypto;
+          yield* registry.run(
+            EnvironmentId.make(environmentId),
+            unsettleThread({
+              threadId: ThreadId.make(threadId),
+              reason: "user",
+              commandId: CommandId.make(yield* crypto.randomUUIDv4),
+            }),
+          );
+          return { status: "succeeded" as const };
+        }),
+      ),
     settleThread: (environmentId, threadId) =>
       run(
         Effect.gen(function* () {

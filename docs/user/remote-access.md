@@ -199,9 +199,9 @@ without removing their existing permissions; it does not grant every capability.
 capabilities** in a machine's access menu to allow the full set, or grant individual capabilities
 for controlling work, handling approvals, retrieving artifacts, managing reviews, or event delivery.
 
-The assistant can use named profiles for new threads, inspect work and approvals, control thread
-lifecycle, and subscribe to events or webhook delivery when permitted. Profiles are managed in the
-gateway settings or the Agents board; changing a profile does not change existing threads. Use `t3_list_environments`
+The assistant can use agents from the shared library for new chats, inspect work and approvals, control thread
+lifecycle, and subscribe to events or webhook delivery when permitted. Agents are managed on the
+Agents board; changing an agent does not change existing chats. Use `t3_list_environments`
 to check the environment IDs and effective grants seen by the assistant. Permission errors also
 report the granted and missing scopes.
 
@@ -218,19 +218,20 @@ chat does not start or stop its agent. The desktop app must already be running a
 Open **Open agents** in the command palette, or visit `/agents`. Create a named agent, choose its
 provider, model, thinking, allowed machines, and a system prompt describing its role and workflow,
 then start a task or an empty chat. Clicking a
-card opens the conversation; **Back to agents** returns to the board. Settled work stays visible
-in its agent column. Deleting an agent keeps its conversations under **Removed agents**.
+card opens the conversation; **Back to agents** returns to the board. Settled work moves into a collapsed **Settled** section
+in its agent column. Right-click a chat to settle or un-settle it. Deleting an agent keeps its conversations under **Removed agents**.
 
-Profiles are shared across clients connected to the same server. Edits also copy to connected
-environments that support shared settings. Disconnected machines need **Apply to all** in Settings
-after reconnecting. Each target resolves the provider and model locally; an unavailable or
-ambiguous selection must be re-selected before starting a thread. Profile changes apply only to
-new threads.
+Agents are shared across clients connected to the same server. Updated clients also synchronize
+the agent library between connected environments that support agent sync, including after reconnecting. Each target resolves the provider and model locally; an unavailable or
+ambiguous selection must be re-selected before starting a thread. Agent changes apply only to
+new chats.
 
-MCP assistants can use `t3_create_profile`, `t3_update_profile`, and `t3_delete_profile` with create
-or admin access. Profile writes share only to connected environments with one of those grants;
-check the returned sync failures. Use `profileId` with `t3_create_thread` for voice-driven agent
-tasks, and filter `t3_list_threads` by the same ID to continue work. `t3_open_agents` opens the
+MCP assistants can discover agents with read access using `t3_list_agents`, or manage them using `t3_create_agent`, `t3_update_agent`, and `t3_delete_agent` with create
+or admin access. Agent writes share only to connected environments with one of those grants;
+check the returned sync failures. Use `profileId` with `t3_create_thread` to snapshot an agent’s instructions and settings,
+then `t3_send_message` to start work. Filter `t3_list_threads` by the same ID and `state`
+(`active`, `settled`, or `all`) to find ongoing or completed work. Use `t3_unsettle_thread`
+with lifecycle access to return a settled chat to the active list. `t3_open_agents` opens the
 board in the connected desktop window with read access.
 
 Each chat keeps the agent instructions it started with, including after the agent is edited or
