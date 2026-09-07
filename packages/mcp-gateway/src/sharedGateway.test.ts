@@ -151,7 +151,11 @@ describe("shared MCP gateway", () => {
       expect(
         body(await client.callTool({ name: "t3_get_gateway_health", arguments: {} })).data,
       ).toMatchObject({ bridge: "connected" });
-      expect((await client.listTools()).tools).toHaveLength(57);
+      const toolNames = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(toolNames).toHaveLength(58);
+      expect(toolNames).toContain("t3_list_agents");
+      expect(toolNames).toContain("t3_unsettle_thread");
+      expect(toolNames).not.toContain("t3_list_profiles");
     }
     await clients[0]!.close();
     expect(

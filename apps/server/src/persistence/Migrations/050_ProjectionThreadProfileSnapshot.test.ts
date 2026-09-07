@@ -8,13 +8,13 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
-layer("049_ProjectionThreadProfileSnapshot", (it) => {
+layer("050_ProjectionThreadProfileSnapshot", (it) => {
   it.effect("adds the nullable profile snapshot to thread projections", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
       yield* runMigrations({ toMigrationInclusive: 47 });
-      yield* runMigrations({ toMigrationInclusive: 49 });
+      yield* runMigrations({ toMigrationInclusive: 50 });
 
       const columns = yield* sql<{ readonly name: string; readonly notnull: number }>`
         PRAGMA table_info(projection_threads)
@@ -34,10 +34,33 @@ layer("gateway migration upgrade", (it) => {
       yield* runMigrations({ toMigrationInclusive: 47 });
       yield* sql`ALTER TABLE projection_threads ADD COLUMN profile_snapshot_json TEXT`;
       yield* sql`INSERT INTO effect_sql_migrations (migration_id, name, created_at) VALUES (48, 'ProjectionThreadProfileSnapshot', CURRENT_TIMESTAMP)`;
-      yield* runMigrations({ toMigrationInclusive: 49 });
+      yield* runMigrations({ toMigrationInclusive: 50 });
       const columns = yield* sql<{ readonly name: string }>`PRAGMA table_info(projection_threads)`;
       assert.isTrue(columns.some((column) => column.name === "profile_snapshot_json"));
       assert.isTrue(columns.some((column) => column.name === "branch_pull_request_json"));
     }),
+  );
+});
+
+layer("agents migration 49 upgrade", (it) => {
+  it.effect(
+    "preserves frozen instructions and repairs active ordering from an early agents build",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 48 });
+        yield* sql`ALTER TABLE projection_threads ADD COLUMN profile_snapshot_json TEXT`;
+        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name, created_at) VALUES (49, 'ProjectionThreadProfileSnapshot', CURRENT_TIMESTAMP)`;
+        yield* sql`INSERT INTO projection_threads (thread_id, project_id, title, model_selection_json, runtime_mode, created_at, updated_at, profile_snapshot_json)
+        VALUES ('existing', 'project', 'Existing agent chat', '{"instanceId":"codex","model":"gpt-5.4"}', 'full-access', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, '{"systemPrompt":"Keep these instructions"}')`;
+        yield* runMigrations();
+        const rows = yield* sql<{
+          readonly snapshot: string;
+          readonly activeOrder: string | null;
+        }>`SELECT profile_snapshot_json AS snapshot, active_order_key AS activeOrder FROM projection_threads WHERE thread_id = 'existing'`;
+        assert.deepEqual(rows, [
+          { snapshot: '{"systemPrompt":"Keep these instructions"}', activeOrder: null },
+        ]);
+      }),
   );
 });
