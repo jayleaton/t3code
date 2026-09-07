@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import { Link } from "@tanstack/react-router";
-import { PreviewCard } from "@base-ui/react/preview-card";
+import { PreviewCard, PreviewCardTrigger, PreviewCardPopup } from "../ui/preview-card";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { useProject } from "../../state/entities";
@@ -25,7 +25,7 @@ export function ThreadCard({
   const popupRef = useRef<HTMLDivElement>(null);
   return (
     <div className="agent-thread-container">
-      <PreviewCard.Root
+      <PreviewCard
         open={!contextMenuOpen && previewOpen}
         onOpenChange={(open, details) => {
           if (
@@ -37,7 +37,7 @@ export function ThreadCard({
           setPreviewOpen(open);
         }}
       >
-        <PreviewCard.Trigger
+        <PreviewCardTrigger
           onContextMenu={(event) => {
             event.preventDefault();
             setPreviewOpen(false);
@@ -77,20 +77,19 @@ export function ThreadCard({
               minute: "2-digit",
             })}
           </time>
-        </PreviewCard.Trigger>
-        <PreviewCard.Portal>
-          <PreviewCard.Positioner side="right" align="start" sideOffset={12} className="z-[140]">
-            <PreviewCard.Popup ref={popupRef} className="agent-chat-preview">
-              {previewOpen && (
-                <AgentChatPreview
-                  thread={thread}
-                  project={project?.title ?? "Project unavailable"}
-                />
-              )}
-            </PreviewCard.Popup>
-          </PreviewCard.Positioner>
-        </PreviewCard.Portal>
-      </PreviewCard.Root>
+        </PreviewCardTrigger>
+        <PreviewCardPopup
+          ref={popupRef}
+          side="right"
+          align="start"
+          sideOffset={12}
+          className="agent-chat-preview"
+        >
+          {previewOpen && (
+            <AgentChatPreview thread={thread} project={project?.title ?? "Project unavailable"} />
+          )}
+        </PreviewCardPopup>
+      </PreviewCard>
       <ThreadSpeedControl thread={thread} />
     </div>
   );

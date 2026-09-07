@@ -1,3 +1,6 @@
+import { ArrowUpIcon } from "lucide-react";
+import { ComposerSurface } from "../chat/ComposerSurface";
+import { Button } from "../ui/button";
 import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
@@ -27,7 +30,6 @@ export function AgentTaskDialog({
   const projects = useProjects();
   const [machine, setMachine] = useState("");
   const [projectId, setProjectId] = useState("");
-  const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -54,14 +56,20 @@ export function AgentTaskDialog({
       <DialogPopup className="agent-dialog p-6">
         <DialogTitle>New chat · {profile.name}</DialogTitle>
         <DialogDescription className="mt-2 text-sm text-muted-foreground">
-          Start with this agent’s current profile. Leave the prompt empty to create a chat without
-          starting work.
+          Give {profile.name} a task, or create an empty chat.
         </DialogDescription>
         <form
           className="agent-form"
           onSubmit={async (event) => {
             event.preventDefault();
-            if (!target || !project || runtime._tag !== "Success") return;
+            if (
+              busy ||
+              !target ||
+              !project ||
+              runtime._tag !== "Success" ||
+              profile.runtimeMode === "read-only"
+            )
+              return;
             setBusy(true);
             setError("");
             let createdThreadId: string | undefined;
@@ -80,7 +88,7 @@ export function AgentTaskDialog({
                 environmentId: target.environmentId,
                 projectId: project.id,
                 threadId,
-                title: title.trim() || "New thread",
+                title: "New thread",
                 requestId: randomUUID(),
                 profileSelection: {
                   profileId: profile.profileId,
@@ -158,45 +166,54 @@ export function AgentTaskDialog({
           {target && !project && (
             <p>Add a project on {target.label} from the Threads view first.</p>
           )}
-          <label>
-            Title
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Optional · named automatically from your message"
-            />
-          </label>
-          <label>
-            Prompt <span className="text-muted-foreground">· optional</span>
-            <textarea
-              rows={4}
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Give your agent a task…"
-            />
-          </label>
+          <ComposerSurface.Shell className="agent-task-composer">
+            <ComposerSurface.Host>
+              <ComposerSurface.Main>
+                <textarea
+                  aria-label="Message"
+                  rows={4}
+                  autoFocus
+                  value={prompt}
+                  disabled={busy}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  onKeyDown={(event) => {
+                    if (
+                      event.key === "Enter" &&
+                      !event.shiftKey &&
+                      !event.nativeEvent.isComposing
+                    ) {
+                      event.preventDefault();
+                      event.currentTarget.form?.requestSubmit();
+                    }
+                  }}
+                  placeholder={`Message ${profile.name}…`}
+                />
+                <footer>
+                  <Button variant="ghost" type="button" disabled={busy} onClick={onClose}>
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    disabled={
+                      busy ||
+                      !target ||
+                      !project ||
+                      !AsyncResult.isSuccess(runtime) ||
+                      profile.runtimeMode === "read-only"
+                    }
+                  >
+                    {busy ? "Creating…" : prompt.trim() ? "Send" : "Create chat"}
+                    <ArrowUpIcon />
+                  </Button>
+                </footer>
+              </ComposerSurface.Main>
+            </ComposerSurface.Host>
+          </ComposerSurface.Shell>
           {error && (
             <p role="alert" className="text-destructive">
               {error}
             </p>
           )}
-          <footer>
-            <button type="button" disabled={busy} onClick={onClose}>
-              Cancel
-            </button>
-            <button
-              className="agent-primary"
-              disabled={
-                busy ||
-                !target ||
-                !project ||
-                !AsyncResult.isSuccess(runtime) ||
-                profile.runtimeMode === "read-only"
-              }
-            >
-              {busy ? "Creating…" : "Create chat"}
-            </button>
-          </footer>
         </form>
       </DialogPopup>
     </Dialog>

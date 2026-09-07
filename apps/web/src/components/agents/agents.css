@@ -490,8 +490,6 @@
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 14px;
-  background: var(--popover);
-  color: var(--popover-foreground);
   box-shadow: 0 16px 48px #0006;
   font-size: 13px;
 }
@@ -514,7 +512,7 @@
 .agent-preview-header > span,
 .agent-preview-note,
 .agent-preview-role {
-  color: var(--muted-foreground);
+  color: var(--contrast-muted-foreground);
   font-size: 11px;
 }
 .agent-preview-scroll {
@@ -538,7 +536,8 @@
   max-width: 92%;
   padding: 10px 14px;
   border-radius: 16px;
-  background: var(--muted);
+  background: var(--message-surface);
+  color: var(--contrast-message-foreground);
 }
 .agent-preview-assistant {
   padding: 0 4px;
@@ -759,4 +758,21 @@
   .agent-chat-rail-list > div {
     width: calc(100vw - 68px);
   }
+}
+
+.agent-task-composer textarea {
+  resize: vertical;
+  min-height: 120px;
+  border: 0;
+  background: transparent;
+  padding: 16px;
+  outline: none;
+}
+.agent-task-composer footer {
+  padding: 0 12px 12px;
+}
+.agent-task-composer:focus-within {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 22px;
 }
