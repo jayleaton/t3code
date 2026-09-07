@@ -41,7 +41,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   getMcpGatewayLaunchConfig: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_MCP_GATEWAY_LAUNCH_CONFIG_CHANNEL);
     if (typeof result !== "object" || result === null) return null;
-    return result as ReturnType<DesktopBridge["getMcpGatewayLaunchConfig"]>;
+    return result as ReturnType<NonNullable<DesktopBridge["getMcpGatewayLaunchConfig"]>>;
   },
   getMcpGatewayBridgeToken: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_MCP_GATEWAY_BRIDGE_TOKEN_CHANNEL);

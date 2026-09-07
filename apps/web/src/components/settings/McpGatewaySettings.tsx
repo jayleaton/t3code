@@ -23,6 +23,8 @@ import { Switch } from "../ui/switch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import {
   getMcpGatewayGrants,
+  getMcpGatewayPort,
+  setMcpGatewayPort,
   getMcpGatewayStatus,
   getMcpGatewayStatusSnapshot,
   getMcpGatewayToken,
@@ -494,7 +496,9 @@ export function McpGatewayOperationalStatus({
 export function McpGatewaySettings() {
   const { environments, isReady: registryReady } = useEnvironments();
   const [enabled, setEnabled] = useState(isMcpGatewayEnabled);
+  const [configurationError, setConfigurationError] = useState<string | null>(null);
   const [token, setToken] = useState(getMcpGatewayToken);
+  const [bridgePort, setBridgePort] = useState(() => String(getMcpGatewayPort()));
   const [savedGrants, setSavedGrants] = useState(getMcpGatewayGrants);
   const [pendingGrants, setPendingGrants] = useState<McpGatewayGrants | null>(null);
   const [status, setStatus] = useState<McpGatewayUiState>(() =>
@@ -520,6 +524,7 @@ export function McpGatewaySettings() {
     return subscribeMcpGatewayConfiguration(() => {
       setEnabled(isMcpGatewayEnabled());
       setToken(getMcpGatewayToken());
+      setBridgePort(String(getMcpGatewayPort()));
       const next = getMcpGatewayGrants();
       const serialized = JSON.stringify(next);
       if (serialized !== saved) {
@@ -546,6 +551,7 @@ export function McpGatewaySettings() {
   return (
     <SettingsPageContainer>
       <SettingsSection title="MCP Gateway" icon={<ServerCogIcon className="size-5" />}>
+        {configurationError && <p role="alert">{configurationError}</p>}
         <SettingsRow
           id="enable-mcp-gateway"
           title="Enable MCP Gateway"
@@ -557,10 +563,43 @@ export function McpGatewaySettings() {
               aria-label="Enable MCP Gateway"
               onCheckedChange={(checked) => {
                 const next = Boolean(checked);
-                setEnabled(next);
-                setStatus(next ? "connecting" : "disabled");
-                setMcpGatewayToken(token);
-                setMcpGatewayEnabled(next);
+                try {
+                  setMcpGatewayToken(token);
+                  setMcpGatewayEnabled(next);
+                  setEnabled(next);
+                  setStatus(next ? "connecting" : "disabled");
+                  setConfigurationError(null);
+                } catch {
+                  setConfigurationError(
+                    "Gateway settings could not be saved. Check browser storage access and try again.",
+                  );
+                }
+              }}
+            />
+          }
+        />
+        <SettingsRow
+          id="mcp-gateway-port"
+          title="Bridge port"
+          description="Use the companion's T3_MCP_BRIDGE_PORT, or leave the default 47631. Connections stay on this computer."
+          control={
+            <Input
+              aria-label="MCP gateway bridge port"
+              type="number"
+              min={1}
+              max={65535}
+              value={bridgePort}
+              onChange={(event) => setBridgePort(event.target.value)}
+              onBlur={() => {
+                try {
+                  setMcpGatewayPort(Number(bridgePort));
+                  setConfigurationError(null);
+                } catch {
+                  setBridgePort(String(getMcpGatewayPort()));
+                  setConfigurationError(
+                    "Choose a port from 1 to 65535 and ensure browser storage is available.",
+                  );
+                }
               }}
             />
           }
@@ -654,7 +693,7 @@ export function McpGatewaySettings() {
         <SettingsRow
           title="Companion endpoint"
           description="Start t3-mcp-gateway in your MCP host with T3_MCP_BRIDGE_TOKEN. The companion listens only on loopback, rejects unauthenticated clients, and receives the persisted environment grants above after authentication."
-          status="ws://127.0.0.1:47631"
+          status={`ws://127.0.0.1:${getMcpGatewayPort()}`}
         />
       </SettingsSection>
     </SettingsPageContainer>

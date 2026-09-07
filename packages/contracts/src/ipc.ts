@@ -1067,7 +1067,7 @@ export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
-  getMcpGatewayLaunchConfig: () => McpGatewayLaunchConfig | null;
+  getMcpGatewayLaunchConfig?: () => McpGatewayLaunchConfig | null;
   getMcpGatewayBridgeToken?: () => string | null;
   /** The desktop client's OS platform, read from Electron's preload process. */
   getClientPlatform?: () => string;

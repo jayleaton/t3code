@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   getMcpGatewayGrants,
+  getMcpGatewayPort,
+  setMcpGatewayPort,
   MCP_GATEWAY_CONFIGURABLE_SCOPES,
   getMcpGatewayToken,
   MCP_GATEWAY_GRANTS_KEY,
@@ -41,6 +43,14 @@ describe("MCP gateway grants", () => {
   });
 
   afterEach(() => vi.unstubAllGlobals());
+
+  it("persists a custom loopback bridge port and rejects invalid ports", () => {
+    expect(getMcpGatewayPort()).toBe(47631);
+    setMcpGatewayPort(47632);
+    expect(getMcpGatewayPort()).toBe(47632);
+    for (const invalid of [0, 65536, 1.5, NaN]) expect(() => setMcpGatewayPort(invalid)).toThrow();
+    expect(getMcpGatewayPort()).toBe(47632);
+  });
 
   it("persists scopes under exact registry environment ids and defaults to no grants", () => {
     expect(getMcpGatewayGrants()).toEqual({});

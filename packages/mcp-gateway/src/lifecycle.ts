@@ -36,6 +36,7 @@ export function createGatewayController(input: {
       current = { state: "starting" };
       try {
         const module = await input.load();
+        if (generation !== enableGeneration) return current;
         const started = await module.start(input.port);
         handles.add(started);
         if (generation !== enableGeneration) {
@@ -43,8 +44,9 @@ export function createGatewayController(input: {
             await started.stop();
             handles.delete(started);
           } catch (error) {
-            generation += 1;
-            current = cleanupFailure(error);
+            if (current.state !== "running" && current.state !== "starting") {
+              current = cleanupFailure(error);
+            }
           }
           return current;
         }

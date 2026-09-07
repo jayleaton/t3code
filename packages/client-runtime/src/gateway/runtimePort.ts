@@ -69,35 +69,40 @@ function targetKind(tag: string): string {
 const shellSnapshot = (environmentId: EnvironmentId) =>
   Effect.gen(function* () {
     const registry = yield* EnvironmentRegistry;
-    return yield* registry.run(
-      environmentId,
-      subscribe(ORCHESTRATION_WS_METHODS.subscribeShell, {}).pipe(
-        Stream.filter((item) => item.kind === "snapshot"),
-        Stream.runHead,
-        Effect.map(
-          (item) => (Option.getOrThrow(item) as { snapshot: OrchestrationShellSnapshot }).snapshot,
+    return yield* registry
+      .run(
+        environmentId,
+        subscribe(ORCHESTRATION_WS_METHODS.subscribeShell, {}).pipe(
+          Stream.filter((item) => item.kind === "snapshot"),
+          Stream.runHead,
+          Effect.map(
+            (item) =>
+              (Option.getOrThrow(item) as { snapshot: OrchestrationShellSnapshot }).snapshot,
+          ),
         ),
-      ),
-    );
+      )
+      .pipe(Effect.timeout("20 seconds"));
   });
 
 const threadSnapshot = (environmentId: EnvironmentId, threadId: ThreadId, turnLimit?: number) =>
   Effect.gen(function* () {
     const registry = yield* EnvironmentRegistry;
-    return yield* registry.run(
-      environmentId,
-      subscribe(ORCHESTRATION_WS_METHODS.subscribeThread, {
-        threadId,
-        ...(turnLimit === undefined ? {} : { turnLimit }),
-      }).pipe(
-        Stream.filter((item) => item.kind === "snapshot"),
-        Stream.runHead,
-        Effect.map(
-          (item) =>
-            (Option.getOrThrow(item) as { snapshot: OrchestrationThreadDetailSnapshot }).snapshot,
+    return yield* registry
+      .run(
+        environmentId,
+        subscribe(ORCHESTRATION_WS_METHODS.subscribeThread, {
+          threadId,
+          ...(turnLimit === undefined ? {} : { turnLimit }),
+        }).pipe(
+          Stream.filter((item) => item.kind === "snapshot"),
+          Stream.runHead,
+          Effect.map(
+            (item) =>
+              (Option.getOrThrow(item) as { snapshot: OrchestrationThreadDetailSnapshot }).snapshot,
+          ),
         ),
-      ),
-    );
+      )
+      .pipe(Effect.timeout("20 seconds"));
   });
 
 /**

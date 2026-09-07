@@ -191,7 +191,7 @@ devices. For server version warnings, follow [Updating T3 Code](./updating.md).
 
 Configure your assistant using the launch configuration in **Settings → MCP Gateway**, then enable
 the gateway in the desktop app. Keep that desktop connected to the environments your assistant
-needs to access.
+needs to access. If you configure a custom companion port, set the same **Bridge port** in MCP Gateway settings; the standard port works without changing it.
 
 Enable access per environment and select **Save** to apply permission changes. Default access allows
 reading chats, creating threads, and sending messages. **Enable all environments** enables machines

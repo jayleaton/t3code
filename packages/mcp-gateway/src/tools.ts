@@ -95,7 +95,7 @@ async function shareProfiles(
 }
 
 function currentGrants(source: GatewayGrantSource): GatewayGrants {
-  return typeof source === "function" ? source() : source;
+  return Object.assign(Object.create(null), typeof source === "function" ? source() : source);
 }
 
 async function authoritativeProfiles(

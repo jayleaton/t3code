@@ -1,5 +1,7 @@
 import { EnvironmentId, type ServerProvider } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as TestClock from "effect/testing/TestClock";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
@@ -457,6 +459,39 @@ describe("Gateway Runtime Port", () => {
     expect(projected.artifacts[0]).toMatchObject({ path: "src/index.ts" });
     expect(JSON.stringify(projected)).not.toContain("/home/user/secret");
   });
+
+  for (const operation of ["listProjects", "getThread"] as const) {
+    it.effect(`interrupts an offline ${operation} snapshot subscription at its deadline`, () =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const released = yield* Deferred.make<void>();
+        const registry = {
+          run: () =>
+            Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.ensuring(Deferred.succeed(released, undefined)),
+            ),
+        } as unknown as EnvironmentRegistry["Service"];
+        const port = yield* Effect.context<EnvironmentRegistry | Crypto.Crypto>().pipe(
+          Effect.map(createGatewayRuntimePortFromContext),
+          Effect.provideService(EnvironmentRegistry, registry),
+          Effect.provideService(Crypto.Crypto, testCrypto),
+        );
+        const pending = (
+          operation === "listProjects"
+            ? port.listProjects(environmentId)
+            : port.getThread(environmentId, "thread-1")
+        ).then(
+          () => false,
+          () => true,
+        );
+        yield* Deferred.await(entered);
+        yield* TestClock.adjust("21 seconds");
+        yield* Deferred.await(released);
+        expect(yield* Effect.promise(() => pending)).toBe(true);
+      }),
+    );
+  }
 
   it.effect("projects the existing registry without starting or replacing it", () =>
     Effect.gen(function* () {
