@@ -83,7 +83,7 @@ export function ThreadCard({
           side="right"
           align="start"
           sideOffset={12}
-          className="agent-chat-preview"
+          className="agent-chat-preview bg-background text-foreground"
         >
           {previewOpen && (
             <AgentChatPreview thread={thread} project={project?.title ?? "Project unavailable"} />

@@ -83,6 +83,7 @@ export function AgentChatPreview({
                   {message.streaming ? " · writing…" : ""}
                 </div>
                 <ChatMarkdown
+                  className={user ? "text-message-foreground" : ""}
                   text={text.slice(0, 24000)}
                   cwd={thread.worktreePath ?? workspace?.workspaceRoot}
                   threadRef={ref}
