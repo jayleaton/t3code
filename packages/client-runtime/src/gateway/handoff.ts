@@ -74,7 +74,7 @@ export async function performAgentHandoff(
     );
   const threadId = `handoff-${input.handoffId}`;
   const briefPath = `.agents/t3/handoffs/${input.handoffId}.md`;
-  await port.createThread({
+  const creation = await port.createThread({
     environmentId: input.environmentId,
     projectId: input.projectId,
     threadId,
@@ -86,6 +86,9 @@ export async function performAgentHandoff(
       overrideFields: [],
     },
   });
+  if (creation.status === "failed" || creation.status === "denied") {
+    throw new Error(`Destination chat creation ${creation.status}. No handoff was sent.`);
+  }
   const result = {
     environmentId: input.environmentId,
     threadId,
@@ -94,13 +97,16 @@ export async function performAgentHandoff(
   };
   try {
     await files.writeBrief(briefPath, brief);
-    await port.sendMessage({
+    const delivery = await port.sendMessage({
       environmentId: input.environmentId,
       threadId,
       requestId: `${threadId}-send`,
       messageId: `${threadId}-message`,
       text: `Read the handoff brief at ${briefPath}. It contains the source agent’s summary and selected file contents.\n\n${input.prompt.trim()}\n\nSource thread: ${input.sourceThreadId}. Keep that conversation intact; settlement requires the user’s choice.`,
     });
+    if (delivery.status === "failed" || delivery.status === "denied") {
+      throw new Error(`Handoff delivery ${delivery.status}. Open the created chat to recover.`);
+    }
     return { ...result, status: "sent" };
   } catch (error) {
     return {

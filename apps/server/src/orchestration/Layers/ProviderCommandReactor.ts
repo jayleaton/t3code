@@ -1702,6 +1702,7 @@ const make = Effect.gen(function* () {
     readonly action: "cancel" | "stop" | "pause" | "resume" | "retry" | "restart";
     readonly attemptId?: string;
     readonly createdAt: string;
+    readonly failure?: string;
   }) =>
     Effect.all({
       commandId: serverCommandId(`lifecycle-${input.action}-completed`),
@@ -1714,9 +1715,10 @@ const make = Effect.gen(function* () {
           threadId: input.threadId,
           activity: {
             id: eventId,
-            tone: "info",
-            kind: `lifecycle.${input.action}.completed`,
-            summary: `${input.action[0]?.toUpperCase()}${input.action.slice(1)} accepted`,
+            tone: input.failure === undefined ? "info" : "error",
+            kind: `lifecycle.${input.action}.${input.failure === undefined ? "completed" : "failed"}`,
+            summary:
+              input.failure ?? `${input.action[0]?.toUpperCase()}${input.action.slice(1)} accepted`,
             payload: {
               action: input.action,
               ...(input.attemptId === undefined ? {} : { attemptId: input.attemptId }),
@@ -1756,37 +1758,9 @@ const make = Effect.gen(function* () {
     const thread = yield* resolveThreadDetail(event.payload.threadId);
     if (!thread) return;
 
-    if (action === "pause" || action === "cancel") {
-      yield* providerService.interruptTurn({ threadId: thread.id });
-      yield* appendLifecycleReceipt({
-        threadId: thread.id,
-        action,
-        ...(typeof payload.attemptId === "string" ? { attemptId: payload.attemptId } : {}),
-        createdAt: event.occurredAt,
-      });
-      return;
-    }
-    if (action === "stop" || action === "restart") {
-      if (thread.session && thread.session.status !== "stopped") {
-        yield* providerService.stopSession({ threadId: thread.id });
-      }
-      if (action === "stop") {
-        yield* setThreadSession({
-          threadId: thread.id,
-          session: {
-            threadId: thread.id,
-            status: "stopped",
-            providerName: thread.session?.providerName ?? null,
-            ...(thread.session?.providerInstanceId === undefined
-              ? {}
-              : { providerInstanceId: thread.session.providerInstanceId }),
-            runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-            activeTurnId: null,
-            lastError: thread.session?.lastError ?? null,
-            updatedAt: event.occurredAt,
-          },
-          createdAt: event.occurredAt,
-        });
+    yield* Effect.gen(function* () {
+      if (action === "pause" || action === "cancel") {
+        yield* providerService.interruptTurn({ threadId: thread.id });
         yield* appendLifecycleReceipt({
           threadId: thread.id,
           action,
@@ -1795,31 +1769,85 @@ const make = Effect.gen(function* () {
         });
         return;
       }
-    }
+      if (action === "stop" || action === "restart") {
+        if (thread.session && thread.session.status !== "stopped") {
+          yield* providerService.stopSession({ threadId: thread.id });
+        }
+        if (action === "stop") {
+          yield* setThreadSession({
+            threadId: thread.id,
+            session: {
+              threadId: thread.id,
+              status: "stopped",
+              providerName: thread.session?.providerName ?? null,
+              ...(thread.session?.providerInstanceId === undefined
+                ? {}
+                : { providerInstanceId: thread.session.providerInstanceId }),
+              runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+              activeTurnId: null,
+              lastError: thread.session?.lastError ?? null,
+              updatedAt: event.occurredAt,
+            },
+            createdAt: event.occurredAt,
+          });
+          yield* appendLifecycleReceipt({
+            threadId: thread.id,
+            action,
+            ...(typeof payload.attemptId === "string" ? { attemptId: payload.attemptId } : {}),
+            createdAt: event.occurredAt,
+          });
+          return;
+        }
+      }
 
-    const previous = thread.messages.findLast((message) => message.role === "user");
-    if (previous === undefined || typeof payload.messageId !== "string") return;
-    yield* orchestrationEngine.dispatch({
-      type: "thread.turn.start",
-      commandId: CommandId.make(`${String(event.commandId ?? event.eventId)}:execute`),
-      threadId: thread.id,
-      message: {
-        messageId: MessageId.make(payload.messageId),
-        role: "user",
-        text: previous.text,
-        attachments: previous.attachments ?? [],
-      },
-      modelSelection: thread.modelSelection,
-      runtimeMode: thread.runtimeMode,
-      interactionMode: thread.interactionMode,
-      createdAt: event.occurredAt,
-    });
-    yield* appendLifecycleReceipt({
-      threadId: thread.id,
-      action,
-      ...(typeof payload.attemptId === "string" ? { attemptId: payload.attemptId } : {}),
-      createdAt: event.occurredAt,
-    });
+      const previous =
+        typeof payload.sourceMessageId === "string"
+          ? thread.messages.find(
+              (message) => message.id === payload.sourceMessageId && message.role === "user",
+            )
+          : thread.messages.findLast((message) => message.role === "user");
+      if (previous === undefined || typeof payload.messageId !== "string") {
+        yield* appendLifecycleReceipt({
+          threadId: thread.id,
+          action,
+          ...(typeof payload.attemptId === "string" ? { attemptId: payload.attemptId } : {}),
+          createdAt: event.occurredAt,
+          failure: "Lifecycle source message is unavailable.",
+        });
+        return;
+      }
+      yield* orchestrationEngine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make(`${String(event.commandId ?? event.eventId)}:execute`),
+        threadId: thread.id,
+        message: {
+          messageId: MessageId.make(payload.messageId),
+          role: "user",
+          text: previous.text,
+          attachments: previous.attachments ?? [],
+        },
+        modelSelection: thread.modelSelection,
+        runtimeMode: thread.runtimeMode,
+        interactionMode: thread.interactionMode,
+        createdAt: event.occurredAt,
+      });
+      yield* appendLifecycleReceipt({
+        threadId: thread.id,
+        action,
+        ...(typeof payload.attemptId === "string" ? { attemptId: payload.attemptId } : {}),
+        createdAt: event.occurredAt,
+      });
+    }).pipe(
+      Effect.catch((error) =>
+        appendLifecycleReceipt({
+          threadId: thread.id,
+          action,
+          ...(typeof payload.attemptId === "string" ? { attemptId: payload.attemptId } : {}),
+          createdAt: event.occurredAt,
+          failure: error instanceof Error ? error.message : String(error),
+        }),
+      ),
+    );
   });
 
   const processDomainEvent = Effect.fn("processDomainEvent")(function* (

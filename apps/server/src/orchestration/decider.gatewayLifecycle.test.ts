@@ -134,6 +134,33 @@ it.layer(NodeServices.layer)("gateway lifecycle decider", (it) => {
     }),
   );
 
+  it.effect("freezes the source user message separately from the new turn message ID", () =>
+    Effect.gen(function* () {
+      const model = readModel("interrupted");
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.lifecycle.control",
+          commandId: CommandId.make("retry-source"),
+          threadId: ThreadId.make("thread-1"),
+          action: "retry",
+          attemptId: "retry-source",
+          messageId: MessageId.make("new-retry-message"),
+          createdAt: NOW,
+        },
+        readModel: model,
+      } as never);
+      expect(result).toMatchObject({
+        payload: {
+          activity: {
+            payload: {
+              messageId: "new-retry-message",
+              sourceMessageId: model.threads[0]!.messages[0]!.id,
+            },
+          },
+        },
+      });
+    }),
+  );
   it.effect("rejects resume unless the thread is interrupted", () =>
     Effect.gen(function* () {
       const error = yield* decideOrchestrationCommand({

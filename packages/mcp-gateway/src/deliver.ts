@@ -145,13 +145,16 @@ export function startWebhookDeliveryWorker(
   const deliverBatch = async () => {
     const batchSize = input.batchSize ?? 32;
     const excludedEnvironmentIds = new Set<string>();
+    const visited = new Set<string>();
     let attempted = 0;
     while (attempted < batchSize) {
       if (stopped) return;
       const due = store.dueDeliveries(batchSize - attempted, [...excludedEnvironmentIds]);
-      if (due.length === 0) break;
-      for (const delivery of due) {
+      const unseen = due.filter((row) => !visited.has(`${row.webhookId}:${row.eventId}`));
+      if (unseen.length === 0) break;
+      for (const delivery of unseen) {
         if (stopped) return;
+        visited.add(`${delivery.webhookId}:${delivery.eventId}`);
         const webhook = store.webhookById(delivery.webhookId);
         if (webhook === undefined) continue;
         if (!input.isAuthorized(webhook.environmentId)) {
@@ -159,7 +162,16 @@ export function startWebhookDeliveryWorker(
           continue;
         }
         const target = store.buildDelivery(delivery.webhookId, delivery.eventId);
-        if (target === undefined) continue;
+        if (target === undefined) {
+          attempted += 1;
+          store.reportDeliveryAttempt(
+            delivery.webhookId,
+            delivery.eventId,
+            { ok: false, retryable: false },
+            "Delivery no longer matches the webhook configuration.",
+          );
+          continue;
+        }
         attempted += 1;
         const result = await sender(target);
         store.reportDeliveryAttempt(

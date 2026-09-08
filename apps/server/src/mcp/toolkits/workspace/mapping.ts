@@ -473,3 +473,11 @@ function resolveModelSlug(
   }
   return instance.models[0]?.slug ?? DEFAULT_MODEL;
 }
+
+/** Local CLI clients are trusted; browser-origin requests must use normal session authentication. */
+export function permitsUnauthenticatedWorkspaceClient(
+  address: string | null | undefined,
+  origin: string | undefined,
+): boolean {
+  return origin === undefined && isLoopbackRemoteAddress(address);
+}

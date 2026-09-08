@@ -11,6 +11,7 @@ import {
 
 import {
   isLoopbackRemoteAddress,
+  permitsUnauthenticatedWorkspaceClient,
   resolveProviderSelection,
   threadBrief,
   threadShelf,
@@ -189,4 +190,13 @@ describe("isLoopbackRemoteAddress", () => {
     expect(isLoopbackRemoteAddress("::1")).toBe(true);
     expect(isLoopbackRemoteAddress("192.168.1.9")).toBe(false);
   });
+});
+
+it("keeps local CLI workspace access while requiring authentication for browser origins and remote peers", () => {
+  expect(permitsUnauthenticatedWorkspaceClient("127.0.0.1", undefined)).toBe(true);
+  expect(permitsUnauthenticatedWorkspaceClient("::1", undefined)).toBe(true);
+  for (const origin of ["https://untrusted.example", "null", "http://localhost:3000", ""]) {
+    expect(permitsUnauthenticatedWorkspaceClient("127.0.0.1", origin)).toBe(false);
+  }
+  expect(permitsUnauthenticatedWorkspaceClient("192.168.1.2", undefined)).toBe(false);
 });

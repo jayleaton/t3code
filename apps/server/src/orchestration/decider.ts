@@ -1256,6 +1256,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               action: command.action,
               attemptId: command.attemptId,
               messageId: command.messageId,
+              sourceMessageId: thread.messages.findLast((message) => message.role === "user")?.id,
             },
             turnId: thread.latestTurn?.turnId ?? null,
             createdAt: command.createdAt,

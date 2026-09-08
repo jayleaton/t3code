@@ -1448,10 +1448,35 @@ const makeWsRpcLayer = (
             Effect.gen(function* () {
               // Attach the live queue before reading the durable head so no event
               // can fall into a replay/live handoff gap.
-              const liveBuffer = yield* Queue.unbounded<OrchestrationEvent>();
+              const liveBudget = yield* makeLiveStreamBudget();
+              const liveBuffer = yield* Queue.unbounded<
+                RetainedLiveItem<OrchestrationEvent>,
+                OrchestrationGetSnapshotError
+              >();
+              let closed = false;
+              const closeBuffer = (error?: OrchestrationGetSnapshotError) =>
+                Effect.gen(function* () {
+                  if (closed) return;
+                  closed = true;
+                  liveBudget.release(yield* Queue.clear(liveBuffer).pipe(Effect.orDie));
+                  if (error) yield* Queue.fail(liveBuffer, error);
+                  yield* Queue.shutdown(liveBuffer);
+                });
+              yield* Effect.addFinalizer(() => closeBuffer());
+              yield* liveBudget.failed.pipe(
+                Effect.catchTags({ OrchestrationGetSnapshotError: closeBuffer }),
+                Effect.forkScoped,
+              );
               yield* Effect.forkScoped(
                 orchestrationEngine.streamDomainEvents.pipe(
-                  Stream.runForEach((event) => Queue.offer(liveBuffer, event)),
+                  Stream.runForEach((event) =>
+                    liveBudget.retain(event).pipe(
+                      Effect.flatMap((item) => Queue.offer(liveBuffer, item)),
+                      Effect.uninterruptible,
+                    ),
+                  ),
+                  Effect.raceFirst(liveBudget.failed),
+                  Effect.catchTags({ OrchestrationGetSnapshotError: () => Effect.void }),
                 ),
                 { startImmediately: true },
               );
@@ -1466,9 +1491,9 @@ const makeWsRpcLayer = (
                     }),
                 ),
               );
-              const live = Stream.fromQueue(liveBuffer).pipe(
-                Stream.filter((event) => event.sequence > headSequence),
-              );
+              const live = liveBudget
+                .deliver(Stream.fromQueue(liveBuffer))
+                .pipe(Stream.filter((event) => event.sequence > headSequence));
               return Stream.concat(replay, live);
             }),
             { "rpc.aggregate": "orchestration" },

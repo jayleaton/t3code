@@ -57,17 +57,26 @@ export function splitSharedServerPatch(patch: ServerSettingsPatch): {
 /** Omit restart recovery on servers that cannot persist its preference. */
 export function filterSharedServerPatch(
   patch: ServerSettingsPatch,
-  capabilities: Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation"> | undefined,
+  capabilities:
+    | Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation" | "agentLibrarySync">
+    | undefined,
 ): ServerSettingsPatch {
-  return capabilities?.threadRestartContinuation === true
-    ? patch
-    : Struct.omit(patch, ["continueThreadsAfterServerUpdate"]);
+  const supported =
+    capabilities?.threadRestartContinuation === true
+      ? patch
+      : Struct.omit(patch, ["continueThreadsAfterServerUpdate"]);
+  return capabilities?.agentLibrarySync === true
+    ? supported
+    : Struct.omit(supported, ["mcpGatewayProfiles", "mcpGatewayProfileDeletedAt"]);
 }
 
 /** The shared subset supported by one environment. */
 export function pickSharedServerSettings(
   settings: ServerSettings,
-  capabilities?: Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation">,
+  capabilities?: Pick<
+    ExecutionEnvironmentCapabilities,
+    "threadRestartContinuation" | "agentLibrarySync"
+  >,
 ): ServerSettingsPatch {
   return filterSharedServerPatch(Struct.pick(settings, SHARED_SERVER_SETTING_KEYS), capabilities);
 }
@@ -96,7 +105,7 @@ export interface SharedSettingsEnvironment {
   readonly syncEligible: boolean;
   readonly settings: ServerSettings | null;
   readonly capabilities?:
-    | Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation">
+    | Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation" | "agentLibrarySync">
     | undefined;
 }
 
@@ -112,7 +121,7 @@ export function findSharedSettingsMismatches(input: {
   readonly primaryEnvironmentId: EnvironmentId | null;
   readonly primarySettings: ServerSettings | null;
   readonly primaryCapabilities?:
-    | Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation">
+    | Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation" | "agentLibrarySync">
     | undefined;
   readonly environments: ReadonlyArray<SharedSettingsEnvironment>;
 }): ReadonlyArray<{ readonly environmentId: EnvironmentId; readonly label: string }> {

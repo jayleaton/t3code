@@ -64,9 +64,11 @@ export function AgentChatPreview({
             </p>
           )}
           {detail && messages.length === 0 && <p>No messages yet.</p>}
-          {detail && detail.messages.length > messages.length && (
-            <p className="agent-preview-note">Recent messages · open chat for earlier history</p>
-          )}
+          {detail &&
+            detail.messages.filter((message) => message.role !== "system").length >
+              messages.length && (
+              <p className="agent-preview-note">Recent messages · open chat for earlier history</p>
+            )}
           {messages.map((message) => {
             const user = message.role === "user";
             const text = user

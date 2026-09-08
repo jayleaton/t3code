@@ -64,11 +64,10 @@ function authenticate(
         }
         if (configure) {
           socket.send(JSON.stringify({ type: "configure", grants: {} }));
-          const configuredSignal = AbortSignal.timeout(10);
-          configuredSignal.addEventListener("abort", () => resolve(), { once: true });
         } else resolve();
         return;
       }
+      if (message.type === "configured") resolve();
       onRequest?.(message);
     });
   });

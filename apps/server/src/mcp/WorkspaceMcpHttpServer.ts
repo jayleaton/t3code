@@ -8,7 +8,7 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import { normalizeMcpHttpResponse } from "./McpHttpServer.ts";
 import { WorkspaceToolkitHandlersLive } from "./toolkits/workspace/handlers.ts";
-import { isLoopbackRemoteAddress } from "./toolkits/workspace/mapping.ts";
+import { permitsUnauthenticatedWorkspaceClient } from "./toolkits/workspace/mapping.ts";
 import { WorkspaceMcpAuth, type WorkspaceMcpPrincipal } from "./toolkits/workspace/principal.ts";
 import { WorkspaceToolkit } from "./toolkits/workspace/tools.ts";
 
@@ -59,7 +59,10 @@ const makeWorkspaceMcpAuthMiddleware = EnvironmentAuth.EnvironmentAuth.pipe(
   Effect.map((serverAuth): WorkspaceMcpAuthMiddleware =>
     Effect.fn("WorkspaceMcpHttpServer.authenticateRequest")(function* (httpEffect) {
       const request = yield* HttpServerRequest.HttpServerRequest;
-      const loopback = isLoopbackRemoteAddress(requestRemoteAddress(request));
+      const loopback = permitsUnauthenticatedWorkspaceClient(
+        requestRemoteAddress(request),
+        request.headers.origin,
+      );
       const principal = yield* serverAuth.authenticateHttpRequest(request).pipe(
         Effect.map((session): WorkspaceMcpPrincipal | null => ({
           kind: "session",

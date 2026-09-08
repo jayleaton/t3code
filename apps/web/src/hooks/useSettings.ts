@@ -446,7 +446,9 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
           environments
             .filter(
               (target) =>
-                target.environmentId !== environmentId && supportsSharedSettingsSync(target),
+                target.environmentId !== environmentId &&
+                supportsSharedSettingsSync(target) &&
+                target.serverConfig?.environment.capabilities.agentLibrarySync === true,
             )
             .map((target) =>
               persistServerSettings({
@@ -587,7 +589,9 @@ export function useSharedSettingsSync() {
         environmentId: mismatch.environmentId,
         input: {
           patch: filterSharedServerPatch(patch, target?.serverConfig?.environment.capabilities),
-          replicateProfiles: true,
+          ...(target?.serverConfig?.environment.capabilities.agentLibrarySync === true
+            ? { replicateProfiles: true }
+            : {}),
         },
       });
     }

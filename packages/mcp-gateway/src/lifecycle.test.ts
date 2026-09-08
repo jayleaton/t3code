@@ -170,3 +170,28 @@ describe("gateway lifecycle isolation", () => {
     expect(controller.status()).toEqual({ state: "disabled" });
   });
 });
+
+it("waits for in-flight disable before enabling a replacement", async () => {
+  const stopped = Promise.withResolvers<void>();
+  const stopStarted = Promise.withResolvers<void>();
+  const start = vi
+    .fn()
+    .mockResolvedValueOnce({
+      stop: () => {
+        stopStarted.resolve();
+        return stopped.promise;
+      },
+    })
+    .mockResolvedValue({ stop: async () => {} });
+  const controller = createGatewayController({ port: unusedPort, load: async () => ({ start }) });
+  await controller.enable();
+  const disabling = controller.disable();
+  await stopStarted.promise;
+  const enabling = controller.enable();
+  expect(start).toHaveBeenCalledTimes(1);
+  stopped.resolve();
+  await disabling;
+  expect(await enabling).toEqual({ state: "running" });
+  expect(start).toHaveBeenCalledTimes(2);
+  await controller.disable();
+});

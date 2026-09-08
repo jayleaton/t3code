@@ -355,6 +355,8 @@ export function AgentsBoard() {
                       )
                         setDeleting(null);
                       else setDeleteError("Could not delete the agent. Try again.");
+                    } catch {
+                      setDeleteError("Could not delete the agent. Try again.");
                     } finally {
                       setBusy(false);
                     }

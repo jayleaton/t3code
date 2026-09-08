@@ -56,7 +56,7 @@ export function readMcpGatewayBridgeToken(source: McpGatewayCredentialSource): s
   try {
     const file = source.statFile(credentialPath);
     if (!file.isFile() || (source.userId !== null && file.uid !== source.userId)) return null;
-    if ((file.mode & 0o077) !== 0) return null;
+    if (source.userId !== null && (file.mode & 0o077) !== 0) return null;
     return parseTokenEnvironmentFile(source.readFileString(credentialPath));
   } catch {
     return null;

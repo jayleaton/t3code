@@ -12,7 +12,7 @@ import {
 const primaryId = EnvironmentId.make("env-primary");
 const laptopId = EnvironmentId.make("env-laptop");
 const boxId = EnvironmentId.make("env-box");
-const restartCapabilities = { threadRestartContinuation: true };
+const restartCapabilities = { threadRestartContinuation: true, agentLibrarySync: true };
 
 describe("supportsSharedSettingsSync", () => {
   it("accepts only connected servers that advertise the shared-settings capability", () => {
@@ -288,12 +288,14 @@ it("shares the complete profile list, detects revisions drifting, and propagates
   expect(
     findSharedSettingsMismatches({
       primaryEnvironmentId: primaryId,
+      primaryCapabilities: { agentLibrarySync: true },
       primarySettings: { ...DEFAULT_SERVER_SETTINGS, mcpGatewayProfiles: profiles },
       environments: [
         {
           environmentId: laptopId,
           label: "Laptop",
           syncEligible: true,
+          capabilities: { agentLibrarySync: true },
           settings: {
             ...DEFAULT_SERVER_SETTINGS,
             mcpGatewayProfiles: [{ ...profiles[0]!, revision: 1 }],
@@ -302,4 +304,14 @@ it("shares the complete profile list, detects revisions drifting, and propagates
       ],
     }),
   ).toEqual([{ environmentId: laptopId, label: "Laptop" }]);
+});
+
+it("filters agent replication fields from older servers without dropping supported preferences", () => {
+  const patch = {
+    sidebarAutoSettleAfterDays: 7,
+    mcpGatewayProfiles: [],
+    mcpGatewayProfileDeletedAt: { deleted: "2026-09-08T00:00:00Z" },
+  };
+  expect(filterSharedServerPatch(patch, {})).toEqual({ sidebarAutoSettleAfterDays: 7 });
+  expect(filterSharedServerPatch(patch, { agentLibrarySync: true })).toEqual(patch);
 });

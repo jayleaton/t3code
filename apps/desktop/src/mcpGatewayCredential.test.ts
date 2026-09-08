@@ -84,3 +84,16 @@ describe("readMcpGatewayBridgeToken", () => {
     }
   });
 });
+
+it("accepts Windows synthetic modes without weakening POSIX checks", () => {
+  assert.strictEqual(
+    readMcpGatewayBridgeToken({
+      env: {},
+      homeDirectory: "C:/Users/tester",
+      userId: null,
+      statFile: () => ({ ...secureFile, mode: 0o100666 }),
+      readFileString: () => "T3_MCP_BRIDGE_TOKEN=windows-token-123456\n",
+    }),
+    "windows-token-123456",
+  );
+});

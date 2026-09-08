@@ -142,3 +142,26 @@ describe("webhook delivery network policy", () => {
     expect(resolved).toEqual({ address: "93.184.216.34", family: 4 });
   });
 });
+
+it("retires pending deliveries invalidated by a filter change and keeps shutdown finite", async () => {
+  const store = createGatewayEventStore();
+  const { webhook } = store.registerWebhook({
+    environmentId: "local",
+    url: "https://example.com/hook",
+  });
+  store.emit({ environmentId: "local", type: "thread.completed" });
+  store.updateWebhook("local", webhook.webhookId, { types: ["thread.started"] });
+  const sender = vi.fn(async () => ({ ok: true, retryable: false }));
+  const worker = startWebhookDeliveryWorker(store, { isAuthorized: () => true, sender });
+  try {
+    await worker.runOnce();
+    expect(sender).not.toHaveBeenCalled();
+    expect(store.dueDeliveries(32)).toHaveLength(0);
+    store.emit({ environmentId: "local", type: "thread.started" });
+    await worker.runOnce();
+    expect(sender).toHaveBeenCalledOnce();
+  } finally {
+    await worker.stop();
+    store.close();
+  }
+});

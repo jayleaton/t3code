@@ -616,7 +616,17 @@ export function McpGatewaySettings() {
               placeholder="At least 16 characters"
               aria-label="MCP gateway bridge token"
               onChange={(event) => setToken(event.target.value)}
-              onBlur={() => setMcpGatewayToken(token)}
+              onBlur={() => {
+                try {
+                  setMcpGatewayToken(token);
+                  setConfigurationError(null);
+                } catch {
+                  setToken(getMcpGatewayToken());
+                  setConfigurationError(
+                    "Gateway settings could not be saved. Check browser storage access and try again.",
+                  );
+                }
+              }}
             />
           }
         />

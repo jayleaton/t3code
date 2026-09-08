@@ -690,7 +690,7 @@ export const make = (
       protocolVersion: 1,
       clientCapabilities: initializeClientCapabilities,
       clientInfo: options.clientInfo,
-      ...(options.initializeMeta ? { _meta: options.initializeMeta } : {}),
+      ...(options.initializeMeta !== undefined ? { _meta: options.initializeMeta } : {}),
     } satisfies EffectAcpSchema.InitializeRequest;
     const sendInitialize = runLoggedRequest(
       "initialize",

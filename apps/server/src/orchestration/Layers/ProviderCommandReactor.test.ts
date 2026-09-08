@@ -1311,6 +1311,53 @@ describe("ProviderCommandReactor", () => {
     }),
   );
 
+  it("records a correlated lifecycle failure when provider interruption fails", async () => {
+    const entered = Promise.withResolvers<void>();
+    const harness = await createHarness({
+      interruptTurnEffect: () =>
+        Effect.sync(() => entered.resolve()).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: "codex",
+                method: "interruptTurn",
+                detail: "interrupt rejected",
+              }),
+            ),
+          ),
+        ),
+    });
+    const threadId = ThreadId.make("thread-1");
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("lifecycle-failure"),
+        threadId,
+        createdAt,
+        activity: {
+          id: EventId.make("lifecycle-failure"),
+          kind: "lifecycle.pause.requested",
+          tone: "info",
+          summary: "Pause requested",
+          turnId: null,
+          createdAt,
+          payload: { action: "pause", attemptId: "failed-attempt" },
+        },
+      }),
+    );
+    await entered.promise;
+    await harness.drain();
+    const thread = (await harness.readModel()).threads.find((thread) => thread.id === threadId);
+    expect(thread?.activities).toContainEqual(
+      expect.objectContaining({
+        kind: "lifecycle.pause.failed",
+        tone: "error",
+        payload: expect.objectContaining({ action: "pause", attemptId: "failed-attempt" }),
+      }),
+    );
+  });
+
   effectIt.effect("settles a failed provider startup and allows a clean retry", () =>
     Effect.gen(function* () {
       let failStartup = true;

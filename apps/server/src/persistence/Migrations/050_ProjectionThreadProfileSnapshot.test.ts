@@ -1,3 +1,5 @@
+import { ThreadProfileSnapshot } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -5,6 +7,8 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+
+const decodeSnapshot = Schema.decodeEffect(Schema.fromJsonString(ThreadProfileSnapshot));
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
@@ -52,14 +56,22 @@ layer("agents migration 49 upgrade", (it) => {
         yield* sql`ALTER TABLE projection_threads ADD COLUMN profile_snapshot_json TEXT`;
         yield* sql`INSERT INTO effect_sql_migrations (migration_id, name, created_at) VALUES (49, 'ProjectionThreadProfileSnapshot', CURRENT_TIMESTAMP)`;
         yield* sql`INSERT INTO projection_threads (thread_id, project_id, title, model_selection_json, runtime_mode, created_at, updated_at, profile_snapshot_json)
-        VALUES ('existing', 'project', 'Existing agent chat', '{"instanceId":"codex","model":"gpt-5.4"}', 'full-access', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, '{"systemPrompt":"Keep these instructions"}')`;
+        VALUES ('existing', 'project', 'Existing agent chat', '{"instanceId":"codex","model":"gpt-5.4"}', 'full-access', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, '{"systemPrompt":"Keep these instructions","profileId":"agent","profileName":"Agent","revision":1,"effectiveSource":{"modelSelection":"profile","runtimeMode":"profile","interactionMode":"profile","reasoningEffort":"fallback"}}')`;
         yield* runMigrations();
         const rows = yield* sql<{
           readonly snapshot: string;
           readonly activeOrder: string | null;
         }>`SELECT profile_snapshot_json AS snapshot, active_order_key AS activeOrder FROM projection_threads WHERE thread_id = 'existing'`;
+        assert.equal(
+          (yield* decodeSnapshot(rows[0]!.snapshot)).systemPrompt,
+          "Keep these instructions",
+        );
         assert.deepEqual(rows, [
-          { snapshot: '{"systemPrompt":"Keep these instructions"}', activeOrder: null },
+          {
+            snapshot:
+              '{"systemPrompt":"Keep these instructions","profileId":"agent","profileName":"Agent","revision":1,"effectiveSource":{"modelSelection":"profile","runtimeMode":"profile","interactionMode":"profile","reasoningEffort":"fallback"}}',
+            activeOrder: null,
+          },
         ]);
       }),
   );

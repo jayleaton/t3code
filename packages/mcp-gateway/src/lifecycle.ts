@@ -21,6 +21,7 @@ export function createGatewayController(input: {
   let current: GatewayStatus = { state: "disabled" };
   const handles = new Set<GatewayRuntimeHandle>();
   let generation = 0;
+  let stopping: Promise<void> | undefined;
   const hasActiveRuntime = () => current.state === "running" || current.state === "starting";
 
   const cleanupFailure = (error: unknown): GatewayStatus => ({
@@ -28,9 +29,35 @@ export function createGatewayController(input: {
     message: `Failed to stop MCP gateway: ${error instanceof Error ? error.message : String(error)}`,
   });
 
+  const stopAll = async (): Promise<void> => {
+    generation += 1;
+    const failures: unknown[] = [];
+    for (const running of handles) {
+      try {
+        await running.stop();
+        handles.delete(running);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 0) {
+      current = { state: "disabled" };
+      return;
+    }
+    current = cleanupFailure(failures[0]);
+    throw failures[0];
+  };
+
   return {
     status: () => current,
     enable: async (): Promise<GatewayStatus> => {
+      if (stopping) {
+        try {
+          await stopping;
+        } catch {
+          return current;
+        }
+      }
       if (hasActiveRuntime()) return current;
       if (handles.size > 0) return current;
       const enableGeneration = ++generation;
@@ -62,23 +89,11 @@ export function createGatewayController(input: {
       }
       return current;
     },
-    disable: async (): Promise<void> => {
-      generation += 1;
-      const failures: unknown[] = [];
-      for (const running of handles) {
-        try {
-          await running.stop();
-          handles.delete(running);
-        } catch (error) {
-          failures.push(error);
-        }
-      }
-      if (failures.length === 0) {
-        current = { state: "disabled" };
-        return;
-      }
-      current = cleanupFailure(failures[0]);
-      throw failures[0];
+    disable: (): Promise<void> => {
+      stopping ??= stopAll().finally(() => {
+        stopping = undefined;
+      });
+      return stopping;
     },
   };
 }

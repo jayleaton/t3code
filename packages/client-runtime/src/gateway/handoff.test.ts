@@ -72,3 +72,26 @@ describe("agent handoff", () => {
     expect(files.readSource).not.toHaveBeenCalled();
   });
 });
+
+it.each(["failed", "denied"] as const)(
+  "stops after %s creation without writing or sending",
+  async (status) => {
+    const { port, files } = fixture();
+    vi.mocked(port.createThread).mockResolvedValue({ status } as Awaited<
+      ReturnType<typeof port.createThread>
+    >);
+    await expect(performAgentHandoff(port, input, files)).rejects.toThrow(`creation ${status}`);
+    expect(files.writeBrief).not.toHaveBeenCalled();
+    expect(port.sendMessage).not.toHaveBeenCalled();
+  },
+);
+it("does not report a rejected send as delivered", async () => {
+  const { port, files } = fixture();
+  vi.mocked(port.sendMessage).mockResolvedValue({ status: "denied" } as Awaited<
+    ReturnType<typeof port.sendMessage>
+  >);
+  expect(await performAgentHandoff(port, input, files)).toMatchObject({
+    status: "created",
+    error: expect.stringContaining("denied"),
+  });
+});

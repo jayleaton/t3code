@@ -344,6 +344,7 @@ export const make = Effect.gen(function* () {
     applyPatch: (input) =>
       ensureGitCommand("GitWorkflowService.applyPatch", input.cwd).pipe(
         Effect.andThen(git.applyPatch(input)),
+        Effect.tap(() => gitManager.invalidateStatus(input.cwd)),
       ),
     switchRef: (input) =>
       ensureGitCommand("GitWorkflowService.switchRef", input.cwd).pipe(

@@ -71,8 +71,18 @@ export const syncAgentInstructionFile = Effect.fn("syncAgentInstructionFile")(fu
       yield* fs.remove(file);
       // Preserve handoff documents and any user-added files. Only remove empty directories.
       for (const directory of [parent, path.dirname(parent), path.dirname(path.dirname(parent))]) {
-        if ((yield* fs.readDirectory(directory)).length !== 0) break;
-        yield* Effect.tryPromise(() => NodeFSP.rmdir(directory));
+        const removed = yield* Effect.tryPromise(async () => {
+          try {
+            if ((await NodeFSP.readdir(directory)).length !== 0) return false;
+            await NodeFSP.rmdir(directory);
+            return true;
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code === "ENOENT" || code === "ENOTEMPTY" || code === "EEXIST") return false;
+            throw error;
+          }
+        });
+        if (!removed) break;
       }
     }
     return;

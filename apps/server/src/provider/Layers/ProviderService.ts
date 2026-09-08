@@ -340,7 +340,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       if (Option.isNone(thread)) return undefined;
       const instructions = thread.value.profileSnapshot?.systemPrompt;
       if (thread.value.profileSnapshot?.profileId && thread.value.settledAt === null) {
-        const project = yield* projectionQuery.value.getProjectShellById(thread.value.projectId);
+        const project = thread.value.worktreePath
+          ? Option.none()
+          : yield* projectionQuery.value.getProjectShellById(thread.value.projectId);
         const cwd =
           thread.value.worktreePath ??
           (Option.isSome(project) ? project.value.workspaceRoot : undefined);
