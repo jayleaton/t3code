@@ -8,10 +8,14 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useLocation: ({ select }: { select: (value: { pathname: string }) => unknown }) => select(route),
   useNavigate: () => route.navigate,
+  useParams: () => ({}),
   createFileRoute: () => (options: unknown) => options,
   Link: ({ to, children }: { to: string; children: ReactNode }) => <a href={to}>{children}</a>,
 }));
 vi.mock("./AgentHandoffDialog", () => ({ AgentHandoffDialog: () => <div>Handoff dialog</div> }));
+vi.mock("./AgentChatRail", () => ({
+  AgentChatRail: () => <nav aria-label="Active and unread agent chats" />,
+}));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => [] }));
 vi.mock("../../state/server", () => ({ primaryServerKeybindingsAtom: {} }));
 vi.mock("../../hooks/useSettings", () => ({
@@ -80,7 +84,9 @@ describe("Agents route shell", () => {
       expect(container.querySelector("[data-sidebar-control]")).toBeNull();
       expect(container.textContent).not.toContain("Thread navigation");
       expect(container.querySelector("textarea")).not.toBeNull();
-      expect(container.querySelector('a[href="/agents"]')?.textContent).toContain("Back to agents");
+      expect(
+        container.querySelector('nav[aria-label="Active and unread agent chats"]'),
+      ).not.toBeNull();
       await act(async () =>
         Array.from(container.querySelectorAll("button"))
           .find((button) => button.textContent === "Toggle context")!

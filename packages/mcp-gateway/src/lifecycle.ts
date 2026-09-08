@@ -21,6 +21,7 @@ export function createGatewayController(input: {
   let current: GatewayStatus = { state: "disabled" };
   const handles = new Set<GatewayRuntimeHandle>();
   let generation = 0;
+  const hasActiveRuntime = () => current.state === "running" || current.state === "starting";
 
   const cleanupFailure = (error: unknown): GatewayStatus => ({
     state: "degraded",
@@ -30,7 +31,7 @@ export function createGatewayController(input: {
   return {
     status: () => current,
     enable: async (): Promise<GatewayStatus> => {
-      if (current.state === "running" || current.state === "starting") return current;
+      if (hasActiveRuntime()) return current;
       if (handles.size > 0) return current;
       const enableGeneration = ++generation;
       current = { state: "starting" };
@@ -44,7 +45,7 @@ export function createGatewayController(input: {
             await started.stop();
             handles.delete(started);
           } catch (error) {
-            if (current.state !== "running" && current.state !== "starting") {
+            if (!hasActiveRuntime()) {
               current = cleanupFailure(error);
             }
           }
