@@ -1377,6 +1377,23 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "orchestration" },
           ),
+        [ORCHESTRATION_WS_METHODS.getCommandReceipts]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.getCommandReceipts,
+            Effect.gen(function* () {
+              const receipts = yield* orchestrationEngine.getCommandReceipts(input.commandIds);
+              return { receipts };
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationGetSnapshotError({
+                    message: "Failed to read orchestration command receipts.",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
         [ORCHESTRATION_WS_METHODS.getWorkflowScript]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.getWorkflowScript,
@@ -1423,6 +1440,37 @@ const makeWsRpcLayer = (
                   }),
               ),
             ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.subscribeEvents]: (input) =>
+          observeRpcStreamEffect(
+            ORCHESTRATION_WS_METHODS.subscribeEvents,
+            Effect.gen(function* () {
+              // Attach the live queue before reading the durable head so no event
+              // can fall into a replay/live handoff gap.
+              const liveBuffer = yield* Queue.unbounded<OrchestrationEvent>();
+              yield* Effect.forkScoped(
+                orchestrationEngine.streamDomainEvents.pipe(
+                  Stream.runForEach((event) => Queue.offer(liveBuffer, event)),
+                ),
+                { startImmediately: true },
+              );
+              const headSequence = yield* orchestrationEngine.latestSequence;
+              const replayGap = Math.max(0, headSequence - input.afterSequence);
+              const replay = orchestrationEngine.readEvents(input.afterSequence, replayGap).pipe(
+                Stream.mapError(
+                  (cause) =>
+                    new OrchestrationGetSnapshotError({
+                      message: "Failed to replay orchestration events",
+                      cause,
+                    }),
+                ),
+              );
+              const live = Stream.fromQueue(liveBuffer).pipe(
+                Stream.filter((event) => event.sequence > headSequence),
+              );
+              return Stream.concat(replay, live);
+            }),
             { "rpc.aggregate": "orchestration" },
           ),
         [ORCHESTRATION_WS_METHODS.subscribeShell]: (input) =>
@@ -1990,11 +2038,11 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "server",
             },
           ),
-        [WS_METHODS.serverUpdateSettings]: ({ patch }) =>
+        [WS_METHODS.serverUpdateSettings]: ({ patch, replicateProfiles }) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateSettings,
             serverSettings
-              .updateSettings(patch)
+              .updateSettings(patch, replicateProfiles)
               .pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
             {
               "rpc.aggregate": "server",
@@ -2542,6 +2590,12 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.vcsRemoveWorktree,
             gitWorkflow.removeWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            { "rpc.aggregate": "vcs" },
+          ),
+        [WS_METHODS.vcsApplyPatch]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.vcsApplyPatch,
+            gitWorkflow.applyPatch(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
             { "rpc.aggregate": "vcs" },
           ),
         [WS_METHODS.vcsCreateRef]: (input) =>

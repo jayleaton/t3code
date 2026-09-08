@@ -111,6 +111,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     focusedMainOrFirst: Effect.succeed(Option.none()),
     setMain: () => Effect.void,
     clearMain: () => Effect.void,
+    fromWebContents: () => Effect.die("unexpected window lookup"),
     reveal: () => Effect.void,
     sendAll: (_channel, state) =>
       Effect.sync(() => {
