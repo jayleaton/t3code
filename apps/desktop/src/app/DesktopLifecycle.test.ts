@@ -70,6 +70,7 @@ function makeElectronWindowLayer(destroyAll: Effect.Effect<void> = Effect.void) 
     setMain: () => Effect.void,
     clearMain: () => Effect.void,
     fromWebContents: () => Effect.die("unexpected window lookup"),
+    prepareReveal: () => Effect.succeed(false),
     reveal: () => Effect.void,
     sendAll: () => Effect.void,
     destroyAll,
@@ -93,7 +94,9 @@ function makeDesktopWindowLayer(
     handleBackendReady: () => Effect.void,
     handleBackendNotReady: Effect.void,
     flushMainWindowBounds: input.flushMainWindowBounds ?? Effect.void,
+    prepareCaptureReveal: Effect.void,
     dispatchMenuAction: () => Effect.void,
+    dispatchSnapShotEvent: () => Effect.void,
     zoomMain: () => Effect.void,
     syncAppearance: Effect.void,
   });
