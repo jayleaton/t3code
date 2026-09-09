@@ -1,21 +1,25 @@
-import { ArrowUpIcon } from "lucide-react";
-import { ComposerSurface } from "../chat/ComposerSurface";
-import { Button } from "../ui/button";
 import { useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import {
   createGatewayRuntimePortFromContext,
   resolveGatewayProfileModelSelection,
 } from "@t3tools/client-runtime/gateway";
-import { type McpGatewayProfile } from "@t3tools/contracts";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import {
+  ProviderInstanceId,
+  type McpGatewayProfile,
+  type ThreadProfileSelection,
+} from "@t3tools/contracts";
 import { connectionAtomRuntime } from "../../connection/runtime";
 import { useEnvironments } from "../../state/environments";
 import { useProjects } from "../../state/entities";
-import { toastManager } from "../ui/toast";
-import { randomUUID } from "../../lib/utils";
+import { releaseComposerDraftUploads } from "../../lib/composerDraftUploads";
+import { newDraftId, newThreadId, randomUUID } from "../../lib/utils";
+import { useComposerDraftStore } from "../../composerDraftStore";
+import ChatView from "../ChatView";
+import { Button } from "../ui/button";
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialog";
+import { resolveAgentTaskProject } from "./agents.logic";
 
 export function AgentTaskDialog({
   profile,
@@ -24,28 +28,101 @@ export function AgentTaskDialog({
   profile: McpGatewayProfile;
   onClose: () => void;
 }) {
-  const navigate = useNavigate();
   const runtime = useAtomValue(connectionAtomRuntime);
   const { environments } = useEnvironments();
   const projects = useProjects();
-  const [machine, setMachine] = useState("");
-  const [projectId, setProjectId] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [initialDraft] = useState(() =>
+    useComposerDraftStore
+      .getState()
+      .getDraftSessionByLogicalProjectKey(`agent-task:${profile.profileId}`),
+  );
+  const [machine, setMachine] = useState<string>(initialDraft?.environmentId ?? "");
+  const [projectId, setProjectId] = useState<string>(initialDraft?.projectId ?? "");
+  const [draftId] = useState(() => initialDraft?.draftId ?? newDraftId());
+  const [threadId] = useState(() => initialDraft?.threadId ?? newThreadId());
+  const draftSession = useComposerDraftStore((store) => store.getDraftSession(draftId));
+  const draft = useComposerDraftStore((store) => store.draftsByThreadKey[draftId]);
+  const [creating, setCreating] = useState(false);
+  const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+  const busy = creating || sending;
   const eligible = environments.filter(
     (env) =>
       env.connection.phase === "connected" &&
       (!profile.environmentIds?.length || profile.environmentIds.includes(env.environmentId)) &&
       resolveGatewayProfileModelSelection(profile, env.serverConfig?.providers ?? []) !== undefined,
   );
-  const target =
-    eligible.find((env) => env.environmentId === machine) ??
-    (machine === "" ? eligible[0] : undefined);
+  const target = eligible.find((env) => env.environmentId === machine);
+  const supportsAgentDrafts =
+    target?.serverConfig?.environment.capabilities.agentThreadBootstrap === true;
   const targetProjects = projects
-    .filter((project) => project.environmentId === target?.environmentId)
-    .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  const project = targetProjects.find((item) => item.id === projectId) ?? targetProjects[0];
+    .filter((project) => project.environmentId === machine)
+    .toSorted((a, b) => a.title.localeCompare(b.title));
+  const project = resolveAgentTaskProject(projects, machine, projectId);
+  const modelSelection = target
+    ? resolveGatewayProfileModelSelection(profile, target.serverConfig?.providers ?? [])
+    : undefined;
+  const hasContent = Boolean(
+    draft &&
+    (draft.prompt.trim() ||
+      draft.images.length ||
+      draft.files.length ||
+      draft.persistedAttachments.length ||
+      draft.nonPersistedImageIds.length ||
+      draft.terminalContexts.length ||
+      draft.elementContexts.length ||
+      draft.previewAnnotations.length ||
+      draft.reviewComments.length),
+  );
+  const profileSelection: ThreadProfileSelection = {
+    profileId: profile.profileId,
+    revision: profile.revision,
+    // The normal composer starts with the agent's defaults and allows explicit changes.
+    overrideFields: ["modelSelection", "runtimeMode", "interactionMode", "reasoningEffort"],
+  };
+
+  const selectProject = (nextProjectId: string) => {
+    setProjectId(nextProjectId);
+    setError("");
+    const selected = resolveAgentTaskProject(projects, machine, nextProjectId);
+    if (!selected || !modelSelection || profile.runtimeMode === "read-only") return;
+    const store = useComposerDraftStore.getState();
+    store.setLogicalProjectDraftThreadId(
+      `agent-task:${profile.profileId}`,
+      scopeProjectRef(selected.environmentId, selected.id),
+      draftId,
+      {
+        threadId,
+        envMode: "local",
+        environmentSelection: "manual",
+        runtimeMode: profile.runtimeMode,
+        interactionMode: profile.interactionMode,
+      },
+    );
+    store.setModelSelection(
+      draftId,
+      {
+        instanceId: ProviderInstanceId.make(modelSelection.instanceId),
+        model: modelSelection.model,
+        ...(modelSelection.options ? { options: modelSelection.options } : {}),
+        ...(profile.reasoningEffort
+          ? {
+              options: [
+                ...(modelSelection.options ?? []).filter(
+                  (option) => option.id !== "reasoningEffort",
+                ),
+                { id: "reasoningEffort", value: profile.reasoningEffort },
+              ],
+            }
+          : {}),
+      },
+      { replaceOptions: true },
+    );
+  };
+  const finish = () => {
+    useComposerDraftStore.getState().clearDraftThread(draftId);
+    onClose();
+  };
   return (
     <Dialog
       open
@@ -53,86 +130,25 @@ export function AgentTaskDialog({
         if (!open && !busy) onClose();
       }}
     >
-      <DialogPopup className="agent-dialog p-6">
+      <DialogPopup className="agent-dialog agent-task-dialog p-6">
         <DialogTitle>New chat · {profile.name}</DialogTitle>
         <DialogDescription className="mt-2 text-sm text-muted-foreground">
-          Give {profile.name} a task, or create an empty chat.
+          Choose where this chat runs, then give {profile.name} a task.
         </DialogDescription>
-        <form
-          className="agent-form"
-          onSubmit={async (event) => {
-            event.preventDefault();
-            if (
-              busy ||
-              !target ||
-              !project ||
-              runtime._tag !== "Success" ||
-              profile.runtimeMode === "read-only"
-            )
-              return;
-            setBusy(true);
-            setError("");
-            let createdThreadId: string | undefined;
-            try {
-              const port = createGatewayRuntimePortFromContext(runtime.value);
-              // Read the target's saved revision; never override its catalog resolution.
-              const saved = (await port.listProfiles!(target.environmentId)).find(
-                (item) => item.profileId === profile.profileId,
-              );
-              if (!saved || saved.revision !== profile.revision)
-                throw new Error(
-                  "This machine has a different agent revision. Sync settings and try again.",
-                );
-              const threadId = randomUUID();
-              await port.createThread({
-                environmentId: target.environmentId,
-                projectId: project.id,
-                threadId,
-                title: "New thread",
-                requestId: randomUUID(),
-                profileSelection: {
-                  profileId: profile.profileId,
-                  revision: profile.revision,
-                  overrideFields: [],
-                },
-              });
-              createdThreadId = threadId;
-              if (prompt.trim())
-                await port.sendMessage({
-                  environmentId: target.environmentId,
-                  threadId,
-                  text: prompt.trim(),
-                  messageId: randomUUID(),
-                  requestId: randomUUID(),
-                });
-              await navigate({ to: "/agents" });
-              onClose();
-            } catch (cause) {
-              if (createdThreadId) {
-                toastManager.add({
-                  type: "warning",
-                  title: "Thread created, message not sent",
-                  description: "Open the thread and send your prompt again.",
-                });
-                await navigate({ to: "/agents" });
-                onClose();
-              }
-              setError(cause instanceof Error ? cause.message : "Could not create thread.");
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
+        <div className="agent-form">
           <label>
             Machine
             <select
               value={machine}
-              onChange={(e) => {
-                setMachine(e.target.value);
+              disabled={busy || hasContent}
+              onChange={(event) => {
+                setMachine(event.target.value);
                 setProjectId("");
               }}
             >
-              <option value="">Any available machine{target ? ` · ${target.label}` : ""}</option>
+              <option value="" disabled>
+                Select machine
+              </option>
               {eligible.map((env) => (
                 <option key={env.environmentId} value={env.environmentId}>
                   {env.label}
@@ -142,8 +158,7 @@ export function AgentTaskDialog({
           </label>
           {!target && (
             <p role="alert">
-              No connected machine can uniquely resolve this provider and model. Re-select on this
-              machine.
+              Select a connected machine that supports this agent's provider and model.
             </p>
           )}
           <label>
@@ -151,7 +166,8 @@ export function AgentTaskDialog({
             <select
               required
               value={project?.id ?? ""}
-              onChange={(e) => setProjectId(e.target.value)}
+              disabled={busy || hasContent || !target}
+              onChange={(event) => selectProject(event.target.value)}
             >
               <option value="" disabled>
                 Select project
@@ -163,58 +179,99 @@ export function AgentTaskDialog({
               ))}
             </select>
           </label>
-          {target && !project && (
-            <p>Add a project on {target.label} from the Threads view first.</p>
-          )}
-          <ComposerSurface.Shell className="agent-task-composer">
-            <ComposerSurface.Host>
-              <ComposerSurface.Main>
-                <textarea
-                  aria-label="Message"
-                  rows={4}
-                  autoFocus
-                  value={prompt}
-                  disabled={busy}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  onKeyDown={(event) => {
-                    if (
-                      event.key === "Enter" &&
-                      !event.shiftKey &&
-                      !event.nativeEvent.isComposing
-                    ) {
-                      event.preventDefault();
-                      event.currentTarget.form?.requestSubmit();
-                    }
-                  }}
-                  placeholder={`Message ${profile.name}…`}
-                />
-                <footer>
-                  <Button variant="ghost" type="button" disabled={busy} onClick={onClose}>
-                    Cancel
-                  </Button>
-                  <Button
-                    type="submit"
-                    disabled={
-                      busy ||
-                      !target ||
-                      !project ||
-                      !AsyncResult.isSuccess(runtime) ||
-                      profile.runtimeMode === "read-only"
-                    }
-                  >
-                    {busy ? "Creating…" : prompt.trim() ? "Send" : "Create chat"}
-                    <ArrowUpIcon />
-                  </Button>
-                </footer>
-              </ComposerSurface.Main>
-            </ComposerSurface.Host>
-          </ComposerSurface.Shell>
-          {error && (
-            <p role="alert" className="text-destructive">
-              {error}
+          {project && <p className="text-xs text-muted-foreground">{project.workspaceRoot}</p>}
+          {hasContent && (
+            <p className="text-xs text-muted-foreground">
+              Clear the draft to change its machine or project.
             </p>
           )}
-        </form>
+          {target && targetProjects.length === 0 && (
+            <p>Add a project on {target.label} from the Threads view first.</p>
+          )}
+        </div>
+        {target && !supportsAgentDrafts && (
+          <p role="status">
+            Update this machine’s T3 Code server to send from this dialog. You can still create an
+            empty chat.
+          </p>
+        )}
+        {target &&
+          supportsAgentDrafts &&
+          project &&
+          draftSession?.environmentId === target.environmentId &&
+          draftSession.projectId === project.id &&
+          profile.runtimeMode !== "read-only" && (
+            <ChatView
+              composerOnly
+              routeKind="draft"
+              draftId={draftId}
+              environmentId={target.environmentId}
+              threadId={draftSession.threadId}
+              profileSelection={profileSelection}
+              onSendBusyChange={setSending}
+              onTurnStarted={finish}
+            />
+          )}
+        {error && (
+          <p role="alert" className="text-destructive">
+            {error}
+          </p>
+        )}
+        <div className="mt-4 flex justify-end gap-2">
+          {hasContent && (
+            <Button
+              variant="ghost"
+              disabled={busy}
+              onClick={() => {
+                releaseComposerDraftUploads(draftId);
+                useComposerDraftStore.getState().clearComposerContent(draftId);
+              }}
+            >
+              Clear draft
+            </Button>
+          )}
+          <Button variant="ghost" disabled={busy} onClick={onClose}>
+            Cancel
+          </Button>
+          {!hasContent && (
+            <Button
+              disabled={
+                busy ||
+                !target ||
+                !project ||
+                runtime._tag !== "Success" ||
+                profile.runtimeMode === "read-only"
+              }
+              onClick={async () => {
+                if (busy || !target || !project || runtime._tag !== "Success") return;
+                setCreating(true);
+                setError("");
+                try {
+                  const port = createGatewayRuntimePortFromContext(runtime.value);
+                  await port.createThread({
+                    environmentId: target.environmentId,
+                    projectId: project.id,
+                    threadId,
+                    title: "New thread",
+                    requestId: randomUUID(),
+                    profileSelection: {
+                      profileId: profile.profileId,
+                      revision: profile.revision,
+                      overrideFields: [],
+                    },
+                  });
+                  finish();
+                } catch (cause) {
+                  setError(cause instanceof Error ? cause.message : "Could not create thread.");
+                } finally {
+                  setCreating(false);
+                }
+              }}
+            >
+              {creating ? "Creating…" : "Create empty chat"}
+            </Button>
+          )}
+        </div>
       </DialogPopup>
     </Dialog>
   );

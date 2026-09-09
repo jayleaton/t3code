@@ -220,6 +220,17 @@ describe("environment entity projections", () => {
       ...THREAD_SHELL,
       environmentId: ENVIRONMENT_ID,
       title: "Current thread",
+      profileSnapshot: {
+        profileId: "agent",
+        profileName: "Agent",
+        revision: 2,
+        effectiveSource: {
+          modelSelection: "profile" as const,
+          runtimeMode: "profile" as const,
+          interactionMode: "profile" as const,
+          reasoningEffort: "profile" as const,
+        },
+      },
       branch: "current-branch",
       worktreePath: "/repo/current-worktree",
       activeOrderKey: "f",
@@ -236,6 +247,7 @@ describe("environment entity projections", () => {
       unsettledAt: "2026-03-09T12:00:00.000Z",
     });
     expect(merged?.messages).toBe(messages);
+    expect(merged?.profileSnapshot).toBe(shell.profileSnapshot);
   });
 
   it("preserves untouched project and thread identities across unrelated shell updates", () => {

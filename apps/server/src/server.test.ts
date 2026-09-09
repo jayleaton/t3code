@@ -10600,6 +10600,23 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
         yield* buildAppUnderTest({
           layers: {
+            serverSettings: {
+              getSettings: Effect.succeed({
+                ...DEFAULT_SERVER_SETTINGS,
+                mcpGatewayProfiles: [
+                  {
+                    profileId: "test-agent",
+                    name: "Test agent",
+                    revision: 2,
+                    modelSelection: defaultModelSelection,
+                    runtimeMode: "full-access",
+                    interactionMode: "default",
+                    createdAt: "2026-01-01T00:00:00.000Z",
+                    updatedAt: "2026-01-01T00:00:00.000Z",
+                  },
+                ],
+              }),
+            },
             gitVcsDriver: {
               remoteExists,
               fetchRemote,
@@ -10645,6 +10662,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 createThread: {
                   projectId: defaultProjectId,
                   title: "Bootstrap Thread",
+                  profileSelection: { profileId: "test-agent", revision: 2, overrideFields: [] },
                   modelSelection: defaultModelSelection,
                   runtimeMode: "full-access",
                   interactionMode: "default",
@@ -10666,6 +10684,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         );
 
         assert.equal(response.sequence, 5);
+        assertTrue(dispatchedCommands[0]?.type === "thread.create");
+        if (dispatchedCommands[0]?.type === "thread.create") {
+          assert.deepEqual(dispatchedCommands[0].profileSelection, {
+            profileId: "test-agent",
+            revision: 2,
+            overrideFields: [],
+          });
+          assert.equal(dispatchedCommands[0].projectId, defaultProjectId);
+          assert.equal(dispatchedCommands[0].profileSnapshot?.profileId, "test-agent");
+          assert.equal(dispatchedCommands[0].profileSnapshot?.profileName, "Test agent");
+        }
         assert.deepEqual(
           dispatchedCommands.map((command) => command.type),
           [

@@ -91,6 +91,7 @@ import { makeLiveStreamBudget, type RetainedLiveItem } from "./orchestration/Liv
 import {
   cleanupFailedUploadedAttachments,
   normalizeDispatchCommand,
+  resolveThreadCreateProfile,
 } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -1095,11 +1096,14 @@ const makeWsRpcLayer = (
 
           const bootstrapProgram = Effect.gen(function* () {
             if (bootstrap?.createThread) {
-              const created = yield* dispatchFromClient({
+              const createCommand: Extract<OrchestrationCommand, { type: "thread.create" }> = {
                 type: "thread.create",
                 commandId: yield* serverCommandId("bootstrap-thread-create"),
                 threadId: command.threadId,
                 projectId: bootstrap.createThread.projectId,
+                ...(bootstrap.createThread.profileSelection === undefined
+                  ? {}
+                  : { profileSelection: bootstrap.createThread.profileSelection }),
                 title: bootstrap.createThread.title,
                 modelSelection: bootstrap.createThread.modelSelection,
                 runtimeMode: bootstrap.createThread.runtimeMode,
@@ -1107,7 +1111,32 @@ const makeWsRpcLayer = (
                 branch: bootstrap.createThread.branch,
                 worktreePath: bootstrap.createThread.worktreePath,
                 createdAt: bootstrap.createThread.createdAt,
-              });
+              };
+              // Bootstrap sub-commands go straight to the engine, so resolve the
+              // agent here just as the standalone thread.create RPC does.
+              const resolvedCreateCommand = createCommand.profileSelection
+                ? yield* Effect.all([
+                    serverSettings.getSettings,
+                    providerRegistry.getProviders,
+                  ]).pipe(
+                    Effect.flatMap(([settings, providers]) =>
+                      Effect.try({
+                        try: () =>
+                          resolveThreadCreateProfile(
+                            createCommand,
+                            settings.mcpGatewayProfiles,
+                            providers,
+                          ) as OrchestrationCommand,
+                        catch: (cause) =>
+                          toDispatchCommandError(
+                            cause,
+                            "Could not resolve the agent for this chat",
+                          ),
+                      }),
+                    ),
+                  )
+                : createCommand;
+              const created = yield* dispatchFromClient(resolvedCreateCommand);
               // The successful create is a fence in the engine command queue:
               // every delete for the prior incarnation committed before it.
               // Drain through that event before setup or turn start can own

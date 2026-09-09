@@ -222,6 +222,7 @@ export const make = Effect.gen(function* () {
       threadSettlement: true,
       threadAutoSettlement: true,
       agentLibrarySync: true,
+      agentThreadBootstrap: true,
       threadRestartContinuation: true,
       threadSnooze: true,
       environmentThemes: true,
