@@ -19,6 +19,7 @@ export function createGatewayController(input: {
   readonly load: () => Promise<GatewayRuntimeModule>;
 }) {
   let current: GatewayStatus = { state: "disabled" };
+  const getStatus = (): GatewayStatus => current;
   const handles = new Set<GatewayRuntimeHandle>();
   let generation = 0;
 
@@ -44,7 +45,7 @@ export function createGatewayController(input: {
             await started.stop();
             handles.delete(started);
           } catch (error) {
-            if (current.state !== "running" && current.state !== "starting") {
+            if (getStatus().state !== "running" && getStatus().state !== "starting") {
               current = cleanupFailure(error);
             }
           }
