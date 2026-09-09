@@ -6,7 +6,7 @@ import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
-class AgentInstructionFileError extends Schema.TaggedErrorClass<AgentInstructionFileError>()(
+class AgentInstructionFileError extends Schema.TaggedError<AgentInstructionFileError>()(
   "AgentInstructionFileError",
   { message: Schema.String },
 ) {}
