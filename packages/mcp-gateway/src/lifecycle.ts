@@ -27,8 +27,10 @@ export function createGatewayController(input: {
     message: `Failed to stop MCP gateway: ${error instanceof Error ? error.message : String(error)}`,
   });
 
+  const status = (): GatewayStatus => current;
+
   return {
-    status: () => current,
+    status,
     enable: async (): Promise<GatewayStatus> => {
       if (current.state === "running" || current.state === "starting") return current;
       if (handles.size > 0) return current;
@@ -44,7 +46,8 @@ export function createGatewayController(input: {
             await started.stop();
             handles.delete(started);
           } catch (error) {
-            if (current.state !== "running" && current.state !== "starting") {
+            const latest = status();
+            if (latest.state !== "running" && latest.state !== "starting") {
               current = cleanupFailure(error);
             }
           }
