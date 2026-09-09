@@ -636,6 +636,10 @@
   display: block;
   padding: 12px;
 }
+.agent-thread-pr {
+  display: inline-block;
+  margin: 0 42px 10px 12px;
+}
 .agent-thread-speed {
   position: absolute;
   bottom: 6px;

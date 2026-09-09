@@ -8,6 +8,8 @@ import { AgentChatPreview } from "./AgentChatPreview";
 import { ThreadSpeedControl } from "./ThreadSpeedControl";
 import { isInsideComposerFloatingLayer } from "../chat/composerEventScope";
 import { agentThreadStatus, agentThreadStatusLabel } from "./agents.logic";
+import { useLinkedThreadPullRequest, prStatusIndicator } from "../ThreadStatusIndicators";
+import { useOpenPrLink } from "../../lib/openPullRequestLink";
 
 export function ThreadCard({
   thread,
@@ -20,6 +22,12 @@ export function ThreadCard({
   ) => Promise<void>;
 }) {
   const project = useProject(scopeProjectRef(thread.environmentId, thread.projectId));
+  const linkedPr = useLinkedThreadPullRequest(
+    thread.environmentId,
+    thread.linkedPullRequest ?? thread.branchPullRequest,
+  );
+  const prStatus = prStatusIndicator(linkedPr?.pr ?? null, linkedPr?.sourceControlProvider);
+  const openPrLink = useOpenPrLink();
   const [previewOpen, setPreviewOpen] = useState(false);
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
   const status = agentThreadStatus(thread);
@@ -125,6 +133,19 @@ export function ThreadCard({
           )}
         </PreviewCardPopup>
       </PreviewCard>
+      {prStatus && linkedPr && (
+        <a
+          href={prStatus.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`agent-thread-pr text-xs tabular-nums hover:underline ${prStatus.colorClass}`}
+          aria-label={prStatus.tooltip}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => openPrLink(event, prStatus.url, undefined, thread.environmentId)}
+        >
+          #{linkedPr.pr.number}
+        </a>
+      )}
       <ThreadSpeedControl thread={thread} />
     </div>
   );
