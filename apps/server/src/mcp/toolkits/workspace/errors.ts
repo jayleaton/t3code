@@ -9,7 +9,7 @@ export const WorkspaceMcpErrorCode = Schema.Literals([
 ]);
 export type WorkspaceMcpErrorCode = typeof WorkspaceMcpErrorCode.Type;
 
-export class WorkspaceMcpError extends Schema.TaggedErrorClass<WorkspaceMcpError>()(
+export class WorkspaceMcpError extends Schema.TaggedError<WorkspaceMcpError>()(
   "WorkspaceMcpError",
   {
     code: WorkspaceMcpErrorCode,

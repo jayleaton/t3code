@@ -19,6 +19,7 @@ export function createGatewayController(input: {
   readonly load: () => Promise<GatewayRuntimeModule>;
 }) {
   let current: GatewayStatus = { state: "disabled" };
+  const getStatus = (): GatewayStatus => current;
   const handles = new Set<GatewayRuntimeHandle>();
   let generation = 0;
 
