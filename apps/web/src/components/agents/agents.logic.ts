@@ -63,3 +63,14 @@ export function isAgentChatInFocus(
     Date.parse(completedAt) > Date.parse(lastVisitedAt)
   );
 }
+
+/** Explicit project selections must never fall back to a different workspace. */
+export function resolveAgentTaskProject<T extends { environmentId: string; id: string }>(
+  projects: ReadonlyArray<T>,
+  environmentId: string,
+  projectId: string,
+): T | undefined {
+  return projects.find(
+    (project) => project.environmentId === environmentId && project.id === projectId,
+  );
+}
