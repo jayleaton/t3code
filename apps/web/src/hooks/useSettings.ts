@@ -598,7 +598,9 @@ export function useSharedSettingsSync() {
             target?.serverConfig?.settings,
             primarySettings,
           ),
-          replicateProfiles: true,
+          ...(target?.serverConfig?.environment.capabilities.agentLibrarySync === true
+            ? { replicateProfiles: true }
+            : {}),
         },
       });
     }
