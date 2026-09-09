@@ -111,7 +111,7 @@ export const getMcpGatewayBridgeToken = DesktopIpc.makeSyncIpcMethod({
   }),
 });
 
-class DesktopWindowUnavailable extends Schema.TaggedErrorClass<DesktopWindowUnavailable>()(
+class DesktopWindowUnavailable extends Schema.TaggedError<DesktopWindowUnavailable>()(
   "DesktopWindowUnavailable",
   { message: Schema.String },
 ) {}
