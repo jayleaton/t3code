@@ -28,7 +28,7 @@ import { AgentTaskDialog } from "./AgentTaskDialog";
 import { groupAgentThreads } from "./agents.logic";
 import { SidebarMenuButton } from "../ui/sidebar";
 import { openCommandPalette } from "../../commandPaletteBus";
-import { searchSidebarThreadsByTitle } from "../Sidebar.logic";
+import { searchSidebarThreads } from "../Sidebar.logic";
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialog";
 
 const agentOrderSchema = Schema.Array(Schema.String);
@@ -106,7 +106,7 @@ export function AgentsBoard() {
   const [task, setTask] = useState<McpGatewayProfile | null>(null);
   const [query, setQuery] = useState("");
   const searching = query.trim().length > 0;
-  const results = useMemo(() => searchSidebarThreadsByTitle(threads, query), [threads, query]);
+  const results = useMemo(() => searchSidebarThreads(threads, query), [threads, query]);
   const [deleting, setDeleting] = useState<McpGatewayProfile | null>(null);
   const [busy, setBusy] = useState(false);
   const [deleteError, setDeleteError] = useState("");

@@ -14,7 +14,7 @@ layer("050_ProjectionThreadProfileSnapshot", (it) => {
       const sql = yield* SqlClient.SqlClient;
 
       yield* runMigrations({ toMigrationInclusive: 47 });
-      yield* runMigrations({ toMigrationInclusive: 50 });
+      yield* runMigrations({ toMigrationInclusive: 51 });
 
       const columns = yield* sql<{ readonly name: string; readonly notnull: number }>`
         PRAGMA table_info(projection_threads)
@@ -34,7 +34,7 @@ layer("gateway migration upgrade", (it) => {
       yield* runMigrations({ toMigrationInclusive: 47 });
       yield* sql`ALTER TABLE projection_threads ADD COLUMN profile_snapshot_json TEXT`;
       yield* sql`INSERT INTO effect_sql_migrations (migration_id, name, created_at) VALUES (48, 'ProjectionThreadProfileSnapshot', CURRENT_TIMESTAMP)`;
-      yield* runMigrations({ toMigrationInclusive: 50 });
+      yield* runMigrations({ toMigrationInclusive: 51 });
       const columns = yield* sql<{ readonly name: string }>`PRAGMA table_info(projection_threads)`;
       assert.isTrue(columns.some((column) => column.name === "profile_snapshot_json"));
       assert.isTrue(columns.some((column) => column.name === "branch_pull_request_json"));
@@ -62,5 +62,21 @@ layer("agents migration 49 upgrade", (it) => {
           { snapshot: '{"systemPrompt":"Keep these instructions"}', activeOrder: null },
         ]);
       }),
+  );
+});
+
+layer("agents migration 50 upgrade", (it) => {
+  it.effect("repairs PR storage when migration 50 was already used for agent profiles", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 49 });
+      yield* sql`ALTER TABLE projection_threads ADD COLUMN profile_snapshot_json TEXT`;
+      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name, created_at) VALUES (50, 'ProjectionThreadProfileSnapshot', CURRENT_TIMESTAMP)`;
+      yield* runMigrations();
+      const tables = yield* sql<{
+        name: string;
+      }>`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'projection_thread_pull_requests'`;
+      assert.equal(tables.length, 1);
+    }),
   );
 });

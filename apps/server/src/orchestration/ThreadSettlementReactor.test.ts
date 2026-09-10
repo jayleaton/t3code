@@ -80,6 +80,7 @@ function makeThread(
     },
     runtimeMode: "full-access",
     interactionMode: "default",
+    pullRequests: [],
     branch: null,
     worktreePath: null,
     latestTurn: null,
@@ -301,6 +302,57 @@ const startHarness = Effect.fn("startThreadSettlementHarness")(function* (
 });
 
 describe("ThreadSettlementReactor", () => {
+  it.effect(
+    "settles all-terminal links from snapshots and keeps open or unsynced links active",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(Date.parse(NOW));
+          const link = (number: number, state: "open" | "merged" | null) => ({
+            host: "example.test",
+            repository: "owner/repository",
+            number,
+            url: `https://example.test/owner/repository/pull/${number}`,
+            source: "manual" as const,
+            linkedAt: NOW,
+            stack: null,
+            snapshot:
+              state === null
+                ? null
+                : {
+                    state,
+                    title: "Review",
+                    headBranch: "feature",
+                    baseBranch: "main",
+                    isDraft: false,
+                    updatedAt: NOW,
+                    syncedAt: NOW,
+                    mergedAt: state === "merged" ? NOW : null,
+                  },
+          });
+          const fixture = yield* makeHarness({
+            snapshot: makeSnapshot([
+              makeThread("merged", { pullRequests: [link(1, "merged"), link(2, "merged")] }),
+              makeThread("open", { pullRequests: [link(1, "merged"), link(2, "open")] }),
+              makeThread("unsynced", { pullRequests: [link(1, "merged"), link(2, null)] }),
+            ]),
+            settings: { ...DEFAULT_SERVER_SETTINGS, sidebarAutoSettleOnMerge: true },
+            branchPullRequest: () => Effect.die("linked threads must not query the branch"),
+            pullRequestSummary: () => Effect.die("linked threads must use their snapshots"),
+          });
+          yield* Effect.gen(function* () {
+            const reactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+            yield* startHarness(reactor, fixture.activation, fixture.snapshotReads);
+            assert.deepStrictEqual(
+              (yield* Ref.get(fixture.commands)).map(({ threadId }) => threadId),
+              [ThreadId.make("merged")],
+            );
+            assert.deepStrictEqual(yield* Ref.get(fixture.branchCalls), []);
+            assert.deepStrictEqual(yield* Ref.get(fixture.summaryCalls), []);
+          }).pipe(Effect.provide(fixture.layer));
+        }),
+      ),
+  );
   it.effect("uses saved PRs without settling resumed threads or branches with newer PRs", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -629,6 +681,22 @@ describe("ThreadSettlementReactor", () => {
                   reasoningEffort: "profile",
                 },
               },
+              ...(index === 0
+                ? {
+                    pullRequests: [
+                      {
+                        host: "example.test",
+                        repository: reference.repository,
+                        number: 42,
+                        url: reference.url,
+                        source: "agent" as const,
+                        linkedAt: "2026-08-27T00:00:00.000Z",
+                        snapshot: null,
+                        stack: null,
+                      },
+                    ],
+                  }
+                : {}),
               ...(index === 2
                 ? { branchPullRequest: reference }
                 : { linkedPullRequest: reference }),
@@ -657,6 +725,25 @@ describe("ThreadSettlementReactor", () => {
             yield* startHarness(reactor, fixture.activation, fixture.snapshotReads);
             assert.deepStrictEqual(yield* Ref.get(fixture.commands), []);
             yield* Ref.set(merged, true);
+            yield* Ref.update(fixture.snapshots, (snapshot) => ({
+              ...snapshot,
+              threads: snapshot.threads.map((thread) => ({
+                ...thread,
+                pullRequests: thread.pullRequests.map((link) => ({
+                  ...link,
+                  snapshot: {
+                    state: "merged" as const,
+                    title: "Agent work",
+                    headBranch: "feature",
+                    baseBranch: "main",
+                    isDraft: false,
+                    updatedAt: NOW,
+                    mergedAt: NOW,
+                    syncedAt: NOW,
+                  },
+                })),
+              })),
+            }));
             yield* TestClock.adjust("1 minute");
             yield* Queue.take(fixture.snapshotReads);
             yield* reactor.drain;

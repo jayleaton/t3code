@@ -8,7 +8,12 @@ import { AgentChatPreview } from "./AgentChatPreview";
 import { ThreadSpeedControl } from "./ThreadSpeedControl";
 import { isInsideComposerFloatingLayer } from "../chat/composerEventScope";
 import { agentThreadStatus, agentThreadStatusLabel } from "./agents.logic";
-import { useLinkedThreadPullRequest, prStatusIndicator } from "../ThreadStatusIndicators";
+import {
+  useLinkedThreadPullRequest,
+  prStatusIndicator,
+  linkedPullRequestSnapshotStatus,
+} from "../ThreadStatusIndicators";
+import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import { useOpenPrLink } from "../../lib/openPullRequestLink";
 
 export function ThreadCard({
@@ -25,6 +30,19 @@ export function ThreadCard({
   const prReference = thread.linkedPullRequest ?? thread.branchPullRequest;
   const linkedPr = useLinkedThreadPullRequest(thread.environmentId, prReference);
   const prStatus = prStatusIndicator(linkedPr?.pr ?? null, linkedPr?.sourceControlProvider);
+  const links = visibleThreadPullRequests(thread.pullRequests ?? []);
+  const badges =
+    links.length > 0
+      ? links.map((link) => {
+          const detail = linkedPullRequestSnapshotStatus(link);
+          return {
+            reference: link,
+            status: prStatusIndicator(detail?.pr ?? null, detail?.sourceControlProvider),
+          };
+        })
+      : prReference
+        ? [{ reference: prReference, status: prStatus }]
+        : [];
   const openPrLink = useOpenPrLink();
   const [previewOpen, setPreviewOpen] = useState(false);
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
@@ -131,19 +149,20 @@ export function ThreadCard({
           )}
         </PreviewCardPopup>
       </PreviewCard>
-      {prReference && (
+      {badges.map(({ reference, status }) => (
         <a
-          href={prReference.url}
+          key={reference.url}
+          href={reference.url}
           target="_blank"
           rel="noopener noreferrer"
-          className={`agent-thread-pr text-xs tabular-nums hover:underline ${prStatus?.colorClass ?? "text-muted-foreground"}`}
-          aria-label={prStatus?.tooltip ?? `Open PR #${prReference.number}`}
+          className={`agent-thread-pr text-xs tabular-nums hover:underline ${status?.colorClass ?? "text-muted-foreground"}`}
+          aria-label={status?.tooltip ?? `Open PR #${reference.number}`}
           onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => openPrLink(event, prReference.url, undefined, thread.environmentId)}
+          onClick={(event) => openPrLink(event, reference.url, undefined, thread.environmentId)}
         >
-          #{prReference.number}
+          #{reference.number}
         </a>
-      )}
+      ))}
       <ThreadSpeedControl thread={thread} />
     </div>
   );
