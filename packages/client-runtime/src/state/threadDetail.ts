@@ -51,6 +51,8 @@ export function mergeEnvironmentThread(
     modelSelection: shell.modelSelection,
     runtimeMode: shell.runtimeMode,
     interactionMode: shell.interactionMode,
+    linkedPullRequest: shell.linkedPullRequest ?? null,
+    branchPullRequest: shell.branchPullRequest ?? null,
     branch: shell.branch,
     worktreePath: shell.worktreePath,
     latestTurn: shell.latestTurn,

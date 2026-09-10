@@ -22,10 +22,8 @@ export function ThreadCard({
   ) => Promise<void>;
 }) {
   const project = useProject(scopeProjectRef(thread.environmentId, thread.projectId));
-  const linkedPr = useLinkedThreadPullRequest(
-    thread.environmentId,
-    thread.linkedPullRequest ?? thread.branchPullRequest,
-  );
+  const prReference = thread.linkedPullRequest ?? thread.branchPullRequest;
+  const linkedPr = useLinkedThreadPullRequest(thread.environmentId, prReference);
   const prStatus = prStatusIndicator(linkedPr?.pr ?? null, linkedPr?.sourceControlProvider);
   const openPrLink = useOpenPrLink();
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -133,17 +131,17 @@ export function ThreadCard({
           )}
         </PreviewCardPopup>
       </PreviewCard>
-      {prStatus && linkedPr && (
+      {prReference && (
         <a
-          href={prStatus.url}
+          href={prReference.url}
           target="_blank"
           rel="noopener noreferrer"
-          className={`agent-thread-pr text-xs tabular-nums hover:underline ${prStatus.colorClass}`}
-          aria-label={prStatus.tooltip}
+          className={`agent-thread-pr text-xs tabular-nums hover:underline ${prStatus?.colorClass ?? "text-muted-foreground"}`}
+          aria-label={prStatus?.tooltip ?? `Open PR #${prReference.number}`}
           onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => openPrLink(event, prStatus.url, undefined, thread.environmentId)}
+          onClick={(event) => openPrLink(event, prReference.url, undefined, thread.environmentId)}
         >
-          #{linkedPr.pr.number}
+          #{prReference.number}
         </a>
       )}
       <ThreadSpeedControl thread={thread} />
