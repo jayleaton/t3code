@@ -336,6 +336,7 @@ import {
   type EnvironmentOption,
   resolveEffectiveEnvMode,
   resolveLocalCheckoutBranchMismatch,
+  resolveThreadBranchForSend,
   shouldShowComposerContextStrip,
   shouldShowEnvironmentIndicator,
 } from "./BranchToolbar.logic";
@@ -5276,6 +5277,12 @@ export default function ChatView(props: ChatViewProps) {
     requestedEnvMode: envMode,
     isGitRepo,
   });
+  const branchForNextTurn = resolveThreadBranchForSend({
+    effectiveEnvMode: envMode,
+    activeWorktreePath,
+    activeThreadBranch,
+    currentGitBranch: gitStatusQuery.data?.refName ?? null,
+  });
   const localCheckoutBranchMismatch = useMemo(
     () =>
       isServerThread
@@ -6977,8 +6984,8 @@ export default function ChatView(props: ChatViewProps) {
         threadId: threadIdForSend,
         createdAt: messageCreatedAt,
         ...(ctxSelectedModel ? { modelSelection: ctxSelectedModelSelection } : {}),
-        ...(localCheckoutBranchMismatch
-          ? { branch: localCheckoutBranchMismatch.currentBranch }
+        ...(branchForNextTurn !== null && branchForNextTurn !== activeThread.branch
+          ? { branch: branchForNextTurn }
           : {}),
         runtimeMode,
         interactionMode: sendInteractionMode,
@@ -7016,7 +7023,7 @@ export default function ChatView(props: ChatViewProps) {
                       modelSelection: threadCreateModelSelection,
                       runtimeMode,
                       interactionMode: sendInteractionMode,
-                      branch: activeThreadBranch,
+                      branch: branchForNextTurn,
                       worktreePath: activeThread.worktreePath,
                       createdAt: activeThread.createdAt,
                     },
@@ -7509,8 +7516,8 @@ export default function ChatView(props: ChatViewProps) {
         threadId: threadIdForSend,
         createdAt: messageCreatedAt,
         modelSelection: ctxSelectedModelSelection,
-        ...(localCheckoutBranchMismatch
-          ? { branch: localCheckoutBranchMismatch.currentBranch }
+        ...(branchForNextTurn !== null && branchForNextTurn !== activeThread.branch
+          ? { branch: branchForNextTurn }
           : {}),
         runtimeMode,
         interactionMode: nextInteractionMode,
@@ -7582,7 +7589,7 @@ export default function ChatView(props: ChatViewProps) {
       isConnecting,
       isSendBusy,
       isServerThread,
-      localCheckoutBranchMismatch,
+      branchForNextTurn,
       persistThreadSettingsForNextTurn,
       resetLocalDispatch,
       runtimeMode,
@@ -8163,7 +8170,7 @@ export default function ChatView(props: ChatViewProps) {
   });
 
   const composerSurface = (
-    <ComposerSurface.Shell contextStrip={!composerOnly && showComposerContextStrip}>
+    <ComposerSurface.Shell contextStrip={composerOnly || showComposerContextStrip}>
       <ComposerSurface.Host>
         <div ref={attachDraftHeroComposerAnchorRef} className="relative z-10">
           <ChatComposer
@@ -8282,7 +8289,7 @@ export default function ChatView(props: ChatViewProps) {
           data-terminal-open={terminalUiState.terminalOpen ? "true" : undefined}
           className="relative z-0"
         >
-          {!composerOnly && mountComposerContextStrip && (
+          {(composerOnly || mountComposerContextStrip) && (
             <div className="pointer-events-auto">
               <BranchToolbar
                 environmentId={activeThread.environmentId}
@@ -8316,7 +8323,7 @@ export default function ChatView(props: ChatViewProps) {
                 }
                 availableEnvironments={logicalProjectEnvironments}
                 composerControlsHostRef={setRestingComposerControlsHost}
-                contextStripVisible={showComposerContextStrip}
+                contextStripVisible={composerOnly || showComposerContextStrip}
               />
             </div>
           )}
