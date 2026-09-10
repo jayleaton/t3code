@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { GitPullRequestIcon } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { PreviewCard, PreviewCardTrigger, PreviewCardPopup } from "../ui/preview-card";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
@@ -116,14 +117,6 @@ export function ThreadCard({
               </span>
             </div>
           </div>
-          <time className="agent-thread-time" dateTime={thread.updatedAt}>
-            {new Date(thread.updatedAt).toLocaleString(undefined, {
-              month: "short",
-              day: "numeric",
-              hour: "numeric",
-              minute: "2-digit",
-            })}
-          </time>
         </PreviewCardTrigger>
         <PreviewCardPopup
           ref={popupRef}
@@ -149,21 +142,38 @@ export function ThreadCard({
           )}
         </PreviewCardPopup>
       </PreviewCard>
-      {badges.map(({ reference, status }) => (
-        <a
-          key={reference.url}
-          href={reference.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={`agent-thread-pr text-xs tabular-nums hover:underline ${status?.colorClass ?? "text-muted-foreground"}`}
-          aria-label={status?.tooltip ?? `Open PR #${reference.number}`}
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => openPrLink(event, reference.url, undefined, thread.environmentId)}
-        >
-          #{reference.number}
-        </a>
-      ))}
-      <ThreadSpeedControl thread={thread} />
+      <div className="agent-thread-footer">
+        <time className="agent-thread-time" dateTime={thread.updatedAt}>
+          {new Date(thread.updatedAt).toLocaleString(undefined, {
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+          })}
+        </time>
+        <ThreadSpeedControl thread={thread} />
+      </div>
+      {badges.length > 0 && (
+        <div className="agent-thread-prs" aria-label="Pull requests">
+          {badges.map(({ reference, status }) => (
+            <a
+              key={reference.url}
+              href={reference.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`agent-thread-pr ${status?.colorClass ?? "text-muted-foreground"}`}
+              title={`${reference.repository} #${reference.number}`}
+              aria-label={status?.tooltip ?? `Open PR #${reference.number}`}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => openPrLink(event, reference.url, undefined, thread.environmentId)}
+            >
+              <GitPullRequestIcon size={12} aria-hidden="true" />
+              <span className="agent-thread-pr-repository">{reference.repository}</span>
+              <span>#{reference.number}</span>
+            </a>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
