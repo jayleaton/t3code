@@ -636,14 +636,52 @@
   display: block;
   padding: 12px;
 }
+.agent-thread-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 26px;
+  padding: 0 12px 8px;
+}
+.agent-thread-prs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}
 .agent-thread-pr {
-  display: inline-block;
-  margin: 0 42px 10px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+.agent-thread-pr:hover {
+  background: var(--accent);
+}
+.agent-thread-pr:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.agent-thread-pr svg,
+.agent-thread-pr > span:last-child {
+  flex-shrink: 0;
+}
+.agent-thread-pr-repository {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .agent-thread-speed {
-  position: absolute;
-  bottom: 6px;
-  right: 8px;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 .agent-thread-speed button {
   width: 26px;
@@ -657,8 +695,6 @@
   display: block;
   color: var(--muted-foreground);
   font-size: 10px;
-  margin-top: 8px;
-  padding-right: 26px;
 }
 .agent-status-error,
 .agent-status-attention {
