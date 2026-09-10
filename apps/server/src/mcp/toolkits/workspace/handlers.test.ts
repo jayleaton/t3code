@@ -73,6 +73,7 @@ function shell(overrides: Partial<OrchestrationThreadShell> = {}): Orchestration
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" },
     runtimeMode: "approval-required",
     interactionMode: "default",
+    pullRequests: [],
     branch: null,
     worktreePath: null,
     latestTurn: {

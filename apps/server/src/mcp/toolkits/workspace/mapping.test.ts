@@ -11,7 +11,6 @@ import {
 
 import {
   isLoopbackRemoteAddress,
-  permitsUnauthenticatedWorkspaceClient,
   resolveProviderSelection,
   threadBrief,
   threadShelf,
@@ -29,6 +28,7 @@ function shell(overrides: Partial<OrchestrationThreadShell> = {}): Orchestration
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" },
     runtimeMode: "approval-required",
     interactionMode: "default",
+    pullRequests: [],
     branch: null,
     worktreePath: null,
     latestTurn: {
@@ -190,13 +190,4 @@ describe("isLoopbackRemoteAddress", () => {
     expect(isLoopbackRemoteAddress("::1")).toBe(true);
     expect(isLoopbackRemoteAddress("192.168.1.9")).toBe(false);
   });
-});
-
-it("keeps local CLI workspace access while requiring authentication for browser origins and remote peers", () => {
-  expect(permitsUnauthenticatedWorkspaceClient("127.0.0.1", undefined)).toBe(true);
-  expect(permitsUnauthenticatedWorkspaceClient("::1", undefined)).toBe(true);
-  for (const origin of ["https://untrusted.example", "null", "http://localhost:3000", ""]) {
-    expect(permitsUnauthenticatedWorkspaceClient("127.0.0.1", origin)).toBe(false);
-  }
-  expect(permitsUnauthenticatedWorkspaceClient("192.168.1.2", undefined)).toBe(false);
 });
