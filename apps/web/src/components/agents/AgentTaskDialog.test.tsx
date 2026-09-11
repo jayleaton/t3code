@@ -99,6 +99,21 @@ afterEach(async () => {
   await act(async () => root.render(null));
 });
 describe("Agents new chat workspace", () => {
+  it("keeps disconnected machines visible and prevents submission if the selected machine disconnects", async () => {
+    await render();
+    await select(0, mac);
+    await select(1, t3code);
+    state.environments = [
+      { environmentId: mac, label: "MacBook", connection: { phase: "offline" } },
+    ];
+    await render();
+    const option = container.querySelectorAll("select")[0]!.options[1]!;
+    expect(option.text).toContain("MacBook — Not connected");
+    expect(option.disabled).toBe(true);
+    expect(container.textContent).toContain("Settings → Connections");
+    await submit();
+    expect(state.createThread).not.toHaveBeenCalled();
+  });
   it("only lists the chosen machine's projects and sends the explicit project despite updates", async () => {
     await render();
     await select(0, mac);

@@ -19,6 +19,7 @@ import { useComposerDraftStore } from "../../composerDraftStore";
 import ChatView from "../ChatView";
 import { Button } from "../ui/button";
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialog";
+import { agentMachineUnavailableReason } from "./agentMachineAvailability";
 import { resolveAgentTaskProject } from "./agents.logic";
 
 export function AgentTaskDialog({
@@ -46,12 +47,11 @@ export function AgentTaskDialog({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const busy = creating || sending;
-  const eligible = environments.filter(
-    (env) =>
-      env.connection.phase === "connected" &&
-      (!profile.environmentIds?.length || profile.environmentIds.includes(env.environmentId)) &&
-      resolveGatewayProfileModelSelection(profile, env.serverConfig?.providers ?? []) !== undefined,
-  );
+  const machines = environments.map((env) => ({
+    env,
+    reason: agentMachineUnavailableReason(profile, env),
+  }));
+  const eligible = machines.filter(({ reason }) => reason === undefined).map(({ env }) => env);
   const target = eligible.find((env) => env.environmentId === machine);
   const supportsAgentDrafts =
     target?.serverConfig?.environment.capabilities.agentThreadBootstrap === true;
@@ -149,9 +149,14 @@ export function AgentTaskDialog({
               <option value="" disabled>
                 Select machine
               </option>
-              {eligible.map((env) => (
-                <option key={env.environmentId} value={env.environmentId}>
+              {machines.map(({ env, reason }) => (
+                <option
+                  key={env.environmentId}
+                  value={env.environmentId}
+                  disabled={reason !== undefined}
+                >
                   {env.label}
+                  {reason ? ` — ${reason}` : ""}
                 </option>
               ))}
             </select>
@@ -160,6 +165,19 @@ export function AgentTaskDialog({
             <p role="alert">
               Select a connected machine that supports this agent's provider and model.
             </p>
+          )}
+          {eligible.length === 0 && (
+            <div role="status" className="text-sm text-muted-foreground">
+              {machines.length === 0 ? (
+                <p>No machines configured. Add one in Settings → Connections.</p>
+              ) : (
+                machines.map(({ env, reason }) => (
+                  <p key={env.environmentId}>
+                    {env.label}: {reason}
+                  </p>
+                ))
+              )}
+            </div>
           )}
           <label>
             Project
