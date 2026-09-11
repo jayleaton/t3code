@@ -140,7 +140,7 @@ export function resolveGatewayProfileModelSelection(
       return [];
     }
     return provider.models
-      .filter((model) => model.name === profile.modelLabel)
+      .filter((model) => model.slug === profile.modelLabel || model.name === profile.modelLabel)
       .map((model) => ({ instanceId: provider.instanceId, model: model.slug }));
   });
   return matches.length === 1 ? matches[0] : undefined;

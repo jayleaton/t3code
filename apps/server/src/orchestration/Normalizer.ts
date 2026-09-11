@@ -84,7 +84,9 @@ export function resolveThreadCreateProfile<
             return [];
           }
           return provider.models
-            .filter((model) => model.name === profile.modelLabel)
+            .filter(
+              (model) => model.slug === profile.modelLabel || model.name === profile.modelLabel,
+            )
             .map((model) => ({ instanceId: provider.instanceId, model: model.slug }));
         });
   if (readableMatches.length > 1) {
