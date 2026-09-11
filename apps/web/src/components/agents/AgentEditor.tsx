@@ -1,3 +1,4 @@
+import { agentModelOptions } from "./agentModelCatalog";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import type { McpGatewayProfile, ServerProvider } from "@t3tools/contracts";
 import { MCP_GATEWAY_RUNTIME_MODE_LABELS } from "@t3tools/contracts";
@@ -16,7 +17,7 @@ export function AgentEditor({
 }: {
   profile: McpGatewayProfile | null;
   profiles: ReadonlyArray<McpGatewayProfile>;
-  providers: ReadonlyArray<ServerProvider>;
+  providers: ReadonlyArray<ServerProvider & { readonly environmentId: string }>;
   machines: ReadonlyArray<{ environmentId: string; label: string }>;
   onSave: (profile: McpGatewayProfile) => Promise<boolean | undefined>;
   onClose: () => void;
@@ -49,18 +50,20 @@ export function AgentEditor({
   );
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
-  const providerLabels = [
-    ...new Set(providers.filter((p) => p.enabled).map((p) => p.displayName?.trim() || p.driver)),
-  ];
-  const models = [
-    ...new Map(
-      providers
-        .filter((p) => p.enabled && (p.displayName?.trim() || p.driver) === providerLabel)
-        .flatMap((p) => p.models.map((m) => [m.slug, m] as const)),
-    ).values(),
-  ].sort(
-    (left, right) => left.name.localeCompare(right.name) || left.slug.localeCompare(right.slug),
+  const availableProviders = providers.filter(
+    (provider) => environmentIds.length === 0 || environmentIds.includes(provider.environmentId),
   );
+  const providerLabels = [
+    ...new Set(
+      availableProviders.filter((p) => p.enabled).map((p) => p.displayName?.trim() || p.driver),
+    ),
+  ];
+  const models = agentModelOptions(providers, environmentIds, providerLabel);
+  const selectedModel =
+    models.find((model) => model.slug === modelLabel) ??
+    (models.filter((model) => model.name === modelLabel).length === 1
+      ? models.find((model) => model.name === modelLabel)
+      : undefined);
   return (
     <Dialog
       open
@@ -96,7 +99,7 @@ export function AgentEditor({
                 icon,
                 revision: profile?.revision ?? 1,
                 providerLabel,
-                modelLabel,
+                modelLabel: selectedModel?.slug ?? modelLabel,
                 ...(thinking.trim() ? { reasoningEffort: thinking.trim() } : {}),
                 runtimeMode,
                 interactionMode,
@@ -203,10 +206,16 @@ export function AgentEditor({
             </label>
             <label>
               Model
-              <select required value={modelLabel} onChange={(e) => setModelLabel(e.target.value)}>
+              <select
+                required
+                value={selectedModel?.slug ?? modelLabel}
+                onChange={(e) => setModelLabel(e.target.value)}
+              >
                 <option value="">Select model</option>
-                {modelLabel && !models.some((model) => model.slug === modelLabel) && (
-                  <option value={modelLabel}>{modelLabel}</option>
+                {modelLabel && !selectedModel && (
+                  <option value={modelLabel} disabled>
+                    {modelLabel} — unavailable; select a model
+                  </option>
                 )}
                 {models.map((model) => (
                   <option key={model.slug} value={model.slug}>
@@ -295,7 +304,7 @@ export function AgentEditor({
             </button>
             <button
               className="agent-primary"
-              disabled={saving || !name.trim() || !providerLabel || !modelLabel}
+              disabled={saving || !name.trim() || !providerLabel || !selectedModel}
             >
               {saving ? "Saving…" : profile ? "Save agent" : "Create agent"}
             </button>

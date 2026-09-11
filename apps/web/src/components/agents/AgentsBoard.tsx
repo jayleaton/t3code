@@ -1,3 +1,5 @@
+import { useClientSettings } from "../../hooks/useSettings";
+import { visibleAgentProviders } from "./agentModelCatalog";
 import { ThreadCard } from "./ThreadCard";
 import { useAgentThreadContextMenu } from "./useAgentThreadContextMenu";
 import * as Schema from "effect/Schema";
@@ -100,6 +102,7 @@ export function AgentsBoard() {
     setOrder(ids);
   };
   const { environments } = useEnvironments();
+  const modelPreferences = useClientSettings((settings) => settings.providerModelPreferences);
   const threads = useThreadShells();
   const ready = useAllEnvironmentShellsBootstrapped();
   const [editor, setEditor] = useState<McpGatewayProfile | "new" | null>(null);
@@ -308,7 +311,13 @@ export function AgentsBoard() {
         <AgentEditor
           profile={editor === "new" ? null : editor}
           profiles={profiles}
-          providers={online.flatMap((env) => env.serverConfig?.providers ?? [])}
+          providers={online.flatMap((env) =>
+            env.serverConfig
+              ? visibleAgentProviders(env.environmentId, env.serverConfig.providers, {
+                  providerModelPreferences: modelPreferences,
+                })
+              : [],
+          )}
           machines={environments}
           onClose={() => setEditor(null)}
           onSave={(profile) =>
