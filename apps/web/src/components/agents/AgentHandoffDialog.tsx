@@ -4,7 +4,6 @@ import { useNavigate } from "@tanstack/react-router";
 import { ThreadId } from "@t3tools/contracts";
 import {
   createGatewayRuntimePortFromContext,
-  resolveGatewayProfileModelSelection,
   type AgentHandoffResult,
 } from "@t3tools/client-runtime/gateway";
 import { connectionAtomRuntime } from "../../connection/runtime";
@@ -13,6 +12,8 @@ import { useEnvironments } from "../../state/environments";
 import { useProjects } from "../../state/entities";
 import { randomUUID } from "../../lib/utils";
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialog";
+
+import { agentMachineUnavailableReason } from "./agentMachineAvailability";
 
 export function AgentHandoffDialog({
   sourceEnvironmentId,
@@ -41,14 +42,14 @@ export function AgentHandoffDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const profile = profiles.find((p) => p.profileId === profileId);
-  const eligible = environments.filter(
-    (env) =>
-      env.connection.phase === "connected" &&
-      profile &&
-      (!profile.environmentIds?.length || profile.environmentIds.includes(env.environmentId)) &&
-      resolveGatewayProfileModelSelection(profile, env.serverConfig?.providers ?? []),
-  );
-  const target = eligible.find((env) => env.environmentId === environmentId) ?? eligible[0];
+  const machines = environments.map((env) => ({
+    env,
+    reason: profile ? agentMachineUnavailableReason(profile, env) : "Select an agent",
+  }));
+  const eligible = machines.filter(({ reason }) => reason === undefined).map(({ env }) => env);
+  const target = environmentId
+    ? eligible.find((env) => env.environmentId === environmentId)
+    : eligible[0];
   const choices = projects
     .filter((p) => p.environmentId === target?.environmentId)
     .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -176,9 +177,17 @@ export function AgentHandoffDialog({
                     setProjectId("");
                   }}
                 >
-                  {eligible.map((env) => (
-                    <option key={env.environmentId} value={env.environmentId}>
+                  <option value="" disabled>
+                    Select machine
+                  </option>
+                  {machines.map(({ env, reason }) => (
+                    <option
+                      key={env.environmentId}
+                      value={env.environmentId}
+                      disabled={reason !== undefined}
+                    >
                       {env.label}
+                      {reason ? ` — ${reason}` : ""}
                     </option>
                   ))}
                 </select>
@@ -196,7 +205,8 @@ export function AgentHandoffDialog({
             </div>
             {!target && (
               <p role="alert">
-                No connected machine can run this agent. Re-select its provider and model.
+                No available machine selected. Check the machine list for connection, provider, or
+                model issues.
               </p>
             )}
             <label>
