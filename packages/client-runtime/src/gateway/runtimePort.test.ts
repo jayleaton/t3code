@@ -67,6 +67,33 @@ describe("Gateway Runtime Port", () => {
     ).toBeUndefined();
   });
 
+  it("routes custom OpenCode models by slug when display names collide", () => {
+    const provider = {
+      instanceId: "opencode",
+      driver: "opencode",
+      displayName: "OpenCode",
+      enabled: true,
+      availability: "available",
+      status: "ready",
+      models: [
+        { slug: "deepseek/deepseek-flash", name: "DeepSeek Flash" },
+        { slug: "deepseek-api/deepseek-flash", name: "DeepSeek Flash" },
+      ],
+    } as unknown as ServerProvider;
+    expect(
+      resolveGatewayProfileModelSelection(
+        { providerLabel: "OpenCode", modelLabel: "deepseek-api/deepseek-flash" },
+        [provider],
+      ),
+    ).toEqual({ instanceId: "opencode", model: "deepseek-api/deepseek-flash" });
+    expect(
+      resolveGatewayProfileModelSelection(
+        { providerLabel: "OpenCode", modelLabel: "DeepSeek Flash" },
+        [provider],
+      ),
+    ).toBeUndefined();
+  });
+
   it("validates legacy routing snapshots against the live catalog and preserves options", () => {
     const selection = {
       instanceId: "codex-main",

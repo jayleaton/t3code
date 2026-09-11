@@ -180,6 +180,62 @@ describe("canonicalizeClientCommandTimestamps", () => {
     });
   });
 
+  it("resolves an exact model slug even when display names collide", () => {
+    const command = {
+      type: "thread.create",
+      commandId: CommandId.make("command-readable-profile"),
+      threadId: ThreadId.make("thread-readable-profile"),
+      projectId: ProjectId.make("project-1"),
+      title: "Readable profile thread",
+      modelSelection: undefined,
+      runtimeMode: undefined,
+      interactionMode: undefined,
+      profileSelection: { profileId: "profile-andy", revision: 2, overrideFields: [] },
+      branch: null,
+      worktreePath: null,
+      createdAt: serverReceivedAt,
+    } as const;
+    const profile = {
+      profileId: "profile-andy",
+      name: "Andy",
+      revision: 2,
+      providerLabel: "Codex",
+      modelLabel: "gpt-5.6-sol",
+      reasoningEffort: "high",
+      runtimeMode: "auto-accept-edits",
+      interactionMode: "plan",
+      createdAt: serverReceivedAt,
+      updatedAt: serverReceivedAt,
+    } as const;
+    const providers = [
+      {
+        instanceId: ProviderInstanceId.make("codex"),
+        driver: "codex",
+        displayName: "Codex",
+        enabled: true,
+        status: "ready",
+        availability: "available",
+        models: [
+          { slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
+          { slug: "other-route", name: "GPT-5.6 Sol" },
+        ],
+      },
+    ] as never;
+
+    expect(resolveThreadCreateProfile(command as never, [profile], providers)).toMatchObject({
+      modelSelection: {
+        instanceId: "codex",
+        model: "gpt-5.6-sol",
+        options: [{ id: "reasoningEffort", value: "high" }],
+      },
+      profileSnapshot: {
+        profileId: "profile-andy",
+        profileName: "Andy",
+        revision: 2,
+      },
+    });
+  });
+
   it("rejects an ambiguous readable profile selection", () => {
     const command = {
       modelSelection: undefined,

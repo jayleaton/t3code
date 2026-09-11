@@ -53,12 +53,14 @@ export function AgentEditor({
     ...new Set(providers.filter((p) => p.enabled).map((p) => p.displayName?.trim() || p.driver)),
   ];
   const models = [
-    ...new Set(
+    ...new Map(
       providers
-        .filter((p) => (p.displayName?.trim() || p.driver) === providerLabel)
-        .flatMap((p) => p.models.map((m) => m.name)),
-    ),
-  ];
+        .filter((p) => p.enabled && (p.displayName?.trim() || p.driver) === providerLabel)
+        .flatMap((p) => p.models.map((m) => [m.slug, m] as const)),
+    ).values(),
+  ].sort(
+    (left, right) => left.name.localeCompare(right.name) || left.slug.localeCompare(right.slug),
+  );
   return (
     <Dialog
       open
@@ -203,8 +205,13 @@ export function AgentEditor({
               Model
               <select required value={modelLabel} onChange={(e) => setModelLabel(e.target.value)}>
                 <option value="">Select model</option>
-                {[...new Set([...models, ...(modelLabel ? [modelLabel] : [])])].map((label) => (
-                  <option key={label}>{label}</option>
+                {modelLabel && !models.some((model) => model.slug === modelLabel) && (
+                  <option value={modelLabel}>{modelLabel}</option>
+                )}
+                {models.map((model) => (
+                  <option key={model.slug} value={model.slug}>
+                    {model.name} ({model.slug})
+                  </option>
                 ))}
               </select>
             </label>
