@@ -4,7 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { useProject, useThreadDetail, useThreadStatus } from "../../state/entities";
-import { deriveDisplayedUserMessageState } from "../../lib/terminalContext";
+import { stripInlineContextReferences } from "../../lib/composerContextReferences";
 import ChatMarkdown from "../ChatMarkdown";
 import { shouldPreserveAssistantLineBreaks } from "../chat/MessagesTimeline.logic";
 import { agentThreadStatus, agentThreadStatusLabel } from "./agents.logic";
@@ -71,16 +71,12 @@ export function AgentChatPreview({
             </p>
           )}
           {detail && messages.length === 0 && <p>No messages yet.</p>}
-          {detail &&
-            detail.messages.filter((message) => message.role !== "system").length >
-              messages.length && (
-              <p className="agent-preview-note">Recent messages · open chat for earlier history</p>
-            )}
+          {detail && detail.messages.length > messages.length && (
+            <p className="agent-preview-note">Recent messages · open chat for earlier history</p>
+          )}
           {messages.map((message) => {
             const user = message.role === "user";
-            const text = user
-              ? deriveDisplayedUserMessageState(message.text).visibleText
-              : message.text;
+            const text = user ? stripInlineContextReferences(message.text) : message.text;
             return (
               <article
                 key={message.id}

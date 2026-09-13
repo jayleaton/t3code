@@ -3,7 +3,6 @@ import { ArchiveIcon, ArchiveX, ChevronRightIcon, SettingsIcon } from "lucide-re
 import { Link, useNavigate } from "@tanstack/react-router";
 import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAtomValue } from "@effect/atom-react";
 import {
   type BackgroundActivityProfile,
   type DesktopUpdateChannel,
@@ -70,13 +69,19 @@ import {
   useTheme,
 } from "../../hooks/useTheme";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
-import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
+import {
+  useScopedSettings,
+  useScopedSettingsMixed,
+  useUpdateScopedSettings,
+} from "./useScopedSettings";
+import { useScopedModelDisabledReason } from "./useScopedModelAvailability";
+import { useSettingsScope } from "./SettingsScopeContext";
+import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import {
   getCustomModelOptionsByInstance,
   resolveAppModelSelectionState,
-  withoutPlanAgentSelection,
 } from "../../modelSelection";
 import {
   applyProviderInstanceSettings,
@@ -85,13 +90,7 @@ import {
 } from "../../providerInstances";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { isMacPlatform } from "../../lib/utils";
-import {
-  primaryServerConfigAtom,
-  primaryServerObservabilityAtom,
-  primaryServerProvidersAtom,
-} from "../../state/server";
-import { useProjects } from "../../state/entities";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import { EMPTY_SERVER_PROVIDERS } from "../../state/server";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { Button } from "../ui/button";
@@ -118,7 +117,6 @@ import {
   TYPOGRAPHY_ADVANCED_STORAGE_KEY,
 } from "../../appearanceFonts";
 import { CodeFontPreview, PromptFontPreview, TerminalFontPreview } from "./SettingsFontPreviews";
-import { SharedSettingsMismatchAlert } from "./SharedSettingsMismatchAlert";
 import { discoverInstalledFonts, FontFamilyPicker, useFontEnumeration } from "./FontFamilyPicker";
 import {
   NumberField,
@@ -129,6 +127,7 @@ import {
 } from "../ui/number-field";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
+import { ScopedSwitch } from "./ScopedSwitch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ThemeLibrary } from "./ThemeSettings";
@@ -136,7 +135,6 @@ import {
   backgroundActivityOverrideSettings,
   backgroundActivitySharedPolicySettings,
   durationToSeconds,
-  formatDiagnosticsDescription,
   getChangedBrowserSettingLabels,
   getChangedTypographySettingLabels,
   normalizeIntervalSeconds,
@@ -488,8 +486,8 @@ export function useSettingsRestore(onRestored?: () => void) {
     clearThemeHalves,
     themeHalves,
   } = useTheme();
-  const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
 
   const isTextGenerationModelDirty = !Equal.equals(
     settings.textGenerationModelSelection ?? null,
@@ -535,6 +533,9 @@ export function useSettingsRestore(onRestored?: () => void) {
         : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
       ...getChangedTypographySettingLabels(settings),
+      ...(settings.diffFilesCollapsed !== DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed
+        ? ["Default diff file state"]
+        : []),
       ...(settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
         ? ["Diff whitespace changes"]
         : []),
@@ -610,6 +611,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.addProjectBaseDirectory,
       settings.defaultThreadEnvMode,
       settings.newWorktreesStartFromOrigin,
+      settings.diffFilesCollapsed,
       settings.diffIgnoreWhitespace,
       settings.diffLayout,
       settings.proactivePanelsEnabled,
@@ -708,6 +710,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       diffColorScheme: DEFAULT_UNIFIED_SETTINGS.diffColorScheme,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
+      diffFilesCollapsed: DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout,
       proactivePanelsEnabled: DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled,
@@ -781,8 +784,8 @@ function BackgroundActivityAdvancedDialog({
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }) {
-  const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
   const resolvedBackgroundActivity = resolveServerBackgroundActivitySettings(settings);
   const activeProfile = resolvedBackgroundActivity.profile;
   const automaticGitFetchIntervalSeconds = durationToSeconds(
@@ -1059,8 +1062,8 @@ export function AppearanceSettingsPanel() {
   } = useTheme();
   const customThemes = useCustomThemes();
   const [isImportThemeOpen, setIsImportThemeOpen] = useState(false);
-  const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
   const environmentStageLabel = useEnvironmentStageLabel();
   const showEnvironmentIdentification =
     resolveEnvironmentIdentificationPillLabel(environmentStageLabel) !== null;
@@ -1353,7 +1356,7 @@ export function AppearanceSettingsPanel() {
 }
 
 function useFontDefaultFamilies() {
-  const settings = usePrimarySettings();
+  const settings = useScopedSettings();
   // An unset preference shows the font it resolves to on this machine; the
   // default stacks are the platform's own faces, so the name is probed, not
   // hardcoded.
@@ -1373,8 +1376,8 @@ function useFontDefaultFamilies() {
 }
 
 function InterfaceFontRow({ preview }: { preview?: ReactNode }) {
-  const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
   const defaults = useFontDefaultFamilies();
   return (
     <FontFamilySettingsRow
@@ -1404,8 +1407,8 @@ function InterfaceFontRow({ preview }: { preview?: ReactNode }) {
 }
 
 function PromptFontRow() {
-  const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
   const defaults = useFontDefaultFamilies();
   return (
     <FontFamilySettingsRow
@@ -1443,8 +1446,8 @@ function CodeFontRow({
   description?: string;
   preview?: ReactNode;
 }) {
-  const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
   const defaults = useFontDefaultFamilies();
   return (
     <FontFamilySettingsRow
@@ -1476,8 +1479,8 @@ function CodeFontRow({
 }
 
 function TerminalFontRow() {
-  const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
   const defaults = useFontDefaultFamilies();
   return (
     <FontFamilySettingsRow
@@ -1517,8 +1520,8 @@ function TerminalFontRow() {
 }
 
 function FontSmoothingRow() {
-  const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
   if (!isMacPlatform(navigator.platform)) return null;
   return (
     <SettingsRow
@@ -1546,8 +1549,8 @@ function FontSmoothingRow() {
 }
 
 function WordWrapRow() {
-  const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
   return (
     <SettingsRow
       {...searchableSetting("word-wrap")}
@@ -1589,7 +1592,7 @@ function FontSettingsGroup() {
  * under each row show every surface the choice reaches.
  */
 function SimpleFontRows() {
-  const settings = usePrimarySettings();
+  const settings = useScopedSettings();
   return (
     <>
       <InterfaceFontRow preview={<PromptFontPreview />} />
@@ -1930,8 +1933,8 @@ const LEGACY_FEATURE_TARGET_IDS: ReadonlySet<string> = new Set([
  * jump to one of the rows unfolds the section.
  */
 function LegacyFeaturesSection() {
-  const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
   const [open, setOpen] = useState(false);
   const searchTargetId = useSettingsSearchTargetId();
   const targetRef = useSettingsSearchTarget<HTMLElement>("legacy-features");
@@ -1969,29 +1972,7 @@ function LegacyFeaturesSection() {
                 <Switch
                   checked={settings.planModeEnabled}
                   onCheckedChange={(checked) => {
-                    const planModeEnabled = Boolean(checked);
-                    const textGenerationModelSelection = withoutPlanAgentSelection(
-                      settings.textGenerationModelSelection,
-                    );
-                    const sourceControlWriterModelSelection = withoutPlanAgentSelection(
-                      settings.sourceControlWriterModelSelection,
-                    );
-                    updateSettings({
-                      planModeEnabled,
-                      ...(planModeEnabled
-                        ? {}
-                        : {
-                            ...(textGenerationModelSelection &&
-                            textGenerationModelSelection !== settings.textGenerationModelSelection
-                              ? { textGenerationModelSelection }
-                              : {}),
-                            ...(sourceControlWriterModelSelection &&
-                            sourceControlWriterModelSelection !==
-                              settings.sourceControlWriterModelSelection
-                              ? { sourceControlWriterModelSelection }
-                              : {}),
-                          }),
-                    });
+                    updateSettings({ planModeEnabled: Boolean(checked) });
                   }}
                   aria-label="Plan mode (legacy)"
                 />
@@ -2012,10 +1993,12 @@ function LegacyFeaturesSection() {
             />
             <SettingsRow
               serverScoped
+              settingKeys={["enableLegacyTokenStreaming"]}
               {...searchableSetting("legacy-token-streaming")}
               description="Stream output token by token. This legacy mode is slower and harder to follow."
               control={
-                <Switch
+                <ScopedSwitch
+                  settingKeys={["enableLegacyTokenStreaming"]}
                   checked={settings.enableLegacyTokenStreaming}
                   onCheckedChange={(checked) => {
                     if (!checked) {
@@ -2058,25 +2041,32 @@ function LegacyFeaturesSection() {
 }
 
 export function GeneralSettingsPanel() {
-  const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
   const navigate = useNavigate();
-  const environmentId = usePrimaryEnvironmentId();
+  const { scope, environment, connectedEnvironments } = useSettingsScope();
+  // The representative environment supplies the provider list for pickers;
+  // a fanned-out model choice is validated against every target before it
+  // is written. Per-machine tuning (background activity overrides) still
+  // needs exactly one environment.
+  const environmentId = environment?.environmentId ?? null;
+  const isEnvironmentScope = scope.environmentIds.length === 1 && environmentId !== null;
+  const hasServerTargets = connectedEnvironments.length > 0;
   const [backgroundActivityDialogOpen, setBackgroundActivityDialogOpen] = useState(false);
   const lastEnabledProjectGroupingMode = useRef<SidebarProjectGroupingMode>(
     readLastEnabledProjectGroupingMode(),
   );
-  const observability = useAtomValue(primaryServerObservabilityAtom);
-  const serverProviders = useAtomValue(primaryServerProvidersAtom);
+  const serverProviders = environment?.serverConfig?.providers ?? EMPTY_SERVER_PROVIDERS;
   const supportsAutoSettlement =
-    useAtomValue(primaryServerConfigAtom)?.environment.capabilities.threadAutoSettlement === true;
-  const diagnosticsDescription = formatDiagnosticsDescription({
-    localTracingEnabled: observability?.localTracingEnabled ?? false,
-    otlpTracesEnabled: observability?.otlpTracesEnabled ?? false,
-    otlpTracesUrl: observability?.otlpTracesUrl,
-    otlpMetricsEnabled: observability?.otlpMetricsEnabled ?? false,
-    otlpMetricsUrl: observability?.otlpMetricsUrl,
-  });
+    connectedEnvironments.length > 0 &&
+    connectedEnvironments.every(
+      (target) => target.serverConfig?.environment.capabilities.threadAutoSettlement === true,
+    );
+  const supportsRestartContinuation =
+    connectedEnvironments.length > 0 &&
+    connectedEnvironments.every(
+      (target) => target.serverConfig?.environment.capabilities.threadRestartContinuation === true,
+    );
 
   const textGenerationProviders = serverProviders.filter(
     (provider) => provider.supportsTextGeneration !== false,
@@ -2109,9 +2099,16 @@ export function GeneralSettingsPanel() {
     settings.textGenerationModelSelection ?? null,
     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
   );
+  const textGenerationModelDisabledReason = useScopedModelDisabledReason(
+    settings,
+    textGenerationModelInstanceEntries,
+  );
   const resolvedBackgroundActivity = resolveServerBackgroundActivitySettings(settings);
   const activeBackgroundActivityProfile = resolvedBackgroundActivity.profile;
   const backgroundActivityProfileOption = resolveBackgroundActivityProfileOption(settings);
+  const mixedBackgroundActivity = useScopedSettingsMixed(["backgroundActivity"]);
+  const mixedAddProjectBaseDirectory = useScopedSettingsMixed(["addProjectBaseDirectory"]);
+  const mixedTextGenerationModel = useScopedSettingsMixed(["textGenerationModelSelection"]);
   const backgroundActivityDescription =
     backgroundActivityProfileOption === "advanced"
       ? `${ADVANCED_BACKGROUND_ACTIVITY_DESCRIPTION} Shared policy: ${
@@ -2125,7 +2122,7 @@ export function GeneralSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SharedSettingsMismatchAlert />
+      <ProjectDefaultsSettings category="general" />
       <SettingsSection id="organization" title="Organization">
         <SettingsRow
           {...searchableSetting("project-grouping")}
@@ -2167,6 +2164,7 @@ export function GeneralSettingsPanel() {
           <>
             <SettingsRow
               serverScoped
+              settingKeys={["sidebarAutoSettleOnMerge"]}
               {...searchableSetting("auto-settle-merged-threads")}
               description="Settle a thread when its pull request merges. Closed pull requests still settle automatically."
               resetAction={
@@ -2183,7 +2181,8 @@ export function GeneralSettingsPanel() {
                 ) : null
               }
               control={
-                <Switch
+                <ScopedSwitch
+                  settingKeys={["sidebarAutoSettleOnMerge"]}
                   checked={settings.sidebarAutoSettleOnMerge}
                   onCheckedChange={(checked) =>
                     updateSettings({ sidebarAutoSettleOnMerge: Boolean(checked) })
@@ -2195,6 +2194,7 @@ export function GeneralSettingsPanel() {
 
             <SettingsRow
               serverScoped
+              settingKeys={["sidebarAutoSettleAfterDays"]}
               {...searchableSetting("auto-settle-inactive-threads")}
               description="Sidebar threads with no activity for this long settle automatically."
               resetAction={
@@ -2212,7 +2212,8 @@ export function GeneralSettingsPanel() {
                 ) : null
               }
               control={
-                <Switch
+                <ScopedSwitch
+                  settingKeys={["sidebarAutoSettleAfterDays"]}
                   checked={settings.sidebarAutoSettleAfterDays !== null}
                   onCheckedChange={(checked) =>
                     updateSettings({
@@ -2226,6 +2227,7 @@ export function GeneralSettingsPanel() {
             {settings.sidebarAutoSettleAfterDays !== null ? (
               <SettingsRow
                 serverScoped
+                settingKeys={["sidebarAutoSettleAfterDays"]}
                 title={searchableSetting("days-before-auto-settle").title}
                 description="Any new activity un-settles a thread automatically."
                 control={
@@ -2305,6 +2307,48 @@ export function GeneralSettingsPanel() {
               }
               aria-label="Hide whitespace changes by default"
             />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("default-diff-file-state")}
+          description="Start with files expanded or collapsed when opening diffs or a pull request's Code tab."
+          resetAction={
+            settings.diffFilesCollapsed !== DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed ? (
+              <SettingResetButton
+                label="default diff file state"
+                onClick={() =>
+                  updateSettings({
+                    diffFilesCollapsed: DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.diffFilesCollapsed ? "collapsed" : "expanded"}
+              onValueChange={(value) => {
+                if (value === "expanded" || value === "collapsed") {
+                  updateSettings({ diffFilesCollapsed: value === "collapsed" });
+                }
+              }}
+            >
+              <SelectTrigger
+                size="sm"
+                className="w-full sm:w-40"
+                aria-label="Default diff file state"
+              >
+                <SelectValue>{settings.diffFilesCollapsed ? "Collapsed" : "Expanded"}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="expanded">
+                  Expanded
+                </SelectItem>
+                <SelectItem hideIndicator value="collapsed">
+                  Collapsed
+                </SelectItem>
+              </SelectPopup>
+            </Select>
           }
         />
         <SettingsRow
@@ -2423,6 +2467,7 @@ export function GeneralSettingsPanel() {
 
         <SettingsRow
           serverScoped
+          settingKeys={["enableProviderUpdateChecks"]}
           {...searchableSetting("provider-update-checks")}
           description="Check installed provider CLIs for newer available versions."
           resetAction={
@@ -2439,7 +2484,8 @@ export function GeneralSettingsPanel() {
             ) : null
           }
           control={
-            <Switch
+            <ScopedSwitch
+              settingKeys={["enableProviderUpdateChecks"]}
               checked={settings.enableProviderUpdateChecks}
               onCheckedChange={(checked) =>
                 updateSettings({ enableProviderUpdateChecks: Boolean(checked) })
@@ -2452,10 +2498,17 @@ export function GeneralSettingsPanel() {
         <SettingsRow
           {...searchableSetting("continue-threads-after-server-update")}
           serverScoped
-          description="Automatically resume interrupted threads after an update, crash, or machine restart. Applies to this environment and all connected environments that support it. Update older servers first."
+          settingKeys={["continueThreadsAfterServerUpdate"]}
+          description="Automatically resume interrupted threads after an update, crash, or machine restart on the selected environments. Update older servers first."
+          status={
+            !supportsRestartContinuation
+              ? "All selected connected environments must support restart continuation."
+              : undefined
+          }
           resetAction={
+            supportsRestartContinuation &&
             settings.continueThreadsAfterServerUpdate !==
-            DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate ? (
+              DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate ? (
               <SettingResetButton
                 label="continue threads after restarts"
                 onClick={() =>
@@ -2468,8 +2521,10 @@ export function GeneralSettingsPanel() {
             ) : null
           }
           control={
-            <Switch
+            <ScopedSwitch
+              settingKeys={["continueThreadsAfterServerUpdate"]}
               checked={settings.continueThreadsAfterServerUpdate}
+              disabled={!supportsRestartContinuation}
               onCheckedChange={(checked) =>
                 updateSettings({ continueThreadsAfterServerUpdate: Boolean(checked) })
               }
@@ -2480,6 +2535,7 @@ export function GeneralSettingsPanel() {
 
         <SettingsRow
           serverScoped
+          settingKeys={["backgroundActivity"]}
           id={searchableSetting("background-activity").id}
           title={
             <span className="inline-flex items-center gap-1.5">
@@ -2502,10 +2558,10 @@ export function GeneralSettingsPanel() {
           control={
             <>
               <Select
-                value={backgroundActivityProfileOption}
+                value={mixedBackgroundActivity ? null : backgroundActivityProfileOption}
                 onValueChange={(value) => {
                   if (value === "advanced") {
-                    setBackgroundActivityDialogOpen(true);
+                    if (isEnvironmentScope) setBackgroundActivityDialogOpen(true);
                     return;
                   }
                   if (
@@ -2523,7 +2579,9 @@ export function GeneralSettingsPanel() {
                   aria-label="Background activity profile"
                 >
                   <SelectValue>
-                    {BACKGROUND_ACTIVITY_PROFILE_OPTION_LABELS[backgroundActivityProfileOption]}
+                    {(value: BackgroundActivityProfileOption | null) =>
+                      value === null ? "Mixed" : BACKGROUND_ACTIVITY_PROFILE_OPTION_LABELS[value]
+                    }
                   </SelectValue>
                 </SelectTrigger>
                 <SelectPopup align="end" alignItemWithTrigger={false}>
@@ -2536,12 +2594,14 @@ export function GeneralSettingsPanel() {
                   <SelectItem hideIndicator value="battery-saver">
                     {BACKGROUND_ACTIVITY_PROFILE_LABELS["battery-saver"]}
                   </SelectItem>
-                  <SelectItem hideIndicator value="advanced">
-                    {BACKGROUND_ACTIVITY_PROFILE_OPTION_LABELS.advanced}
+                  <SelectItem hideIndicator value="advanced" disabled={!isEnvironmentScope}>
+                    {isEnvironmentScope
+                      ? BACKGROUND_ACTIVITY_PROFILE_OPTION_LABELS.advanced
+                      : `${BACKGROUND_ACTIVITY_PROFILE_OPTION_LABELS.advanced} (one environment)`}
                   </SelectItem>
                 </SelectPopup>
               </Select>
-              {backgroundActivityProfileOption === "advanced" ? (
+              {backgroundActivityProfileOption === "advanced" && isEnvironmentScope ? (
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -2559,7 +2619,7 @@ export function GeneralSettingsPanel() {
                 </Tooltip>
               ) : null}
               <BackgroundActivityAdvancedDialog
-                open={backgroundActivityDialogOpen}
+                open={backgroundActivityDialogOpen && isEnvironmentScope}
                 onOpenChange={setBackgroundActivityDialogOpen}
               />
             </>
@@ -2569,23 +2629,8 @@ export function GeneralSettingsPanel() {
 
       <SettingsSection id="projects-and-threads" title="Projects & threads">
         <SettingsRow
-          {...searchableSetting("new-threads")}
-          description="Choose the default model and workspace for all projects or a specific project."
-          control={
-            <Button
-              render={
-                <Link to="/settings/projects" search={{ project: undefined, machine: undefined }} />
-              }
-              size="sm"
-              variant="outline"
-            >
-              Project settings
-            </Button>
-          }
-        />
-
-        <SettingsRow
           serverScoped
+          settingKeys={["newWorktreesStartFromOrigin"]}
           {...searchableSetting("start-from-origin")}
           description="Creates the worktree from the latest matching branch on origin instead of your local branch."
           resetAction={
@@ -2603,7 +2648,8 @@ export function GeneralSettingsPanel() {
             ) : null
           }
           control={
-            <Switch
+            <ScopedSwitch
+              settingKeys={["newWorktreesStartFromOrigin"]}
               checked={settings.newWorktreesStartFromOrigin}
               onCheckedChange={(checked) =>
                 updateSettings({ newWorktreesStartFromOrigin: Boolean(checked) })
@@ -2614,6 +2660,7 @@ export function GeneralSettingsPanel() {
         />
         <SettingsRow
           serverScoped
+          settingKeys={["addProjectBaseDirectory"]}
           {...searchableSetting("add-project-starts-in")}
           description='Leave empty to use "~/" when the Add Project browser opens.'
           resetAction={
@@ -2633,9 +2680,9 @@ export function GeneralSettingsPanel() {
             <DraftInput
               size="sm"
               className="w-full sm:w-72"
-              value={settings.addProjectBaseDirectory}
+              value={mixedAddProjectBaseDirectory ? "" : settings.addProjectBaseDirectory}
               onCommit={(next) => updateSettings({ addProjectBaseDirectory: next })}
-              placeholder="~/"
+              placeholder={mixedAddProjectBaseDirectory ? "Mixed" : "~/"}
               spellCheck={false}
               aria-label="Add project base directory"
             />
@@ -2768,10 +2815,11 @@ export function GeneralSettingsPanel() {
       <SettingsSection id="text-generation" title="Text generation">
         <SettingsRow
           serverScoped
+          settingKeys={["textGenerationModelSelection"]}
           {...searchableSetting("text-generation-model")}
           description="Used for thread titles and other generated text on connected devices with this provider. Source control can override it."
           resetAction={
-            isTextGenerationModelDirty ? (
+            hasServerTargets && isTextGenerationModelDirty ? (
               <SettingResetButton
                 label="text generation model"
                 onClick={() =>
@@ -2784,7 +2832,11 @@ export function GeneralSettingsPanel() {
             ) : null
           }
           control={
-            !hasTextGenerationProvider ? (
+            !hasServerTargets ? (
+              <span className="text-sm text-muted-foreground">
+                Connect an environment to choose its text generation model.
+              </span>
+            ) : !hasTextGenerationProvider ? (
               <span className="text-sm text-muted-foreground">
                 No text generation providers available.
               </span>
@@ -2798,6 +2850,8 @@ export function GeneralSettingsPanel() {
                   modelOptionsByInstance={textGenerationModelOptionsByInstance}
                   triggerVariant="outline"
                   triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+                  {...(mixedTextGenerationModel ? { triggerLabel: "Mixed" } : {})}
+                  getModelDisabledReason={textGenerationModelDisabledReason}
                   {...(environmentId
                     ? {
                         onOpenProviderSetup: (instanceId: ProviderInstanceId) => {
@@ -2809,6 +2863,15 @@ export function GeneralSettingsPanel() {
                       }
                     : {})}
                   onInstanceModelChange={(instanceId, model) => {
+                    const reason = textGenerationModelDisabledReason(instanceId, model);
+                    if (reason) {
+                      toastManager.add({
+                        type: "error",
+                        title: "Text generation model not saved",
+                        description: reason,
+                      });
+                      return;
+                    }
                     updateSettings({
                       textGenerationModelSelection: resolveAppModelSelectionState(
                         {
@@ -2870,12 +2933,37 @@ export function GeneralSettingsPanel() {
             description="Current version of the application."
           />
         )}
+      </SettingsSection>
+      <SettingsSection title="Diagnostics">
         <SettingsRow
           {...searchableSetting("diagnostics")}
-          description={diagnosticsDescription}
+          description={
+            isEnvironmentScope
+              ? "Inspect processes, resource use, and logs on this environment."
+              : "Inspect processes, resource use, and logs on one environment at a time."
+          }
           control={
-            <Button render={<Link to="/settings/diagnostics" />} size="sm" variant="outline">
+            <Button
+              render={
+                <Link to="/settings/diagnostics" search={{ machine: environmentId ?? undefined }} />
+              }
+              size="sm"
+              variant="outline"
+            >
               View diagnostics
+            </Button>
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("open-source-licenses")}
+          description="Notices for dependencies, assets, and optional tools used by T3 Code."
+          control={
+            <Button
+              render={<Link to="/settings/open-source-licenses" />}
+              size="xs"
+              variant="outline"
+            >
+              View licenses
             </Button>
           }
         />
@@ -2887,25 +2975,31 @@ export function GeneralSettingsPanel() {
 }
 
 export function ArchivedThreadsPanel() {
-  const projects = useProjects();
+  const { scope } = useSettingsScope();
   const { unarchiveThread, confirmAndDeleteThread } = useThreadActions();
-  const environmentIds = useMemo(
-    () => [...new Set(projects.map((project) => project.environmentId))],
-    [projects],
-  );
   const {
     snapshots: archivedSnapshots,
     error: archiveError,
     isLoading: isLoadingArchive,
     refresh: refreshArchivedThreads,
-  } = useArchivedThreadSnapshots(environmentIds);
+  } = useArchivedThreadSnapshots(scope.environmentIds);
 
   const archivedGroups = useMemo(() => {
+    const selectedProjectKeys =
+      scope.kind === "project" || scope.kind === "checkout"
+        ? new Set(scope.members.map((member) => `${member.environmentId}:${member.id}`))
+        : null;
     const projectsByEnvironmentAndId = new Map(
       archivedSnapshots.flatMap(({ environmentId, snapshot }) =>
-        snapshot.projects.map(
-          (project) => [`${environmentId}:${project.id}`, { ...project, environmentId }] as const,
-        ),
+        snapshot.projects
+          .filter(
+            (project) =>
+              selectedProjectKeys === null ||
+              selectedProjectKeys.has(`${environmentId}:${project.id}`),
+          )
+          .map(
+            (project) => [`${environmentId}:${project.id}`, { ...project, environmentId }] as const,
+          ),
       ),
     );
     const threads = archivedSnapshots.flatMap(({ environmentId, snapshot }) =>
@@ -2939,7 +3033,7 @@ export function ArchivedThreadsPanel() {
       }
     }
     return groups;
-  }, [archivedSnapshots]);
+  }, [archivedSnapshots, scope]);
 
   const handleArchivedThreadContextMenu = useCallback(
     async (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
@@ -3021,7 +3115,7 @@ export function ArchivedThreadsPanel() {
       ) : (
         archivedGroups.map(({ project, threads: projectThreads }, index) => (
           <SettingsSection
-            key={project.id}
+            key={`${project.environmentId}:${project.id}`}
             id={index === 0 ? searchableSetting("archive").id : undefined}
             title={project.title}
             icon={<ProjectFavicon project={project} />}

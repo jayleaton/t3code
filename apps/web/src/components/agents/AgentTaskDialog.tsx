@@ -70,7 +70,6 @@ export function AgentTaskDialog({
       draft.persistedAttachments.length ||
       draft.nonPersistedImageIds.length ||
       draft.terminalContexts.length ||
-      draft.elementContexts.length ||
       draft.previewAnnotations.length ||
       draft.reviewComments.length),
   );

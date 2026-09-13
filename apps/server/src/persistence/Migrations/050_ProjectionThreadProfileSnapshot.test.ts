@@ -14,7 +14,7 @@ layer("050_ProjectionThreadProfileSnapshot", (it) => {
       const sql = yield* SqlClient.SqlClient;
 
       yield* runMigrations({ toMigrationInclusive: 47 });
-      yield* runMigrations({ toMigrationInclusive: 51 });
+      yield* runMigrations({ toMigrationInclusive: 52 });
 
       const columns = yield* sql<{ readonly name: string; readonly notnull: number }>`
         PRAGMA table_info(projection_threads)
@@ -34,7 +34,7 @@ layer("gateway migration upgrade", (it) => {
       yield* runMigrations({ toMigrationInclusive: 47 });
       yield* sql`ALTER TABLE projection_threads ADD COLUMN profile_snapshot_json TEXT`;
       yield* sql`INSERT INTO effect_sql_migrations (migration_id, name, created_at) VALUES (48, 'ProjectionThreadProfileSnapshot', CURRENT_TIMESTAMP)`;
-      yield* runMigrations({ toMigrationInclusive: 51 });
+      yield* runMigrations({ toMigrationInclusive: 52 });
       const columns = yield* sql<{ readonly name: string }>`PRAGMA table_info(projection_threads)`;
       assert.isTrue(columns.some((column) => column.name === "profile_snapshot_json"));
       assert.isTrue(columns.some((column) => column.name === "branch_pull_request_json"));
@@ -77,6 +77,22 @@ layer("agents migration 50 upgrade", (it) => {
         name: string;
       }>`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'projection_thread_pull_requests'`;
       assert.equal(tables.length, 1);
+    }),
+  );
+});
+
+layer("agents migration 51 upgrade", (it) => {
+  it.effect("adds upstream context when a shipped agent build already used migration 51", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 50 });
+      yield* sql`ALTER TABLE projection_threads ADD COLUMN profile_snapshot_json TEXT`;
+      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name, created_at) VALUES (51, 'AgentProfileAndPullRequestCompatibility', CURRENT_TIMESTAMP)`;
+      yield* runMigrations();
+      const columns = yield* sql<{
+        readonly name: string;
+      }>`PRAGMA table_info(projection_thread_messages)`;
+      assert.isTrue(columns.some((column) => column.name === "context_json"));
     }),
   );
 });
