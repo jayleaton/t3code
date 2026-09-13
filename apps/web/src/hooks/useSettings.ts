@@ -26,9 +26,9 @@ import {
 } from "@t3tools/contracts/settings";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import {
-  filterSharedServerPatch,
   findSharedSettingsMismatches,
   pickSharedServerSettings,
+  filterSharedServerPatch,
   splitSharedServerPatch,
   supportsSharedSettingsSync,
 } from "@t3tools/client-runtime/state/shared-settings";
