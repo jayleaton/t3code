@@ -117,6 +117,7 @@ describe("MCP gateway server", () => {
           {
             profileId: "code",
             name: "Code",
+            description: "Implements approved plans",
             systemPrompt: "Implement the approved plan.",
             runtimeMode: "approval-required",
             interactionMode: "default",
@@ -143,12 +144,20 @@ describe("MCP gateway server", () => {
 
     const listedTools = await client.listTools();
     const toolNames = listedTools.tools.map((tool) => tool.name);
-    expect(toolNames).toHaveLength(58);
+    expect(toolNames).toHaveLength(59);
     const agents = await client.callTool({
       name: "t3_list_agents",
       arguments: { environmentId: "local" },
     });
     expect(agents.isError).not.toBe(true);
+    const board = await client.callTool({
+      name: "t3_get_agents_view",
+      arguments: { environmentId: "local", profileId: "code" },
+    });
+    expect(board.isError).not.toBe(true);
+    expect(board.structuredContent).toMatchObject({
+      data: { items: [{ profileId: "code", description: "Implements approved plans", runs: [] }] },
+    });
     expect(agents.structuredContent).toMatchObject({
       data: {
         items: [{ profileId: "code", systemPrompt: "Implement the approved plan." }],

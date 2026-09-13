@@ -165,6 +165,27 @@ describe("ClaudeSettings auto-compaction", () => {
 });
 
 describe("ServerSettings MCP gateway profiles", () => {
+  it("preserves optional specializations and allows clearing them", () => {
+    const profile = {
+      profileId: "review",
+      name: "Reviewer",
+      revision: 1,
+      runtimeMode: "read-only",
+      interactionMode: "default",
+      createdAt: "now",
+      updatedAt: "now",
+    };
+    for (const description of [undefined, "Reviews code", ""]) {
+      const value = { ...profile, ...(description !== undefined ? { description } : {}) };
+      expect(decodeServerSettings({ mcpGatewayProfiles: [value] }).mcpGatewayProfiles[0]).toEqual(
+        value,
+      );
+    }
+    expect(() =>
+      decodeServerSettings({ mcpGatewayProfiles: [{ ...profile, description: "x".repeat(281) }] }),
+    ).toThrow();
+  });
+
   it("stores revisioned server-owned profiles including read-only profiles", () => {
     const profile = {
       profileId: "profile-andy",

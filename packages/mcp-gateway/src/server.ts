@@ -34,6 +34,7 @@ const webhook = { environmentId, webhookId: z.string().trim().min(1) };
 
 const profileFields = {
   name: z.string().trim().min(1).max(200),
+  description: z.string().trim().max(280).optional(),
   providerLabel: z.string().trim().min(1),
   modelLabel: z.string().trim().min(1),
   color: z
@@ -60,8 +61,17 @@ type ToolSpec = readonly [description: string, inputSchema: z.ZodRawShape];
 
 const TOOL_SPECS = {
   t3_list_agents: [
-    "List agents from the shared Agents library available on this environment, including instructions and model settings. Use profileId to create chats or hand work to an agent.",
+    "List agents from the shared Agents library available on this environment, including specialization descriptions, instructions and model settings. Use t3_get_agents_view to find their chats/runs. Use profileId to create chats or hand work to an agent.",
     { environmentId, ...optionalRequestContext },
+  ],
+  t3_get_agents_view: [
+    "List the Agents board for an environment: agent specializations and their chat/run summaries, including thread IDs and status. Use this to find an agent’s running or completed work without searching unrelated threads. Filter by profileId and state (active means unsettled, including completed chats). Use t3_get_thread or t3_open_thread with a returned threadId for details.",
+    {
+      environmentId,
+      profileId: z.string().trim().min(1).optional(),
+      state: z.enum(["active", "settled", "all"]).optional(),
+      ...optionalRequestContext,
+    },
   ],
   t3_create_agent: [
     "Create an agent in the shared Agents library without starting a session. Requires create or admin access. Shares to connected machines with the same grant.",

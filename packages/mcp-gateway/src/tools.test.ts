@@ -1847,7 +1847,7 @@ describe("gateway v3 event delivery tools", () => {
   });
 
   it("emits lifecycle events and serves replay with cursors and acks", async () => {
-    const events = createGatewayEventStore();
+    const events = createGatewayEventStore({ now: () => "2026-09-04T00:00:02.000Z" });
     const context = { port: makePort(), grants, events };
 
     const created = await callGatewayTool(context, "t3_create_thread", {
@@ -2355,6 +2355,34 @@ describe("agent profile tools", () => {
     interactionMode: "default",
   };
 
+  it("creates, lists, updates, and clears a specialization without changing instructions", async () => {
+    const port = profilesPort();
+    const context = { port, grants: { local: ["admin", "read"] } as const };
+    await callGatewayTool(context, "t3_create_agent", {
+      ...input,
+      description: "Reviews security",
+      systemPrompt: "Report vulnerabilities",
+    });
+    expect(
+      await callGatewayTool(context, "t3_list_agents", { environmentId: "local" }),
+    ).toMatchObject({ items: [{ description: "Reviews security" }] });
+    await callGatewayTool(context, "t3_update_agent", {
+      environmentId: "local",
+      profileId: "write",
+      patch: { description: "" },
+    });
+    expect(await port.listProfiles!("local")).toMatchObject([
+      { description: "", systemPrompt: "Report vulnerabilities" },
+    ]);
+    await expect(
+      callGatewayTool(context, "t3_update_agent", {
+        environmentId: "local",
+        profileId: "write",
+        patch: { description: "x".repeat(281) },
+      }),
+    ).rejects.toThrow();
+  });
+
   it("agent tools share one library without starting a thread", async () => {
     const port = profilesPort();
     const createThread = vi.spyOn(port, "createThread");
@@ -2556,5 +2584,105 @@ describe("agent chat lifecycle", () => {
       callGatewayTool({ port, grants: { remote: ["lifecycle"] } }, "t3_unsettle_thread", input),
     ).resolves.toEqual({ status: "succeeded" });
     expect(port.unsettleThread).toHaveBeenCalledWith("remote", "done");
+  });
+});
+
+describe("MCP Agents board", () => {
+  const profiles: GatewayProfile[] = [
+    {
+      profileId: "review",
+      name: "Reviewer",
+      description: "Finds bugs",
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+    },
+    {
+      profileId: "write",
+      name: "Writer",
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+    },
+  ];
+  const runs = [
+    {
+      id: "running",
+      title: "Review PR",
+      projectId: "p1",
+      profileSnapshot: { profileId: "review" },
+      status: "running",
+      settledAt: null,
+    },
+    {
+      id: "finished",
+      profileSnapshot: { profileId: "review" },
+      status: "completed",
+      settledAt: "2026-09-13",
+    },
+    {
+      id: "deleted-agent",
+      profileSnapshot: { profileId: "deleted" },
+      status: "idle",
+      settledAt: null,
+    },
+    { id: "normal-thread", profileSnapshot: null, status: "running", settledAt: null },
+  ];
+  function context() {
+    const port = {
+      ...makePort({ profiles }),
+      listThreads: vi.fn(async () => ({ items: runs, snapshotAt: "now" })),
+    };
+    return { port, grants: { local: ["read"] } as const };
+  }
+  it("groups only agent chats with descriptions and preserves deleted-agent runs", async () => {
+    const result = await callGatewayTool(context(), "t3_get_agents_view", {
+      environmentId: "local",
+    });
+    expect(result).toMatchObject({
+      environmentId: "local",
+      snapshotAt: "now",
+      items: [
+        {
+          profileId: "review",
+          description: "Finds bugs",
+          runs: [
+            { threadId: "running", projectId: "p1", status: "running", environmentId: "local" },
+          ],
+        },
+        { profileId: "write", description: "", runs: [] },
+      ],
+      orphanedRuns: [{ threadId: "deleted-agent", profileId: "deleted" }],
+    });
+    expect(JSON.stringify(result)).not.toContain("normal-thread");
+    expect(JSON.stringify(result)).not.toContain("finished");
+  });
+  it("filters by agent and settled state", async () => {
+    expect(
+      await callGatewayTool(context(), "t3_get_agents_view", {
+        environmentId: "local",
+        profileId: "review",
+        state: "settled",
+      }),
+    ).toMatchObject({
+      items: [{ profileId: "review", runs: [{ threadId: "finished" }] }],
+      orphanedRuns: [],
+    });
+    const result = await callGatewayTool(context(), "t3_get_agents_view", {
+      environmentId: "local",
+      profileId: "review",
+      state: "all",
+    });
+    expect(result.items).toHaveLength(1);
+    expect(JSON.stringify(result)).toContain("running");
+    expect(JSON.stringify(result)).toContain("finished");
+  });
+  it("checks read grants before loading runs from a machine", async () => {
+    const ctx = context();
+    await expect(
+      callGatewayTool(ctx, "t3_get_agents_view", { environmentId: "remote" }),
+    ).rejects.toMatchObject({ code: "unknown_environment" });
+    expect(ctx.port.listThreads).not.toHaveBeenCalled();
+    await expect(
+      callGatewayTool(ctx, "t3_get_agents_view", { environmentId: "local", state: "invalid" }),
+    ).rejects.toThrow();
   });
 });

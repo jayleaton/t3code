@@ -31,6 +31,7 @@ export type GatewayThreadControlAction =
 export type GatewayApprovalDecision = "accept" | "acceptForSession" | "decline" | "cancel";
 
 export interface GatewayProfile {
+  readonly description?: string | undefined;
   readonly color?: string | undefined;
   readonly icon?:
     | "orb"
@@ -71,6 +72,7 @@ export interface GatewayProfile {
 export type GatewayProfileInput = Pick<
   GatewayProfile,
   | "name"
+  | "description"
   | "providerLabel"
   | "modelLabel"
   | "reasoningEffort"

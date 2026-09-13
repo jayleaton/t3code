@@ -35,6 +35,7 @@ export function AgentEditor({
       ]!,
   );
   const [icon, setIcon] = useState<NonNullable<McpGatewayProfile["icon"]>>(profile?.icon ?? "orb");
+  const [description, setDescription] = useState(profile?.description ?? "");
   const [name, setName] = useState(profile?.name ?? "");
   const [providerLabel, setProviderLabel] = useState(profile?.providerLabel ?? "");
   const [modelLabel, setModelLabel] = useState(profile?.modelLabel ?? "");
@@ -94,6 +95,7 @@ export function AgentEditor({
               const saved = await onSave({
                 profileId: profile?.profileId ?? randomUUID(),
                 name: name.trim(),
+                description: description.trim(),
                 systemPrompt,
                 color,
                 icon,
@@ -126,6 +128,18 @@ export function AgentEditor({
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
+          </label>
+          <label>
+            Specialization
+            <input
+              maxLength={280}
+              placeholder="Reviews code for correctness, security, and maintainability"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+            />
+            <span className="text-xs text-muted-foreground">
+              A short description shown on the board and in MCP.
+            </span>
           </label>
           <fieldset
             className="agent-appearance"
