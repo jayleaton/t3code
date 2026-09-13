@@ -5,6 +5,8 @@ description: Operate T3 Code projects and threads through an external environmen
 
 # T3 workspace control
 
+Use `list_agents` to find saved agents and their specializations. Use `get_agents_view` to see agents with their runs, optionally filtered by `profileId` and `state` (`active`, `settled`, or `all`). Runs belong to this endpoint’s environment; connect to another machine’s workspace MCP to see its runs. Use a run’s `id` with `get_thread` for details.
+
 Use `list_threads` to resolve a requested thread and `get_thread` to summarize it. Keep spoken replies short; do not read code, diffs, or transcripts aloud. Use `list_projects` and `list_providers` before starting work when the target is unclear.
 
 Only call `settle_thread` when the user asks to settle or archive a finished task. Never infer consent because work looks done. In this workflow, “archive this finished task” means settle, preserving history and artifacts, not `thread.archive` or delete. Workspace settlement needs no additional confirmation flag: the user's request supplies consent.

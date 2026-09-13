@@ -17,6 +17,7 @@ import { Tool, Toolkit } from "effect/unstable/ai";
 import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts";
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ServerSettingsService } from "../../../serverSettings.ts";
 import { WorkspaceMcpError } from "./errors.ts";
 import { WORKSPACE_THREAD_SHELVES, WORKSPACE_THREAD_STATUSES } from "./mapping.ts";
 import { WorkspaceMcpAuth } from "./principal.ts";
@@ -183,6 +184,47 @@ export const ListThreadsTool = readonlyTool(
   }).annotate(Tool.Title, "List threads"),
 );
 
+const AgentBrief = Schema.Struct({
+  profileId: Schema.String,
+  name: Schema.String,
+  description: Schema.String,
+  providerLabel: Schema.NullOr(Schema.String),
+  modelLabel: Schema.NullOr(Schema.String),
+  environmentIds: Schema.Array(Schema.String),
+});
+
+export const ListAgentsTool = readonlyTool(
+  Tool.make("list_agents", {
+    description:
+      "List saved T3 agents and their specializations on this environment. Use get_agents_view for their associated chats/runs, including settled runs.",
+    parameters: Schema.Struct({ profileId: Schema.optionalKey(TrimmedNonEmptyString) }),
+    success: Schema.Struct({ agents: Schema.Array(AgentBrief) }),
+    failure: WorkspaceMcpError,
+    dependencies: [WorkspaceMcpAuth, ServerSettingsService],
+  }).annotate(Tool.Title, "List agents"),
+);
+
+export const GetAgentsViewTool = readonlyTool(
+  Tool.make("get_agents_view", {
+    description:
+      "Read the Agents board: saved agents, specializations, and their chats/runs on this environment. Filter by profileId or active/settled/all state (default active). Deleted agents' runs appear in orphanedRuns. Use get_thread with a run's id for its conversation. Other machines require their own workspace MCP connection.",
+    parameters: Schema.Struct({
+      profileId: Schema.optionalKey(TrimmedNonEmptyString),
+      state: Schema.optionalKey(Schema.Literals(["active", "settled", "all"])),
+    }),
+    success: Schema.Struct({
+      agents: Schema.Array(
+        Schema.Struct({ ...AgentBrief.fields, runs: Schema.Array(ThreadBrief) }),
+      ),
+      orphanedRuns: Schema.Array(
+        Schema.Struct({ profileId: Schema.String, ...ThreadBrief.fields }),
+      ),
+    }),
+    failure: WorkspaceMcpError,
+    dependencies: [WorkspaceMcpAuth, ServerSettingsService, ProjectionSnapshotQuery],
+  }).annotate(Tool.Title, "Read Agents board"),
+);
+
 export const GetThreadTool = readonlyTool(
   Tool.make("get_thread", {
     description:
@@ -339,6 +381,8 @@ export const WorkspaceToolkit = Toolkit.make(
   ListProjectsTool,
   CreateProjectTool,
   ListThreadsTool,
+  ListAgentsTool,
+  GetAgentsViewTool,
   GetThreadTool,
   ListProvidersTool,
   StartThreadTool,
