@@ -4,6 +4,7 @@ import {
   DEFAULT_RUNTIME_MODE,
   MessageId,
   type ModelSelection,
+  type McpGatewayProfile,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -21,6 +22,7 @@ import { threadHasQueuedTurnStart } from "../../../orchestration/ThreadSettlemen
 import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts";
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ServerSettingsService } from "../../../serverSettings.ts";
 import { WorkspaceMcpError } from "./errors.ts";
 import {
   projectBrief,
@@ -132,6 +134,17 @@ function settlementConflict(threadId: ThreadId, reason: string) {
   });
 }
 
+function agentBrief(profile: McpGatewayProfile) {
+  return {
+    profileId: profile.profileId,
+    name: profile.name,
+    description: profile.description ?? "",
+    providerLabel: profile.providerLabel ?? profile.modelSelection?.instanceId ?? null,
+    modelLabel: profile.modelLabel ?? profile.modelSelection?.model ?? null,
+    environmentIds: profile.environmentIds ?? [],
+  };
+}
+
 export const handlers = {
   list_projects: (input: { readonly query?: string | undefined }) =>
     Effect.gen(function* () {
@@ -196,6 +209,53 @@ export const handlers = {
         .map((thread) => threadBrief(thread, clock))
         .filter((thread) => matchesThreadFilter(thread, input));
       return { threads };
+    }).pipe(Effect.mapError(toWorkspaceError)),
+
+  list_agents: (input: { readonly profileId?: string | undefined }) =>
+    Effect.gen(function* () {
+      yield* requireWorkspaceRead();
+      const settings = yield* (yield* ServerSettingsService).getSettings;
+      return {
+        agents: settings.mcpGatewayProfiles
+          .filter(
+            (profile) => input.profileId === undefined || profile.profileId === input.profileId,
+          )
+          .map(agentBrief),
+      };
+    }).pipe(Effect.mapError(toWorkspaceError)),
+
+  get_agents_view: (input: {
+    readonly profileId?: string | undefined;
+    readonly state?: "active" | "settled" | "all" | undefined;
+  }) =>
+    Effect.gen(function* () {
+      yield* requireWorkspaceRead();
+      const settings = yield* (yield* ServerSettingsService).getSettings;
+      const snapshot = yield* (yield* ProjectionSnapshotQuery).getShellSnapshot();
+      const clock = Date.parse(yield* nowIso);
+      const state = input.state ?? "active";
+      const groups = new Map<string, ReturnType<typeof threadBrief>[]>();
+      for (const thread of snapshot.threads) {
+        const profileId = thread.profileSnapshot?.profileId;
+        if (!profileId || (input.profileId !== undefined && profileId !== input.profileId))
+          continue;
+        if (state === "active" && thread.settledAt !== null) continue;
+        if (state === "settled" && thread.settledAt === null) continue;
+        const runs = groups.get(profileId) ?? [];
+        runs.push(threadBrief(thread, clock));
+        groups.set(profileId, runs);
+      }
+      const agents = settings.mcpGatewayProfiles
+        .filter((profile) => input.profileId === undefined || profile.profileId === input.profileId)
+        .map((profile) => {
+          const runs = groups.get(profile.profileId) ?? [];
+          groups.delete(profile.profileId);
+          return { ...agentBrief(profile), runs };
+        });
+      const orphanedRuns = [...groups].flatMap(([profileId, runs]) =>
+        runs.map((run) => ({ profileId, ...run })),
+      );
+      return { agents, orphanedRuns };
     }).pipe(Effect.mapError(toWorkspaceError)),
 
   get_thread: (input: {

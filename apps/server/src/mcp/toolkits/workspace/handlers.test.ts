@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Crypto from "effect/Crypto";
 import * as Option from "effect/Option";
 import { WorkspaceMcpAuth, type WorkspaceMcpPrincipal } from "./principal.ts";
+import { ServerSettingsService } from "../../../serverSettings.ts";
 import { WorkspaceMcpError } from "./errors.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
@@ -330,6 +331,102 @@ describe("workspace settlement handlers", () => {
           detail: expect.stringContaining("History and artifacts were not changed"),
         },
       });
+    }),
+  );
+});
+
+describe("workspace MCP Agents board", () => {
+  const profile = {
+    profileId: "agent-1",
+    name: "Reviewer",
+    description: "Reviews changes",
+    revision: 1,
+    providerLabel: "Codex",
+    modelLabel: "GPT-6-Astra",
+    systemPrompt: "Private instructions must not appear in listings",
+    runtimeMode: "approval-required" as const,
+    interactionMode: "default" as const,
+    createdAt: settledAt,
+    updatedAt: settledAt,
+  };
+  const profileSnapshot = (profileId: string) => ({
+    profileId,
+    profileName: "Reviewer",
+    revision: 1,
+    effectiveSource: {
+      modelSelection: "profile" as const,
+      runtimeMode: "profile" as const,
+      interactionMode: "profile" as const,
+      reasoningEffort: "profile" as const,
+    },
+  });
+  const threads = [
+    shell({ id: ThreadId.make("active"), profileSnapshot: profileSnapshot("agent-1") }),
+    shell({ id: ThreadId.make("settled"), profileSnapshot: profileSnapshot("agent-1"), settledAt }),
+    shell({ id: ThreadId.make("ordinary") }),
+    shell({ id: ThreadId.make("orphan"), profileSnapshot: profileSnapshot("deleted") }),
+  ];
+  const provide = <A, E>(
+    effect: Effect.Effect<A, E, WorkspaceMcpAuth | ProjectionSnapshotQuery | ServerSettingsService>,
+  ) =>
+    effect.pipe(
+      Effect.provideService(WorkspaceMcpAuth, { kind: "loopback" }),
+      Effect.provideService(ProjectionSnapshotQuery, {
+        getShellSnapshot: () => Effect.succeed({ threads, projects: [] }),
+      } as unknown as ProjectionSnapshotQuery["Service"]),
+      Effect.provide(
+        ServerSettingsService.layerTest({
+          mcpGatewayProfiles: [
+            profile,
+            { ...profile, profileId: "empty", name: "Empty agent", description: "" },
+          ],
+        }),
+      ),
+    );
+
+  it.effect("lists profiles without exposing system prompts", () =>
+    Effect.gen(function* () {
+      const result = yield* provide(handlers.list_agents({}));
+      expect(result.agents).toHaveLength(2);
+      expect(result.agents[0]).toMatchObject({ name: "Reviewer", description: "Reviews changes" });
+      for (const agent of result.agents) expect(agent).not.toHaveProperty("systemPrompt");
+      expect((yield* provide(handlers.list_agents({ profileId: "empty" }))).agents).toHaveLength(1);
+    }),
+  );
+
+  it.effect("groups active runs, preserves empty agents, and separates deleted profiles", () =>
+    Effect.gen(function* () {
+      const result = yield* provide(handlers.get_agents_view({}));
+      expect(result.agents[0]?.runs.map((run) => run.id)).toEqual(["active"]);
+      expect(result.agents[1]?.runs).toEqual([]);
+      expect(result.orphanedRuns.map((run) => run.id)).toEqual(["orphan"]);
+      for (const agent of result.agents) expect(agent).not.toHaveProperty("systemPrompt");
+    }),
+  );
+
+  it.effect("filters settled runs and returns both shelves for all", () =>
+    Effect.gen(function* () {
+      const result = yield* provide(
+        handlers.get_agents_view({ profileId: "agent-1", state: "settled" }),
+      );
+      expect(result.agents).toHaveLength(1);
+      expect(result.agents[0]?.runs.map((run) => run.id)).toEqual(["settled"]);
+      expect(result.orphanedRuns).toEqual([]);
+      const all = yield* provide(handlers.get_agents_view({ state: "all" }));
+      expect(all.agents[0]?.runs.map((run) => run.id)).toEqual(["active", "settled"]);
+    }),
+  );
+
+  it.effect("checks read authorization before reading profiles or runs", () =>
+    Effect.gen(function* () {
+      for (const effect of [handlers.list_agents({}), handlers.get_agents_view({})]) {
+        const result = yield* provide(
+          effect.pipe(
+            Effect.provideService(WorkspaceMcpAuth, { kind: "session", scopes: new Set<string>() }),
+          ),
+        ).pipe(Effect.result);
+        expect(result._tag).toBe("Failure");
+      }
     }),
   );
 });

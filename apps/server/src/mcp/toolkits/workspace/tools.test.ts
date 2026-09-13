@@ -9,6 +9,8 @@ it("exports described workspace tools", () => {
     "list_projects",
     "create_project",
     "list_threads",
+    "list_agents",
+    "get_agents_view",
     "get_thread",
     "list_providers",
     "start_thread",
