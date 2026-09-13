@@ -44,6 +44,7 @@ export const handoffInputSchema = z.object({
 
 const profileInput = z.object({
   name: z.string().trim().min(1).max(200),
+  description: z.string().trim().max(280).optional(),
   providerLabel: z.string().trim().min(1),
   modelLabel: z.string().trim().min(1),
   color: z
@@ -844,6 +845,65 @@ export async function callGatewayTool(
               ? "await_event"
               : null,
         snapshotAt: thread.updatedAt ?? "runtime",
+      };
+    }
+    case "t3_get_agents_view": {
+      const environmentId = environmentWithScope(context, input, "read");
+      const { profileId, state } = z
+        .object({
+          profileId: z.string().trim().min(1).optional(),
+          state: z.enum(["active", "settled", "all"]).default("active"),
+        })
+        .parse(input);
+      const [profiles, page] = await Promise.all([
+        authoritativeProfiles(context, environmentId),
+        context.port.listThreads(environmentId),
+      ]);
+      const runsByProfile = new Map<string, Record<string, unknown>[]>();
+      for (const thread of page.items) {
+        const snapshot = thread.profileSnapshot as { profileId?: string } | null | undefined;
+        const agentId = snapshot?.profileId;
+        if (!agentId || (profileId !== undefined && profileId !== agentId)) continue;
+        if (
+          state !== "all" &&
+          (state === "settled" ? thread.settledAt == null : thread.settledAt != null)
+        )
+          continue;
+        const runs = runsByProfile.get(agentId) ?? [];
+        runs.push({
+          threadId: thread.id,
+          environmentId,
+          projectId: thread.projectId,
+          title: thread.title,
+          status: thread.status,
+          settledAt: thread.settledAt ?? null,
+          createdAt: thread.createdAt,
+          updatedAt: thread.updatedAt,
+        });
+        runsByProfile.set(agentId, runs);
+      }
+      const items = profiles
+        .filter((profile) => profileId === undefined || profile.profileId === profileId)
+        .map((profile) => {
+          const runs = profile.profileId ? (runsByProfile.get(profile.profileId) ?? []) : [];
+          if (profile.profileId) runsByProfile.delete(profile.profileId);
+          return {
+            profileId: profile.profileId,
+            name: profile.name,
+            description: profile.description ?? "",
+            providerLabel: profile.providerLabel,
+            modelLabel: profile.modelLabel,
+            environmentIds: profile.environmentIds ?? [],
+            runs,
+          };
+        });
+      return {
+        environmentId,
+        items,
+        orphanedRuns: [...runsByProfile].flatMap(([profileId, runs]) =>
+          runs.map((run) => ({ ...run, profileId })),
+        ),
+        snapshotAt: page.snapshotAt,
       };
     }
     case "t3_list_agents": {

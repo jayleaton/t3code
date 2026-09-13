@@ -209,7 +209,12 @@ export function AgentsBoard() {
                 <div className="agent-column-header">
                   <div className="agent-heading">
                     <AgentIcon icon={profile.icon} />
-                    <h2>{profile.name}</h2>
+                    <div className="agent-heading-text">
+                      <h2>{profile.name}</h2>
+                      {profile.description?.trim() && (
+                        <p className="agent-description">{profile.description}</p>
+                      )}
+                    </div>
 
                     <SidebarMenuButton
                       size="icon"

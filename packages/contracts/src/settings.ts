@@ -933,6 +933,7 @@ export const BackgroundActivitySettings = Schema.Struct({
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
 export const McpGatewayProfile = Schema.Struct({
+  description: Schema.optional(Schema.String.check(Schema.isMaxLength(280))),
   color: Schema.optional(Schema.String.check(Schema.isPattern(/^#[0-9a-fA-F]{6}$/))),
   icon: Schema.optional(
     Schema.Literals(["orb", "bot", "code", "pen", "search", "shield", "sparkles", "terminal"]),
