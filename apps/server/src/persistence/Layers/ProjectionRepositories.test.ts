@@ -15,15 +15,21 @@ import * as Statement from "effect/unstable/sql/Statement";
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
 import { ProjectionProjectRepositoryLive } from "./ProjectionProjects.ts";
 import { ProjectionThreadRepositoryLive } from "./ProjectionThreads.ts";
-import { ProjectionThreadProposedPlanRepositoryLive } from "./ProjectionThreadProposedPlans.ts";
+import * as ProjectionThreadPullRequests from "../ProjectionThreadPullRequests.ts";
 import { ProjectionProjectRepository } from "../Services/ProjectionProjects.ts";
 import { ProjectionThreadRepository } from "../Services/ProjectionThreads.ts";
+import {
+  ProjectionThreadPullRequestRepository,
+  type ProjectionThreadPullRequest,
+} from "../ProjectionThreadPullRequests.ts";
+import { ProjectionThreadProposedPlanRepositoryLive } from "./ProjectionThreadProposedPlans.ts";
 import { ProjectionThreadProposedPlanRepository } from "../Services/ProjectionThreadProposedPlans.ts";
 
 const projectionRepositoriesLayer = it.layer(
   Layer.mergeAll(
     ProjectionProjectRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionThreadRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ProjectionThreadPullRequests.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionThreadProposedPlanRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     SqlitePersistenceMemory,
   ),
@@ -327,7 +333,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
     }),
   );
 
-  it.effect("stores JSON for thread model options", () =>
+  it.effect("stores JSON for thread model options and profile snapshots", () =>
     Effect.gen(function* () {
       const threads = yield* ProjectionThreadRepository;
       const sql = yield* SqlClient.SqlClient;
@@ -342,6 +348,18 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         },
         runtimeMode: "full-access",
         interactionMode: "default",
+        profileSnapshot: {
+          profileId: "profile-andy",
+          profileName: "Andy",
+          revision: 3,
+          reasoningEffort: "medium",
+          effectiveSource: {
+            modelSelection: "profile",
+            runtimeMode: "profile",
+            interactionMode: "profile",
+            reasoningEffort: "profile",
+          },
+        },
         branch: null,
         worktreePath: null,
         latestTurnId: null,
@@ -363,8 +381,11 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
 
       const rows = yield* sql<{
         readonly modelSelection: string | null;
+        readonly profileSnapshot: string | null;
       }>`
-        SELECT model_selection_json AS "modelSelection"
+        SELECT
+          model_selection_json AS "modelSelection",
+          profile_snapshot_json AS "profileSnapshot"
         FROM projection_threads
         WHERE thread_id = 'thread-null-options'
       `;
@@ -381,6 +402,22 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
           model: "claude-opus-4-6",
         }),
       );
+      assert.strictEqual(
+        row.profileSnapshot,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        JSON.stringify({
+          profileId: "profile-andy",
+          profileName: "Andy",
+          revision: 3,
+          reasoningEffort: "medium",
+          effectiveSource: {
+            modelSelection: "profile",
+            runtimeMode: "profile",
+            interactionMode: "profile",
+            reasoningEffort: "profile",
+          },
+        }),
+      );
 
       const persisted = yield* threads.getById({
         threadId: ThreadId.make("thread-null-options"),
@@ -388,6 +425,18 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       assert.deepStrictEqual(Option.getOrNull(persisted)?.modelSelection, {
         instanceId: ProviderInstanceId.make("claudeAgent"),
         model: "claude-opus-4-6",
+      });
+      assert.deepStrictEqual(Option.getOrNull(persisted)?.profileSnapshot, {
+        profileId: "profile-andy",
+        profileName: "Andy",
+        revision: 3,
+        reasoningEffort: "medium",
+        effectiveSource: {
+          modelSelection: "profile",
+          runtimeMode: "profile",
+          interactionMode: "profile",
+          reasoningEffort: "profile",
+        },
       });
     }),
   );
@@ -406,6 +455,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         },
         runtimeMode: "full-access",
         interactionMode: "default",
+        profileSnapshot: null,
         branch: null,
         worktreePath: null,
         latestTurnId: null,
@@ -490,6 +540,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         branch: null,
         worktreePath: null,
         linkedPullRequest,
+        profileSnapshot: null,
         branchPullRequest,
         latestTurnId: null,
         createdAt: "2026-03-24T00:00:00.000Z",
@@ -527,6 +578,166 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       const branchCleared = yield* threads.getById({ threadId: row.threadId });
       assert.strictEqual(Option.getOrNull(branchCleared)?.branchPullRequest, null);
       assert.deepStrictEqual(Option.getOrNull(branchCleared)?.linkedPullRequest, linkedPullRequest);
+    }),
+  );
+
+  it.effect("uses one Azure identity for repository writes, lookups, and deletion", () =>
+    Effect.gen(function* () {
+      const pullRequests = yield* ProjectionThreadPullRequestRepository;
+      const threadId = ThreadId.make("azure-alias-link");
+      const row: ProjectionThreadPullRequest = {
+        threadId,
+        host: "org.visualstudio.com",
+        repository: "project/_git/web",
+        number: 7,
+        url: "https://org.visualstudio.com/project/_git/web/pullrequest/7",
+        source: "manual",
+        linkedAt: "2026-09-09T00:00:00.000Z",
+        snapshot: null,
+        stack: null,
+      };
+      yield* pullRequests.upsert(row);
+      yield* pullRequests.upsert({
+        ...row,
+        host: "dev.azure.com",
+        repository: "org/project/_git/web",
+      });
+      const found = yield* pullRequests.listByPullRequest({
+        host: "ssh.dev.azure.com",
+        repository: "v3/org/project/web",
+        number: 7,
+      });
+      assert.deepStrictEqual(found, [
+        { ...row, host: "dev.azure.com", repository: "org/project/_git/web" },
+      ]);
+      assert.deepStrictEqual(
+        yield* pullRequests.listByPullRequest({
+          host: "dev.azure.com",
+          repository: "other/project/_git/web",
+          number: 7,
+        }),
+        [],
+      );
+      yield* pullRequests.delete({
+        threadId,
+        host: "vs-ssh.visualstudio.com",
+        repository: "v3/org/project/web",
+        number: 7,
+      });
+      assert.deepStrictEqual(yield* pullRequests.listByThreadId({ threadId }), []);
+    }),
+  );
+
+  it.effect("round-trips pull request links with JSON snapshot and stack columns", () =>
+    Effect.gen(function* () {
+      const pullRequests = yield* ProjectionThreadPullRequestRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-pr-links");
+      const otherThreadId = ThreadId.make("thread-pr-links-other");
+
+      const unsynced: ProjectionThreadPullRequest = {
+        threadId,
+        host: "github.com",
+        repository: "pingdotgg/t3code",
+        number: 42,
+        url: "https://github.com/pingdotgg/t3code/pull/42",
+        source: "manual",
+        linkedAt: "2026-03-24T00:00:00.000Z",
+        snapshot: null,
+        stack: null,
+      };
+      const synced: ProjectionThreadPullRequest = {
+        threadId,
+        host: "github.com",
+        repository: "pingdotgg/t3code",
+        number: 7,
+        url: "https://github.com/pingdotgg/t3code/pull/7",
+        source: "stack",
+        linkedAt: "2026-03-23T00:00:00.000Z",
+        snapshot: {
+          state: "open",
+          title: "Add links",
+          headBranch: "feat/links",
+          baseBranch: "main",
+          isDraft: false,
+          updatedAt: "2026-03-23T01:00:00.000Z",
+          syncedAt: "2026-03-23T02:00:00.000Z",
+        },
+        stack: {
+          kind: "native",
+          id: "stack-1",
+          number: 1,
+          url: "https://github.com/pingdotgg/t3code/stack/1",
+          base: "main",
+          layers: [
+            { number: 7, headBranch: "feat/links", state: "open" },
+            { number: 42, headBranch: "feat/links-ui", state: "open" },
+          ],
+        },
+      };
+      const sharedOnOtherThread: ProjectionThreadPullRequest = {
+        ...unsynced,
+        threadId: otherThreadId,
+        source: "agent",
+        linkedAt: "2026-03-25T00:00:00.000Z",
+      };
+
+      yield* pullRequests.upsert(unsynced);
+      yield* pullRequests.upsert(synced);
+      yield* pullRequests.upsert(sharedOnOtherThread);
+
+      const rawRows = yield* sql<{
+        readonly number: number;
+        readonly snapshotJson: string | null;
+        readonly stackJson: string | null;
+      }>`
+        SELECT number, snapshot_json AS "snapshotJson", stack_json AS "stackJson"
+        FROM projection_thread_pull_requests
+        WHERE thread_id = ${threadId}
+        ORDER BY number ASC
+      `;
+      assert.strictEqual(rawRows[0]?.number, 7);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      assert.deepStrictEqual(JSON.parse(rawRows[0]?.snapshotJson ?? "null"), synced.snapshot);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      assert.deepStrictEqual(JSON.parse(rawRows[0]?.stackJson ?? "null"), synced.stack);
+      assert.strictEqual(rawRows[1]?.snapshotJson, null);
+      assert.strictEqual(rawRows[1]?.stackJson, null);
+
+      // Ordered by linked_at, then number.
+      assert.deepStrictEqual(yield* pullRequests.listByThreadId({ threadId }), [synced, unsynced]);
+
+      // One pull request across threads, ordered by linked_at.
+      assert.deepStrictEqual(
+        yield* pullRequests.listByPullRequest({
+          host: "github.com",
+          repository: "pingdotgg/t3code",
+          number: 42,
+        }),
+        [unsynced, sharedOnOtherThread],
+      );
+
+      // Upsert on the composite key replaces snapshot and stack in place.
+      const resynced = { ...unsynced, snapshot: synced.snapshot, stack: null } as const;
+      yield* pullRequests.upsert(resynced);
+      assert.deepStrictEqual(yield* pullRequests.listByThreadId({ threadId }), [synced, resynced]);
+
+      yield* pullRequests.delete({
+        threadId,
+        host: "github.com",
+        repository: "pingdotgg/t3code",
+        number: 7,
+      });
+      assert.deepStrictEqual(yield* pullRequests.listByThreadId({ threadId }), [resynced]);
+
+      yield* pullRequests.deleteByThreadIdAndSource({ threadId, source: "manual" });
+      assert.deepStrictEqual(yield* pullRequests.listByThreadId({ threadId }), []);
+      assert.deepStrictEqual(yield* pullRequests.listByThreadId({ threadId: otherThreadId }), [
+        sharedOnOtherThread,
+      ]);
+
+      yield* pullRequests.deleteByThreadId({ threadId: otherThreadId });
+      assert.deepStrictEqual(yield* pullRequests.listByThreadId({ threadId: otherThreadId }), []);
     }),
   );
 });

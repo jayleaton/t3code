@@ -212,66 +212,114 @@ it("requires a settlement to match the live Grok turn", () => {
 });
 
 it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
-  it.effect("sends runtime context with the current model without changing saved prompts", () =>
+  it.effect("rejects rollback without discarding the provider conversation", () =>
     Effect.gen(function* () {
-      const threadId = ThreadId.make("grok-runtime-context");
-      const tempDir = yield* Effect.promise(() =>
-        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "grok-runtime-context-")),
-      );
-      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
-      const wrapperPath = yield* Effect.promise(() =>
-        makeMockGrokWrapper({ T3_ACP_REQUEST_LOG_PATH: requestLogPath }),
-      );
+      const threadId = ThreadId.make("grok-unsupported-rollback");
+      const wrapperPath = yield* Effect.promise(() => makeMockGrokWrapper());
       const adapter = yield* makeTestAdapter(wrapperPath);
       yield* adapter.startSession({
         threadId,
         cwd: process.cwd(),
         runtimeMode: "full-access",
-        modelSelection: { instanceId: ProviderInstanceId.make("grok"), model: "grok-mock-alt" },
       });
-      yield* adapter.sendTurn({ threadId, input: "First prompt" });
-      yield* adapter.sendTurn({
-        threadId,
-        input: "Second prompt",
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("grok"),
-          model: "grok-4.6",
-          options: [{ id: "reasoningEffort", value: "low" }],
-        },
-      });
-      const snapshot = yield* adapter.readThread(threadId);
-      assert.deepEqual(
-        snapshot.turns.map((turn) => turn.items),
-        [
-          [
-            {
-              prompt: [{ type: "text", text: "First prompt" }],
-              result: { stopReason: "end_turn" },
-            },
-          ],
-          [
-            {
-              prompt: [{ type: "text", text: "Second prompt" }],
-              result: { stopReason: "end_turn" },
-            },
-          ],
-        ],
-      );
+      yield* adapter.sendTurn({ threadId, input: "Remember this turn" });
+      const originalTurns = [...(yield* adapter.readThread(threadId)).turns];
+      assert.isFalse(adapter.capabilities.supportsConversationRollback);
+      const error = yield* adapter.rollbackThread(threadId, 1).pipe(Effect.flip);
+      assert.equal(error._tag, "ProviderAdapterRequestError");
+      assert.deepStrictEqual((yield* adapter.readThread(threadId)).turns, originalTurns);
       yield* adapter.stopSession(threadId);
-      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
-      const prompts = requests
-        .filter((request) => request.method === "session/prompt")
-        .map(
-          (request) => (request.params as { prompt: Array<{ type: string; text: string }> }).prompt,
-        );
-      assert.equal(prompts.length, 2);
-      assert.deepEqual(prompts[0]?.[0], { type: "text", text: "First prompt" });
-      assert.include(prompts[0]?.[1]?.text, "Grok harness, as grok-mock-alt");
-      assert.deepEqual(prompts[1]?.[0], { type: "text", text: "Second prompt" });
-      assert.include(prompts[1]?.[1]?.text, "Grok harness, as grok-4.6");
-      assert.include(prompts[1]?.[1]?.text, "with low reasoning effort");
-      assert.include(prompts[1]?.[1]?.text, "embed images and videos");
     }),
+  );
+
+  it.effect(
+    "keeps frozen agent rules in initialization and runtime context out of saved prompts",
+    () =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("grok-runtime-context");
+        const tempDir = yield* Effect.promise(() =>
+          NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "grok-runtime-context-")),
+        );
+        const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+        const wrapperPath = yield* Effect.promise(() =>
+          makeMockGrokWrapper({ T3_ACP_REQUEST_LOG_PATH: requestLogPath }),
+        );
+        const adapter = yield* makeTestAdapter(wrapperPath);
+        yield* adapter.startSession({
+          threadId,
+          agentInstructions: "Act as the research agent.",
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+          modelSelection: { instanceId: ProviderInstanceId.make("grok"), model: "grok-mock-alt" },
+        });
+        yield* adapter.sendTurn({ threadId, input: "First prompt" });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "Second prompt",
+          agentInstructions: "Do not replace the frozen session rules.",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("grok"),
+            model: "grok-4.6",
+            options: [{ id: "reasoningEffort", value: "low" }],
+          },
+        });
+        const snapshot = yield* adapter.readThread(threadId);
+        assert.deepEqual(
+          snapshot.turns.map((turn) => turn.items),
+          [
+            [
+              {
+                prompt: [{ type: "text", text: "First prompt" }],
+                result: { stopReason: "end_turn" },
+              },
+            ],
+            [
+              {
+                prompt: [{ type: "text", text: "Second prompt" }],
+                result: { stopReason: "end_turn" },
+              },
+            ],
+          ],
+        );
+        yield* adapter.stopSession(threadId);
+        const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+        const prompts = requests
+          .filter((request) => request.method === "session/prompt")
+          .map(
+            (request) =>
+              (request.params as { prompt: Array<{ type: string; text: string }> }).prompt,
+          );
+        assert.equal(prompts.length, 2);
+        assert.deepEqual(prompts[0]?.[0], { type: "text", text: "First prompt" });
+        assert.include(prompts[0]?.[1]?.text, "Grok harness, as grok-mock-alt");
+        assert.deepEqual(prompts[1]?.[0], { type: "text", text: "Second prompt" });
+        assert.include(prompts[1]?.[1]?.text, "Grok harness, as grok-4.6");
+        assert.include(prompts[1]?.[1]?.text, "with low reasoning effort");
+        assert.include(prompts[1]?.[1]?.text, "embed images and videos");
+        assert.equal(requests.filter((request) => request.method === "initialize").length, 1);
+        assert.deepEqual(
+          (
+            requests.find((request) => request.method === "initialize")?.params as {
+              _meta: unknown;
+            }
+          )?._meta,
+          { rules: "Act as the research agent." },
+        );
+        assert.notInclude(
+          prompts
+            .flat()
+            .map((part) => part.text)
+            .join("\n"),
+          "Act as the research agent.",
+        );
+        assert.notInclude(
+          prompts
+            .flat()
+            .map((part) => part.text)
+            .join("\n"),
+          "Do not replace the frozen session rules.",
+        );
+      }),
   );
 
   it.effect("starts a session and maps mock ACP prompt flow to runtime events", () =>
@@ -1822,9 +1870,14 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
   it.effect("ignores replayed session/load updates when resuming a Grok session", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("grok-load-replay-filter");
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "grok-resume-rules-")),
+      );
+      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
       const wrapperPath = yield* Effect.promise(() =>
         makeMockGrokWrapper({
           T3_ACP_EMIT_LOAD_REPLAY: "1",
+          T3_ACP_REQUEST_LOG_PATH: requestLogPath,
         }),
       );
       const adapter = yield* makeTestAdapter(wrapperPath);
@@ -1841,6 +1894,7 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
         cwd: process.cwd(),
         runtimeMode: "full-access",
         modelSelection: { instanceId: ProviderInstanceId.make("grok"), model: "grok-build" },
+        agentInstructions: "Keep the original research instructions on resume.",
         resumeCursor: { schemaVersion: 1, sessionId: "mock-session-1" },
       });
 
@@ -1868,6 +1922,12 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
 
       yield* Fiber.interrupt(runtimeEventsFiber);
       yield* adapter.stopSession(threadId);
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      assert.deepEqual(
+        (requests.find((request) => request.method === "initialize")?.params as { _meta: unknown })
+          ?._meta,
+        { rules: "Keep the original research instructions on resume." },
+      );
     }),
   );
 

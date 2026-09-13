@@ -5,7 +5,7 @@ import type {
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
-import { OrchestrationCommand } from "@t3tools/contracts";
+import { CommandId, OrchestrationCommand } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
@@ -212,6 +212,29 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           });
         }
 
+        // New and moved projects do not carry a resolved identity in the event-derived
+        // command model. Legacy PR edits need it to identify the link they replace.
+        if (
+          envelope.command.type === "thread.meta.update" &&
+          envelope.command.linkedPullRequest !== undefined
+        ) {
+          const threadId = envelope.command.threadId;
+          const thread = commandReadModel.threads.find((thread) => thread.id === threadId);
+          if (thread !== undefined) {
+            const project = yield* projectionSnapshotQuery.getProjectShellById(thread.projectId);
+            if (Option.isSome(project)) {
+              commandReadModel = {
+                ...commandReadModel,
+                projects: commandReadModel.projects.map((entry) =>
+                  entry.id === thread.projectId
+                    ? { ...entry, repositoryIdentity: project.value.repositoryIdentity }
+                    : entry,
+                ),
+              };
+            }
+          }
+        }
+
         // Command snapshots omit activities at startup and cap them while running.
         // Read this request's durable state before deciding how to send the answer.
         const userInputActivity =
@@ -412,6 +435,17 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       aggregateId: threadId,
     });
 
+  const getCommandReceipts: NonNullable<OrchestrationEngineShape["getCommandReceipts"]> = (
+    commandIds,
+  ) =>
+    Effect.forEach(commandIds, (commandId) =>
+      commandReceiptRepository.getByCommandId({ commandId: CommandId.make(commandId) }),
+    ).pipe(
+      Effect.map((receipts) =>
+        receipts.flatMap((receipt) => (Option.isSome(receipt) ? [receipt.value] : [])),
+      ),
+    );
+
   const dispatch: OrchestrationEngineShape["dispatch"] = (command, options) =>
     Effect.gen(function* () {
       const result = yield* Deferred.make<{ sequence: number }, OrchestrationDispatchError>();
@@ -428,6 +462,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     readEvents,
     readThreadEvents,
     getThreadReplayStats,
+    getCommandReceipts,
     dispatch,
     subscribeDomainEvents: PubSub.subscribe(eventPubSub).pipe(Effect.map(Stream.fromSubscription)),
     // Each access creates a fresh PubSub subscription so that multiple

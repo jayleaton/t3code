@@ -26,9 +26,9 @@ import {
 } from "@t3tools/contracts/settings";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import {
-  filterSharedServerPatch,
   findSharedSettingsMismatches,
   pickSharedServerSettings,
+  filterSharedServerPatch,
   splitSharedServerPatch,
   supportsSharedSettingsSync,
 } from "@t3tools/client-runtime/state/shared-settings";
@@ -427,8 +427,54 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
   );
   const { environments } = useEnvironments();
   const updateSettings = useCallback(
-    (patch: UnifiedSettingsPatch) => {
+    async (patch: UnifiedSettingsPatch) => {
       const { serverPatch, clientPatch } = splitPatch(patch);
+
+      if (serverPatch.mcpGatewayProfiles !== undefined) {
+        if (!environmentId) {
+          toastManager.add({
+            type: "warning",
+            title: "Agent not saved",
+            description: PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE,
+          });
+          return false;
+        }
+        const saved = await persistServerSettings({ environmentId, input: { patch: serverPatch } });
+        if (saved._tag !== "Success") return false;
+        const { sharedPatch } = splitSharedServerPatch(serverPatch);
+        const results = await Promise.all(
+          environments
+            .filter(
+              (target) =>
+                target.environmentId !== environmentId && supportsSharedSettingsSync(target),
+            )
+            .map((target) =>
+              persistServerSettings({
+                environmentId: target.environmentId,
+                input: {
+                  patch: filterSharedServerPatch(
+                    {
+                      ...sharedPatch,
+                      mcpGatewayProfiles: saved.value.mcpGatewayProfiles,
+                      mcpGatewayProfileDeletedAt: saved.value.mcpGatewayProfileDeletedAt,
+                    },
+                    target.serverConfig?.environment.capabilities,
+                  ),
+                  replicateProfiles: true,
+                },
+              }),
+            ),
+        );
+        if (results.some((result) => result._tag !== "Success")) {
+          toastManager.add({
+            type: "warning",
+            title: "Agent saved on this machine",
+            description: "Some machines could not sync. Use Apply to all in Settings to retry.",
+          });
+        }
+        if (Object.keys(clientPatch).length > 0) persistClientSettingsPatch(clientPatch);
+        return true;
+      }
 
       if (Object.keys(serverPatch).length > 0) {
         const { sharedPatch, localPatch } = splitSharedServerPatch(serverPatch);
@@ -552,6 +598,9 @@ export function useSharedSettingsSync() {
             target?.serverConfig?.settings,
             primarySettings,
           ),
+          ...(target?.serverConfig?.environment.capabilities.agentLibrarySync === true
+            ? { replicateProfiles: true }
+            : {}),
         },
       });
     }
@@ -560,7 +609,7 @@ export function useSharedSettingsSync() {
   return { mismatches, applyToAll };
 }
 
-export function useUpdateEnvironmentSettings(environmentId: EnvironmentId) {
+export function useUpdateEnvironmentSettings(environmentId: EnvironmentId | null) {
   return useUpdateSettingsTarget(environmentId);
 }
 

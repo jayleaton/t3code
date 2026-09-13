@@ -1,3 +1,4 @@
+import { AgentLibrarySync } from "../hooks/useAgentLibrary";
 import { type ServerLifecycleWelcomePayload } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -67,6 +68,7 @@ import {
 } from "../components/KeybindingsUpdateToast.logic";
 
 import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
+import { installDesktopPasteAsText } from "../lib/desktopPasteAsText";
 import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
 
 export const Route = createRootRoute({
@@ -108,6 +110,7 @@ export const Route = createRootRoute({
 });
 
 function RootRouteView() {
+  useEffect(() => installDesktopPasteAsText(window.desktopBridge, window), []);
   const pathname = useLocation({ select: (location) => location.pathname });
   const { authGateState } = Route.useRouteContext();
   const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
@@ -169,6 +172,7 @@ function RootRouteView() {
 
   const appShell = (
     <CommandPalette>
+      <AgentLibrarySync />
       <AppSidebarLayout>
         <Outlet />
       </AppSidebarLayout>
@@ -226,6 +230,11 @@ function EnvironmentThemeSync() {
 
 function ContrastAppearanceSync() {
   const appearanceContrast = useClientSettings((settings) => settings.appearanceContrast);
+  const diffColorScheme = useClientSettings((settings) => settings.diffColorScheme);
+
+  useEffect(() => {
+    document.documentElement.dataset.diffColorScheme = diffColorScheme;
+  }, [diffColorScheme]);
 
   useEffect(() => {
     applyAppearanceContrast(document.documentElement, appearanceContrast);
@@ -238,7 +247,13 @@ function GlassAppearanceSync() {
   const glassOpacity = useClientSettings((settings) => settings.glassOpacity);
 
   useEffect(() => {
-    document.documentElement.style.setProperty("--glass-opacity", `${glassOpacity}%`);
+    const style = document.documentElement.style;
+    style.setProperty("--glass-opacity", `${glassOpacity}%`);
+    if (glassOpacity === 100) {
+      style.setProperty("--glass-blur", "0px");
+    } else {
+      style.removeProperty("--glass-blur");
+    }
   }, [glassOpacity]);
 
   return null;

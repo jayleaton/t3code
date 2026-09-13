@@ -16,6 +16,7 @@ import {
 import { WORKSPACE_IMAGE_PREVIEW_EXTENSIONS } from "@t3tools/shared/filePreview";
 import { isCommandAvailable } from "@t3tools/shared/shell";
 import * as NodeOS from "node:os";
+
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
@@ -34,8 +35,12 @@ import * as ElectronMenu from "../../electron/ElectronMenu.ts";
 import * as ElectronShell from "../../electron/ElectronShell.ts";
 import * as ElectronTheme from "../../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
+import * as Electron from "electron";
+import * as MacPermissions from "../../permissions/MacPermissions.ts";
+import { safariPermissionCheck } from "../../preview/BrowserImport/SafariPermission.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
+import { readMcpGatewayBridgeTokenFromProcess } from "../../mcpGatewayCredential.ts";
 import {
   extractDistroFromUncPath,
   resolveWslPickFolderDefaultPath,
@@ -52,6 +57,25 @@ const ContextMenuInput = Schema.Struct({
   position: Schema.optionalKey(ContextMenuPosition),
 });
 
+const McpGatewayLaunchConfigSchema = Schema.Struct({
+  command: Schema.String,
+  args: Schema.Array(Schema.String),
+  env: Schema.Record(Schema.String, Schema.String),
+});
+
+export function resolveMcpGatewayLaunchConfig(input: {
+  readonly isPackaged: boolean;
+  readonly executablePath: string;
+  readonly resourcesPath: string;
+}) {
+  if (!input.isPackaged) return null;
+  return {
+    command: input.executablePath,
+    args: [`${input.resourcesPath}/t3-mcp-gateway.mjs`],
+    env: { ELECTRON_RUN_AS_NODE: "1" },
+  };
+}
+
 function toWebSocketBaseUrl(httpBaseUrl: URL): string {
   const url = new URL(httpBaseUrl.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -64,6 +88,52 @@ export const getAppBranding = DesktopIpc.makeSyncIpcMethod({
   handler: Effect.fn("desktop.ipc.window.getAppBranding")(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     return environment.branding;
+  }),
+});
+
+export const getMcpGatewayLaunchConfig = DesktopIpc.makeSyncIpcMethod({
+  channel: IpcChannels.GET_MCP_GATEWAY_LAUNCH_CONFIG_CHANNEL,
+  result: Schema.NullOr(McpGatewayLaunchConfigSchema),
+  handler: Effect.fn("desktop.ipc.window.getMcpGatewayLaunchConfig")(function* () {
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    // Electron is the packaged Node runtime when ELECTRON_RUN_AS_NODE is set.
+    return resolveMcpGatewayLaunchConfig({
+      isPackaged: environment.isPackaged,
+      executablePath: process.execPath,
+      resourcesPath: environment.resourcesPath,
+    });
+  }),
+});
+
+export const getMcpGatewayBridgeToken = DesktopIpc.makeSyncIpcMethod({
+  channel: IpcChannels.GET_MCP_GATEWAY_BRIDGE_TOKEN_CHANNEL,
+  result: Schema.NullOr(Schema.String),
+  handler: Effect.fn("desktop.ipc.window.getMcpGatewayBridgeToken")(function* () {
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    return readMcpGatewayBridgeTokenFromProcess(environment.homeDirectory);
+  }),
+});
+
+class DesktopWindowUnavailable extends Schema.TaggedError<DesktopWindowUnavailable>()(
+  "DesktopWindowUnavailable",
+  { message: Schema.String },
+) {}
+
+export const revealWindow = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.REVEAL_WINDOW_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.window.revealWindow")(function* (_input, event) {
+    const electronWindow = yield* ElectronWindow.ElectronWindow;
+    const window = event?.sender
+      ? yield* electronWindow.fromWebContents(event.sender)
+      : Option.none();
+    if (Option.isNone(window) || window.value.isDestroyed()) {
+      return yield* new DesktopWindowUnavailable({
+        message: "The requesting desktop window is unavailable.",
+      });
+    }
+    yield* electronWindow.reveal(window.value);
   }),
 });
 
@@ -305,7 +375,16 @@ export const openSystemSettings = DesktopIpc.makeIpcMethod({
   result: Schema.Boolean,
   handler: Effect.fn("desktop.ipc.window.openSystemSettings")(function* (pane) {
     const shell = yield* ElectronShell.ElectronShell;
-    return yield* shell.openSystemSettings(pane);
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    if (environment.platform !== "darwin") return false;
+    const owner = Electron.BrowserWindow.getFocusedWindow();
+    const opened = yield* shell.openSystemSettings(pane);
+    if (opened && environment.isPackaged) {
+      const permissions = yield* MacPermissions.MacPermissions;
+      const isGranted = yield* safariPermissionCheck;
+      yield* permissions.showHelper(pane, owner, isGranted);
+    }
+    return opened;
   }),
 });
 
@@ -330,6 +409,32 @@ export const probeRemoteEditors = DesktopIpc.makeIpcMethod({
       }
     }
     return available;
+  }),
+});
+
+export const pasteAsText = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PASTE_AS_TEXT_CHANNEL,
+  payload: Schema.Undefined,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.window.pasteAsText")(function* (_input, event) {
+    const electronWindow = yield* ElectronWindow.ElectronWindow;
+    const window = yield* electronWindow.main;
+    if (
+      event === undefined ||
+      Option.isNone(window) ||
+      window.value.isDestroyed() ||
+      window.value.webContents.id !== event.sender.id
+    ) {
+      return;
+    }
+    const focused = Electron.webContents.getFocusedWebContents();
+    if (
+      focused &&
+      !focused.isDestroyed() &&
+      Electron.BrowserWindow.fromWebContents(focused) === window.value
+    ) {
+      focused.paste();
+    }
   }),
 });
 
@@ -377,5 +482,17 @@ export const pickThemeFiles = DesktopIpc.makeIpcMethod({
         Effect.orElseSucceed((): PickedThemeFile => ({ name, size: 0, text: "" })),
       );
     });
+  }),
+});
+
+export const checkSystemPermission = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.CHECK_SYSTEM_PERMISSION_CHANNEL,
+  payload: SystemSettingsPaneSchema,
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.window.checkSystemPermission")(function* () {
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    if (environment.platform !== "darwin") return false;
+    const check = yield* safariPermissionCheck;
+    return yield* Effect.promise(check);
   }),
 });

@@ -36,7 +36,7 @@ import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { ServerConfig } from "../../config.ts";
-import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
+import { buildRuntimeInstructions, withAgentInstructions } from "../RuntimeInstructions.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import type { AntigravityAuth } from "../AntigravityAuth.ts";
 import {
@@ -230,11 +230,22 @@ const resolveClientFilePath = Effect.fn("AntigravityAdapter.resolveClientFilePat
   }) {
     const { path } = input;
     const resolved = path.resolve(input.requestPath);
-    // Follow symlinks on the parent so a link out of the workspace cannot escape it.
-    const parent = yield* input.fileSystem
-      .realPath(path.dirname(resolved))
-      .pipe(Effect.orElseSucceed(() => path.dirname(resolved)));
-    const real = path.join(parent, path.basename(resolved));
+    // Canonicalize the nearest existing ancestor: a new nested directory under
+    // macOS /var must compare against the same /private/var root as the session.
+    let ancestor = resolved;
+    const missing: string[] = [];
+    let real = resolved;
+    while (true) {
+      const canonical = yield* input.fileSystem.realPath(ancestor).pipe(Effect.option);
+      if (Option.isSome(canonical)) {
+        real = path.join(canonical.value, ...missing);
+        break;
+      }
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) break;
+      missing.unshift(path.basename(ancestor));
+      ancestor = parent;
+    }
     const roots = yield* Effect.forEach(input.allowedRoots, (root) =>
       input.fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => root)),
     );
@@ -793,6 +804,9 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
                 cwd,
                 clientInfo: { name: "t3-code", version: "0.0.0" },
                 clientFileSystem: true,
+                ...(mcp?.agentDeviceEnvironment
+                  ? { agentDeviceEnvironment: mcp.agentDeviceEnvironment }
+                  : {}),
                 additionalDirectories: [serverConfig.attachmentsDir],
                 ...(Option.isSome(cursor) ? { resumeSessionId: cursor.value.sessionId } : {}),
                 mcpServers: mcp
@@ -1082,7 +1096,10 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
                   ...prompt,
                   {
                     type: "text",
-                    text: buildRuntimeInstructions({ harness: "Antigravity", model }),
+                    text: withAgentInstructions(
+                      buildRuntimeInstructions({ harness: "Antigravity", model }),
+                      input.agentInstructions,
+                    ),
                   },
                 ],
               },

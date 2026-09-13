@@ -32,13 +32,18 @@ import {
   setUpdateChannel,
 } from "./methods/updates.ts";
 import {
+  revealWindow,
   getAppBranding,
+  getMcpGatewayBridgeToken,
+  getMcpGatewayLaunchConfig,
   getLocalEnvironmentBootstraps,
   getLocalEnvironmentBearerToken,
   getSystemLocale,
   getWindowFullscreenState,
   openExternal,
   openSystemSettings,
+  checkSystemPermission,
+  pasteAsText,
   probeRemoteEditors,
   pickFolder,
   pickProjectFavicon,
@@ -71,7 +76,10 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(AppActivationIpc.setReady);
   yield* ipc.handle(AppActivationIpc.complete);
 
+  yield* ipc.handle(revealWindow);
   yield* ipc.handleSync(getAppBranding);
+  yield* ipc.handleSync(getMcpGatewayBridgeToken);
+  yield* ipc.handleSync(getMcpGatewayLaunchConfig);
   yield* ipc.handleSync(getSystemLocale);
   yield* ipc.handleSync(getWindowFullscreenState);
   yield* ipc.handleSync(getLocalEnvironmentBootstraps);
@@ -122,6 +130,8 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(showContextMenu);
   yield* ipc.handle(openExternal);
   yield* ipc.handle(openSystemSettings);
+  yield* ipc.handle(checkSystemPermission);
+  yield* ipc.handle(pasteAsText);
   yield* ipc.handle(probeRemoteEditors);
   yield* ipc.handle(getUpdateState);
   yield* ipc.handle(setUpdateChannel);

@@ -44,14 +44,20 @@ export type UnpinThreadInput = CommandInput<"thread.unpin">;
 export type ReorderPinnedThreadInput = CommandInput<"thread.pin.reorder">;
 export type ReorderActiveThreadInput = CommandInput<"thread.active.reorder">;
 export type UpdateThreadMetadataInput = CommandInput<"thread.meta.update">;
+export type LinkThreadPullRequestInput = CommandInput<"thread.pull-request.link">;
+export type UnlinkThreadPullRequestInput = CommandInput<"thread.pull-request.unlink">;
 export type SetThreadRuntimeModeInput = CommandInput<"thread.runtime-mode.set">;
 export type SetThreadInteractionModeInput = CommandInput<"thread.interaction-mode.set">;
 export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
 export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
+export type ControlThreadLifecycleInput = CommandInput<"thread.lifecycle.control">;
+export type RespondToThreadApprovalsInput = CommandInput<"thread.approval.batch-respond">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
 export type DismissThreadUserInputInput = CommandInput<"thread.user-input.dismiss">;
-export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert">;
+export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert"> & {
+  readonly restoreFiles?: boolean;
+};
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
 
 type DispatchTag = typeof ORCHESTRATION_WS_METHODS.dispatchCommand;
@@ -252,6 +258,24 @@ export const updateThreadMetadata: (input: UpdateThreadMetadataInput) => Command
   });
 });
 
+export const linkThreadPullRequest: (input: LinkThreadPullRequestInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.linkThreadPullRequest")(function* (input) {
+    return yield* dispatch({
+      ...input,
+      type: "thread.pull-request.link",
+      commandId: yield* commandId(input),
+    });
+  });
+
+export const unlinkThreadPullRequest: (input: UnlinkThreadPullRequestInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.unlinkThreadPullRequest")(function* (input) {
+    return yield* dispatch({
+      ...input,
+      type: "thread.pull-request.unlink",
+      commandId: yield* commandId(input),
+    });
+  });
+
 export const setThreadRuntimeMode: (input: SetThreadRuntimeModeInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.setThreadRuntimeMode",
 )(function* (input) {
@@ -299,6 +323,28 @@ export const interruptThreadTurn: (input: InterruptThreadTurnInput) => CommandEf
   });
 });
 
+export const controlThreadLifecycle: (input: ControlThreadLifecycleInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.controlThreadLifecycle")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.lifecycle.control",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
+export const respondToThreadApprovals: (input: RespondToThreadApprovalsInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.respondToThreadApprovals")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.approval.batch-respond",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
 export const respondToThreadApproval: (input: RespondToThreadApprovalInput) => CommandEffect =
   Effect.fn("EnvironmentCommands.respondToThreadApproval")(function* (input) {
     const metadata = yield* timestampedCommandMetadata(input);
@@ -335,9 +381,10 @@ export const dismissThreadUserInput: (input: DismissThreadUserInputInput) => Com
 export const revertThreadCheckpoint: (input: RevertThreadCheckpointInput) => CommandEffect =
   Effect.fn("EnvironmentCommands.revertThreadCheckpoint")(function* (input) {
     const metadata = yield* timestampedCommandMetadata(input);
+    const { restoreFiles, ...command } = input;
     return yield* dispatch({
-      ...input,
-      type: "thread.checkpoint.revert",
+      ...command,
+      type: restoreFiles === false ? "thread.conversation.revert" : "thread.checkpoint.revert",
       commandId: metadata.commandId,
       createdAt: metadata.createdAt,
     });

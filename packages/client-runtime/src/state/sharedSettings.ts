@@ -27,6 +27,8 @@ const SHARED_SERVER_SETTING_KEYS = [
   "sidebarAutoSettleOnMerge",
   "newWorktreesStartFromOrigin",
   "sourceControlWritingStyle",
+  "mcpGatewayProfiles",
+  "mcpGatewayProfileDeletedAt",
   "textGenerationModelSelection",
 ] as const satisfies ReadonlyArray<keyof ServerSettings & keyof ServerSettingsPatch>;
 

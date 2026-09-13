@@ -80,6 +80,7 @@ function makeThread(
     },
     runtimeMode: "full-access",
     interactionMode: "default",
+    pullRequests: [],
     branch: null,
     worktreePath: null,
     latestTurn: null,
@@ -301,6 +302,86 @@ const startHarness = Effect.fn("startThreadSettlementHarness")(function* (
 });
 
 describe("ThreadSettlementReactor", () => {
+  it("distinguishes a project that inherits the threshold from one that disables it", () => {
+    const inherits = ThreadSettlementReactor.autoSettlementSettingsKey({
+      ...DEFAULT_SERVER_SETTINGS,
+      projectSettingsOverrides: { [PROJECT_ID]: { sidebarAutoSettleOnMerge: true } },
+    });
+    const never = ThreadSettlementReactor.autoSettlementSettingsKey({
+      ...DEFAULT_SERVER_SETTINGS,
+      projectSettingsOverrides: {
+        [PROJECT_ID]: { sidebarAutoSettleOnMerge: true, sidebarAutoSettleAfterDays: null },
+      },
+    });
+    assert.notStrictEqual(inherits, never);
+  });
+
+  it("ignores project overrides that do not touch settlement", () => {
+    const base = ThreadSettlementReactor.autoSettlementSettingsKey({
+      ...DEFAULT_SERVER_SETTINGS,
+      projectSettingsOverrides: { [PROJECT_ID]: { sidebarAutoSettleOnMerge: false } },
+    });
+    const unrelated = ThreadSettlementReactor.autoSettlementSettingsKey({
+      ...DEFAULT_SERVER_SETTINGS,
+      projectSettingsOverrides: {
+        [LINKED_PROJECT_ID]: { defaultThreadEnvMode: "worktree" },
+        [PROJECT_ID]: { sidebarAutoSettleOnMerge: false, defaultAutoPull: true },
+      },
+    });
+    assert.strictEqual(base, unrelated);
+  });
+
+  it.effect(
+    "settles all-terminal links from snapshots and keeps open or unsynced links active",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(Date.parse(NOW));
+          const link = (number: number, state: "open" | "merged" | null) => ({
+            host: "example.test",
+            repository: "owner/repository",
+            number,
+            url: `https://example.test/owner/repository/pull/${number}`,
+            source: "manual" as const,
+            linkedAt: NOW,
+            stack: null,
+            snapshot:
+              state === null
+                ? null
+                : {
+                    state,
+                    title: "Review",
+                    headBranch: "feature",
+                    baseBranch: "main",
+                    isDraft: false,
+                    updatedAt: NOW,
+                    syncedAt: NOW,
+                    mergedAt: state === "merged" ? NOW : null,
+                  },
+          });
+          const fixture = yield* makeHarness({
+            snapshot: makeSnapshot([
+              makeThread("merged", { pullRequests: [link(1, "merged"), link(2, "merged")] }),
+              makeThread("open", { pullRequests: [link(1, "merged"), link(2, "open")] }),
+              makeThread("unsynced", { pullRequests: [link(1, "merged"), link(2, null)] }),
+            ]),
+            settings: { ...DEFAULT_SERVER_SETTINGS, sidebarAutoSettleOnMerge: true },
+            branchPullRequest: () => Effect.die("linked threads must not query the branch"),
+            pullRequestSummary: () => Effect.die("linked threads must use their snapshots"),
+          });
+          yield* Effect.gen(function* () {
+            const reactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+            yield* startHarness(reactor, fixture.activation, fixture.snapshotReads);
+            assert.deepStrictEqual(
+              (yield* Ref.get(fixture.commands)).map(({ threadId }) => threadId),
+              [ThreadId.make("merged")],
+            );
+            assert.deepStrictEqual(yield* Ref.get(fixture.branchCalls), []);
+            assert.deepStrictEqual(yield* Ref.get(fixture.summaryCalls), []);
+          }).pipe(Effect.provide(fixture.layer));
+        }),
+      ),
+  );
   it.effect("uses saved PRs without settling resumed threads or branches with newer PRs", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -434,6 +515,59 @@ describe("ThreadSettlementReactor", () => {
     ),
   );
 
+  it.effect("a project override settles only that project's inactive threads", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const overriddenProject = ProjectId.make("overridden-project");
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot(
+            [
+              makeThread("inherits-thread"),
+              makeThread("overridden-thread", { projectId: overriddenProject }),
+            ],
+            [makeProject(), makeProject(overriddenProject, "/workspace/overridden")],
+          ),
+          settings: {
+            ...DEFAULT_SERVER_SETTINGS,
+            sidebarAutoSettleAfterDays: null,
+            sidebarAutoSettleOnMerge: false,
+            projectSettingsOverrides: {
+              [overriddenProject]: { sidebarAutoSettleAfterDays: 1 },
+            },
+          },
+        });
+
+        yield* Effect.gen(function* () {
+          const reactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+          yield* reactor.start();
+          yield* Queue.take(fixture.settingsReads);
+          yield* Deferred.succeed(fixture.activation, undefined);
+          yield* Queue.take(fixture.snapshotReads);
+          yield* reactor.drain;
+          assert.deepStrictEqual(
+            (yield* Ref.get(fixture.commands)).map((command) => command.threadId),
+            [ThreadId.make("overridden-thread")],
+          );
+
+          // Clearing the override is a settlement change, so the sweep re-arms.
+          yield* fixture.updateSettings({
+            projectSettingsOverrides: { [overriddenProject]: null },
+            sidebarAutoSettleAfterDays: 1,
+          });
+          yield* Queue.take(fixture.snapshotReads);
+          yield* reactor.drain;
+          // The static snapshot never records the first settlement, so the
+          // second sweep dispatches for both; the inheriting thread is new.
+          assert.include(
+            (yield* Ref.get(fixture.commands)).map((command) => command.threadId),
+            ThreadId.make("inherits-thread"),
+          );
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
   it.effect("starts without clients and skips protected threads before pull request lookup", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -551,6 +685,157 @@ describe("ThreadSettlementReactor", () => {
         }).pipe(Effect.provide(fixture.layer));
       }),
     ),
+  );
+
+  it.effect("automatically settles an agent chat when its branch PR merges", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const pullRequest = yield* Ref.make<"open" | "merged">("open");
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([
+            makeThread("open-pr", {
+              branch: "saved-feature",
+              profileSnapshot: {
+                profileId: "cody",
+                profileName: "Cody",
+                revision: 1,
+                effectiveSource: {
+                  modelSelection: "profile",
+                  runtimeMode: "profile",
+                  interactionMode: "profile",
+                  reasoningEffort: "profile",
+                },
+              },
+              latestUserMessageAt: "2026-08-27T00:00:00.000Z",
+            }),
+          ]),
+          branchPullRequest: () =>
+            Ref.get(pullRequest).pipe(Effect.map((state) => makeBranchPullRequest(state))),
+        });
+
+        yield* Effect.gen(function* () {
+          const reactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+          yield* startHarness(reactor, fixture.activation, fixture.snapshotReads);
+          assert.deepStrictEqual(yield* Ref.get(fixture.commands), []);
+
+          yield* Ref.set(pullRequest, "merged");
+          yield* TestClock.adjust("1 minute");
+          yield* Queue.take(fixture.snapshotReads);
+          yield* reactor.drain;
+
+          assert.deepStrictEqual(
+            (yield* Ref.get(fixture.commands))
+              .map((command) => command.threadId)
+              .sort((left, right) => left.localeCompare(right)),
+            [ThreadId.make("open-pr")],
+          );
+          assert.strictEqual((yield* Ref.get(fixture.branchCalls)).length, 2);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect(
+    "settles every agent chat linked to a merged PR, including branch-discovered links",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(Date.parse(NOW));
+          const merged = yield* Ref.make(false);
+          const reference = {
+            projectId: PROJECT_ID,
+            repository: "owner/repository",
+            number: 42,
+            url: "https://example.test/owner/repository/pull/42",
+          };
+          const threads = ["cody", "alex", "peter"].map((profileId, index) =>
+            makeThread(profileId, {
+              latestUserMessageAt: "2026-08-27T00:00:00.000Z",
+              profileSnapshot: {
+                profileId,
+                profileName: profileId,
+                revision: 1,
+                effectiveSource: {
+                  modelSelection: "profile",
+                  runtimeMode: "profile",
+                  interactionMode: "profile",
+                  reasoningEffort: "profile",
+                },
+              },
+              ...(index === 0
+                ? {
+                    pullRequests: [
+                      {
+                        host: "example.test",
+                        repository: reference.repository,
+                        number: 42,
+                        url: reference.url,
+                        source: "agent" as const,
+                        linkedAt: "2026-08-27T00:00:00.000Z",
+                        snapshot: null,
+                        stack: null,
+                      },
+                    ],
+                  }
+                : {}),
+              ...(index === 2
+                ? { branchPullRequest: reference }
+                : { linkedPullRequest: reference }),
+            }),
+          );
+          const fixture = yield* makeHarness({
+            snapshot: makeSnapshot([
+              ...threads,
+              makeThread("unrelated", {
+                latestUserMessageAt: "2026-08-27T00:00:00.000Z",
+                linkedPullRequest: { ...reference, number: 99 },
+              }),
+            ]),
+            pullRequestSummary: (input) =>
+              Ref.get(merged).pipe(
+                Effect.map((done) =>
+                  makePullRequestSummary({
+                    ...input,
+                    state: done && input.number === 42 ? "merged" : "open",
+                  }),
+                ),
+              ),
+          });
+          yield* Effect.gen(function* () {
+            const reactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+            yield* startHarness(reactor, fixture.activation, fixture.snapshotReads);
+            assert.deepStrictEqual(yield* Ref.get(fixture.commands), []);
+            yield* Ref.set(merged, true);
+            yield* Ref.update(fixture.snapshots, (snapshot) => ({
+              ...snapshot,
+              threads: snapshot.threads.map((thread) => ({
+                ...thread,
+                pullRequests: thread.pullRequests.map((link) => ({
+                  ...link,
+                  snapshot: {
+                    state: "merged" as const,
+                    title: "Agent work",
+                    headBranch: "feature",
+                    baseBranch: "main",
+                    isDraft: false,
+                    updatedAt: NOW,
+                    mergedAt: NOW,
+                    syncedAt: NOW,
+                  },
+                })),
+              })),
+            }));
+            yield* TestClock.adjust("1 minute");
+            yield* Queue.take(fixture.snapshotReads);
+            yield* reactor.drain;
+            assert.deepStrictEqual(
+              (yield* Ref.get(fixture.commands)).map((command) => command.threadId).sort(),
+              ["alex", "cody", "peter"],
+            );
+          }).pipe(Effect.provide(fixture.layer));
+        }),
+      ),
   );
 
   it.effect("reevaluates immediately after a pull request merge", () =>

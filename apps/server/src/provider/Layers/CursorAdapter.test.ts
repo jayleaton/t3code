@@ -26,7 +26,7 @@ import {
 } from "@t3tools/contracts";
 
 import { ServerConfig } from "../../config.ts";
-import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
+import { buildRuntimeInstructions, withAgentInstructions } from "../RuntimeInstructions.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import type { CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { makeCursorAdapter } from "./CursorAdapter.ts";
@@ -162,6 +162,28 @@ const cursorAdapterTestLayer = it.layer(
 );
 
 cursorAdapterTestLayer("CursorAdapterLive", (it) => {
+  it.effect("rejects rollback without discarding the provider conversation", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const settings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-unsupported-rollback");
+      const wrapperPath = yield* Effect.promise(() => makeMockAgentWrapper());
+      yield* settings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+      yield* adapter.startSession({
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId, input: "Remember this turn", attachments: [] });
+      const originalTurns = [...(yield* adapter.readThread(threadId)).turns];
+      assert.isFalse(adapter.capabilities.supportsConversationRollback);
+      const error = yield* adapter.rollbackThread(threadId, 1).pipe(Effect.flip);
+      assert.equal(error._tag, "ProviderAdapterRequestError");
+      assert.deepStrictEqual((yield* adapter.readThread(threadId)).turns, originalTurns);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("rejects a Cursor transport error returned as a successful assistant answer", () =>
     Effect.gen(function* () {
       const adapter = yield* CursorAdapter;
@@ -311,6 +333,7 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       yield* adapter.sendTurn({
         threadId,
         input: "please $review this",
+        agentInstructions: "Act as the review agent.",
         attachments: [],
       });
       const snapshot = yield* adapter.readThread(threadId);
@@ -336,7 +359,13 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
         [
           [
             { type: "text", text: "please /review this" },
-            { type: "text", text: buildRuntimeInstructions({ harness: "Cursor" }) },
+            {
+              type: "text",
+              text: withAgentInstructions(
+                buildRuntimeInstructions({ harness: "Cursor" }),
+                "Act as the review agent.",
+              ),
+            },
           ],
         ],
       );

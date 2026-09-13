@@ -5,6 +5,7 @@ import * as NodeCrypto from "node:crypto";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import {
+  type DeviceServiceState,
   AuthAccessTokenType,
   AuthStandardClientScopes,
   AuthEnvironmentBootstrapTokenType,
@@ -97,6 +98,7 @@ const encodeTestJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unk
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ServerConfig from "./config.ts";
+import * as DeviceService from "./device/DeviceService.ts";
 import { HTTP_ROUTER_CONFIG, makeRoutesLayer } from "./server.ts";
 import {
   isThreadDetailEvent,
@@ -117,6 +119,7 @@ import {
 } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
+import * as PullRequestSyncReactor from "./orchestration/PullRequestSyncReactor.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { OrchestrationEventStoreLive } from "./persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationEventStore } from "./persistence/Services/OrchestrationEventStore.ts";
@@ -331,6 +334,7 @@ const makeDefaultOrchestrationReadModel = () => {
         runtimeMode: "full-access" as const,
         branch: null,
         worktreePath: null,
+        pullRequests: [],
         createdAt: now,
         updatedAt: now,
         archivedAt: null,
@@ -361,6 +365,7 @@ const makeDefaultOrchestrationThreadShell = (
     interactionMode: "default",
     branch: null,
     worktreePath: null,
+    pullRequests: [],
     latestTurn: null,
     createdAt: now,
     updatedAt: now,
@@ -384,7 +389,7 @@ const browserOtlpTracingLayer = Layer.mergeAll(
 
 const makeAuthTestLayer = () =>
   EnvironmentAuth.layer.pipe(
-    Layer.provide(SqlitePersistenceMemory),
+    Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provide(ServerSecretStore.layer),
     Layer.provide(
       Layer.mock(ServerEnvironment.ServerEnvironmentIdentity)({
@@ -802,6 +807,11 @@ const buildAppUnderTest = (options?: {
             listBindings: () => Effect.succeed([]),
             ...options?.layers?.providerSessionDirectory,
           }),
+          Layer.mock(DeviceService.DeviceService)({
+            state: Effect.succeed(EMPTY_DEVICE_STATE),
+            currentReadiness: () => Effect.succeed(null),
+            sessionsForThread: () => Effect.succeed([]),
+          }),
         ),
       ),
       Layer.provide(
@@ -955,6 +965,11 @@ const buildAppUnderTest = (options?: {
             start: () => Effect.void,
             drainThrough: () => Effect.void,
             ...options?.layers?.threadDeletionReactor,
+          }),
+          Layer.mock(PullRequestSyncReactor.PullRequestSyncReactor)({
+            start: () => Effect.void,
+            drain: Effect.void,
+            requestSync: () => Effect.void,
           }),
         ),
       ),
@@ -1651,6 +1666,18 @@ const NodeHttpServerTestWithWsDeflate = HttpServer.layerTestClient.pipe(
     ),
   ),
 );
+
+const EMPTY_DEVICE_STATE: DeviceServiceState = {
+  hosts: [],
+  hostStatus: "disabled",
+  hostStatuses: {},
+  devices: [],
+  sessions: [],
+  onboardingCompleted: false,
+  agentAccessEnabled: false,
+  hubBasePath: DeviceService.DEVICE_HUB_ROUTE_PREFIX,
+  revision: 0,
+};
 
 it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("parks HTTP ingress until command readiness", () =>
@@ -5510,6 +5537,31 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("serves draft workspace files without a thread", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-draft-media-" });
+      yield* fileSystem.writeFileString(path.join(directory, "note.html"), "<p>draft</p>");
+
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const issued = yield* client[WS_METHODS.assetsCreateUrl]({
+              resource: { _tag: "draft-workspace-file", cwd: directory, path: "note.html" },
+            });
+            const response = yield* HttpClient.get(issued.relativeUrl);
+            assert.equal(response.status, 200);
+            assert.equal(response.headers["content-type"], "text/html; charset=utf-8");
+            assert.equal(yield* response.text, "<p>draft</p>");
+          }),
+        ),
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("uploads image bytes through a signed URL issued by websocket rpc", () =>
     Effect.gen(function* () {
       const config = yield* buildAppUnderTest();
@@ -8104,6 +8156,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             runtimeMode: "full-access" as const,
             branch: null,
             worktreePath: null,
+            pullRequests: [],
             createdAt: now,
             updatedAt: now,
             archivedAt: null,
@@ -8139,6 +8192,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           },
           orchestrationEngine: {
             dispatch: () => Effect.succeed({ sequence: 7 }),
+            getCommandReceipts: (commandIds) =>
+              Effect.succeed(
+                commandIds.map((commandId) => ({
+                  commandId: CommandId.make(commandId),
+                  aggregateKind: "thread" as const,
+                  aggregateId: ThreadId.make("thread-1"),
+                  acceptedAt: now,
+                  resultSequence: 7,
+                  status: "accepted" as const,
+                  error: null,
+                })),
+              ),
             readEvents: () => Stream.empty,
           },
           checkpointDiffQuery: {
@@ -8172,6 +8237,25 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
       assert.equal(dispatchResult.sequence, 7);
+
+      const receiptResult = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.getCommandReceipts]({
+            commandIds: [CommandId.make("cmd-1")],
+          }),
+        ),
+      );
+      assert.deepEqual(receiptResult.receipts, [
+        {
+          commandId: CommandId.make("cmd-1"),
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          acceptedAt: now,
+          resultSequence: 7,
+          status: "accepted",
+          error: null,
+        },
+      ]);
 
       const turnDiffResult = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
@@ -9069,6 +9153,70 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(Option.getOrThrow(first).kind, "snapshot");
       assert.equal(readEventsCalls, 0);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("subscribeEvents replays through the captured head before forwarding live events", () =>
+    Effect.gen(function* () {
+      const liveEvents = yield* PubSub.unbounded<OrchestrationEvent>();
+      const event = (sequence: number, eventId: string) =>
+        ({
+          sequence,
+          eventId: EventId.make(eventId),
+          aggregateKind: "thread",
+          aggregateId: defaultThreadId,
+          occurredAt: `2026-01-01T00:00:0${sequence}.000Z`,
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          type: "thread.message-sent",
+          payload: {
+            threadId: defaultThreadId,
+            messageId: MessageId.make(`message-${sequence}`),
+            role: "user",
+            text: `Message ${sequence}`,
+            turnId: null,
+            streaming: false,
+            createdAt: `2026-01-01T00:00:0${sequence}.000Z`,
+            updatedAt: `2026-01-01T00:00:0${sequence}.000Z`,
+          },
+        }) satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+      const replayed = event(2, "event-replayed");
+      const live = event(3, "event-live");
+      let replayAfterSequence: number | undefined;
+      let replayLimit: number | undefined;
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            streamDomainEvents: Stream.fromPubSub(liveEvents),
+            latestSequence: PubSub.publish(liveEvents, live).pipe(Effect.as(2)),
+            readEvents: (afterSequence, limit) => {
+              replayAfterSequence = afterSequence;
+              replayLimit = limit;
+              return Stream.make(replayed);
+            },
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const items = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeEvents]({ afterSequence: 1 }).pipe(
+            Stream.take(2),
+            Stream.runCollect,
+          ),
+        ),
+      ).pipe(Effect.timeout("2 seconds"));
+
+      assert.deepEqual(
+        Array.from(items, (item) => item.sequence),
+        [2, 3],
+      );
+      assert.equal(replayAfterSequence, 1);
+      assert.equal(replayLimit, 1);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest), TestClock.withLive),
   );
 
   it.effect("subscribeThread replays a small thread range across a large global gap", () =>
@@ -10505,6 +10653,23 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
         yield* buildAppUnderTest({
           layers: {
+            serverSettings: {
+              getSettings: Effect.succeed({
+                ...DEFAULT_SERVER_SETTINGS,
+                mcpGatewayProfiles: [
+                  {
+                    profileId: "test-agent",
+                    name: "Test agent",
+                    revision: 2,
+                    modelSelection: defaultModelSelection,
+                    runtimeMode: "full-access",
+                    interactionMode: "default",
+                    createdAt: "2026-01-01T00:00:00.000Z",
+                    updatedAt: "2026-01-01T00:00:00.000Z",
+                  },
+                ],
+              }),
+            },
             gitVcsDriver: {
               remoteExists,
               fetchRemote,
@@ -10550,6 +10715,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 createThread: {
                   projectId: defaultProjectId,
                   title: "Bootstrap Thread",
+                  profileSelection: { profileId: "test-agent", revision: 2, overrideFields: [] },
                   modelSelection: defaultModelSelection,
                   runtimeMode: "full-access",
                   interactionMode: "default",
@@ -10571,6 +10737,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         );
 
         assert.equal(response.sequence, 5);
+        assertTrue(dispatchedCommands[0]?.type === "thread.create");
+        if (dispatchedCommands[0]?.type === "thread.create") {
+          assert.deepEqual(dispatchedCommands[0].profileSelection, {
+            profileId: "test-agent",
+            revision: 2,
+            overrideFields: [],
+          });
+          assert.equal(dispatchedCommands[0].projectId, defaultProjectId);
+          assert.equal(dispatchedCommands[0].profileSnapshot?.profileId, "test-agent");
+          assert.equal(dispatchedCommands[0].profileSnapshot?.profileName, "Test agent");
+        }
         assert.deepEqual(
           dispatchedCommands.map((command) => command.type),
           [

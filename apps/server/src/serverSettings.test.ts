@@ -1,6 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DEFAULT_SERVER_SETTINGS,
+  ModelSelection,
+  ProjectId,
+  ProjectScript,
   ProviderDriverKind,
   ProviderInstanceId,
   resolveProviderInstanceEnabled,
@@ -179,6 +182,96 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           options: [{ id: "reasoningEffort", value: "low" }],
         });
       }),
+  );
+
+  it.effect("owns gateway profile revisions and timestamps on the server", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const requested = {
+        profileId: "profile-andy",
+        name: "Andy",
+        revision: 99,
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6" },
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        createdAt: "2000-01-01T00:00:00.000Z",
+        updatedAt: "2000-01-01T00:00:00.000Z",
+      };
+
+      const created = yield* serverSettings.updateSettings({ mcpGatewayProfiles: [requested] });
+      assert.equal(created.mcpGatewayProfiles[0]?.revision, 1);
+      assert.notEqual(created.mcpGatewayProfiles[0]?.createdAt, requested.createdAt);
+
+      const updated = yield* serverSettings.updateSettings({
+        mcpGatewayProfiles: [{ ...requested, name: "Andy 2", revision: 1 }],
+      });
+      assert.equal(updated.mcpGatewayProfiles[0]?.revision, 2);
+      assert.equal(
+        updated.mcpGatewayProfiles[0]?.createdAt,
+        created.mcpGatewayProfiles[0]?.createdAt,
+      );
+      assert.notEqual(updated.mcpGatewayProfiles[0]?.updatedAt, requested.updatedAt);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("replicates stamped profile revisions and resumes local revision ownership", () =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      const profile = {
+        profileId: "shared-write",
+        name: "Write",
+        revision: 7,
+        providerLabel: "Codex",
+        modelLabel: "GPT",
+        runtimeMode: "approval-required" as const,
+        interactionMode: "default" as const,
+        createdAt: "2026-09-01T00:00:00.000Z",
+        updatedAt: "2026-09-06T00:00:00.000Z",
+      };
+      const replicated = yield* settings.updateSettings({ mcpGatewayProfiles: [profile] }, true);
+      assert.deepEqual(replicated.mcpGatewayProfiles, [profile]);
+      const edited = yield* settings.updateSettings({
+        mcpGatewayProfiles: [{ ...profile, name: "Review" }],
+      });
+      assert.equal(edited.mcpGatewayProfiles[0]?.revision, 8);
+      const repeated = yield* settings.updateSettings(
+        { mcpGatewayProfiles: edited.mcpGatewayProfiles },
+        true,
+      );
+      assert.deepEqual(repeated.mcpGatewayProfiles, edited.mcpGatewayProfiles);
+      const deleted = yield* settings.updateSettings({ mcpGatewayProfiles: [] });
+      assert.deepEqual(deleted.mcpGatewayProfiles, []);
+      const stale = yield* settings.updateSettings({ mcpGatewayProfiles: [profile] }, true);
+      assert.deepEqual(stale.mcpGatewayProfiles, []);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("rejects duplicate gateway profile names at the server boundary", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const base = {
+        name: "Andy",
+        revision: 0,
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6" },
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        createdAt: "2000-01-01T00:00:00.000Z",
+        updatedAt: "2000-01-01T00:00:00.000Z",
+      };
+
+      const error = yield* serverSettings
+        .updateSettings({
+          mcpGatewayProfiles: [
+            { ...base, profileId: "profile-andy-1" },
+            { ...base, profileId: "profile-andy-2" },
+          ],
+        })
+        .pipe(Effect.flip);
+
+      assert.equal(error.operation, "normalize");
+      assert.match(String(error.cause), /Duplicate MCP gateway profile name: Andy/);
+      assert.deepEqual((yield* serverSettings.getSettings).mcpGatewayProfiles, []);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
   it.effect("deep merges nested settings updates without dropping siblings", () =>
@@ -1277,6 +1370,115 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.match(environment.CODEX_HOME ?? "", /[\\/][.]codex-terminal$/);
       assert.notInclude(persisted, "sk-terminal-secret");
       assert.include(persisted, '"valueRedacted": true');
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("folds legacy project overrides into projectSettingsOverrides once", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const sql = yield* SqlClient.SqlClient;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const legacyProject = ProjectId.make("project-legacy");
+      const scriptedProject = ProjectId.make("project-scripted");
+      const script: ProjectScript = {
+        id: "check",
+        name: "Check",
+        command: "npm test",
+        icon: "play",
+        runOnWorktreeCreate: false,
+      };
+      const model = createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.5");
+      const modelJson = yield* Schema.encodeEffect(Schema.fromJsonString(ModelSelection))(model);
+      const scriptsJson = yield* Schema.encodeEffect(
+        Schema.fromJsonString(Schema.Array(ProjectScript)),
+      )([script]);
+      for (const [projectId, modelColumn, envMode, autoPull, scripts] of [
+        // The legacy project also carries aggregate scripts, but its stored
+        // null override reset them; the fold must not bring them back.
+        [legacyProject, modelJson, "worktree", 1, scriptsJson],
+        [scriptedProject, null, null, 0, scriptsJson],
+      ] as const) {
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id, title, workspace_root, default_model_selection_json,
+            default_thread_env_mode, auto_pull, scripts_json, created_at, updated_at
+          )
+          VALUES (
+            ${projectId}, ${"Project"}, ${`/tmp/${projectId}`}, ${modelColumn},
+            ${envMode}, ${autoPull}, ${scripts},
+            ${"2026-08-25T00:00:00.000Z"}, ${"2026-08-25T00:00:00.000Z"}
+          )
+        `;
+      }
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        `{"projectAgentBrowserAccessOverrides":{"${legacyProject}":false},"projectAutoPullOverrides":{"${scriptedProject}":true},"projectScriptOverrides":{"${legacyProject}":null}}`,
+      );
+
+      const settings = yield* serverSettings.getSettings;
+      assert.isTrue(settings.projectSettingsFolded);
+      assert.deepEqual<ServerSettings["projectSettingsOverrides"]>(
+        settings.projectSettingsOverrides,
+        {
+          [legacyProject]: {
+            enableAgentBrowserAccess: false,
+            defaultModelSelection: model,
+            defaultThreadEnvMode: "worktree",
+            defaultAutoPull: true,
+          },
+          [scriptedProject]: { defaultAutoPull: true, defaultProjectScripts: [script] },
+        },
+      );
+      // Derived legacy views keep older clients reading the same values.
+      assert.deepEqual<ServerSettings["projectAutoPullOverrides"]>(
+        settings.projectAutoPullOverrides,
+        {
+          [legacyProject]: true,
+          [scriptedProject]: true,
+        },
+      );
+      assert.deepEqual<ServerSettings["projectScriptOverrides"]>(settings.projectScriptOverrides, {
+        [scriptedProject]: [script],
+      });
+
+      // A reset survives the next load: the fold does not run again.
+      yield* serverSettings.updateSettings({
+        projectSettingsOverrides: { [legacyProject]: null },
+      });
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      const persisted = yield* decodeServerSettings(
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        JSON.parse(raw),
+      );
+      assert.isTrue(persisted.projectSettingsFolded);
+      assert.isUndefined(persisted.projectSettingsOverrides[legacyProject]);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("leaves an unreadable settings.json untouched instead of folding over it", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const sql = yield* SqlClient.SqlClient;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, auto_pull, scripts_json, created_at, updated_at
+        )
+        VALUES (
+          ${"project-broken"}, ${"Project"}, ${"/tmp/project-broken"}, ${1}, ${"[]"},
+          ${"2026-08-25T00:00:00.000Z"}, ${"2026-08-25T00:00:00.000Z"}
+        )
+      `;
+      const broken = '{"defaultAutoPull": tru';
+      yield* fileSystem.writeFileString(serverConfig.settingsPath, broken);
+
+      const settings = yield* serverSettings.getSettings;
+      assert.isFalse(settings.projectSettingsFolded);
+      assert.deepEqual(settings.projectSettingsOverrides, {});
+      // The user's file is still there to repair; nothing was written over it.
+      assert.equal(yield* fileSystem.readFileString(serverConfig.settingsPath), broken);
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 });

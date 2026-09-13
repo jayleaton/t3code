@@ -172,6 +172,12 @@ export type DesktopTheme = "light" | "dark" | "system";
 export type DesktopUpdateChannel = "latest" | "nightly";
 export type DesktopAppStageLabel = "Alpha" | "Dev" | "Nightly";
 
+export interface McpGatewayLaunchConfig {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly env: Readonly<Record<string, string>>;
+}
+
 export const DesktopUpdateStatusSchema = Schema.Literals([
   "disabled",
   "idle",
@@ -1213,6 +1219,8 @@ export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
+  getMcpGatewayLaunchConfig: () => McpGatewayLaunchConfig | null;
+  getMcpGatewayBridgeToken?: () => string | null;
   /** The desktop client's OS platform, read from Electron's preload process. */
   getClientPlatform?: () => string;
   /**
@@ -1301,12 +1309,15 @@ export interface DesktopBridge {
    * lack it, and callers no-op when it is missing.
    */
   openSystemSettings?: (pane: SystemSettingsPane) => Promise<boolean>;
+  checkSystemPermission?: (pane: SystemSettingsPane) => Promise<boolean>;
   /**
    * Probe this desktop machine for installed remote-capable editor CLIs
    * (used for remote open-in-editor deep links). Optional: older desktop
    * builds lack it; callers fall back to VS Code only.
    */
   probeRemoteEditors?: () => Promise<readonly EditorId[]>;
+  /** Present when the desktop shell can perform an ordered plain-text paste. */
+  pasteAsText?: () => Promise<void>;
   onMenuAction: (listener: (action: string) => void) => () => void;
   onSnapShotEvent?: (listener: (event: DesktopSnapShotEvent) => void) => () => void;
   /**
@@ -1314,6 +1325,7 @@ export interface DesktopBridge {
    * them.
    */
   onQuitShortcut?: (listener: (event: QuitShortcutHintEvent) => void) => () => void;
+  revealWindow: () => Promise<void>;
   getWindowFullscreenState: () => boolean;
   onWindowFullscreenStateChange: (listener: (fullscreen: boolean) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;

@@ -2274,7 +2274,10 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(mcpSession
             ? {
                 environment: {
-                  ...(options?.environment ?? process.env),
+                  ...McpProviderSession.withAgentDeviceEnvironment(
+                    options?.environment ?? process.env,
+                    mcpSession,
+                  ),
                   T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, ""),
                 },
                 appServerArgs: [
@@ -2283,6 +2286,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   "-c",
                   'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
                 ],
+                mcpCapabilities: mcpSession.capabilities,
               }
             : {}),
         };
@@ -2526,6 +2530,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     return yield* session.runtime
       .sendTurn({
         ...(input.input !== undefined ? { input: input.input } : {}),
+        ...(input.agentInstructions !== undefined
+          ? { agentInstructions: input.agentInstructions }
+          : {}),
         ...(input.modelSelection?.instanceId === boundInstanceId
           ? { model: input.modelSelection.model }
           : {}),

@@ -29,9 +29,16 @@ import {
   type VcsStatusRemoteResult,
   VcsStatusResult,
   ModelSelection,
+  type ProjectId,
   SourceControlProviderError,
   type SourceControlWritingStyleSettings,
+  type ThreadId,
 } from "@t3tools/contracts";
+import {
+  hasProjectSettingsOverrides,
+  resolveProjectSettings,
+} from "@t3tools/shared/projectSettings";
+import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   detectSourceControlProviderFromGitRemoteUrl,
   mergeGitStatusParts,
@@ -661,6 +668,28 @@ export const make = Effect.gen(function* () {
 
   const sourceControlProvider = (cwd: string) => sourceControlProviders.resolve({ cwd });
   const serverSettingsService = yield* ServerSettings.ServerSettingsService;
+  // Optional: git actions also run from the CLI and tests without orchestration.
+  const projectionQuery = yield* Effect.serviceOption(
+    ProjectionSnapshotQuery.ProjectionSnapshotQuery,
+  );
+  /** Environment settings with the acting project's overrides applied. */
+  const projectSettingsFor = Effect.fnUntraced(function* (input: {
+    readonly cwd: string;
+    readonly threadId?: ThreadId | undefined;
+  }) {
+    const settings = yield* serverSettingsService.getSettings;
+    if (!hasProjectSettingsOverrides(settings) || Option.isNone(projectionQuery)) return settings;
+    const projectId = yield* (
+      input.threadId !== undefined
+        ? projectionQuery.value
+            .getThreadShellById(input.threadId)
+            .pipe(Effect.map(Option.map((thread) => thread.projectId)))
+        : projectionQuery.value
+            .getActiveProjectByWorkspaceRoot(input.cwd)
+            .pipe(Effect.map(Option.map((project) => project.id)))
+    ).pipe(Effect.orElseSucceed(() => Option.none<ProjectId>()));
+    return resolveProjectSettings(settings, Option.getOrNull(projectId)).settings;
+  });
   const readRepositoryInstructions = (cwd: string, fileName: string) =>
     Effect.gen(function* () {
       const root = yield* fileSystem.realPath(cwd);
@@ -1912,6 +1941,7 @@ export const make = Effect.gen(function* () {
     cwd: string,
     fallbackBranch: string | null,
     emit: GitActionProgressEmitter,
+    draft?: boolean,
   ) {
     const provider = yield* sourceControlProvider(cwd);
     const terms = getChangeRequestTerminologyForKind(provider.kind);
@@ -2002,6 +2032,7 @@ export const make = Effect.gen(function* () {
         headSelector: headContext.preferredHeadSelector,
         title: generated.title,
         bodyFile,
+        ...(draft === undefined ? {} : { draft }),
       })
       .pipe(Effect.ensuring(fileSystem.remove(bodyFile).pipe(Effect.catch(() => Effect.void))));
 
@@ -2600,7 +2631,7 @@ export const make = Effect.gen(function* () {
         let commitMessageForStep = input.commitMessage;
         let preResolvedCommitSuggestion: CommitAndBranchSuggestion | undefined = undefined;
 
-        const textGenerationSettings = yield* serverSettingsService.getSettings.pipe(
+        const textGenerationSettings = yield* projectSettingsFor(input).pipe(
           Effect.flatMap((settings) =>
             settings.sourceControlWriterModelSelection === null
               ? Effect.succeed({
@@ -2699,7 +2730,13 @@ export const make = Effect.gen(function* () {
               .pipe(
                 Effect.tap(() => Ref.set(currentPhase, Option.some("pr"))),
                 Effect.flatMap(() =>
-                  runPrStep(textGenerationSettings, input.cwd, currentBranch, progress.emit),
+                  runPrStep(
+                    textGenerationSettings,
+                    input.cwd,
+                    currentBranch,
+                    progress.emit,
+                    input.draft,
+                  ),
                 ),
               )
           : { status: "skipped_not_requested" as const };
