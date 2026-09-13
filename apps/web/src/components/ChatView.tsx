@@ -8750,6 +8750,8 @@ export default function ChatView(props: ChatViewProps) {
             keybindings={keybindings}
             terminalOpen={Boolean(terminalUiState.terminalOpen)}
             gitCwd={gitCwd}
+            pullRequestProjectId={supportsPullRequests ? (activeProject?.id ?? null) : null}
+            pullRequestRepository={supportsPullRequests ? activeProjectRepository : null}
             restingControlsHost={composerOnly ? null : restingComposerControlsHost}
             restingControlsHaveLeadingContext={isGitRepo || showComposerEnvironmentIndicator}
             onRestingControlsVisibilityChange={setRestingComposerControlsVisible}
@@ -8765,6 +8767,7 @@ export default function ChatView(props: ChatViewProps) {
             onPageScrollKeyDown={onComposerPageScrollKeyDown}
             onPageScrollKeyUp={onComposerPageScrollKeyUp}
             onPageScrollRelease={onComposerPageScrollRelease}
+            onCompactContext={onCompactContext}
             onSend={onSend}
             onInterrupt={onInterrupt}
             onImplementPlanInNewThread={onImplementPlanInNewThread}
