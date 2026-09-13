@@ -22,8 +22,8 @@ import { Route as SettingsSourceControlRouteImport } from './routes/settings.sou
 import { Route as SettingsSnapShotRouteImport } from './routes/settings.snap-shot'
 import { Route as SettingsProvidersRouteImport } from './routes/settings.providers'
 import { Route as SettingsProjectsRouteImport } from './routes/settings.projects'
-import { Route as SettingsMcpGatewayRouteImport } from './routes/settings.mcp-gateway'
 import { Route as SettingsOpenSourceLicensesRouteImport } from './routes/settings.open-source-licenses'
+import { Route as SettingsMcpGatewayRouteImport } from './routes/settings.mcp-gateway'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
 import { Route as SettingsIntegrationsRouteImport } from './routes/settings.integrations'
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
@@ -102,17 +102,17 @@ const SettingsProjectsRoute = SettingsProjectsRouteImport.update({
   path: '/projects',
   getParentRoute: () => SettingsRoute,
 } as any)
-const SettingsMcpGatewayRoute = SettingsMcpGatewayRouteImport.update({
-  id: '/mcp-gateway',
-  path: '/mcp-gateway',
-  getParentRoute: () => SettingsRoute,
-} as any)
 const SettingsOpenSourceLicensesRoute =
   SettingsOpenSourceLicensesRouteImport.update({
     id: '/open-source-licenses',
     path: '/open-source-licenses',
     getParentRoute: () => SettingsRoute,
   } as any)
+const SettingsMcpGatewayRoute = SettingsMcpGatewayRouteImport.update({
+  id: '/mcp-gateway',
+  path: '/mcp-gateway',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsKeybindingsRoute = SettingsKeybindingsRouteImport.update({
   id: '/keybindings',
   path: '/keybindings',
@@ -464,18 +464,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsProjectsRouteImport
       parentRoute: typeof SettingsRoute
     }
-    '/settings/mcp-gateway': {
-      id: '/settings/mcp-gateway'
-      path: '/mcp-gateway'
-      fullPath: '/settings/mcp-gateway'
-      preLoaderRoute: typeof SettingsMcpGatewayRouteImport
-      parentRoute: typeof SettingsRoute
-    }
     '/settings/open-source-licenses': {
       id: '/settings/open-source-licenses'
       path: '/open-source-licenses'
       fullPath: '/settings/open-source-licenses'
       preLoaderRoute: typeof SettingsOpenSourceLicensesRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/mcp-gateway': {
+      id: '/settings/mcp-gateway'
+      path: '/mcp-gateway'
+      fullPath: '/settings/mcp-gateway'
+      preLoaderRoute: typeof SettingsMcpGatewayRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/keybindings': {
