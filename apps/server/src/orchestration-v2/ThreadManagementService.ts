@@ -1,3 +1,6 @@
+import { resolveThreadCreateProfile } from "./AgentProfile.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
+import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import {
   type ChatAttachment,
   type CommandId,
@@ -28,6 +31,7 @@ import * as Schema from "effect/Schema";
 import {
   OrchestratorDispatchError,
   OrchestratorProjectionError,
+  OrchestratorCommandRejectedError,
   OrchestratorV2,
   type OrchestratorV2DispatchResult,
   type OrchestratorV2Error,
@@ -430,8 +434,43 @@ const make = Effect.gen(function* () {
       Effect.andThen(orchestrator.getThreadSnapshotWindow(threadId, options)),
     );
 
+  const settings = yield* Effect.serviceOption(ServerSettingsService);
+  const providers = yield* Effect.serviceOption(ProviderRegistry);
   const dispatch: ThreadManagementServiceShape["dispatch"] = (command) =>
-    ensureCommandTranscripts(command).pipe(Effect.andThen(orchestrator.dispatch(command)));
+    Effect.gen(function* () {
+      yield* ensureCommandTranscripts(command);
+      if (command.type !== "thread.create" || command.profileSelection === undefined) {
+        if (command.type === "thread.create") {
+          const { profileSnapshot: _untrustedSnapshot, ...trusted } = command;
+          return yield* orchestrator.dispatch(trusted);
+        }
+        return yield* orchestrator.dispatch(command);
+      }
+      if (Option.isNone(settings) || Option.isNone(providers)) {
+        return yield* new OrchestratorCommandRejectedError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Agent profile settings are unavailable",
+        });
+      }
+      const resolved = yield* Effect.gen(function* () {
+        const library = yield* Option.getOrThrow(settings).getSettings;
+        const catalog = yield* Option.getOrThrow(providers).getProviders;
+        return yield* Effect.try(() =>
+          resolveThreadCreateProfile(command, library.mcpGatewayProfiles, catalog),
+        );
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestratorCommandRejectedError({
+              commandId: command.commandId,
+              commandType: command.type,
+              cause,
+            }),
+        ),
+      );
+      return yield* orchestrator.dispatch(resolved);
+    });
 
   const getProjectThread: ThreadManagementServiceShape["getProjectThread"] = (input) =>
     getThreadProjection(input.threadId).pipe(

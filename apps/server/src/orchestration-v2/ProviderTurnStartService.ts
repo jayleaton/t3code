@@ -1,3 +1,4 @@
+import { agentProfilePrompt } from "./AgentProfile.ts";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import {
   CommandId,
@@ -702,13 +703,13 @@ export const layer: Layer.Layer<
           text:
             effectiveHandoffs.length === 0
               ? projectComposerContextForProvider({
-                  text: message.text,
+                  text: agentProfilePrompt(message.text, projection.thread.profileSnapshot),
                   records: message.context?.records ?? [],
                 })
               : providerMessageWithContextHandoffs({
                   handoffs: effectiveHandoffs,
                   userText: projectComposerContextForProvider({
-                    text: message.text,
+                    text: agentProfilePrompt(message.text, projection.thread.profileSnapshot),
                     records: message.context?.records ?? [],
                   }),
                 }),

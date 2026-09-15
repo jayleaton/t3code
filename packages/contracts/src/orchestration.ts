@@ -67,6 +67,30 @@ export {
 } from "./checkpointDiff.ts";
 
 // Correlation id is command id by design in this model.
+export const ThreadProfileSnapshot = Schema.Struct({
+  systemPrompt: Schema.optional(Schema.String.check(Schema.isMaxLength(32_000))),
+  profileId: Schema.NullOr(TrimmedNonEmptyString),
+  profileName: Schema.NullOr(TrimmedNonEmptyString),
+  revision: Schema.NullOr(NonNegativeInt),
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+  effectiveSource: Schema.Struct({
+    modelSelection: Schema.Literals(["profile", "thread-override", "fallback"]),
+    runtimeMode: Schema.Literals(["profile", "thread-override", "fallback"]),
+    interactionMode: Schema.Literals(["profile", "thread-override", "fallback"]),
+    reasoningEffort: Schema.Literals(["profile", "thread-override", "fallback"]),
+  }),
+});
+export type ThreadProfileSnapshot = typeof ThreadProfileSnapshot.Type;
+
+export const ThreadProfileSelection = Schema.Struct({
+  profileId: TrimmedNonEmptyString,
+  revision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  overrideFields: Schema.Array(
+    Schema.Literals(["modelSelection", "runtimeMode", "interactionMode", "reasoningEffort"]),
+  ),
+});
+export type ThreadProfileSelection = typeof ThreadProfileSelection.Type;
+
 export const CorrelationId = CommandId;
 export type CorrelationId = typeof CorrelationId.Type;
 
@@ -313,6 +337,7 @@ export const ThreadPullRequestLink = Schema.Struct({
 export type ThreadPullRequestLink = typeof ThreadPullRequestLink.Type;
 
 export const OrchestrationThread = Schema.Struct({
+  profileSnapshot: Schema.optional(ThreadProfileSnapshot),
   id: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -382,6 +407,7 @@ export const OrchestrationReadModel = Schema.Struct({
 export type OrchestrationReadModel = typeof OrchestrationReadModel.Type;
 
 export const OrchestrationThreadShell = Schema.Struct({
+  profileSnapshot: Schema.optional(ThreadProfileSnapshot),
   id: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -1123,6 +1149,7 @@ export type OrchestrationAggregateKind = typeof OrchestrationAggregateKind.Type;
 export const OrchestrationActorKind = Schema.Literals(["client", "server", "provider"]);
 
 export const ThreadCreatedPayload = Schema.Struct({
+  profileSnapshot: Schema.optional(ThreadProfileSnapshot),
   threadId: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -1612,3 +1639,25 @@ export class OrchestrationDispatchCommandError extends Schema.TaggedError<Orches
     bootstrapThreadDisposition: Schema.optional(Schema.Literal("deleted")),
   },
 ) {}
+
+export const OrchestrationCommandReceiptRecord = Schema.Struct({
+  commandId: CommandId,
+  aggregateKind: OrchestrationAggregateKind,
+  aggregateId: Schema.Union([ProjectId, ThreadId]),
+  acceptedAt: IsoDateTime,
+  resultSequence: NonNegativeInt,
+  status: OrchestrationCommandReceiptStatus,
+  error: Schema.NullOr(Schema.String),
+});
+export type OrchestrationCommandReceiptRecord = typeof OrchestrationCommandReceiptRecord.Type;
+
+export const OrchestrationGetCommandReceiptsInput = Schema.Struct({
+  commandIds: Schema.Array(CommandId).check(Schema.isMaxLength(100)),
+});
+export type OrchestrationGetCommandReceiptsInput = typeof OrchestrationGetCommandReceiptsInput.Type;
+
+export const OrchestrationGetCommandReceiptsResult = Schema.Struct({
+  receipts: Schema.Array(OrchestrationCommandReceiptRecord),
+});
+export type OrchestrationGetCommandReceiptsResult =
+  typeof OrchestrationGetCommandReceiptsResult.Type;

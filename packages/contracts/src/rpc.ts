@@ -1,3 +1,7 @@
+import {
+  OrchestrationGetCommandReceiptsInput,
+  OrchestrationGetCommandReceiptsResult,
+} from "./orchestration.ts";
 import { OrchestrationDispatchCommandError } from "./orchestration.ts";
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
@@ -646,6 +650,7 @@ const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
 const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
   payload: Schema.Struct({
     patch: ServerSettingsPatch,
+    replicateProfiles: Schema.optional(Schema.Boolean),
     providerInstanceMutation: Schema.optionalKey(ProviderInstanceMutation),
   }),
   success: ServerSettings,
@@ -1401,6 +1406,15 @@ const WsSubscribeDeviceStateRpc = Rpc.make(WS_METHODS.subscribeDeviceState, {
   stream: true,
 });
 
+const WsOrchestrationGetCommandReceiptsRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.getCommandReceipts,
+  {
+    payload: OrchestrationGetCommandReceiptsInput,
+    success: OrchestrationGetCommandReceiptsResult,
+    error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
+  },
+);
+
 const WsOrchestrationV2DispatchCommandRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, {
   payload: OrchestrationV2RpcSchemas.dispatchCommand.input,
   success: OrchestrationV2RpcSchemas.dispatchCommand.output,
@@ -1752,5 +1766,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2LaunchThreadRpc,
   WsOrchestrationV2SubscribeArchivedShellRpc,
   WsOrchestrationV2SubscribeShellRpc,
+  WsOrchestrationGetCommandReceiptsRpc,
   WsOrchestrationV2SubscribeThreadRpc,
 );

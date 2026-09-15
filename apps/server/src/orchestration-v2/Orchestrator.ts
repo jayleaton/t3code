@@ -1394,6 +1394,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       creationSource: command.creationSource,
       id: command.threadId,
       projectId: command.projectId,
+      ...(command.profileSnapshot === undefined
+        ? {}
+        : { profileSnapshot: command.profileSnapshot }),
       title: command.title,
       providerInstanceId: command.modelSelection.instanceId,
       modelSelection: command.modelSelection,

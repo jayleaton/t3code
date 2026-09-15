@@ -1,7 +1,8 @@
 import { assert, it } from "@effect/vitest";
-import { EventId, ThreadId } from "@t3tools/contracts";
+import { EventId, ThreadId, ThreadProfileSnapshot } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -17,6 +18,8 @@ import {
   layer as projectionMaintenanceLayer,
 } from "./ProjectionMaintenance.ts";
 import { ProjectionStoreV2, layer as projectionStoreLayer } from "./ProjectionStore.ts";
+
+const encodeProfileSnapshot = Schema.encodeEffect(Schema.fromJsonString(ThreadProfileSnapshot));
 
 const databaseLayer = SqlitePersistenceMemory;
 const eventStoreProvided = eventStoreLayer.pipe(Layer.provideMerge(databaseLayer));
@@ -173,6 +176,19 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
       `;
 
       assert.equal(yield* importer.pendingThreadCount, 1);
+      const profileSnapshot = {
+        profileId: "review",
+        profileName: "Reviewer",
+        revision: 3,
+        systemPrompt: "Review changes carefully",
+        effectiveSource: {
+          modelSelection: "profile",
+          runtimeMode: "profile",
+          interactionMode: "profile",
+          reasoningEffort: "profile",
+        },
+      } as const;
+      yield* sql`UPDATE projection_threads SET profile_snapshot_json = ${yield* encodeProfileSnapshot(profileSnapshot)} WHERE thread_id = ${threadId}`;
       const shellImport = yield* importer.reconcileShells;
       assert.equal(yield* importer.pendingThreadCount, 1);
       assert.deepStrictEqual(shellImport, {
@@ -188,6 +204,8 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
       `;
       assert.equal(shellEventCount[0]?.count, 6);
 
+      const visibleBeforeReplay = yield* projections.getThreadProjection(threadId);
+      assert.equal(visibleBeforeReplay.thread.profileSnapshot?.profileId, "review");
       const rebuilt = yield* maintenance.rebuild;
       assert.isTrue(rebuilt.valid);
       const shellProjection = yield* projections.getThreadProjection(threadId);
@@ -248,6 +266,7 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
         importedMessageCount: 2,
       });
       const projection = yield* projections.getThreadProjection(threadId);
+      assert.deepStrictEqual(projection.thread.profileSnapshot, profileSnapshot);
       assert.equal(projection.thread.title, "Renamed after shell import");
       assert.equal(projection.thread.runtimeMode, "approval-required");
       assert.equal(projection.thread.interactionMode, "plan");

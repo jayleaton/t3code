@@ -553,6 +553,48 @@ const startHarness = Effect.fn("startThreadSettlementHarness")(function* (
 });
 
 describe("ThreadSettlementServiceV2 worker", () => {
+  it.effect("a merge settles every eligible associated chat and protects unrelated chats", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const settled = yield* Deferred.make<void>();
+        const count = yield* Ref.make(0);
+        const linkedPullRequest = {
+          projectId: PROJECT_ID,
+          repository: "owner/repository",
+          number: 42,
+          url: "https://github.com/owner/repository/pull/42",
+        };
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([
+            makeThread("agent-chat-one", { linkedPullRequest }),
+            makeThread("agent-chat-two", { linkedPullRequest }),
+            makeThread("unrelated", { linkedPullRequest: { ...linkedPullRequest, number: 99 } }),
+          ]),
+          settings: {
+            ...DEFAULT_SERVER_SETTINGS,
+            sidebarAutoSettleAfterDays: null,
+            sidebarAutoSettleOnMerge: true,
+          },
+          onDispatch: () =>
+            Ref.updateAndGet(count, (n) => n + 1).pipe(
+              Effect.flatMap((n) => (n === 2 ? Deferred.succeed(settled, undefined) : Effect.void)),
+            ),
+        });
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+          yield* fixture.publishMerge;
+          yield* Deferred.await(settled);
+          expect((yield* Ref.get(fixture.commands)).map((c) => c.threadId).sort()).toEqual([
+            "agent-chat-one",
+            "agent-chat-two",
+          ]);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
   it.effect("settles only the project opted in while environment settlement is disabled", () =>
     Effect.scoped(
       Effect.gen(function* () {

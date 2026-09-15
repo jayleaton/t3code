@@ -38,6 +38,8 @@ import {
 } from "./checkpointDiff.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import {
+  ThreadProfileSnapshot,
+  ThreadProfileSelection,
   ThreadLinkedPullRequest,
   ThreadPullRequestLink,
   ThreadPullRequestKey,
@@ -327,6 +329,7 @@ export const OrchestrationV2ProviderCapabilities = Schema.Struct({
 export type OrchestrationV2ProviderCapabilities = typeof OrchestrationV2ProviderCapabilities.Type;
 
 export const OrchestrationV2AppThread = Schema.Struct({
+  profileSnapshot: Schema.optional(ThreadProfileSnapshot),
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
@@ -1419,6 +1422,7 @@ export type OrchestrationV2LatestVisibleMessageSummary =
   typeof OrchestrationV2LatestVisibleMessageSummary.Type;
 
 export const OrchestrationV2ThreadShell = Schema.Struct({
+  profileSnapshot: Schema.optional(ThreadProfileSnapshot),
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
@@ -2155,6 +2159,8 @@ export type OrchestrationV2StoredEventJson = typeof OrchestrationV2StoredEventJs
 export const OrchestrationV2Command = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("thread.create"),
+    profileSelection: Schema.optional(ThreadProfileSelection),
+    profileSnapshot: Schema.optional(ThreadProfileSnapshot),
     ...OrchestrationV2CreationFields,
     commandId: CommandId,
     threadId: ThreadId,
@@ -2555,6 +2561,7 @@ export const OrchestrationV2Command = Schema.Union([
 export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
 
 export const ORCHESTRATION_V2_WS_METHODS = {
+  getCommandReceipts: "orchestration.getCommandReceipts",
   dispatchCommand: "orchestration.dispatchCommand",
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
@@ -2616,6 +2623,7 @@ export type OrchestrationV2ThreadLaunchWorkspaceStrategy =
   typeof OrchestrationV2ThreadLaunchWorkspaceStrategy.Type;
 
 export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
+  profileSelection: Schema.optional(ThreadProfileSelection),
   commandId: CommandId,
   creationSource: Schema.optional(OrchestrationV2CreationSource),
   threadId: Schema.optional(ThreadId),

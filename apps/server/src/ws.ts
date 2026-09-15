@@ -1,3 +1,4 @@
+import { OrchestrationCommandReceiptRepository } from "./persistence/Services/OrchestrationCommandReceipts.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import { OrchestratorV2 } from "./orchestration-v2/Orchestrator.ts";
@@ -7,14 +8,12 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Encoding from "effect/Encoding";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
-import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
@@ -192,7 +191,6 @@ import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
 import { projectMutationOperation } from "./project/ProjectMutation.ts";
-import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
@@ -678,6 +676,7 @@ const makeWsRpcLayer = (
       const deviceHostContext =
         yield* Effect.context<Effect.Services<ReturnType<typeof remoteSshDeviceHosts>>>();
       const orchestrationEngine = yield* OrchestratorV2;
+      const commandReceipts = yield* OrchestrationCommandReceiptRepository;
       const crypto = yield* Crypto.Crypto;
       const serverCommandId = (tag: string) =>
         crypto.randomUUIDv4.pipe(
@@ -695,7 +694,6 @@ const makeWsRpcLayer = (
             );
       const usage = yield* UsageService.UsageService;
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
-      const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const worktreeSetupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
       const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
       const repositoryIdentityResolver =
@@ -1709,6 +1707,23 @@ const makeWsRpcLayer = (
       });
 
       const handlers = ServerWsRpcGroup.of({
+        [ORCHESTRATION_V2_WS_METHODS.getCommandReceipts]: ({ commandIds }) =>
+          Effect.forEach(commandIds, (id) => commandReceipts.getByCommandId({ commandId: id }), {
+            concurrency: 8,
+          }).pipe(
+            Effect.map((receipts) => ({
+              receipts: receipts.flatMap((receipt) =>
+                Option.isSome(receipt) ? [receipt.value] : [],
+              ),
+            })),
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationDispatchCommandError({
+                  message: "Could not read command receipts",
+                  cause,
+                }),
+            ),
+          ),
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
@@ -1833,6 +1848,9 @@ const makeWsRpcLayer = (
             startup
               .enqueueCommand(
                 ThreadMessageIntake.launchThread({
+                  ...(input.profileSelection === undefined
+                    ? {}
+                    : { profileSelection: input.profileSelection }),
                   commandId: input.commandId,
                   ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
                   ...(input.reuseExistingThread === undefined
@@ -2342,7 +2360,11 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "server",
             },
           ),
-        [WS_METHODS.serverUpdateSettings]: ({ patch, providerInstanceMutation }) =>
+        [WS_METHODS.serverUpdateSettings]: ({
+          patch,
+          providerInstanceMutation,
+          replicateProfiles,
+        }) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateSettings,
             Effect.gen(function* () {
@@ -2353,7 +2375,7 @@ const makeWsRpcLayer = (
                 : undefined;
               const nextPatch = { ...patch, ...(deviceHosts ? { deviceHosts } : {}) };
               const settings = yield* providerInstanceMutation === undefined
-                ? serverSettings.updateSettings(nextPatch)
+                ? serverSettings.updateSettings(nextPatch, replicateProfiles)
                 : serverSettings.updateProviderInstance(providerInstanceMutation, nextPatch);
               return ServerSettings.redactServerSettingsForClient(settings);
             }),
@@ -3089,6 +3111,12 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.vcsRemoveWorktree,
             gitWorkflow.removeWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            { "rpc.aggregate": "vcs" },
+          ),
+        [WS_METHODS.vcsApplyPatch]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.vcsApplyPatch,
+            gitWorkflow.applyPatch(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
             { "rpc.aggregate": "vcs" },
           ),
         [WS_METHODS.vcsCreateRef]: (input) =>

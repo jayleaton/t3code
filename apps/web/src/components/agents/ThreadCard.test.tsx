@@ -1,9 +1,10 @@
-import * as Schema from "effect/Schema";
+import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { v2ThreadShell } from "./agents.testFixtures";
 // @vitest-environment happy-dom
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { EnvironmentId, ProjectId, ThreadId, OrchestrationThreadShell } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 const openPrLink = vi.hoisted(() => vi.fn((event: MouseEvent) => event.preventDefault()));
 vi.mock("../../state/entities", () => ({ useProject: () => ({ title: "Project" }) }));
@@ -44,24 +45,7 @@ describe("agent card PR navigation", () => {
         url: "https://github.com/owner/repo/pull/42",
       };
       const thread = {
-        ...Schema.decodeUnknownSync(OrchestrationThreadShell)({
-          id: "chat",
-          projectId: "project",
-          title: "Agent chat",
-          modelSelection: { instanceId: "codex", model: "gpt-5" },
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          branch: null,
-          worktreePath: null,
-          latestTurn: null,
-          session: null,
-          createdAt: "2026-09-10T00:00:00Z",
-          updatedAt: "2026-09-10T00:00:00Z",
-          latestUserMessageAt: null,
-          hasPendingApprovals: false,
-          hasPendingUserInput: false,
-          hasActionableProposedPlan: false,
-        }),
+        ...presentThreadShell(EnvironmentId.make("remote"), v2ThreadShell),
         id: ThreadId.make("chat"),
         environmentId: EnvironmentId.make("remote"),
         projectId: reference.projectId,

@@ -1,3 +1,4 @@
+import { ThreadProfileSnapshot } from "@t3tools/contracts";
 import {
   AgentSessionImportSource,
   ApprovalRequestId,
@@ -118,6 +119,7 @@ const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
+    profileSnapshot: Schema.NullOr(Schema.fromJsonString(ThreadProfileSnapshot)),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
     branchPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
   }),
@@ -489,6 +491,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          profile_snapshot_json AS "profileSnapshot",
           branch,
           worktree_path AS "worktreePath",
           linked_pull_request_json AS "linkedPullRequest",
@@ -529,6 +532,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          profile_snapshot_json AS "profileSnapshot",
           branch,
           worktree_path AS "worktreePath",
           linked_pull_request_json AS "linkedPullRequest",
@@ -571,6 +575,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          profile_snapshot_json AS "profileSnapshot",
           branch,
           worktree_path AS "worktreePath",
           linked_pull_request_json AS "linkedPullRequest",
@@ -1103,6 +1108,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          profile_snapshot_json AS "profileSnapshot",
           branch,
           worktree_path AS "worktreePath",
           linked_pull_request_json AS "linkedPullRequest",
@@ -2022,6 +2028,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 modelSelection: row.modelSelection,
                 runtimeMode: row.runtimeMode,
                 interactionMode: row.interactionMode,
+                ...(row.profileSnapshot === null ? {} : { profileSnapshot: row.profileSnapshot }),
                 branch: row.branch,
                 worktreePath: row.worktreePath,
                 branchPullRequest: row.branchPullRequest,
@@ -2238,6 +2245,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   modelSelection: row.modelSelection,
                   runtimeMode: row.runtimeMode,
                   interactionMode: row.interactionMode,
+                  ...(row.profileSnapshot === null ? {} : { profileSnapshot: row.profileSnapshot }),
                   branch: row.branch,
                   worktreePath: row.worktreePath,
                   branchPullRequest: row.branchPullRequest,
@@ -2379,6 +2387,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                         modelSelection: row.modelSelection,
                         runtimeMode: row.runtimeMode,
                         interactionMode: row.interactionMode,
+                        ...(row.profileSnapshot === null
+                          ? {}
+                          : { profileSnapshot: row.profileSnapshot }),
                         branch: row.branch,
                         worktreePath: row.worktreePath,
                         branchPullRequest: row.branchPullRequest,
@@ -2540,6 +2551,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 modelSelection: row.modelSelection,
                 runtimeMode: row.runtimeMode,
                 interactionMode: row.interactionMode,
+                ...(row.profileSnapshot === null ? {} : { profileSnapshot: row.profileSnapshot }),
                 branch: row.branch,
                 worktreePath: row.worktreePath,
                 pullRequests: [],
@@ -2901,6 +2913,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         modelSelection: threadRow.value.modelSelection,
         runtimeMode: threadRow.value.runtimeMode,
         interactionMode: threadRow.value.interactionMode,
+        ...(threadRow.value.profileSnapshot === null
+          ? {}
+          : { profileSnapshot: threadRow.value.profileSnapshot }),
         branch: threadRow.value.branch,
         worktreePath: threadRow.value.worktreePath,
         branchPullRequest: threadRow.value.branchPullRequest,
@@ -3112,6 +3127,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         modelSelection: threadRow.value.modelSelection,
         runtimeMode: threadRow.value.runtimeMode,
         interactionMode: threadRow.value.interactionMode,
+        ...(threadRow.value.profileSnapshot === null
+          ? {}
+          : { profileSnapshot: threadRow.value.profileSnapshot }),
         branch: threadRow.value.branch,
         worktreePath: threadRow.value.worktreePath,
         branchPullRequest: threadRow.value.branchPullRequest,
