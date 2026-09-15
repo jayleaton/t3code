@@ -220,6 +220,7 @@ export function AgentTaskDialog({
           profile.runtimeMode !== "read-only" && (
             <ChatView
               composerOnly
+              autoFocusComposer
               routeKind="draft"
               draftId={draftId}
               environmentId={target.environmentId}

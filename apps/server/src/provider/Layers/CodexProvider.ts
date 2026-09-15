@@ -46,7 +46,7 @@ import {
   type CodexRateLimitSnapshot,
   type CodexResetCreditsSummary,
 } from "./codexUsageLimits.ts";
-import packageJson from "../../../package.json" with { type: "json" };
+import { serverBuildVersion } from "../../buildVersion.ts";
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
 const RATE_LIMITS_PROBE_TIMEOUT_MS = 3_000;
 
@@ -345,7 +345,7 @@ export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
     clientInfo: {
       name: "t3code_desktop",
       title: "T3 Code Desktop",
-      version: packageJson.version,
+      version: serverBuildVersion,
     },
     capabilities: {
       experimentalApi: true,

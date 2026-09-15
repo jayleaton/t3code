@@ -21,9 +21,8 @@ import {
 export { shouldBundleCliDependency };
 
 const repoEnv = loadRepoEnv();
-const cliBuildChannel = /^[^-+]+-(?:nightly|preview)\./.test(packageJson.version)
-  ? "nightly"
-  : "latest";
+const buildVersion = repoEnv.APP_VERSION?.trim() || packageJson.version;
+const cliBuildChannel = /^[^-+]+-(?:nightly|preview)\./.test(buildVersion) ? "nightly" : "latest";
 
 // `build:exe` wraps the same bundle in a Node single-executable. tsdown's exe
 // step refuses multi-chunk output and counts the sourcemap as a chunk, and the
@@ -110,6 +109,7 @@ export default mergeConfig(
         js: "#!/usr/bin/env node\n",
       },
       define: {
+        __T3CODE_BUILD_VERSION__: JSON.stringify(buildVersion),
         __T3CODE_BUILD_CHANNEL__: JSON.stringify(cliBuildChannel),
         __T3CODE_BUILD_RELAY_URL__: JSON.stringify(repoEnv.T3CODE_RELAY_URL?.trim() ?? ""),
         __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(

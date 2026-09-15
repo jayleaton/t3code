@@ -698,6 +698,8 @@ function isCompactCommandMessage(message: ChatMessage): boolean {
 type ChatViewProps = {
   /** Reuse the complete composer and send lifecycle in a dialog or preview. */
   composerOnly?: boolean;
+  /** Focus a new-chat dialog once its machine and project are ready. */
+  autoFocusComposer?: boolean;
   profileSelection?: import("@t3tools/contracts").ThreadProfileSelection;
   onTurnStarted?: () => void;
   onSendBusyChange?: (busy: boolean) => void;
@@ -1445,6 +1447,7 @@ export default function ChatView(props: ChatViewProps) {
     threadId,
     routeKind,
     composerOnly = false,
+    autoFocusComposer = false,
     onSendBusyChange,
     onDiffPanelOpen,
     reserveTitleBarControlInset = true,
@@ -5654,14 +5657,21 @@ export default function ChatView(props: ChatViewProps) {
   }, [activeThread?.id]);
 
   useEffect(() => {
-    if (composerOnly || !activeThread?.id || terminalUiState.terminalOpen) return;
+    if ((composerOnly && !autoFocusComposer) || !activeThread?.id || terminalUiState.terminalOpen)
+      return;
     const frame = window.requestAnimationFrame(() => {
       focusComposer();
     });
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [composerOnly, activeThread?.id, focusComposer, terminalUiState.terminalOpen]);
+  }, [
+    composerOnly,
+    autoFocusComposer,
+    activeThread?.id,
+    focusComposer,
+    terminalUiState.terminalOpen,
+  ]);
 
   // Tabbing back into the app lands focus wherever it last was, often the right panel or the
   // body. Put it in the composer unless something that takes typing already holds it. The
@@ -9230,6 +9240,11 @@ export default function ChatView(props: ChatViewProps) {
       <div
         ref={embeddedComposerRootRef}
         data-embedded-chat-composer
+        data-chat-workspace-drop-target="true"
+        onDragEnter={workspaceFileDropHandlers.onDragEnter}
+        onDragOver={workspaceFileDropHandlers.onDragOver}
+        onDragLeave={workspaceFileDropHandlers.onDragLeave}
+        onDrop={workspaceFileDropHandlers.onDrop}
         className="relative min-w-0 p-2"
       >
         {composerSurface}

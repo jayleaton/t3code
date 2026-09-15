@@ -12,7 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import packageJson from "../../package.json" with { type: "json" };
+import { serverBuildVersion } from "../buildVersion.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { readAgentActivityPublishingActive } from "../cloud/config.ts";
 import { resolveServerSelfUpdateCapability } from "../cloud/selfUpdate.ts";
@@ -211,7 +211,7 @@ export const make = Effect.gen(function* () {
       arch: platformArch(hostArchitecture),
       ...(machine === null ? {} : { machine }),
     },
-    serverVersion: packageJson.version,
+    serverVersion: serverBuildVersion,
     capabilities: {
       repositoryIdentity: true,
       connectionProbe: true,

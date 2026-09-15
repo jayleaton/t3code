@@ -3461,6 +3461,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     yield* runCommand(
       ChildProcess.make(spawnCommand.command, spawnCommand.args, {
         cwd: repoRoot,
+        env: { ...process.env, APP_VERSION: appVersion },
         shell: spawnCommand.shell,
       }),
       { label: "vp run build:desktop", verbose: options.verbose },

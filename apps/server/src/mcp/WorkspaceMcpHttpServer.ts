@@ -4,7 +4,7 @@ import type * as Types from "effect/Types";
 import { McpProtocol, McpServer } from "effect/unstable/ai";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
-import packageJson from "../../package.json" with { type: "json" };
+import { serverBuildVersion } from "../buildVersion.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import { normalizeMcpHttpResponse } from "./McpHttpServer.ts";
 import { WorkspaceToolkitHandlersLive } from "./toolkits/workspace/handlers.ts";
@@ -98,7 +98,7 @@ const WorkspaceToolkitRegistrationLive = McpServer.toolkit(WorkspaceToolkit).pip
 
 const WorkspaceMcpTransportLive = McpServer.layerHttp({
   name: "T3 Code Workspace",
-  version: packageJson.version,
+  version: serverBuildVersion,
   path: WORKSPACE_MCP_PATH,
   protocols: [McpProtocol.v2025_06_18],
 }).pipe(Layer.provide(WorkspaceMcpAuthMiddlewareLive));
