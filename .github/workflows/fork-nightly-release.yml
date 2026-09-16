@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   prepare:
-    if: github.repository == 'jayleaton/t3code' && vars.FORK_RELEASE_ENABLED == 'true' && github.ref_name == (vars.FORK_RELEASE_BRANCH || 'main')
+    if: github.repository == 'jayleaton/t3code' && vars.FORK_RELEASE_ENABLED == 'true' && (github.event_name == 'workflow_dispatch' || github.ref_name == (vars.FORK_RELEASE_BRANCH || 'main'))
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -279,6 +279,7 @@ jobs:
       cli_archive: true
 
   publish:
+    if: github.ref_name == (vars.FORK_RELEASE_BRANCH || 'main')
     needs:
       [
         prepare,

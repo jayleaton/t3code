@@ -439,6 +439,14 @@ jobs:
 
           vp run dist:desktop:artifact "${args[@]}"
 
+      - name: Verify Agents installer isolation
+        if: inputs.platform == 'win' && inputs.brand == 'agents'
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem release/T3-Agents-*.exe)
+          if ($installers.Count -ne 1) { throw 'Expected exactly one Agents installer.' }
+          ./scripts/test-agents-windows-installer.ps1 -Installer $installers[0].FullName
+
       # The single-executable is built with a Node that supports --build-sea
       # (25.7+); the repo itself stays on the engines.node version. It always
       # injects into the runner's own Node: tsdown's cross-target download path
