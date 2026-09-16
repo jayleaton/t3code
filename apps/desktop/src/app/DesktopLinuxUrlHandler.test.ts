@@ -14,6 +14,7 @@ import * as DesktopLinuxUrlHandler from "./DesktopLinuxUrlHandler.ts";
 interface RecordedRegistration {
   readonly directories: string[];
   readonly files: Array<{ readonly path: string; readonly content: string }>;
+  readonly binaries: Array<{ readonly path: string; readonly bytes: Uint8Array }>;
   readonly commands: Array<{ readonly command: string; readonly args: ReadonlyArray<string> }>;
 }
 
@@ -46,6 +47,15 @@ const mockProcess = (exitCode: number) =>
     getOutputFd: () => Stream.empty,
   });
 
+const fileNotFound = (method: string, path: string) =>
+  PlatformError.systemError({
+    _tag: "FileNotFound",
+    module: "FileSystem",
+    method,
+    description: "no such file",
+    pathOrDescriptor: path,
+  });
+
 const makeHandlerLayer = (
   recorded: RecordedRegistration,
   input: {
@@ -53,6 +63,10 @@ const makeHandlerLayer = (
     readonly xdgMimeExitCode?: number;
     readonly writeError?: PlatformError.PlatformError;
     readonly existingEntry?: string;
+    readonly directoryEntries?: ReadonlyArray<string>;
+    readonly entryContents?: Record<string, string>;
+    readonly iconBytes?: Uint8Array;
+    readonly iconExists?: boolean;
   } = {},
 ) =>
   DesktopLinuxUrlHandler.layer.pipe(
@@ -60,7 +74,27 @@ const makeHandlerLayer = (
       Layer.mergeAll(
         Layer.succeed(DesktopEnvironment.DesktopEnvironment, makeEnvironment(input.environment)),
         FileSystem.layerNoop({
-          readFileString: () => Effect.succeed(input.existingEntry ?? ""),
+          readFileString: (path) => {
+            const matched = Object.entries(input.entryContents ?? {}).find(([suffix]) =>
+              path.endsWith(suffix),
+            );
+            if (matched !== undefined) {
+              return Effect.succeed(matched[1]);
+            }
+            if (input.existingEntry !== undefined && path.includes("applications/")) {
+              return Effect.succeed(input.existingEntry);
+            }
+            return Effect.fail(fileNotFound("readFileString", path));
+          },
+          readFile: (path) =>
+            input.iconBytes !== undefined
+              ? Effect.succeed(input.iconBytes)
+              : Effect.fail(fileNotFound("readFile", path)),
+          exists: (path) =>
+            input.iconExists === true && path.endsWith(".png")
+              ? Effect.succeed(true)
+              : Effect.succeed(false),
+          readDirectory: () => Effect.succeed([...(input.directoryEntries ?? [])]),
           makeDirectory: (path) =>
             Effect.sync(() => {
               recorded.directories.push(path);
@@ -71,6 +105,10 @@ const makeHandlerLayer = (
               : Effect.sync(() => {
                   recorded.files.push({ path, content });
                 }),
+          writeFile: (path, bytes) =>
+            Effect.sync(() => {
+              recorded.binaries.push({ path, bytes });
+            }),
         }),
         Layer.succeed(
           ChildProcessSpawner.ChildProcessSpawner,
@@ -102,6 +140,7 @@ const runRegister = (
 const emptyRecording = (): RecordedRegistration => ({
   directories: [],
   files: [],
+  binaries: [],
   commands: [],
 });
 
@@ -124,7 +163,76 @@ describe("DesktopLinuxUrlHandler", () => {
     );
     assert.include(entry, "NoDisplay=true");
     assert.notInclude(entry, "StartupWMClass=");
+    assert.notInclude(entry, "Icon=");
     assert.include(entry, "MimeType=x-scheme-handler/t3code;");
+  });
+
+  it("renders a launcher desktop entry with icon, window class, and the AppImage sandbox flag", () => {
+    const entry = DesktopLinuxUrlHandler.renderLauncherDesktopEntry({
+      displayName: "T3 Code (Nightly)",
+      execTarget: '/home/al ice/Apps/T3 "100%" $HOME\\x.AppImage',
+      scheme: "t3code",
+      iconName: "com.t3tools.T3Code",
+      wmClass: "t3code",
+      noSandbox: true,
+    });
+
+    assert.include(entry, "[Desktop Entry]");
+    assert.include(entry, "Name=T3 Code (Nightly)");
+    assert.include(
+      entry,
+      'Exec="/home/al ice/Apps/T3 \\\\"100%%\\\\" \\\\$HOME\\\\\\\\x.AppImage" --no-sandbox %U',
+    );
+    assert.include(entry, "NoDisplay=false");
+    assert.include(entry, "StartupWMClass=t3code");
+    assert.include(entry, "Icon=com.t3tools.T3Code");
+    assert.include(entry, "MimeType=x-scheme-handler/t3code;");
+  });
+
+  it("detects an integrator entry only when it references the same AppImage", () => {
+    const appImagePath = "/home/alice/Applications/T3-Code.AppImage";
+    assert.isTrue(
+      DesktopLinuxUrlHandler.hasIntegratedLauncherEntry({
+        entries: [
+          { name: "appimagekit_abc123-T3-Code.desktop", content: `Exec="${appImagePath}" %U` },
+        ],
+        ownEntryName: "com.t3tools.T3Code.desktop",
+        appImagePath,
+      }),
+    );
+    assert.isFalse(
+      DesktopLinuxUrlHandler.hasIntegratedLauncherEntry({
+        entries: [
+          {
+            name: "appimagekit_abc123-T3-Code.desktop",
+            content: 'Exec="/home/alice/Applications/Other.AppImage" %U',
+          },
+        ],
+        ownEntryName: "com.t3tools.T3Code.desktop",
+        appImagePath,
+      }),
+    );
+    assert.isFalse(
+      DesktopLinuxUrlHandler.hasIntegratedLauncherEntry({
+        entries: [{ name: "com.t3tools.T3Code.desktop", content: `Exec="${appImagePath}"` }],
+        ownEntryName: "com.t3tools.T3Code.desktop",
+        appImagePath,
+      }),
+    );
+    assert.isFalse(
+      DesktopLinuxUrlHandler.hasIntegratedLauncherEntry({
+        entries: [{ name: "notes.txt", content: appImagePath }],
+        ownEntryName: "com.t3tools.T3Code.desktop",
+        appImagePath,
+      }),
+    );
+    assert.isFalse(
+      DesktopLinuxUrlHandler.hasIntegratedLauncherEntry({
+        entries: [{ name: "appimagekit_abc123-T3-Code.desktop", content: null }],
+        ownEntryName: "com.t3tools.T3Code.desktop",
+        appImagePath,
+      }),
+    );
   });
 
   it("carries structured context on registration errors", () => {
@@ -154,13 +262,14 @@ describe("DesktopLinuxUrlHandler", () => {
     );
   });
 
-  it.effect("writes the handler entry and claims the scheme default via xdg-mime", () => {
+  it.effect("promotes the entry to the launcher when no integrator claimed the AppImage", () => {
     const recorded = emptyRecording();
 
     return Effect.gen(function* () {
       yield* runRegister(recorded);
 
       assert.deepEqual(recorded.directories, ["/home/alice/.local/share/applications"]);
+      assert.deepEqual(recorded.binaries, []);
       assert.equal(recorded.files.length, 1);
       assert.equal(
         recorded.files[0]?.path,
@@ -168,9 +277,76 @@ describe("DesktopLinuxUrlHandler", () => {
       );
       assert.include(
         recorded.files[0]?.content,
+        'Exec="/home/alice/Applications/T3-Code.AppImage" --no-sandbox %U',
+      );
+      assert.include(recorded.files[0]?.content, "NoDisplay=false");
+      assert.include(recorded.files[0]?.content, "Icon=com.t3tools.T3Code");
+      assert.include(recorded.files[0]?.content, "StartupWMClass=t3code");
+      assert.include(recorded.files[0]?.content, "MimeType=x-scheme-handler/t3code;");
+      assert.deepEqual(recorded.commands, [
+        {
+          command: "xdg-mime",
+          args: ["default", "com.t3tools.T3Code.desktop", "x-scheme-handler/t3code"],
+        },
+      ]);
+    });
+  });
+
+  it.effect("installs the embedded AppImage icon into the user hicolor theme", () => {
+    const recorded = emptyRecording();
+
+    return Effect.gen(function* () {
+      yield* runRegister(recorded, {
+        iconBytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      });
+
+      assert.equal(recorded.binaries.length, 1);
+      assert.equal(
+        recorded.binaries[0]?.path,
+        "/home/alice/.local/share/icons/hicolor/512x512/apps/com.t3tools.T3Code.png",
+      );
+      assert.deepEqual(recorded.binaries[0]?.bytes, new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+      assert.include(
+        recorded.directories,
+        "/home/alice/.local/share/icons/hicolor/512x512/apps",
+      );
+      assert.include(recorded.files[0]?.content, "Icon=com.t3tools.T3Code");
+    });
+  });
+
+  it.effect("does not reinstall the icon when the hicolor copy already exists", () => {
+    const recorded = emptyRecording();
+
+    return Effect.gen(function* () {
+      yield* runRegister(recorded, { iconBytes: new Uint8Array([1]), iconExists: true });
+
+      assert.deepEqual(recorded.binaries, []);
+      assert.equal(recorded.files.length, 1);
+      assert.include(recorded.files[0]?.content, "Icon=com.t3tools.T3Code");
+    });
+  });
+
+  it.effect("stays the hidden handler when an integrator entry references the AppImage", () => {
+    const recorded = emptyRecording();
+
+    return Effect.gen(function* () {
+      yield* runRegister(recorded, {
+        directoryEntries: ["appimagekit_abc123-T3-Code.desktop", "org.other.App.desktop"],
+        entryContents: {
+          "appimagekit_abc123-T3-Code.desktop":
+            'Exec="/home/alice/Applications/T3-Code.AppImage" %U',
+        },
+      });
+
+      assert.equal(recorded.files.length, 1);
+      assert.include(
+        recorded.files[0]?.content,
         'Exec="/home/alice/Applications/T3-Code.AppImage" %U',
       );
-      assert.include(recorded.files[0]?.content, "MimeType=x-scheme-handler/t3code;");
+      assert.include(recorded.files[0]?.content, "NoDisplay=true");
+      assert.notInclude(recorded.files[0]?.content, "Icon=");
+      assert.notInclude(recorded.files[0]?.content, "StartupWMClass=");
+      assert.deepEqual(recorded.binaries, []);
       assert.deepEqual(recorded.commands, [
         {
           command: "xdg-mime",
@@ -190,10 +366,34 @@ describe("DesktopLinuxUrlHandler", () => {
         recorded.files[0]?.content,
         `Exec=${DesktopLinuxUrlHandler.escapeDesktopEntryExecArgument(process.execPath)} %U`,
       );
+      assert.include(recorded.files[0]?.content, "NoDisplay=true");
+      assert.deepEqual(recorded.binaries, []);
     });
   });
 
-  it.effect("does not rewrite the pre-ready entry while the portal can be reading it", () => {
+  it.effect("does not rewrite a launcher entry that already matches", () => {
+    const recorded = emptyRecording();
+
+    return Effect.gen(function* () {
+      yield* runRegister(recorded, {
+        existingEntry: DesktopLinuxUrlHandler.renderLauncherDesktopEntry({
+          displayName: "T3 Code (Alpha)",
+          execTarget: "/home/alice/Applications/T3-Code.AppImage",
+          scheme: "t3code",
+          iconName: "com.t3tools.T3Code",
+          wmClass: "t3code",
+          noSandbox: true,
+        }),
+      });
+
+      assert.deepEqual(recorded.files, []);
+      assert.deepEqual(recorded.binaries, []);
+      assert.deepEqual(recorded.directories, []);
+      assert.equal(recorded.commands.length, 1);
+    });
+  });
+
+  it.effect("does not rewrite a matching integrator-era handler entry", () => {
     const recorded = emptyRecording();
 
     return Effect.gen(function* () {
@@ -203,9 +403,15 @@ describe("DesktopLinuxUrlHandler", () => {
           execTarget: "/home/alice/Applications/T3-Code.AppImage",
           scheme: "t3code",
         }),
+        directoryEntries: ["appimagekit_abc123-T3-Code.desktop"],
+        entryContents: {
+          "appimagekit_abc123-T3-Code.desktop":
+            'Exec="/home/alice/Applications/T3-Code.AppImage" %U',
+        },
       });
 
       assert.deepEqual(recorded.files, []);
+      assert.deepEqual(recorded.binaries, []);
       assert.deepEqual(recorded.directories, []);
       assert.equal(recorded.commands.length, 1);
     });

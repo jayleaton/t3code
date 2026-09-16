@@ -1,3 +1,5 @@
+import * as NodePath from "node:path";
+
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -12,7 +14,7 @@ import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import { makeComponentLogger } from "./DesktopObservability.ts";
 
 // Linux ships as an AppImage, so the .desktop entry users end up with is
-// created by whatever integration tool they use (AppImageLauncher names it
+// normally created by an integration tool (AppImageLauncher names it
 // appimagekit_<hash>-….desktop) and its filename is not under our control.
 // Electron's app.setAsDefaultProtocolClient resolves the desktop id from
 // setDesktopName, which cannot match those files — so the browser keeps
@@ -20,6 +22,13 @@ import { makeComponentLogger } from "./DesktopObservability.ts";
 // our own handler entry pointing at the current AppImage and claim the
 // scheme default via xdg-mime, exactly what the file manager's "set as
 // default" checkbox would record in mimeapps.list.
+//
+// When no integrator has claimed the AppImage (a bare download from the
+// release page), that hidden handler entry leaves the app invisible in
+// launchers. In that case the entry is promoted to the real launcher instead:
+// visible, with the AppImage's embedded hicolor icon installed into the user
+// icon theme, the window class pinned via StartupWMClass, and the same
+// --no-sandbox flag the AppImage's own integration template uses.
 const { logInfo, logWarning } = makeComponentLogger("desktop-linux-url-handler");
 
 export class DesktopLinuxUrlHandlerRegistrationError extends Schema.TaggedError<DesktopLinuxUrlHandlerRegistrationError>()(
@@ -83,6 +92,58 @@ export function renderUrlHandlerDesktopEntry(input: {
   ].join("\n");
 }
 
+// electron-builder embeds the hicolor icons in the AppImage squashfs at
+// usr/share/icons/hicolor/<size>x<size>/apps/t3code.png.
+const LAUNCHER_ICON_SIZES = [512, 256, 128];
+const LAUNCHER_ICON_FILE_NAME = "t3code.png";
+
+// The visible launcher used when no integrator entry exists. It claims the
+// window identity (StartupWMClass) and resolves Icon from the user hicolor
+// theme copy installed by installLauncherIcon.
+export function renderLauncherDesktopEntry(input: {
+  readonly displayName: string;
+  readonly execTarget: string;
+  readonly scheme: string;
+  readonly iconName: string;
+  readonly wmClass: string;
+  readonly noSandbox: boolean;
+}): string {
+  const sandboxArgs = input.noSandbox ? " --no-sandbox" : "";
+  return [
+    "[Desktop Entry]",
+    "Type=Application",
+    `Name=${escapeDesktopEntryString(input.displayName)}`,
+    `Exec=${escapeDesktopEntryExecArgument(input.execTarget)}${sandboxArgs} %U`,
+    "Terminal=false",
+    "NoDisplay=false",
+    "StartupNotify=false",
+    `StartupWMClass=${escapeDesktopEntryString(input.wmClass)}`,
+    `Icon=${escapeDesktopEntryString(input.iconName)}`,
+    `MimeType=x-scheme-handler/${input.scheme};`,
+    "",
+  ].join("\n");
+}
+
+// Integrator entries (appimagekit_…) point their Exec line at the AppImage.
+// When one references the same AppImage it owns the launcher slot, so ours
+// must stay the hidden scheme handler.
+export function hasIntegratedLauncherEntry(input: {
+  readonly entries: ReadonlyArray<{
+    readonly name: string;
+    readonly content: string | null;
+  }>;
+  readonly ownEntryName: string;
+  readonly appImagePath: string;
+}): boolean {
+  return input.entries.some(
+    (entry) =>
+      entry.name !== input.ownEntryName &&
+      entry.name.endsWith(".desktop") &&
+      entry.content !== null &&
+      entry.content.includes(input.appImagePath),
+  );
+}
+
 export class DesktopLinuxUrlHandler extends Context.Service<
   DesktopLinuxUrlHandler,
   {
@@ -101,16 +162,109 @@ export const make = Effect.gen(function* () {
     environment.linuxApplicationsDir,
     environment.linuxDesktopEntryName,
   );
+  const iconStem = environment.linuxDesktopEntryName.replace(/\.desktop$/, "");
+
+  // Best-effort: without the icon copy the launcher entry still works and
+  // falls back to a generic icon.
+  const installLauncherIcon = Effect.gen(function* () {
+    if (Option.isNone(environment.appImagePath)) {
+      return;
+    }
+    const iconTarget = NodePath.posix.join(
+      NodePath.posix.dirname(environment.linuxApplicationsDir),
+      "icons",
+      "hicolor",
+      "512x512",
+      "apps",
+      `${iconStem}.png`,
+    );
+    const alreadyInstalled = yield* fileSystem
+      .exists(iconTarget)
+      .pipe(Effect.orElseSucceed(() => false));
+    if (alreadyInstalled) {
+      return;
+    }
+    // Inside the mounted AppImage, process.execPath points at the squashfs
+    // root, so the embedded icons sit relative to it.
+    const appImageMountRoot = NodePath.posix.dirname(process.execPath);
+    for (const size of LAUNCHER_ICON_SIZES) {
+      const iconSource = NodePath.posix.join(
+        appImageMountRoot,
+        "usr",
+        "share",
+        "icons",
+        "hicolor",
+        `${size}x${size}`,
+        "apps",
+        LAUNCHER_ICON_FILE_NAME,
+      );
+      const bytes = yield* fileSystem.readFile(iconSource).pipe(Effect.orElseSucceed(() => null));
+      if (bytes === null) {
+        continue;
+      }
+      yield* fileSystem.makeDirectory(NodePath.posix.dirname(iconTarget), { recursive: true });
+      yield* fileSystem.writeFile(iconTarget, bytes);
+      return;
+    }
+  }).pipe(Effect.ignore);
+
+  const renderEntryContent = (execTarget: string) =>
+    Effect.gen(function* () {
+      const appImagePath = Option.getOrElse(
+        environment.appImagePath,
+        (): string | null => null,
+      );
+      if (appImagePath === null) {
+        // Launching outside an AppImage (a development checkout) is not a
+        // launcher install; keep the hidden handler entry.
+        return renderUrlHandlerDesktopEntry({
+          displayName: environment.displayName,
+          execTarget,
+          scheme,
+        });
+      }
+      const entryNames = yield* fileSystem
+        .readDirectory(environment.linuxApplicationsDir)
+        .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+      const entries = yield* Effect.forEach(entryNames, (name) =>
+        fileSystem
+          .readFileString(NodePath.posix.join(environment.linuxApplicationsDir, name))
+          .pipe(
+            Effect.orElseSucceed(() => null),
+            Effect.map((content) => ({ name, content })),
+          ),
+      );
+      if (
+        hasIntegratedLauncherEntry({
+          entries,
+          ownEntryName: environment.linuxDesktopEntryName,
+          appImagePath,
+        })
+      ) {
+        return renderUrlHandlerDesktopEntry({
+          displayName: environment.displayName,
+          execTarget,
+          scheme,
+        });
+      }
+      yield* installLauncherIcon;
+      return renderLauncherDesktopEntry({
+        displayName: environment.displayName,
+        execTarget,
+        scheme,
+        iconName: iconStem,
+        wmClass: environment.linuxWmClass,
+        // electron-builder ships the AppImage integration template with
+        // --no-sandbox; a launcher entry launching the same binary must match.
+        noSandbox: true,
+      });
+    });
 
   const writeDesktopEntry = Effect.gen(function* () {
     // Inside the mounted AppImage, process.execPath points at a transient
     // /tmp/.mount_* path — the handler must launch the AppImage itself.
     const execTarget = Option.getOrElse(environment.appImagePath, () => process.execPath);
-    const content = renderUrlHandlerDesktopEntry({
-      displayName: environment.displayName,
-      execTarget,
-      scheme,
-    });
+    const content = yield* renderEntryContent(execTarget);
     // Pre-ready setup normally wrote this already. Avoid truncating a valid
     // entry while the portal may be reading it during startup.
     const existing = yield* fileSystem
