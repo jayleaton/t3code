@@ -441,6 +441,7 @@ jobs:
 
       - name: Verify Agents installer isolation
         if: inputs.platform == 'win' && inputs.brand == 'agents'
+        timeout-minutes: 5
         shell: pwsh
         run: |
           $installers = @(Get-ChildItem release/T3-Agents-*.exe)

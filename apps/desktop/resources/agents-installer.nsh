@@ -14,7 +14,7 @@
       WriteRegStr ${ROOT} "${INSTALL_REGISTRY_KEY}" "LegacySharedInstallLocation" "$R0"
       WriteRegStr ${ROOT} "${INSTALL_REGISTRY_KEY}" "LegacySharedUninstallString" "$R2"
       ${If} ${Errors}
-        MessageBox MB_ICONSTOP "T3 Agents must repair its previous shared installation registration. Run this installer as administrator. Your app data has not been changed."
+        MessageBox MB_ICONSTOP "T3 Agents must repair its previous shared installation registration. Run this installer as administrator. Your app data has not been changed." /SD IDOK
         Abort
       ${EndIf}
       # Only the fork's own registration is changed. Leave every file and the
@@ -26,11 +26,11 @@
       ReadRegStr $R2 ${ROOT} "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
       ${If} $R0 != ""
       ${OrIf} $R2 != ""
-        MessageBox MB_ICONSTOP "The previous shared installation registration could not be repaired. Installation stopped to protect T3 Code."
+        MessageBox MB_ICONSTOP "The previous shared installation registration could not be repaired. Installation stopped to protect T3 Code." /SD IDOK
         Abort
       ${EndIf}
     ${Else}
-      MessageBox MB_ICONSTOP "This T3 Agents installation points at T3 Code's folder. Installation stopped to protect T3 Code."
+      MessageBox MB_ICONSTOP "This T3 Agents installation points at T3 Code's folder. Installation stopped to protect T3 Code." /SD IDOK
       Abort
     ${EndIf}
   ${EndIf}
@@ -39,7 +39,7 @@
 !macro customInit
   ${GetFileName} "$INSTDIR" $R0
   ${If} $R0 == "t3code"
-    MessageBox MB_ICONSTOP "T3 Agents cannot be installed into T3 Code's directory. Use its separate t3agents directory."
+    MessageBox MB_ICONSTOP "T3 Agents cannot be installed into T3 Code's directory. Use its separate t3agents directory." /SD IDOK
     Abort
   ${EndIf}
 !macroend
