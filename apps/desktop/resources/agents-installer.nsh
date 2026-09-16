@@ -22,10 +22,25 @@
       DeleteRegValue ${ROOT} "${INSTALL_REGISTRY_KEY}" "InstallLocation"
       DeleteRegValue ${ROOT} "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
       DeleteRegValue ${ROOT} "${UNINSTALL_REGISTRY_KEY}" "QuietUninstallString"
+      ReadRegStr $R0 ${ROOT} "${INSTALL_REGISTRY_KEY}" "InstallLocation"
+      ReadRegStr $R2 ${ROOT} "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
+      ${If} $R0 != ""
+      ${OrIf} $R2 != ""
+        MessageBox MB_ICONSTOP "The previous shared installation registration could not be repaired. Installation stopped to protect T3 Code."
+        Abort
+      ${EndIf}
     ${Else}
       MessageBox MB_ICONSTOP "This T3 Agents installation points at T3 Code's folder. Installation stopped to protect T3 Code."
       Abort
     ${EndIf}
+  ${EndIf}
+!macroend
+
+!macro customInit
+  ${GetFileName} "$INSTDIR" $R0
+  ${If} $R0 == "t3code"
+    MessageBox MB_ICONSTOP "T3 Agents cannot be installed into T3 Code's directory. Use its separate t3agents directory."
+    Abort
   ${EndIf}
 !macroend
 
