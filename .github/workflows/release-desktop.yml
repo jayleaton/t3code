@@ -189,6 +189,15 @@ jobs:
           pnpm_config_cache_dir: ${{ runner.temp }}/pnpm-metadata
         run: vp install --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
 
+      - name: Verify Windows shared profile credentials
+        if: inputs.platform == 'win' && inputs.brand == 'agents'
+        timeout-minutes: 5
+        env:
+          NODE_ENV: test
+        run: |
+          node apps/desktop/scripts/ensure-electron-runtime.mjs
+          vp test run apps/desktop/src/app/WindowsSharedProfile.test.ts apps/desktop/src/app/WindowsSharedProfile.windows.test.ts
+
       - name: Cache resource monitor
         id: resource_monitor_cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6

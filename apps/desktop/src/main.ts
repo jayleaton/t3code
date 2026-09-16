@@ -67,6 +67,7 @@ import * as DesktopWindow from "./window/DesktopWindow.ts";
 import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "./wsl/DesktopWslServerTree.ts";
+import { relaunchWithWindowsSharedProfile } from "./app/WindowsSharedProfile.ts";
 
 const desktopEnvironmentLayer = Layer.unwrap(
   Effect.gen(function* () {
@@ -226,4 +227,6 @@ const desktopRuntimeLayer = desktopClerkLayer.pipe(
   Layer.provideMerge(DesktopPreReadyPlatform.layer),
 );
 
-DesktopApp.program.pipe(Effect.provide(desktopRuntimeLayer), NodeRuntime.runMain);
+if (!relaunchWithWindowsSharedProfile()) {
+  DesktopApp.program.pipe(Effect.provide(desktopRuntimeLayer), NodeRuntime.runMain);
+}
