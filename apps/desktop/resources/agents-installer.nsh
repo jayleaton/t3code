@@ -50,6 +50,7 @@
     !insertmacro detachSharedAgentsInstall HKCU
     !insertmacro detachSharedAgentsInstall HKLM
     ${If} ${RunningX64}
+    ${OrIf} ${IsNativeARM64}
       SetRegView 64
       !insertmacro detachSharedAgentsInstall HKCU
       !insertmacro detachSharedAgentsInstall HKLM
