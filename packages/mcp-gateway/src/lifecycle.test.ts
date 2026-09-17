@@ -6,6 +6,33 @@ import type { GatewayRuntimePort } from "./port.ts";
 const unusedPort = {} as GatewayRuntimePort;
 
 describe("gateway lifecycle isolation", () => {
+  it("keeps a newer runtime running when stale startup cleanup fails", async () => {
+    const first = Promise.withResolvers<GatewayRuntimeHandle>();
+    const currentStop = vi.fn(async () => {});
+    const staleStop = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("stale cleanup failed"))
+      .mockResolvedValue(undefined);
+    const start = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue({ stop: currentStop });
+    const controller = createGatewayController({
+      port: unusedPort,
+      load: async () => ({ start }),
+    });
+    const pending = controller.enable();
+    await Promise.resolve();
+    await controller.disable();
+    await controller.enable();
+    first.resolve({ stop: staleStop });
+    await pending;
+    expect(controller.status()).toEqual({ state: "running" });
+    expect(currentStop).not.toHaveBeenCalled();
+    await controller.disable();
+    expect(staleStop).toHaveBeenCalledTimes(2);
+    expect(currentStop).toHaveBeenCalledOnce();
+  });
   it("does not import or start gateway code while disabled", async () => {
     const load = vi.fn();
     const controller = createGatewayController({ port: unusedPort, load });
@@ -54,6 +81,53 @@ describe("gateway lifecycle isolation", () => {
 
     expect(stop).toHaveBeenCalledOnce();
     expect(controller.status()).toEqual({ state: "disabled" });
+  });
+
+  it("does not start a module loaded after disable", async () => {
+    let loaded!: (module: { start: () => Promise<GatewayRuntimeHandle> }) => void;
+    const start = vi.fn(async () => ({ stop: async () => undefined }));
+    const controller = createGatewayController({
+      port: unusedPort,
+      load: () =>
+        new Promise((resolve) => {
+          loaded = resolve;
+        }),
+    });
+    const enabling = controller.enable();
+    await controller.disable();
+    loaded({ start });
+    await enabling;
+    expect(start).not.toHaveBeenCalled();
+    expect(controller.status()).toEqual({ state: "disabled" });
+  });
+
+  it("retains failed stale cleanup without hiding a newer running runtime", async () => {
+    let finish!: (handle: GatewayRuntimeHandle) => void;
+    const oldStop = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("old cleanup"))
+      .mockResolvedValue(undefined);
+    const newStop = vi.fn(async () => undefined);
+    const start = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      )
+      .mockResolvedValue({ stop: newStop });
+    const controller = createGatewayController({ port: unusedPort, load: async () => ({ start }) });
+    const old = controller.enable();
+    await Promise.resolve();
+    await controller.disable();
+    await controller.enable();
+    finish({ stop: oldStop });
+    await old;
+    expect(controller.status()).toEqual({ state: "running" });
+    await controller.disable();
+    expect(oldStop).toHaveBeenCalledTimes(2);
+    expect(newStop).toHaveBeenCalledOnce();
   });
 
   it("starts and stops only the additive gateway runtime", async () => {

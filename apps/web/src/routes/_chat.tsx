@@ -1,8 +1,10 @@
-import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
+import { Outlet, createFileRoute, redirect, useParams } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo } from "react";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
+import { ThreadRouteView } from "../components/ThreadRouteView";
+import { resolveThreadRouteTarget } from "../threadRoutes";
 import { useClientSettings, useLegacySidebarEnabled } from "../hooks/useSettings";
 import { openCommandPalette } from "../commandPaletteBus";
 import { useProjects } from "../state/entities";
@@ -117,7 +119,7 @@ function ChatRouteGlobalShortcuts() {
             stackedThreadToast({
               type: "info",
               title: "Preview is desktop-only",
-              description: "Open T3 Code in the desktop app to use the in-app preview.",
+              description: "Open T3 Agents in the desktop app to use the in-app preview.",
             }),
           );
           return;
@@ -175,10 +177,16 @@ function ChatRouteGlobalShortcuts() {
 }
 
 function ChatRouteLayout() {
+  // Both thread routes render here, not in their own leaf components, so the
+  // draft-to-thread promotion keeps one ChatView mounted across the swap.
+  const threadTarget = useParams({
+    strict: false,
+    select: (params) => resolveThreadRouteTarget(params),
+  });
   return (
     <>
       <ChatRouteGlobalShortcuts />
-      <Outlet />
+      {threadTarget ? <ThreadRouteView target={threadTarget} /> : <Outlet />}
     </>
   );
 }

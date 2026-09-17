@@ -40,6 +40,17 @@ const makeEnvironment = (
   DesktopEnvironment.DesktopEnvironment.pipe(Effect.provide(makeEnvironmentLayer(overrides, env)));
 
 describe("DesktopEnvironment", () => {
+  it.effect("keeps Agents Windows identity distinct while retaining production state paths", () =>
+    Effect.gen(function* () {
+      const official = yield* makeEnvironment({ platform: "win32", brand: "t3" });
+      const agents = yield* makeEnvironment({ platform: "win32", brand: "agents" });
+      assert.equal(agents.appUserModelId, "com.jayleaton.t3agents");
+      assert.notEqual(agents.appUserModelId, official.appUserModelId);
+      assert.equal(agents.branding.baseName, "T3 Agents");
+      assert.equal(agents.stateDir, official.stateDir);
+      assert.equal(agents.savedEnvironmentRegistryPath, official.savedEnvironmentRegistryPath);
+    }),
+  );
   it.effect("derives state paths and development identity inside Effect", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment(

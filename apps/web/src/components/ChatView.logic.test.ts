@@ -2047,3 +2047,112 @@ it("follows a changed server PR link without replacing an unrelated open panel",
     }),
   ).toBe(false);
 });
+
+describe("worktree setup visibility", () => {
+  const stage = (
+    id: "fetch" | "checkout" | "submodules" | "setup-script" | "agent",
+    status: "done" | "running" | "failed" | "pending",
+  ) => ({
+    id,
+    status,
+    startedAt: now,
+    endedAt: status === "running" || status === "pending" ? null : now,
+    percent: null,
+    detail: null,
+    tail: [],
+  });
+  const base = {
+    threadId,
+    phase: "running" as const,
+    startedAt: now,
+    endedAt: null,
+    branch: "feature",
+    baseRef: "main",
+    worktreePath: null,
+    setupScript: null,
+    stages: [stage("checkout", "running"), stage("agent", "pending")],
+    error: null,
+    sequence: 1,
+  };
+  const settledDone = {
+    ...base,
+    phase: "done" as const,
+    endedAt: now,
+    stages: [stage("checkout", "done"), stage("setup-script", "done"), stage("agent", "done")],
+  };
+
+  it("reads the settled snapshot back from the thread's activities", () => {
+    const activities = [
+      { kind: "setup-script.started", payload: {} },
+      { kind: "worktree-setup", payload: settledDone },
+      { kind: "worktree-setup", payload: { not: "a snapshot" } },
+    ];
+    expect(findRecordedWorktreeSetup(activities, threadId)).toEqual(settledDone);
+    expect(findRecordedWorktreeSetup(activities, ThreadId.make("other"))).toBeNull();
+  });
+
+  it("shows a running setup and drops a clean one once the turn started", () => {
+    const visible = (snapshot: WorktreeSetupSnapshot | null, turnStarted: boolean) =>
+      resolveVisibleWorktreeSetup({
+        live: null,
+        recorded: snapshot,
+        turnStarted,
+        followUpSent: false,
+      });
+    expect(
+      resolveVisibleWorktreeSetup({
+        live: base,
+        recorded: null,
+        turnStarted: false,
+        followUpSent: false,
+      }),
+    ).toEqual(base);
+    expect(visible(settledDone, false)).toEqual(settledDone);
+    expect(visible(settledDone, true)).toBeNull();
+    expect(visible(null, true)).toBeNull();
+  });
+
+  it("keeps a failed script, a failed setup, and a cancelled setup visible", () => {
+    const scriptFailed = {
+      ...settledDone,
+      stages: [stage("checkout", "done"), stage("setup-script", "failed"), stage("agent", "done")],
+    };
+    const visible = (snapshot: WorktreeSetupSnapshot, followUpSent = false) =>
+      resolveVisibleWorktreeSetup({
+        live: null,
+        recorded: snapshot,
+        turnStarted: true,
+        followUpSent,
+      });
+    expect(visible(scriptFailed)).toEqual(scriptFailed);
+    const failed = { ...settledDone, phase: "failed" as const, error: "git exploded" };
+    expect(visible(failed)).toEqual(failed);
+    const cancelled = { ...settledDone, phase: "cancelled" as const };
+    expect(visible(cancelled)).toEqual(cancelled);
+
+    // The setup belongs to the first turn. A follow-up send retires every
+    // settled outcome; only a script that is still running stays.
+    expect(visible(scriptFailed, true)).toBeNull();
+    expect(visible(failed, true)).toBeNull();
+    expect(visible(cancelled, true)).toBeNull();
+    expect(visible(settledDone, true)).toBeNull();
+    const stillRunning = {
+      ...base,
+      stages: [stage("checkout", "done"), stage("setup-script", "running"), stage("agent", "done")],
+    };
+    expect(visible(stillRunning, true)).toEqual(stillRunning);
+  });
+
+  it("prefers whichever snapshot is newer by sequence", () => {
+    const pick = (live: WorktreeSetupSnapshot | null, recorded: WorktreeSetupSnapshot | null) =>
+      resolveVisibleWorktreeSetup({ live, recorded, turnStarted: false, followUpSent: false });
+    expect(pick({ ...base, sequence: 3 }, { ...settledDone, sequence: 7 })).toEqual({
+      ...settledDone,
+      sequence: 7,
+    });
+    expect(pick({ ...settledDone, sequence: 9 }, { ...base, sequence: 1 })).toEqual({
+      ...settledDone,
+      sequence: 9,
+    });
+  });
+});

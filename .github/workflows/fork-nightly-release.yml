@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   prepare:
-    if: github.repository == 'jayleaton/t3code' && vars.FORK_RELEASE_ENABLED == 'true' && github.ref_name == (vars.FORK_RELEASE_BRANCH || 'main')
+    if: github.repository == 'jayleaton/t3code' && vars.FORK_RELEASE_ENABLED == 'true' && (github.event_name == 'workflow_dispatch' || github.ref_name == (vars.FORK_RELEASE_BRANCH || 'main'))
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -59,6 +59,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       NODE_ENV: production
+      T3CODE_DESKTOP_BRAND: agents
       APP_VERSION: ${{ needs.prepare.outputs.version }}
       T3CODE_CLERK_PUBLISHABLE_KEY: ${{ vars.T3CODE_CLERK_PUBLISHABLE_KEY }}
       T3CODE_CLERK_JWT_TEMPLATE: ${{ vars.T3CODE_CLERK_JWT_TEMPLATE }}
@@ -76,10 +77,17 @@ jobs:
         with:
           node-version-file: package.json
           run-install: false
-      - run: vp install --frozen-lockfile --prod=false
+      - name: Install build dependencies
+        env:
+          NODE_ENV: development
+        run: vp install --frozen-lockfile
       - name: Validate Agents and packaging
+        env:
+          NODE_ENV: test
         run: |
           vp test run apps/web/src/components/agents packages/client-runtime/src/gateway packages/mcp-gateway/src apps/server/src/mcp/toolkits/workspace scripts/build-desktop-artifact.test.ts
+          vp test run apps/server/src/persistence/Migrations/050_ProjectionThreadProfileSnapshot.test.ts apps/server/src/persistence/Migrations/050_ProjectionThreadPullRequests.test.ts apps/server/src/persistence/Migrations/051_ProjectionThreadMessageContext.test.ts
+          vp test run apps/desktop/src/app/SharedSafeStorage.test.ts apps/desktop/src/app/LegacyTokenStorage.test.ts apps/desktop/src/app/DesktopClerk.test.ts apps/desktop/src/app/DesktopConnectionCatalogStore.test.ts
           vp run --filter @t3tools/web --filter @t3tools/desktop --filter @t3tools/client-runtime --filter @t3tools/mcp-gateway --filter t3 typecheck
       - run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
       - run: node scripts/update-release-package-versions.ts "$APP_VERSION"
@@ -273,6 +281,7 @@ jobs:
       cli_archive: true
 
   publish:
+    if: github.ref_name == (vars.FORK_RELEASE_BRANCH || 'main')
     needs:
       [
         prepare,

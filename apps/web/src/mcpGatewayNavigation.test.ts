@@ -38,6 +38,9 @@ describe("desktop gateway navigation", () => {
     await expect(openDesktopGatewayThread(router, undefined, "dev-box", "chat")).rejects.toThrow(
       "unavailable",
     );
+    await expect(openDesktopGatewayThread(router, {}, "dev-box", "chat")).rejects.toThrow(
+      "unavailable",
+    );
     expect(router.navigate).not.toHaveBeenCalled();
   });
 

@@ -68,7 +68,7 @@ const checkForUpdatesFromMenu = Effect.gen(function* () {
     yield* electronDialog.showMessageBox({
       type: "info",
       title: "You're up to date!",
-      message: `T3 Code ${updateState.currentVersion} is currently the newest version available.`,
+      message: `T3 Agents ${updateState.currentVersion} is currently the newest version available.`,
       buttons: ["OK"],
     });
   } else if (updateState.status === "error") {
@@ -137,7 +137,17 @@ export const make = Effect.gen(function* () {
     const settingsClick = () => {
       runMenuEffect("open-settings", dispatchMenuAction("open-settings"));
     };
-    const pasteAsTextClick = () => {
+    // Chromium already pastes as plain text for this chord, so the accelerator
+    // needs nothing from the menu: the composer and the terminal each arm
+    // themselves from the same keydown. Routing it through the renderer anyway
+    // lands a second, injected paste and doubles the text. Only a menu click,
+    // which produces no keystroke for them to see, needs that round trip.
+    const pasteAsTextClick = (
+      _item: Electron.MenuItem,
+      _window: Electron.BaseWindow | undefined,
+      event: Electron.KeyboardEvent,
+    ) => {
+      if (event.triggeredByAccelerator === true) return;
       runMenuEffect("paste-as-text", dispatchMenuAction("paste-as-text"));
     };
     const zoomClick = (direction: DesktopWindow.MainWindowZoomDirection) => () => {

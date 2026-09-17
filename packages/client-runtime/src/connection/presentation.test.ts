@@ -5,8 +5,8 @@ import * as Option from "effect/Option";
 import { BearerConnectionProfile, type ConnectionCatalogEntry } from "./catalog.ts";
 import {
   BearerConnectionTarget,
-  ConnectionTransientError,
   ConnectionBlockedError,
+  ConnectionTransientError,
   type SupervisorConnectionState,
 } from "./model.ts";
 import {
@@ -61,7 +61,10 @@ describe("connection presentation", () => {
             lastFailure: new ConnectionBlockedError({ reason, detail: "Private diagnostic" }),
           }),
         ),
-      ).toMatchObject({ phase: "error", failureReason: reason });
+      ).toMatchObject({
+        phase: reason === "unsupported" ? "unsupported" : "error",
+        failureReason: reason,
+      });
     }
     expect(
       presentConnectionState(
@@ -78,6 +81,21 @@ describe("connection presentation", () => {
       "failureReason",
     );
   });
+  it("labels a blocked protocol as unsupported", () => {
+    const connection = presentConnectionState(
+      supervisorState({
+        phase: "blocked",
+        lastFailure: new ConnectionBlockedError({
+          reason: "unsupported",
+          detail: "Update your app.",
+        }),
+      }),
+    );
+    expect(connection.phase).toBe("unsupported");
+    expect(connection.error).toBe("Update your app.");
+    expect(connectionStatusText(connection)).toBe("Client not supported");
+  });
+
   it("preserves profile display information without exposing credentials", () => {
     expect(connectionCatalogDisplayUrl(ENTRY)).toBe("https://environment.example.test");
   });

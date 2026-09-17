@@ -1096,6 +1096,9 @@ describe("buildThreadListV2ListItems", () => {
       "v2-settled-shelf",
       "v2-thread",
     ]);
+    expect(threadJumpTarget(items, "thread.jump.1")?.id).toBe("active");
+    expect(threadJumpTarget(items, "thread.jump.2")?.id).toBe("settled");
+    expect(threadJumpTarget(items, "thread.jump.3")).toBeNull();
   });
 });
 

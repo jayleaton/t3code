@@ -29,6 +29,7 @@ import {
   type WorkLogEntry,
 } from "../../session-logic";
 import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
+import type { QueuedComposerMessage } from "../../queuedMessageStore";
 import {
   type MessageId,
   type WorktreeSetupSnapshot,
@@ -947,6 +948,8 @@ export function deriveMessagesTimelineRows(input: {
   liveAgentTaskIds?: ReadonlySet<string> | undefined;
   /** Live bootstrap progress. Renders a stage card under the first user message. */
   worktreeSetup?: WorktreeSetupSnapshot | null;
+  /** Messages sent during the running turn, rendered after the live rows. */
+  queuedMessages?: ReadonlyArray<QueuedComposerMessage>;
 }): MessagesTimelineRow[] {
   const turnDiffSummaryByAssistantMessageId = new Map<MessageId, TurnDiffSummary>();
   for (const summary of input.turnDiffSummaries) {
@@ -1417,9 +1420,6 @@ export function deriveMessagesTimelineRows(input: {
       createdAt: input.worktreeSetup.startedAt,
       snapshot: input.worktreeSetup,
     } as const;
-    // Sit directly under the first user message: a finished snapshot can
-    // outlive the first assistant reply, and it belongs to the send, not the
-    // end of the thread.
     const firstUserRowIndex = nextRows.findIndex(
       (row) => row.kind === "message" && row.message.role === "user",
     );

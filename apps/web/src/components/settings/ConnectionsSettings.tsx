@@ -161,6 +161,7 @@ import {
   type EnvironmentPresentation,
   useEnvironments,
   usePrimaryEnvironment,
+  useRelayEnvironmentDiscovery,
 } from "~/state/environments";
 import { requestConfirmDialog } from "~/confirmDialog";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -1444,7 +1445,8 @@ function savedBackendStatus(environment: EnvironmentPresentation): {
   readonly text: string;
   readonly tone: "muted" | "error";
 } {
-  if (!environment.entry.enabled) return { text: "Off", tone: "muted" };
+  if (!environment.entry.enabled && environment.connection.phase !== "unsupported")
+    return { text: "Off", tone: "muted" };
   const { connection } = environment;
   switch (connection.phase) {
     case "connected":
@@ -1456,6 +1458,9 @@ function savedBackendStatus(environment: EnvironmentPresentation): {
         text: connection.error ? `Reconnecting: ${connection.error}` : "Reconnecting",
         tone: "error",
       };
+    // Not a failure: the machine is fine, this build just cannot talk to it.
+    case "unsupported":
+      return { text: "Client not supported", tone: "muted" };
     case "error":
       return {
         text: connection.error ? `Connection failed: ${connection.error}` : "Connection failed",
@@ -1480,7 +1485,8 @@ function SavedBackendListRow({
   onRemove,
 }: SavedBackendListRowProps) {
   const environmentId = environment.environmentId;
-  const enabled = environment.entry.enabled;
+  const unsupported = environment.connection.phase === "unsupported";
+  const enabled = environment.entry.enabled && !unsupported;
   const isConnected = environment.connection.phase === "connected";
   const isRemoving = removingEnvironmentId === environmentId;
   const errorTraceId = environment.connection.traceId;
@@ -1515,6 +1521,23 @@ function SavedBackendListRow({
     serverUpdateState.status === "running" && serverUpdateState.stage === "resuming";
   const status = savedBackendStatus(environment);
   const serverVersion = environment.serverConfig?.environment.serverVersion ?? null;
+  // A saved T3 Connect machine this device has never reached (unsupported,
+  // or not yet connected) still has a descriptor from relay discovery, so
+  // it can wear its detected glyph instead of the generic server. Discovery
+  // empties its map on every refresh, so hold the last descriptor seen or
+  // the glyph would blink back to the generic one each time.
+  const relayDiscovery = useRelayEnvironmentDiscovery();
+  const discoveredDescriptor = Option.getOrNull(
+    relayDiscovery.environments.get(environmentId)?.status ?? Option.none(),
+  )?.descriptor;
+  const [lastDescriptor, setLastDescriptor] = useState(discoveredDescriptor);
+  if (discoveredDescriptor !== undefined && discoveredDescriptor !== lastDescriptor) {
+    setLastDescriptor(discoveredDescriptor);
+  }
+  const machineKind = resolveEnvironmentMachineKind(
+    environment.serverConfig ??
+      (lastDescriptor === undefined ? null : { environment: lastDescriptor }),
+  );
   const subtitleText = [
     environmentTransportLabel(environment),
     resumingServerUpdate ? "Restarting" : status.text,
@@ -1533,7 +1556,7 @@ function SavedBackendListRow({
 
   return (
     <EnvironmentRow
-      kind={resolveEnvironmentMachineKind(environment.serverConfig)}
+      kind={machineKind}
       label={environment.label}
       dimmed={!enabled}
       subtitle={
@@ -1551,7 +1574,11 @@ function SavedBackendListRow({
             {subtitleText}
           </TooltipTrigger>
           <TooltipPopup side="top" className="max-w-80 whitespace-pre-wrap leading-tight">
-            {enabled ? connectionStatusText(environment.connection) : "Switched off"}
+            {unsupported
+              ? (environment.connection.error ?? connectionStatusText(environment.connection))
+              : enabled
+                ? connectionStatusText(environment.connection)
+                : "Switched off"}
             {versionMismatch
               ? `\nUpdate available: ${versionMismatch.serverVersion} → ${versionMismatch.clientVersion}`
               : ""}
@@ -1584,13 +1611,15 @@ function SavedBackendListRow({
             <Switch
               size="sm"
               checked={enabled}
-              disabled={isRemoving}
+              disabled={isRemoving || unsupported}
               aria-label={`${enabled ? "Switch off" : "Switch on"} ${environment.label}`}
               onCheckedChange={(checked) => onSetEnabled(environmentId, checked)}
             />
           }
         />
-        <TooltipPopup side="top">{enabled ? "Switch off" : "Switch on"}</TooltipPopup>
+        <TooltipPopup side="top">
+          {unsupported ? "Client not supported" : enabled ? "Switch off" : "Switch on"}
+        </TooltipPopup>
       </Tooltip>
       <Menu>
         <MenuTrigger
@@ -3107,7 +3136,7 @@ export function ConnectionsSettings() {
         {desktopWslState.enabled ? (
           <SettingsRow
             title="WSL only"
-            description="Run only the WSL backend. T3 Code restarts when this changes."
+            description="Run only the WSL backend. T3 Agents restarts when this changes."
             className="bg-muted/20 pl-7 sm:pl-8"
             control={
               <Switch
@@ -3388,8 +3417,8 @@ export function ConnectionsSettings() {
                 </AlertDialogTitle>
                 <AlertDialogDescription>
                   {pendingDesktopServerExposureMode === "network-accessible"
-                    ? "T3 Code will restart to expose this environment over the network."
-                    : "T3 Code will restart and limit this environment back to this machine."}
+                    ? "T3 Agents will restart to expose this environment over the network."
+                    : "T3 Agents will restart and limit this environment back to this machine."}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -3447,15 +3476,15 @@ export function ConnectionsSettings() {
                 <AlertDialogDescription>
                   {pendingWslChange?.kind === "disable"
                     ? pendingWslChange.wasWslOnly
-                      ? "T3 Code will restart on the Windows backend. Threads and projects opened against WSL stay safe inside the distro and become available again when you re-enable WSL."
-                      : "The WSL backend will stop. Threads and projects opened against WSL stay safe inside the distro, but they'll be unavailable in T3 Code until you re-enable WSL."
+                      ? "T3 Agents will restart on the Windows backend. Threads and projects opened against WSL stay safe inside the distro and become available again when you re-enable WSL."
+                      : "The WSL backend will stop. Threads and projects opened against WSL stay safe inside the distro, but they'll be unavailable in T3 Agents until you re-enable WSL."
                     : pendingWslChange?.kind === "distro"
-                      ? "T3 Code will restart the WSL backend on the new distro. Sessions still running on the current distro will be interrupted."
+                      ? "T3 Agents will restart the WSL backend on the new distro. Sessions still running on the current distro will be interrupted."
                       : pendingWslChange?.kind === "enable"
                         ? "Run the WSL backend alongside the Windows one, or stop the Windows backend and use only WSL? You can change this later from Settings."
                         : pendingWslChange?.nextValue
-                          ? "T3 Code will restart and start only the WSL backend. Your Windows-side projects won't be accessible until you turn this off again."
-                          : "T3 Code will restart and bring the Windows backend back up alongside WSL."}
+                          ? "T3 Agents will restart and start only the WSL backend. Your Windows-side projects won't be accessible until you turn this off again."
+                          : "T3 Agents will restart and bring the Windows backend back up alongside WSL."}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -3541,7 +3570,7 @@ export function ConnectionsSettings() {
               <AlertDialogHeader>
                 <AlertDialogTitle>Disable Tailscale HTTPS?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  T3 Code will restart the local backend without Tailscale Serve.
+                  T3 Agents will restart the local backend without Tailscale Serve.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -3579,7 +3608,7 @@ export function ConnectionsSettings() {
               <DialogHeader>
                 <DialogTitle>Set up Tailscale HTTPS?</DialogTitle>
                 <DialogDescription>
-                  T3 Code will restart the local backend with Tailscale Serve enabled and ask
+                  T3 Agents will restart the local backend with Tailscale Serve enabled and ask
                   Tailscale to proxy HTTPS traffic to this backend.
                 </DialogDescription>
               </DialogHeader>

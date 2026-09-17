@@ -16,7 +16,12 @@ export const HOSTED_APP_CHANNEL =
   hostedAppChannel === "latest" || hostedAppChannel === "nightly" ? hostedAppChannel : null;
 export const HOSTED_APP_CHANNEL_LABEL =
   HOSTED_APP_CHANNEL === "nightly" ? "Nightly" : HOSTED_APP_CHANNEL === "latest" ? "Latest" : null;
-export const APP_BASE_NAME = injectedDesktopAppBranding?.baseName ?? "T3 Code";
+/**
+ * Browser builds have no desktop bridge to ask, so the fork's Agents brand is
+ * the default. Electron still overrides this through the injected branding.
+ */
+const WEB_APP_BASE_NAME = "T3 Agents";
+export const APP_BASE_NAME = injectedDesktopAppBranding?.baseName ?? WEB_APP_BASE_NAME;
 export const APP_STAGE_LABEL =
   injectedDesktopAppBranding?.stageLabel ??
   HOSTED_APP_CHANNEL_LABEL ??

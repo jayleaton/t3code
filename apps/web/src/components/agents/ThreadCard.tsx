@@ -1,12 +1,15 @@
-import { useState, useRef, useEffect } from "react";
 import { GitPullRequestIcon } from "lucide-react";
-import { Link } from "@tanstack/react-router";
+import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
+import { useState, useRef, useEffect, type CSSProperties } from "react";
+import { Link, useLocation } from "@tanstack/react-router";
 import { PreviewCard, PreviewCardTrigger, PreviewCardPopup } from "../ui/preview-card";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { useProject } from "../../state/entities";
+import type { McpGatewayProfile } from "@t3tools/contracts";
+import { AgentIcon } from "./AgentIcon";
+import { useEnvironment } from "../../state/environments";
 import { AgentChatPreview } from "./AgentChatPreview";
-import { ThreadSpeedControl } from "./ThreadSpeedControl";
 import { isInsideComposerFloatingLayer } from "../chat/composerEventScope";
 import { agentThreadStatus, agentThreadStatusLabel } from "./agents.logic";
 import {
@@ -19,14 +22,18 @@ import { useOpenPrLink } from "../../lib/openPullRequestLink";
 
 export function ThreadCard({
   thread,
+  profile,
   onContextMenu,
 }: {
+  profile?: McpGatewayProfile | undefined;
   thread: EnvironmentThreadShell;
   onContextMenu: (
     thread: EnvironmentThreadShell,
     position: { x: number; y: number },
   ) => Promise<void>;
 }) {
+  const pathname = useLocation({ select: (location) => location.pathname });
+  const environment = useEnvironment(thread.environmentId);
   const project = useProject(scopeProjectRef(thread.environmentId, thread.projectId));
   const prReference = thread.linkedPullRequest ?? thread.branchPullRequest;
   const linkedPr = useLinkedThreadPullRequest(thread.environmentId, prReference);
@@ -41,9 +48,15 @@ export function ThreadCard({
             status: prStatusIndicator(detail?.pr ?? null, detail?.sourceControlProvider),
           };
         })
-      : prReference
-        ? [{ reference: prReference, status: prStatus }]
-        : [];
+      : [thread.linkedPullRequest, thread.branchPullRequest]
+          .filter(
+            (reference, index, references) =>
+              reference != null &&
+              references.findIndex((item) => item?.url === reference.url) === index,
+          )
+          .flatMap((reference) =>
+            reference ? [{ reference, status: reference === prReference ? prStatus : null }] : [],
+          );
   const openPrLink = useOpenPrLink();
   const [previewOpen, setPreviewOpen] = useState(false);
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
@@ -69,7 +82,11 @@ export function ThreadCard({
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [previewOpen]);
   return (
-    <div className="agent-thread-container">
+    <div
+      className="agent-thread-container"
+      data-current={pathname === `/agents/${thread.environmentId}/${thread.id}`}
+      style={{ "--agent-color": profile?.color ?? "var(--muted-foreground)" } as CSSProperties}
+    >
       <PreviewCard
         open={!contextMenuOpen && previewOpen}
         onOpenChange={(open, details) => {
@@ -106,17 +123,37 @@ export function ThreadCard({
         >
           <div className="agent-thread-title">
             <strong>{thread.title}</strong>
-            <span className={`agent-status agent-status-${status}`}>
-              {agentThreadStatusLabel(status)}
-            </span>
-          </div>
-          <div className="agent-thread-meta">
-            <div className="agent-thread-location">
-              <span className="agent-thread-project">
-                {project?.title ?? "Project unavailable"}
+            <div className="agent-thread-identity">
+              {thread.profileSnapshot && (
+                <span>
+                  <AgentIcon icon={profile?.icon} />
+                  <span>
+                    {profile?.name ?? thread.profileSnapshot.profileName ?? "Removed agent"}
+                  </span>
+                </span>
+              )}
+              <span className={`agent-status agent-status-${status}`}>
+                {agentThreadStatusLabel(status)}
               </span>
             </div>
           </div>
+          <div className="agent-thread-meta">
+            <span className="agent-thread-project">
+              {project?.title ?? "Project unavailable"}
+              {environment && <> · {environment.label}</>}
+            </span>
+            <time className="agent-thread-time" dateTime={thread.updatedAt}>
+              {new Date(thread.updatedAt).toLocaleString(undefined, {
+                month: "short",
+                day: "numeric",
+                hour: "numeric",
+                minute: "2-digit",
+              })}
+            </time>
+          </div>
+          {environment?.connection.phase !== "connected" && (
+            <p className="agent-thread-time">Environment unavailable</p>
+          )}
         </PreviewCardTrigger>
         <PreviewCardPopup
           ref={popupRef}
@@ -142,35 +179,33 @@ export function ThreadCard({
           )}
         </PreviewCardPopup>
       </PreviewCard>
-      <div className="agent-thread-footer">
-        <time className="agent-thread-time" dateTime={thread.updatedAt}>
-          {new Date(thread.updatedAt).toLocaleString(undefined, {
-            month: "short",
-            day: "numeric",
-            hour: "numeric",
-            minute: "2-digit",
-          })}
-        </time>
-        <ThreadSpeedControl thread={thread} />
-      </div>
       {badges.length > 0 && (
         <div className="agent-thread-prs" aria-label="Pull requests">
           {badges.map(({ reference, status }) => (
-            <a
-              key={reference.url}
-              href={reference.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className={`agent-thread-pr ${status?.colorClass ?? "text-muted-foreground"}`}
-              title={`${reference.repository} #${reference.number}`}
-              aria-label={status?.tooltip ?? `Open PR #${reference.number}`}
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={(event) => openPrLink(event, reference.url, undefined, thread.environmentId)}
-            >
-              <GitPullRequestIcon size={12} aria-hidden="true" />
-              <span className="agent-thread-pr-repository">{reference.repository}</span>
-              <span>#{reference.number}</span>
-            </a>
+            <Tooltip key={reference.url}>
+              <TooltipTrigger
+                render={
+                  <a
+                    href={reference.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`agent-thread-pr ${status?.colorClass ?? "text-muted-foreground"}`}
+                    aria-label={status?.tooltip ?? `Open PR #${reference.number}`}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) =>
+                      openPrLink(event, reference.url, undefined, thread.environmentId)
+                    }
+                  />
+                }
+              >
+                <GitPullRequestIcon size={12} aria-hidden="true" />
+                <span className="agent-thread-pr-repository">{reference.repository}</span>
+                <span>#{reference.number}</span>
+              </TooltipTrigger>
+              <TooltipPopup>
+                {status?.tooltip ?? `${reference.repository} #${reference.number}`}
+              </TooltipPopup>
+            </Tooltip>
           ))}
         </div>
       )}

@@ -208,7 +208,7 @@ export function AgentTaskDialog({
         </div>
         {target && !supportsAgentDrafts && (
           <p role="status">
-            Update this machine’s T3 Code server to send from this dialog. You can still create an
+            Update this machine’s T3 Agents server to send from this dialog. You can still create an
             empty chat.
           </p>
         )}

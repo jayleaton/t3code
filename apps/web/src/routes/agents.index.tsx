@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { AgentsBoard } from "../components/agents/AgentsBoard";
 
-export const Route = createFileRoute("/agents/")({ component: AgentsBoard });
+export const Route = createFileRoute("/agents/")({
+  component: () => <p className="agent-empty">Select a thread to open its chat.</p>,
+});

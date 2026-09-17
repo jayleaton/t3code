@@ -27,6 +27,7 @@ const makeEnvironment = (overrides: Record<string, unknown> = {}) =>
     linuxWmClass: "t3code",
     linuxApplicationsDir: "/home/alice/.local/share/applications",
     appImagePath: Option.some("/home/alice/Applications/T3-Code.AppImage"),
+    resolveResourcePathCandidates: (name: string) => [`/mount/resources/${name}`],
     path: { join: (...parts: ReadonlyArray<string>) => parts.join("/") },
     ...overrides,
   } as unknown as DesktopEnvironment.DesktopEnvironment["Service"]);
@@ -60,6 +61,11 @@ const makeHandlerLayer = (
       Layer.mergeAll(
         Layer.succeed(DesktopEnvironment.DesktopEnvironment, makeEnvironment(input.environment)),
         FileSystem.layerNoop({
+          exists: () => Effect.succeed(true),
+          copyFile: (source, destination) =>
+            Effect.sync(() => {
+              recorded.files.push({ path: destination, content: `copied from ${source}` });
+            }),
           readFileString: () => Effect.succeed(input.existingEntry ?? ""),
           makeDirectory: (path) =>
             Effect.sync(() => {
@@ -126,6 +132,54 @@ describe("DesktopLinuxUrlHandler", () => {
     assert.notInclude(entry, "StartupWMClass=");
     assert.include(entry, "MimeType=x-scheme-handler/t3code;");
   });
+
+  it.effect(
+    "registers an Agents launcher with a persistent icon and marks its downloaded AppImage",
+    () => {
+      const recorded: RecordedRegistration = { directories: [], files: [], commands: [] };
+      return runRegister(recorded, {
+        environment: {
+          displayName: "T3 Agents (Nightly)",
+          linuxDesktopEntryName: "com.jayleaton.t3agents.desktop",
+          linuxWmClass: "t3agents",
+          appImagePath: Option.some("/home/alice/Downloads/T3 Agents.AppImage"),
+        },
+      }).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            const launcher = recorded.files.find((file) =>
+              file.path.endsWith("com.jayleaton.t3agents.desktop"),
+            );
+            assert.isDefined(launcher);
+            assert.include(
+              launcher!.content,
+              "Icon=/home/alice/.local/share/applications/../icons/t3agents.png",
+            );
+            assert.include(launcher!.content, "StartupWMClass=t3agents");
+            assert.notInclude(launcher!.content, "NoDisplay=true");
+            assert.isTrue(
+              recorded.files.some(
+                (file) =>
+                  file.path.endsWith("icons/t3agents.png") &&
+                  file.content === "copied from /mount/resources/icon.png",
+              ),
+            );
+            assert.isFalse(
+              recorded.files.some((file) => file.path.endsWith("com.t3tools.T3Code.desktop")),
+            );
+            assert.deepEqual(recorded.commands.find((command) => command.command === "gio")?.args, [
+              "set",
+              "-t",
+              "string",
+              "/home/alice/Downloads/T3 Agents.AppImage",
+              "metadata::custom-icon",
+              "file:///home/alice/.local/share/icons/t3agents.png",
+            ]);
+          }),
+        ),
+      );
+    },
+  );
 
   it("carries structured context on registration errors", () => {
     const writeError = new DesktopLinuxUrlHandler.DesktopLinuxUrlHandlerRegistrationError({

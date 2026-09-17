@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Tests use Node's glob matcher to verify electron-builder exclusions.
 import * as NodeCrypto from "node:crypto";
 import * as NodePath from "node:path";
+import { createRequire } from "node:module";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -22,6 +23,7 @@ import {
   createStageWorkspaceConfig,
   createStagePatchedDependencies,
   createBuildConfig,
+  resolveDesktopPackageName,
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
@@ -92,6 +94,25 @@ import {
   wslRuntimeArchiveStem,
 } from "./build-desktop-artifact.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
+
+it("gives NSIS different default folders for official T3 and T3 Agents", () => {
+  const desktopRequire = createRequire(new URL("../apps/desktop/package.json", import.meta.url));
+  const builderRequire = createRequire(desktopRequire.resolve("electron-builder"));
+  const { AppInfo } = builderRequire("app-builder-lib/out/appInfo.js");
+  const { getWindowsInstallationDirName } = builderRequire(
+    "app-builder-lib/out/targets/targetUtil.js",
+  );
+  const folder = (brand: string, productName: string, appId: string) =>
+    getWindowsInstallationDirName(
+      new AppInfo({
+        metadata: { name: resolveDesktopPackageName(brand), version: "0.0.40" },
+        config: { productName, appId },
+      }),
+      false,
+    );
+  assert.equal(folder("t3", "T3 Code (Nightly)", "com.t3tools.t3code"), "t3code");
+  assert.equal(folder("agents", "T3 Agents", "com.jayleaton.t3agents"), "t3agents");
+});
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 

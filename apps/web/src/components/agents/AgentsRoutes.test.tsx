@@ -83,7 +83,6 @@ describe("Agents route shell", () => {
       expect(container.querySelector("[data-sidebar-control]")).toBeNull();
       expect(container.textContent).not.toContain("Thread navigation");
       expect(container.querySelector("textarea")).not.toBeNull();
-      expect(container.querySelector('a[href="/agents"]')?.textContent).toContain("Back to agents");
       await act(async () =>
         Array.from(container.querySelectorAll("button"))
           .find((button) => button.textContent === "Toggle context")!

@@ -237,7 +237,7 @@ describe("gateway bridge", () => {
         },
         profiles: [
           {
-            name: "Andy",
+            name: " Andy ",
             modelSelection: { instanceId: "glm", model: "glm-5.3" },
             runtimeMode: "full-access",
             interactionMode: "default",
@@ -252,6 +252,8 @@ describe("gateway bridge", () => {
         "2549ba75-2a91-4554-8baa-88e6ae0efa48": ["read"],
       }),
     );
+    expect(Object.hasOwn(bridge.getGrants(), "constructor")).toBe(false);
+    expect(bridge.getGrants()["constructor"]).toBeUndefined();
     expect(bridge.getProfiles()).toEqual([
       {
         name: "Andy",

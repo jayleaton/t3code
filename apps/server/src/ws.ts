@@ -92,6 +92,9 @@ import {
   type PullRequestRef,
   WS_METHODS,
   WsRpcGroup,
+  WORKTREE_SETUP_ACTIVITY_KIND,
+  worktreeSetupActivityId,
+  type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import {

@@ -12,6 +12,7 @@ import { openDesktopGatewayThread, openDesktopGatewayAgents } from "./mcpGateway
 import { connectionAtomRuntime } from "./connection/runtime";
 import {
   getMcpGatewayGrants,
+  getMcpGatewayPort,
   getMcpGatewayToken,
   isMcpGatewayEnabled,
   publishMcpGatewayStatus,
@@ -21,12 +22,11 @@ import {
 } from "./mcpGatewayState";
 import { appAtomRegistry } from "./rpc/atomRegistry";
 
-const BRIDGE_URL = "ws://127.0.0.1:47631";
-
 export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
   const [configuration, setConfiguration] = useState(() => ({
-    available: (window.desktopBridge?.getMcpGatewayLaunchConfig() ?? null) !== null,
+    available: (window.desktopBridge?.getMcpGatewayLaunchConfig?.() ?? null) !== null,
     enabled: isMcpGatewayEnabled(),
+    port: getMcpGatewayPort(),
     grants: getMcpGatewayGrants(),
     token: getMcpGatewayToken(),
   }));
@@ -34,8 +34,9 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
   useEffect(() => {
     const onChange = () =>
       setConfiguration({
-        available: (window.desktopBridge?.getMcpGatewayLaunchConfig() ?? null) !== null,
+        available: (window.desktopBridge?.getMcpGatewayLaunchConfig?.() ?? null) !== null,
         enabled: isMcpGatewayEnabled(),
+        port: getMcpGatewayPort(),
         grants: getMcpGatewayGrants(),
         token: getMcpGatewayToken(),
       });
@@ -68,7 +69,7 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
         events: createGatewayRuntimeEventSourceFromContext(value.value),
         grants: configuration.grants,
         token: configuration.token,
-        url: BRIDGE_URL,
+        url: `ws://127.0.0.1:${configuration.port}`,
         onState: publishMcpGatewayStatus,
         onStatusSnapshot: publishMcpGatewayStatusSnapshot,
       });

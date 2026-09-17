@@ -28,7 +28,7 @@ function parseGrants(value: unknown): GatewayGrants {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("Gateway grants must be an object keyed by environment id.");
   }
-  const grants: Record<string, ReadonlyArray<GatewayScope>> = {};
+  const grants: Record<string, ReadonlyArray<GatewayScope>> = Object.create(null);
   for (const [environmentId, candidate] of Object.entries(value)) {
     if (
       environmentId.trim() === "" ||
@@ -71,7 +71,7 @@ function parseProfiles(value: unknown): ReadonlyArray<GatewayProfile> {
     ) {
       throw new Error(`Invalid gateway profile ${String(profile.name ?? "")}.`);
     }
-    return candidate as GatewayProfile;
+    return { ...candidate, name: profile.name.trim() } as GatewayProfile;
   });
 }
 

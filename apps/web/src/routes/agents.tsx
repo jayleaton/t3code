@@ -1,5 +1,6 @@
-import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 import "../components/agents/agents.css";
+import { AgentsBoard } from "../components/agents/AgentsBoard";
 
 export const Route = createFileRoute("/agents")({
   beforeLoad: ({ context }) => {
@@ -12,7 +13,7 @@ export const Route = createFileRoute("/agents")({
   },
   component: () => (
     <div className="min-h-0 h-dvh w-full flex flex-col">
-      <Outlet />
+      <AgentsBoard />
     </div>
   ),
 });

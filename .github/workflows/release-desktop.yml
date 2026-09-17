@@ -189,6 +189,26 @@ jobs:
           pnpm_config_cache_dir: ${{ runner.temp }}/pnpm-metadata
         run: vp install --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
 
+      - name: Verify Windows shared profile and legacy Agents credentials
+        if: inputs.platform == 'win' && inputs.brand == 'agents'
+        timeout-minutes: 5
+        env:
+          NODE_ENV: test
+          T3CODE_NATIVE_STORAGE_TESTS: "1"
+        run: |
+          node apps/desktop/scripts/ensure-electron-runtime.mjs
+          vp test run apps/desktop/src/app/WindowsSharedProfile.test.ts apps/desktop/src/app/WindowsSharedProfile.windows.test.ts apps/desktop/src/app/SharedSafeStorage.native.test.ts
+
+      - name: Verify macOS shared encryption and legacy Agents credentials
+        if: inputs.platform == 'mac' && inputs.brand == 'agents'
+        timeout-minutes: 5
+        env:
+          NODE_ENV: test
+          T3CODE_NATIVE_STORAGE_TESTS: "1"
+        run: |
+          node apps/desktop/scripts/ensure-electron-runtime.mjs
+          vp test run apps/desktop/src/app/SharedSafeStorage.native.test.ts
+
       - name: Cache resource monitor
         id: resource_monitor_cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -291,6 +311,25 @@ jobs:
           else
               convert -version
           fi
+
+      - name: Verify Linux shared encryption and legacy Agents credentials
+        if: inputs.platform == 'linux' && inputs.brand == 'agents'
+        timeout-minutes: 5
+        shell: bash
+        env:
+          NODE_ENV: test
+          T3CODE_NATIVE_STORAGE_TESTS: "1"
+          XDG_CURRENT_DESKTOP: GNOME
+        run: |
+          sudo apt-get install -y gnome-keyring dbus-x11 xvfb libnss3 libgbm1 libasound2t64
+          node apps/desktop/scripts/ensure-electron-runtime.mjs
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/t3-storage-keyring"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          dbus-run-session -- xvfb-run -a bash -euc '
+            printf "disposable-test-keyring" | gnome-keyring-daemon --unlock --components=secrets
+            vp test run apps/desktop/src/app/SharedSafeStorage.native.test.ts
+          '
 
       - name: Prepare Azure Trusted Signing
         if: inputs.platform == 'win'
@@ -438,6 +477,15 @@ jobs:
           fi
 
           vp run dist:desktop:artifact "${args[@]}"
+
+      - name: Verify Agents installer isolation
+        if: inputs.platform == 'win' && inputs.brand == 'agents'
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem release/T3-Agents-*.exe)
+          if ($installers.Count -ne 1) { throw 'Expected exactly one Agents installer.' }
+          ./scripts/test-agents-windows-installer.ps1 -Installer $installers[0].FullName
 
       # The single-executable is built with a Node that supports --build-sea
       # (25.7+); the repo itself stays on the engines.node version. It always

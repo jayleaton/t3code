@@ -2,11 +2,57 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { MessageId, ThreadId } from "@t3tools/contracts";
 
 import { runMigrations } from "../Migrations.ts";
+import { ProjectionThreadMessageRepositoryLive } from "../Layers/ProjectionThreadMessages.ts";
+import { ProjectionThreadMessageRepository } from "../Services/ProjectionThreadMessages.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+
+layer("agents migration 52 upgrade", (it) => {
+  it.effect("repairs message reads when a shipped build already recorded migration 52", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 50 });
+      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name, created_at) VALUES
+        (51, 'AgentProfileAndPullRequestCompatibility', CURRENT_TIMESTAMP),
+        (52, 'ProjectionThreadListState', CURRENT_TIMESTAMP)`;
+      yield* sql`INSERT INTO projection_thread_messages
+        (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
+        VALUES ('existing-message', 'existing-thread', 'user', 'Keep this message', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`;
+
+      yield* runMigrations();
+      const messages = yield* sql<{ text: string; context: string | null }>`
+        SELECT text, context_json AS context FROM projection_thread_messages
+        WHERE thread_id = 'existing-thread'
+      `;
+      assert.deepEqual(messages, [{ text: "Keep this message", context: null }]);
+      yield* Effect.gen(function* () {
+        const repository = yield* ProjectionThreadMessageRepository;
+        const threadId = ThreadId.make("existing-thread");
+        const now = "2026-09-16T00:00:00Z";
+        yield* repository.upsert({
+          messageId: MessageId.make("new-message"),
+          threadId,
+          turnId: null,
+          role: "user",
+          text: "New message after upgrade",
+          isStreaming: false,
+          createdAt: now,
+          updatedAt: now,
+        });
+        const saved = yield* repository.listByThreadId({ threadId });
+        assert.sameMembers(
+          saved.map((message) => message.text),
+          ["Keep this message", "New message after upgrade"],
+        );
+      }).pipe(Effect.provide(ProjectionThreadMessageRepositoryLive));
+      assert.deepEqual(yield* runMigrations(), []);
+    }),
+  );
+});
 
 layer("050_ProjectionThreadProfileSnapshot", (it) => {
   it.effect("adds the nullable profile snapshot to thread projections", () =>

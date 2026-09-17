@@ -69,17 +69,19 @@ function targetKind(tag: string): string {
 const shellSnapshot = (environmentId: EnvironmentId) =>
   Effect.gen(function* () {
     const registry = yield* EnvironmentRegistry;
-    return yield* registry.run(
-      environmentId,
-      subscribe(ORCHESTRATION_V2_WS_METHODS.subscribeShell, {}).pipe(
-        Stream.filter((item) => item.kind === "snapshot"),
-        Stream.runHead,
-        Effect.map(
-          (item) =>
-            (Option.getOrThrow(item) as { snapshot: OrchestrationV2ShellSnapshot }).snapshot,
+    return yield* registry
+      .run(
+        environmentId,
+        subscribe(ORCHESTRATION_V2_WS_METHODS.subscribeShell, {}).pipe(
+          Stream.filter((item) => item.kind === "snapshot"),
+          Stream.runHead,
+          Effect.map(
+            (item) =>
+              (Option.getOrThrow(item) as { snapshot: OrchestrationV2ShellSnapshot }).snapshot,
+          ),
         ),
-      ),
-    );
+      )
+      .pipe(Effect.timeout("20 seconds"));
   });
 
 const threadSnapshot = (environmentId: EnvironmentId, threadId: ThreadId) =>

@@ -9,6 +9,8 @@ import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawne
 
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import * as DesktopAssets from "./DesktopAssets.ts";
+import * as NodeURL from "node:url";
 import { makeComponentLogger } from "./DesktopObservability.ts";
 
 // Linux ships as an AppImage, so the .desktop entry users end up with is
@@ -63,12 +65,14 @@ export function escapeDesktopEntryExecArgument(value: string): string {
   return escapeDesktopEntryString(`"${quoted}"`);
 }
 
-// The AppImage integration entry owns the window identity and icon. This
-// hidden URL-only entry must not compete with it for StartupWMClass matching.
+// Official builds retain a hidden URL handler for external AppImage integration.
+// Agents supplies its own visible launcher when a persistent icon is available.
 export function renderUrlHandlerDesktopEntry(input: {
   readonly displayName: string;
   readonly execTarget: string;
   readonly scheme: string;
+  readonly iconPath?: string | undefined;
+  readonly wmClass?: string | undefined;
 }): string {
   return [
     "[Desktop Entry]",
@@ -76,7 +80,13 @@ export function renderUrlHandlerDesktopEntry(input: {
     `Name=${escapeDesktopEntryString(input.displayName)}`,
     `Exec=${escapeDesktopEntryExecArgument(input.execTarget)} %U`,
     "Terminal=false",
-    "NoDisplay=true",
+    ...(input.iconPath
+      ? [
+          `Icon=${escapeDesktopEntryString(input.iconPath)}`,
+          `StartupWMClass=${input.wmClass}`,
+          "Categories=Development;",
+        ]
+      : ["NoDisplay=true"]),
     "StartupNotify=false",
     `MimeType=x-scheme-handler/${input.scheme};`,
     "",
@@ -106,16 +116,54 @@ export const make = Effect.gen(function* () {
     // Inside the mounted AppImage, process.execPath points at a transient
     // /tmp/.mount_* path — the handler must launch the AppImage itself.
     const execTarget = Option.getOrElse(environment.appImagePath, () => process.execPath);
+    let iconPath: string | undefined;
+    if (
+      environment.isPackaged &&
+      environment.linuxDesktopEntryName === "com.jayleaton.t3agents.desktop"
+    ) {
+      const source = yield* DesktopAssets.resolveResourcePath("icon.png").pipe(
+        Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+      );
+      if (Option.isSome(source)) {
+        const iconDirectory = environment.path.join(
+          environment.linuxApplicationsDir,
+          "..",
+          "icons",
+        );
+        iconPath = environment.path.join(iconDirectory, "t3agents.png");
+        yield* fileSystem.makeDirectory(iconDirectory, { recursive: true });
+        yield* fileSystem.copyFile(source.value, iconPath);
+      }
+    }
     const content = renderUrlHandlerDesktopEntry({
       displayName: environment.displayName,
       execTarget,
       scheme,
+      iconPath,
+      wmClass: environment.linuxWmClass,
     });
     // Pre-ready setup normally wrote this already. Avoid truncating a valid
     // entry while the portal may be reading it during startup.
     const existing = yield* fileSystem
       .readFileString(desktopEntryPath)
       .pipe(Effect.orElseSucceed(() => null));
+    const appImagePath = Option.getOrUndefined(environment.appImagePath);
+    if (iconPath && appImagePath) {
+      const iconUrl = NodeURL.pathToFileURL(iconPath).href;
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const handle = yield* spawner.spawn(
+            ChildProcess.make(
+              "gio",
+              ["set", "-t", "string", appImagePath, "metadata::custom-icon", iconUrl],
+              { stdin: "ignore", stdout: "ignore", stderr: "ignore" },
+            ),
+          );
+          yield* handle.exitCode;
+        }),
+      ).pipe(Effect.ignore);
+    }
     if (existing === content) return;
     yield* fileSystem.makeDirectory(environment.linuxApplicationsDir, { recursive: true });
     yield* fileSystem.writeFileString(desktopEntryPath, content);

@@ -319,6 +319,13 @@ import {
   reviewCommentContextLabel,
   terminalContextReference,
 } from "../lib/composerContextRecords";
+import {
+  isQueuedMessageDue,
+  latestCompletedToolActivityId,
+  type QueuedComposerMessage,
+  useQueuedMessages,
+  useQueuedMessageStore,
+} from "../queuedMessageStore";
 import { type ReviewCommentContext } from "../reviewCommentContext";
 import { environmentCatalog } from "../connection/catalog";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
@@ -3353,6 +3360,22 @@ export default function ChatView(props: ChatViewProps) {
     (isSendBusy || phase === "connecting" || phase === "running") &&
     compactRequestIsActive &&
     !compactionSettled;
+  // The server records a running worktree setup on the thread for the whole
+  // bootstrap window. That record, with no turn yet, is how a reload or another
+  // client sees a worktree still being prepared, so it counts as working like
+  // the local dispatch that started it. It settles on every failure path and
+  // on restart, so this cannot outlive the setup. The placeholder "starting"
+  // session is not used here: an ordinary first turn projects one too, and it
+  // already drives the connecting state on its own.
+  const recordedWorktreeSetup = useMemo(
+    () => findRecordedWorktreeSetup(activeThread?.activities ?? [], routeThreadRef.threadId),
+    [activeThread?.activities, routeThreadRef.threadId],
+  );
+  const awaitingBootstrapTurn =
+    activeServerThread !== null &&
+    activeServerThread.id === routeThreadRef.threadId &&
+    activeServerThread.latestTurn === null &&
+    recordedWorktreeSetup?.phase === "running";
   const isWorking =
     phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint || isCompacting;
   const activeContextWindow = useMemo(
@@ -3700,27 +3723,24 @@ export default function ChatView(props: ChatViewProps) {
     activeThreadKey,
   );
   const displayedThreadRef = parseScopedThreadKey(displayedTimelineKey);
-  // Live stages of a bootstrap worktree setup. The subscription follows the
-  // thread that was set up, not the route: a deleted bootstrap thread rotates
-  // the draft's thread id, and the failed card must survive that.
-  const worktreeSetupOwnerKey = draftId ?? routeThreadKey;
-  const worktreeSetupActive =
-    worktreeSetupRef !== null && worktreeSetupRef.ownerKey === worktreeSetupOwnerKey;
-  // The setup runs on the environment that received the dispatch, so both
-  // the subscription and cancel target that one even if the draft's machine
-  // picker changes underneath.
+  // Live stages of a bootstrap worktree setup. A worktree send creates the
+  // server thread under the route's thread id before anything else, so the
+  // stream is keyed by that id alone: no owner bookkeeping, and a remount,
+  // reload, or second client picks it up the same way. The subscription is
+  // held only while a snapshot can still change.
+  const routeThreadPreparesWorktree =
+    (isPreparingWorktree && activeThread?.id === routeThreadRef.threadId) ||
+    heldWorktreeSetup?.phase === "running";
   const worktreeSetupQuery = useEnvironmentQuery(
-    worktreeSetupActive
+    routeThreadPreparesWorktree
       ? vcsEnvironment.worktreeSetup({
-          environmentId: worktreeSetupRef.environmentId,
-          input: { threadId: worktreeSetupRef.threadId },
+          environmentId: routeThreadRef.environmentId,
+          input: { threadId: routeThreadRef.threadId },
         })
       : null,
   );
   const latestWorktreeSetup = worktreeSetupQuery.data;
   useEffect(() => {
-    // The server drops finished snapshots after a grace period and emits null.
-    // Hold the last real snapshot so a settled card does not vanish.
     if (latestWorktreeSetup) setHeldWorktreeSetup(latestWorktreeSetup);
   }, [latestWorktreeSetup]);
   const worktreeSetup =
@@ -3732,20 +3752,18 @@ export default function ChatView(props: ChatViewProps) {
   const worktreeSetupDoneAndTurnVisible =
     worktreeSetup?.phase === "done" && activeThread?.latestRun?.startedAt != null;
   useEffect(() => {
-    if (!worktreeSetupDoneAndTurnVisible) return;
-    setWorktreeSetupRef(null);
     setHeldWorktreeSetup(null);
   }, [worktreeSetupDoneAndTurnVisible]);
   const cancelWorktreeSetup = useAtomCommand(vcsEnvironment.cancelWorktreeSetup, {
     reportFailure: false,
   });
   const onCancelWorktreeSetup = useCallback(() => {
-    if (!worktreeSetup || !worktreeSetupRef || worktreeSetup.phase !== "running") return;
+    if (!worktreeSetup || worktreeSetup.phase !== "running") return;
     void cancelWorktreeSetup({
-      environmentId: worktreeSetupRef.environmentId,
+      environmentId: routeThreadRef.environmentId,
       input: { threadId: worktreeSetup.threadId },
     });
-  }, [cancelWorktreeSetup, worktreeSetup, worktreeSetupRef]);
+  }, [cancelWorktreeSetup, routeThreadRef.environmentId, worktreeSetup]);
   // The setup terminal belongs to the thread that was set up. A failed
   // bootstrap deletes that thread and closes its terminals, so only offer the
   // terminal while the setup thread is still the active one.
@@ -7278,6 +7296,17 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
 
+      if (command === "thread.steerQueuedMessage") {
+        const message = activeThreadKey
+          ? useQueuedMessageStore.getState().queuesByThreadKey[activeThreadKey]?.[0]
+          : undefined;
+        if (!message) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) queuedMessageActionsRef.current.steer(message.id);
+        return;
+      }
+
       if (command === "thread.stop") {
         // An unavailable command should not shadow contextual shortcuts such as Escape to close a dialog.
         if (!canInterruptRunningThread) return;
@@ -7308,6 +7337,7 @@ export default function ChatView(props: ChatViewProps) {
     activeThreadPinned,
     activeThreadSettled,
     canInterruptRunningThread,
+    activeThreadKey,
     terminalUiState.terminalOpen,
     terminalUiState.activeTerminalId,
     activeThreadId,
@@ -7728,6 +7758,81 @@ export default function ChatView(props: ChatViewProps) {
     }
   };
 
+  const queuedMessages = useQueuedMessages(activeThreadKey ?? "");
+  // Puts queued messages back into the composer, e.g. after Stop or a failed
+  // send. Prompts join with blank lines; attachments and contexts are added.
+  const restoreQueuedMessagesToComposer = (messages: ReadonlyArray<QueuedComposerMessage>) => {
+    if (messages.length === 0) return;
+    const prompts = [promptRef.current, ...messages.map((message) => message.prompt)]
+      .map((prompt) => prompt.trim())
+      .filter((prompt) => prompt.length > 0);
+    const nextPrompt = prompts.join("\n\n");
+    promptRef.current = nextPrompt;
+    setComposerDraftPrompt(composerDraftTarget, nextPrompt);
+    // The draft store silently drops attachments over the per-turn cap. Split
+    // the overflow back into the queue so nothing is lost; the user can send
+    // the first batch and the rest follows as a queued message.
+    const attachmentRoom = Math.max(
+      0,
+      PROVIDER_SEND_TURN_MAX_ATTACHMENTS -
+        composerImagesRef.current.length -
+        composerFilesRef.current.length,
+    );
+    const attachments = messages.flatMap((message) => [...message.images, ...message.files]);
+    const restored = attachments.slice(0, attachmentRoom);
+    const overflow = attachments.slice(attachmentRoom);
+    const restoredImages = restored.filter((attachment) => attachment.type === "image");
+    const restoredFiles = restored.filter((attachment) => attachment.type === "file");
+    // The composer syncs these refs from the draft in an effect; a send before
+    // that effect runs must already see the restored content.
+    composerImagesRef.current = [...composerImagesRef.current, ...restoredImages];
+    composerFilesRef.current = [...composerFilesRef.current, ...restoredFiles];
+    if (restoredImages.length > 0) addComposerDraftImages(composerDraftTarget, restoredImages);
+    if (restoredFiles.length > 0) addComposerDraftFiles(composerDraftTarget, restoredFiles);
+    if (overflow.length > 0 && activeThreadKey) {
+      useQueuedMessageStore.getState().enqueue(activeThreadKey, {
+        prompt: "",
+        images: overflow.filter((attachment) => attachment.type === "image"),
+        files: overflow.filter((attachment) => attachment.type === "file"),
+        terminalContexts: [],
+        previewAnnotations: [],
+        reviewComments: [],
+        submissionIntent: "foreground",
+        queuedAfterToolActivityId: latestCompletedToolActivityId(threadActivities),
+        // Restoration is not a send. The user decides when the overflow goes.
+        holdUntilUserAction: true,
+        createdAt: new Date().toISOString(),
+      });
+      toastManager.add(
+        stackedThreadToast({
+          type: "info",
+          title: "Some attachments stayed queued",
+          description: `A message holds at most ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} attachments. Use Send now on the queued row when you want the rest to go.`,
+        }),
+      );
+    }
+    const restoredTerminalContexts = [
+      ...composerTerminalContextsRef.current,
+      ...messages.flatMap((message) => message.terminalContexts),
+    ];
+    composerTerminalContextsRef.current = restoredTerminalContexts;
+    setComposerDraftTerminalContexts(composerDraftTarget, restoredTerminalContexts);
+    const draft = useComposerDraftStore.getState().getComposerDraft(composerDraftTarget);
+    setComposerDraftPreviewAnnotations(composerDraftTarget, [
+      ...(draft?.previewAnnotations ?? []),
+      ...messages.flatMap((message) => message.previewAnnotations),
+    ]);
+    setComposerDraftReviewComments(composerDraftTarget, [
+      ...(draft?.reviewComments ?? []),
+      ...messages.flatMap((message) => message.reviewComments),
+    ]);
+    composerRef.current?.resetCursorState({
+      cursor: collapseExpandedComposerCursor(nextPrompt, nextPrompt.length),
+      prompt: nextPrompt,
+      detectTrigger: true,
+    });
+  };
+
   const onSend = async (
     e?: { preventDefault: () => void },
     dispatchMode: ComposerDispatchMode = "auto",
@@ -7735,6 +7840,8 @@ export default function ChatView(props: ChatViewProps) {
       annotation: PreviewAnnotationPayload;
       image: ComposerImageAttachment | null;
     },
+    /** A queued message being sent now instead of the live composer draft. */
+    queuedMessage?: QueuedComposerMessage,
   ) => {
     e?.preventDefault();
     // Typed out in full rather than picked from the menu. Attachments or contexts
@@ -7743,6 +7850,7 @@ export default function ChatView(props: ChatViewProps) {
       usageLimitsOffered &&
       usageLimitsKey !== null &&
       !directAnnotation &&
+      !queuedMessage &&
       !composerHasNonPromptContent &&
       isUsageLimitsCommand(promptRef.current)
     ) {
@@ -7804,7 +7912,9 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
     if (activePendingProgress) {
-      if (directAnnotation) {
+      // A queued message waits until the question is answered; it must not
+      // be submitted as the answer.
+      if (directAnnotation || queuedMessage) {
         notifyDirectAnnotationAttached();
         return;
       }
@@ -7822,6 +7932,8 @@ export default function ChatView(props: ChatViewProps) {
       terminalContexts: composerTerminalContexts,
       previewAnnotations: sendContextPreviewAnnotations,
       reviewComments: composerReviewComments,
+    } = queuedMessage ?? sendCtx;
+    const {
       selectedProvider: ctxSelectedProvider,
       selectedModel: ctxSelectedModel,
       selectedProviderModels: ctxSelectedProviderModels,
@@ -8062,6 +8174,7 @@ export default function ChatView(props: ChatViewProps) {
     }
     if (
       !directAnnotation &&
+      !queuedMessage &&
       sendInteractionModeEnabled &&
       showPlanFollowUpPrompt &&
       activeProposedPlan &&
@@ -8133,7 +8246,7 @@ export default function ChatView(props: ChatViewProps) {
       composerReviewComments.length === 0
         ? parseStandaloneComposerSlashCommand(trimmed)
         : null;
-    if (standaloneSlashCommand) {
+    if (standaloneSlashCommand && !queuedMessage) {
       handleInteractionModeChange(standaloneSlashCommand);
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
@@ -8154,6 +8267,12 @@ export default function ChatView(props: ChatViewProps) {
           }),
         );
       }
+      // A queued message whose only content expired would retry on every
+      // boundary and block the rest of the queue. Nothing sendable is left
+      // in it, so drop it and let the queue move on.
+      if (queuedMessage && activeThreadKey) {
+        useQueuedMessageStore.getState().remove(activeThreadKey, queuedMessage.id);
+      }
       return;
     }
     if (!activeProject) {
@@ -8164,6 +8283,38 @@ export default function ChatView(props: ChatViewProps) {
           description: "This draft no longer points to an available project.",
         }),
       );
+      return;
+    }
+    if (
+      !queuedMessage &&
+      !directAnnotation &&
+      phase === "running" &&
+      activeThreadKey &&
+      settings.followUpBehavior === "queue"
+    ) {
+      if (composerRef.current?.validateProviderInput(promptForSend) === false) {
+        return;
+      }
+      useQueuedMessageStore.getState().enqueue(activeThreadKey, {
+        prompt: promptForSend,
+        images: [...composerImages],
+        files: [...composerFiles],
+        terminalContexts: [...composerTerminalContexts],
+        previewAnnotations: [...composerPreviewAnnotations],
+        reviewComments: [...composerReviewComments],
+        submissionIntent,
+        queuedAfterToolActivityId: latestCompletedToolActivityId(threadActivities),
+        createdAt: new Date().toISOString(),
+      });
+      promptRef.current = "";
+      // Attachments move with the message; their uploads stay pending. The
+      // refs clear now too, so a Stop before the composer's sync effect runs
+      // does not restore the moved attachments twice.
+      composerImagesRef.current = [];
+      composerFilesRef.current = [];
+      composerTerminalContextsRef.current = [];
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
       return;
     }
     const threadIdForSend = activeThread.id;
@@ -8251,6 +8402,11 @@ export default function ChatView(props: ChatViewProps) {
       text: messageTextForSend || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
     });
     if (composerRef.current?.validateProviderInput(outgoingMessageText) === false) {
+      // A queued message that no longer fits is held at the head for the
+      // user to edit via Cancel, instead of failing on every boundary.
+      if (queuedMessage && activeThreadKey) {
+        useQueuedMessageStore.getState().holdAtFront(activeThreadKey, queuedMessage);
+      }
       return;
     }
 
@@ -8271,10 +8427,41 @@ export default function ChatView(props: ChatViewProps) {
     };
 
     sendInFlightRef.current = true;
+    // Every early return above leaves a queued message in the queue for a
+    // later retry. From here on a failure hands it back to the composer.
+    if (queuedMessage) {
+      const taken = activeThreadKey
+        ? useQueuedMessageStore
+            .getState()
+            .take(
+              activeThreadKey,
+              queuedMessage.id,
+              latestCompletedToolActivityId(threadActivities),
+            )
+        : null;
+      if (!taken) {
+        sendInFlightRef.current = false;
+        return;
+      }
+    }
+    // Stop drains the queue. A queued send whose upload was still running at
+    // that moment must not start a turn afterwards; it checks this before
+    // dispatch and hands the message back to the composer instead.
+    const drainGenerationAtTake = useQueuedMessageStore.getState().drainGeneration;
+    // A queued send that fails goes back to the head of the queue, held. The
+    // messages behind it keep their order and wait; the composer is not
+    // touched, which also keeps a failure after navigation off the new
+    // thread's draft. The user retries with Send now or edits with Cancel.
+    const abortQueuedReplay = () => {
+      if (queuedMessage && activeThreadKey) {
+        useQueuedMessageStore.getState().holdAtFront(activeThreadKey, queuedMessage);
+      }
+    };
     const attachmentCapabilitiesBeforeUpload = readLiveAttachmentCapabilities();
     if (attachmentCapabilitiesBeforeUpload.fileBlockReason !== null) {
       sendInFlightRef.current = false;
       setThreadError(threadIdForSend, attachmentCapabilitiesBeforeUpload.fileBlockReason);
+      abortQueuedReplay();
       return;
     }
     const turnUsesAttachmentUploads =
@@ -8294,11 +8481,13 @@ export default function ChatView(props: ChatViewProps) {
       if (attachmentCapabilitiesAfterUpload.fileBlockReason !== null) {
         sendInFlightRef.current = false;
         setThreadError(threadIdForSend, attachmentCapabilitiesAfterUpload.fileBlockReason);
+        abortQueuedReplay();
         return;
       }
       if (getUploadedAttachments({ environmentId, images: composerAttachmentsSnapshot }) === null) {
         sendInFlightRef.current = false;
         setThreadError(threadIdForSend, "Retry or remove failed uploads before sending.");
+        abortQueuedReplay();
         return;
       }
     }
@@ -8397,9 +8586,11 @@ export default function ChatView(props: ChatViewProps) {
         }),
       );
     }
-    promptRef.current = "";
-    clearComposerDraftContent(composerDraftTarget);
-    composerRef.current?.resetCursorState();
+    if (!queuedMessage) {
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+    }
 
     let firstComposerImageName: string | null = null;
     if (composerImagesSnapshot.length > 0) {
@@ -8462,6 +8653,7 @@ export default function ChatView(props: ChatViewProps) {
     }
 
     let turnStartSucceeded = false;
+    let backgroundDraftOpened = false;
     if (failure === null && turnAttachmentsResult._tag === "Success") {
       const bootstrap =
         isLocalDraftThread || baseBranchForWorktree
@@ -8557,15 +8749,46 @@ export default function ChatView(props: ChatViewProps) {
     }
 
     if (failure !== null) {
-      if (
-        promptRef.current.length === 0 &&
-        composerImagesRef.current.length === 0 &&
-        composerFilesRef.current.length === 0 &&
-        composerTerminalContextsRef.current.length === 0 &&
-        (useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.previewAnnotations
-          .length ?? 0) === 0 &&
-        (useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.reviewComments
-          .length ?? 0) === 0
+      if (resolvedSubmissionIntent === "background" && draftId && draftThread) {
+        restoreFailedBackgroundDraftThread(
+          draftId,
+          draftThread,
+          wasBootstrapThreadDeleted(squashAtomCommandFailure(failure))
+            ? newThreadId()
+            : threadIdForSend,
+        );
+        clearBackgroundDraftSubmissionByRef(scopeThreadRef(environmentId, threadIdForSend));
+      }
+      if (queuedMessage) {
+        setOptimisticUserMessages((existing) => {
+          const removed = existing.filter((message) => message.id === messageIdForSend);
+          for (const message of removed) {
+            revokeUserMessagePreviewUrls(message);
+          }
+          const next = existing.filter((message) => message.id !== messageIdForSend);
+          return next.length === existing.length ? existing : next;
+        });
+        // The optimistic row's preview URLs were just revoked, so the images
+        // need fresh ones before the row can show them again.
+        if (activeThreadKey) {
+          useQueuedMessageStore.getState().holdAtFront(activeThreadKey, {
+            ...queuedMessage,
+            images: queuedMessage.images.map(cloneComposerImageForRetry),
+          });
+        }
+      } else if (
+        backgroundDraftOpened
+          ? !composerDraftHasUserContent(
+              useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
+            )
+          : promptRef.current.length === 0 &&
+            composerImagesRef.current.length === 0 &&
+            composerFilesRef.current.length === 0 &&
+            composerTerminalContextsRef.current.length === 0 &&
+            (useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)
+              ?.previewAnnotations.length ?? 0) === 0 &&
+            (useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.reviewComments
+              .length ?? 0) === 0
       ) {
         setOptimisticUserMessages((existing) => {
           const removed = existing.filter((message) => message.id === messageIdForSend);
@@ -8598,6 +8821,21 @@ export default function ChatView(props: ChatViewProps) {
           threadIdForSend,
           error instanceof Error ? error.message : "Failed to send message.",
         );
+        if (backgroundDraftOpened && draftId) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Background task failed",
+              description: error instanceof Error ? error.message : "Failed to send message.",
+              actionProps: {
+                children: "Open draft",
+                onClick: () => {
+                  void navigate({ to: "/draft/$draftId", params: { draftId } });
+                },
+              },
+            }),
+          );
+        }
       }
     }
     sendInFlightRef.current = false;
@@ -8609,6 +8847,75 @@ export default function ChatView(props: ChatViewProps) {
       resetLocalDispatch();
     }
   };
+
+  // Sends the oldest queued message once it is due: a tool call finished
+  // after it was queued, or the turn ended. Only one leaves per boundary; the
+  // take inside onSend re-anchors the rest.
+  const sendQueuedMessage = useEffectEvent((message: QueuedComposerMessage) => {
+    void onSend(undefined, message.submissionIntent, undefined, message);
+  });
+  const nextQueuedMessage = queuedMessages[0] ?? null;
+  const latestToolActivityId = useMemo(
+    () => (nextQueuedMessage ? latestCompletedToolActivityId(threadActivities) : null),
+    [nextQueuedMessage, threadActivities],
+  );
+  // Approvals and questions block the agent; a steer landing on top of them
+  // would answer nothing and confuse the turn, so the queue holds until the
+  // user resolves them.
+  const queueBlockedByPendingRequest =
+    activePendingApproval !== null || pendingUserInputs.length > 0;
+  // onSend bails early on transient gates (environment offline, settings not
+  // hydrated, checkpoint rewinding, messages loading, machine not chosen) and
+  // leaves the message queued. Re-run when any of them clear so a due message
+  // does not wait for an unrelated phase change.
+  const queueSendGate =
+    activeEnvironmentUnavailable ||
+    !clientSettingsHydrated ||
+    isRevertingCheckpoint ||
+    threadDetailLoading ||
+    needsLoadBalancing ||
+    activeProviderStatus === null;
+  useEffect(() => {
+    if (!nextQueuedMessage || isSendBusy || queueBlockedByPendingRequest || queueSendGate) return;
+    if (sendInFlightRef.current) return;
+    if (!isQueuedMessageDue({ message: nextQueuedMessage, phase, latestToolActivityId })) return;
+    sendQueuedMessage(nextQueuedMessage);
+  }, [
+    isSendBusy,
+    latestToolActivityId,
+    nextQueuedMessage,
+    phase,
+    queueBlockedByPendingRequest,
+    queueSendGate,
+  ]);
+
+  // The row handlers are read from refs at call-time so their identity stays
+  // stable and does not bust TimelineRowCtx on every ChatView render.
+  const queuedMessageActionsRef = useRef({
+    steer: (_id: string) => {},
+    remove: (_id: string) => {},
+  });
+  queuedMessageActionsRef.current = {
+    steer: (id) => {
+      const message = queuedMessages.find((entry) => entry.id === id);
+      if (!message || sendInFlightRef.current || queueBlockedByPendingRequest) return;
+      void onSend(undefined, message.submissionIntent, undefined, message);
+    },
+    remove: (id) => {
+      if (!activeThreadKey) return;
+      const message = useQueuedMessageStore.getState().remove(activeThreadKey, id);
+      if (message) restoreQueuedMessagesToComposer([message]);
+    },
+  };
+  const onSteerQueuedMessage = useCallback((id: string) => {
+    queuedMessageActionsRef.current.steer(id);
+  }, []);
+  const onRemoveQueuedMessage = useCallback((id: string) => {
+    queuedMessageActionsRef.current.remove(id);
+  }, []);
+  // Stop also cancels the queue: the messages return to the composer instead
+  // of starting a new turn the moment the interrupted one settles.
+  restoreQueuedMessagesRef.current = restoreQueuedMessagesToComposer;
 
   const onRespondToApproval = useCallback(
     async (requestId: RuntimeRequestId, decision: ProviderApprovalDecision) => {
@@ -9302,11 +9609,11 @@ export default function ChatView(props: ChatViewProps) {
   // setup (the bootstrap created it), so this keys off the route, not
   // `isLocalDraftThread`.
   const onWorktreeSetupWorkLocally = useCallback(() => {
-    if (!worktreeSetup || !worktreeSetupRef || worktreeSetup.phase !== "running" || !draftId) {
+    if (!worktreeSetup || worktreeSetup.phase !== "running" || !draftId) {
       return;
     }
     const target = {
-      environmentId: worktreeSetupRef.environmentId,
+      environmentId: routeThreadRef.environmentId,
       input: { threadId: worktreeSetup.threadId },
     };
     void (async () => {
@@ -9314,7 +9621,7 @@ export default function ChatView(props: ChatViewProps) {
       if (result._tag !== "Success" || !result.value.cancelled) return;
       setWorkLocallyResendDraftId(draftId);
     })();
-  }, [cancelWorktreeSetup, draftId, worktreeSetup, worktreeSetupRef]);
+  }, [cancelWorktreeSetup, draftId, routeThreadRef.environmentId, worktreeSetup]);
   const onSendRef = useRef(onSend);
   onSendRef.current = onSend;
   // Resend once the cancelled dispatch has settled and the composer is free.
@@ -9682,7 +9989,7 @@ export default function ChatView(props: ChatViewProps) {
     ) : renderedRightPanelSurface?.kind === "pull-request" && !supportsPullRequests ? (
       <PullRequestsUnavailableState
         title="Pull requests unavailable"
-        error="Update this environment's T3 Code server to browse pull requests."
+        error="Update this environment's T3 Agents server to browse pull requests."
       />
     ) : renderedRightPanelSurface?.kind === "pull-request" ? (
       // No onClose: the surface tab's own X owns closing here, and a second X in the header

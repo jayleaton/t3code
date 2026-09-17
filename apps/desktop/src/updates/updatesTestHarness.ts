@@ -228,7 +228,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     quitAndInstalls: () => quitAndInstallCount,
     installSteps,
     downloadCount: () => downloadCount,
-    feedUrls: () => feedUrls,
+    feedUrls: (): ReadonlyArray<ElectronUpdater.ElectronUpdaterFeedUrl> => feedUrls,
     fullChangelog: () => fullChangelog,
     listenerCount: () =>
       Array.from(listeners.values()).reduce(

@@ -309,6 +309,32 @@ describe("gateway chat tools", () => {
     expect(read.items[0]).toMatchObject({ text: `hello from ${environmentId}` });
   });
 
+  it.each(["constructor", "toString", "__proto__"])(
+    "does not inherit a grant for %s",
+    async (environmentId) => {
+      const context = {
+        port: {
+          ...makePort(),
+          listEnvironments: async () => [
+            {
+              environmentId,
+              label: environmentId,
+              targetKind: "primary",
+              connectionState: "connected",
+            },
+          ],
+        },
+        grants: {},
+      };
+      expect(await callGatewayTool(context, "t3_list_environments", {})).toMatchObject({
+        items: [],
+      });
+      await expect(
+        callGatewayTool(context, "t3_get_thread", { environmentId, threadId: "thread" }),
+      ).rejects.toMatchObject({ code: "unknown_environment" });
+    },
+  );
+
   it("rejects a mutation when the host has only read scope", async () => {
     await expect(
       callGatewayTool({ port: makePort(), grants: { local: ["read"] } }, "t3_send_message", {

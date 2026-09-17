@@ -7,6 +7,7 @@ import {
   agentThreadStatus,
   groupAgentThreads,
   isAgentChatInFocus,
+  selectAgentWorkspaceThreads,
   resolveAgentTaskProject,
 } from "./agents.logic";
 const profile: McpGatewayProfile = {
@@ -91,6 +92,41 @@ describe("agent chat focus", () => {
   });
 });
 
+describe("agent workspace selection", () => {
+  it("includes completed unsettled work across environments, filters by agent, and clears back to All", () => {
+    const done = {
+      ...thread("completed task", "write"),
+      latestTurn: {
+        turnId: "turn" as NonNullable<ReturnType<typeof thread>["latestTurn"]>["turnId"],
+        state: "completed" as const,
+        requestedAt: "2026-09-06T00:00:00.000Z",
+        startedAt: null,
+        completedAt: "2026-09-06T00:02:00.000Z",
+        assistantMessageId: null,
+      },
+    };
+    const remote = {
+      ...thread("remote task", "review"),
+      environmentId: EnvironmentId.make("remote"),
+    };
+    const settled = thread("settled task", "write", "2026-09-06T01:00:00.000Z");
+    const items = [done, remote, settled, thread("ordinary task", null)];
+    expect(selectAgentWorkspaceThreads(items, null, "")).toEqual({
+      active: [done, remote],
+      settled: [settled],
+    });
+    expect(selectAgentWorkspaceThreads(items, "write", "")).toEqual({
+      active: [done],
+      settled: [settled],
+    });
+    expect(selectAgentWorkspaceThreads(items, null, "").active).toEqual([done, remote]);
+    expect(selectAgentWorkspaceThreads(items, null, " REMOTE ").active).toEqual([remote]);
+    expect(selectAgentWorkspaceThreads(items, "write", "remote").active).toEqual([]);
+    expect(selectAgentWorkspaceThreads(items, null, "ordinary").active).toEqual([items[3]]);
+    expect(selectAgentWorkspaceThreads([], null, "")).toEqual({ active: [], settled: [] });
+  });
+});
+
 describe("agent task project selection", () => {
   const projects = [
     { environmentId: "mac", id: "buildthings", workspaceRoot: "/Users/jay/buildthings" },
@@ -106,5 +142,29 @@ describe("agent task project selection", () => {
     expect(resolveAgentTaskProject(projects.slice(0, 2), "mac", "t3code")).toBeUndefined();
     expect(resolveAgentTaskProject(projects, "windows", "buildthings")).toBeUndefined();
     expect(resolveAgentTaskProject(projects, "linux", "t3code")).toBeUndefined();
+  });
+});
+
+describe("agent workspace pull request search", () => {
+  it("finds PR references without matching the title and still applies the agent filter", () => {
+    const linked = {
+      ...thread("Review work", "write"),
+      pullRequests: [
+        {
+          host: "github.com",
+          repository: "owner/repository",
+          number: 42,
+          url: "https://github.com/owner/repository/pull/42",
+          source: "manual" as const,
+          linkedAt: "2026-09-06T00:00:00Z",
+          snapshot: null,
+          stack: null,
+        },
+      ],
+    };
+    expect(selectAgentWorkspaceThreads([linked], null, "owner/repository").active).toEqual([
+      linked,
+    ]);
+    expect(selectAgentWorkspaceThreads([linked], "other", "owner/repository").active).toEqual([]);
   });
 });

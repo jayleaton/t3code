@@ -333,6 +333,29 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       ),
     );
 
+  const offerThreadPersistence = Effect.fn("EnvironmentThreadState.offerThreadPersistence")(
+    function* (thread: OrchestrationThread, snapshotSequence: number) {
+      const currentPage = yield* SubscriptionRef.get(state).pipe(Effect.map((value) => value.page));
+      yield* Queue.offer(persistence, {
+        snapshotSequence,
+        thread,
+        // Persist the window boundary with the window's content so a cache
+        // restore can keep paging from where the loaded history ends.
+        ...Option.match(currentPage, {
+          onNone: () => ({}),
+          onSome: (value) =>
+            ({
+              page: {
+                beforeCursor: value.beforeCursor,
+                hasMore: value.hasMore,
+                snapshotSequence,
+              },
+            }) as const,
+        }),
+      });
+    },
+  );
+
   const setThread = Effect.fn("EnvironmentThreadState.setThread")(function* (
     thread: OrchestrationV2ThreadProjection,
     options?: {

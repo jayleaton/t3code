@@ -1,3 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off - read-only compatibility lookup for tokens written by older Agents builds.
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
+import { withLegacyTokenStorage } from "./LegacyTokenStorage.ts";
+import { decryptLegacyAgentsString, usesAgentsStorageCompatibility } from "./SharedSafeStorage.ts";
 import { createClerkBridge } from "@clerk/electron";
 import { storage } from "@clerk/electron/storage";
 import * as Context from "effect/Context";
@@ -73,8 +78,28 @@ export const desktopClerkFrontendApiHostname = resolveDesktopClerkFrontendApiHos
 );
 
 function createDesktopClerkBridge(stateDir: string, isDevelopment: boolean) {
+  const tokenStorage = storage({ path: stateDir });
   return createClerkBridge({
-    storage: storage({ path: stateDir }),
+    storage: usesAgentsStorageCompatibility()
+      ? withLegacyTokenStorage({
+          storage: tokenStorage,
+          readEncrypted: async (key) => {
+            const document: unknown = JSON.parse(
+              await NodeFSP.readFile(NodePath.join(stateDir, "clerk-tokens.json"), "utf8"),
+            );
+            if (typeof document !== "object" || document === null) return undefined;
+            // electron-store treats dots in keys as nested paths.
+            let value: unknown = document;
+            for (const part of key.split(".")) {
+              if (typeof value !== "object" || value === null || !Object.hasOwn(value, part))
+                return undefined;
+              value = (value as Record<string, unknown>)[part];
+            }
+            return typeof value === "string" ? value : undefined;
+          },
+          decryptLegacy: (value) => decryptLegacyAgentsString(Buffer.from(value, "base64")),
+        })
+      : tokenStorage,
     passkeys: true,
     renderer: {
       scheme: ElectronProtocol.getDesktopScheme(isDevelopment),
