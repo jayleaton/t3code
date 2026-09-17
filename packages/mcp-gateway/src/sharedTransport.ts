@@ -137,7 +137,9 @@ export function connectMcpSession(input: {
     const onClose = () =>
       fail(
         new Error(
-          "Gateway authentication failed or the port belongs to an older gateway. Stop the old gateway and reconnect.",
+          nonce === undefined
+            ? "The port belongs to an older gateway or a different service that is not the T3 shared MCP gateway. Stop that process or use the configured gateway port."
+            : "Shared gateway authentication failed: the bridge token did not match. Verify the MCP gateway token configured for this environment.",
         ),
       );
     const authenticate = (raw: WebSocket.RawData) => {
@@ -148,15 +150,26 @@ export function connectMcpSession(input: {
         }
         const message = value as Record<string, unknown>;
         if (nonce === undefined) {
-          if (
-            message.type !== "challenge" ||
-            message.protocol !== PROTOCOL ||
-            typeof message.nonce !== "string" ||
-            message.configuration !== input.configuration
-          ) {
+          if (message.type !== "challenge" || typeof message.nonce !== "string") {
             fail(
               new Error(
-                "The bridge port belongs to an incompatible gateway or different configuration. Stop that gateway or use a separate bridge port and state file.",
+                "The port responded without a T3 shared gateway challenge. It belongs to a different service or an older gateway; stop that process or use the configured gateway port.",
+              ),
+            );
+            return;
+          }
+          if (message.protocol !== PROTOCOL) {
+            fail(
+              new Error(
+                `Gateway protocol mismatch: this client speaks ${PROTOCOL} while the running gateway speaks ${typeof message.protocol === "string" ? message.protocol : "an unknown protocol"}. Update the gateway and its clients to the same version.`,
+              ),
+            );
+            return;
+          }
+          if (message.configuration !== input.configuration) {
+            fail(
+              new Error(
+                "State file or configuration mismatch: the running gateway was started with a different configuration (state file, retention, repository allowlist, or grants). Stop that gateway or start it with this environment's configuration.",
               ),
             );
             return;
@@ -174,7 +187,11 @@ export function connectMcpSession(input: {
           message.type !== "ready" ||
           !matches(message.proof, proof(input.token, "server", nonce, input.configuration))
         ) {
-          fail(new Error("Shared gateway server authentication failed."));
+          fail(
+            new Error(
+              "Shared gateway authentication failed: the gateway could not prove the bridge token.",
+            ),
+          );
           return;
         }
         cleanup();

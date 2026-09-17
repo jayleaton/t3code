@@ -144,7 +144,7 @@ describe("MCP gateway server", () => {
 
     const listedTools = await client.listTools();
     const toolNames = listedTools.tools.map((tool) => tool.name);
-    expect(toolNames).toHaveLength(59);
+    expect(toolNames).toHaveLength(61);
     const agents = await client.callTool({
       name: "t3_list_agents",
       arguments: { environmentId: "local" },
@@ -190,6 +190,8 @@ describe("MCP gateway server", () => {
         "t3_get_pr",
         "t3_get_pr_checks",
         "t3_list_review_comments",
+        "t3_create_and_start_thread",
+        "t3_wait_for_thread_status",
       ]),
     );
     const result = await client.callTool({

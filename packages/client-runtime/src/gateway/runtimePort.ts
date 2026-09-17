@@ -42,6 +42,7 @@ import type {
   GatewayRuntimeEvent,
   GatewayRuntimeEventSource,
   GatewayRuntimePort,
+  GatewayThreadExecutionState,
 } from "./port.ts";
 
 export interface GatewayEffectRuntime {
@@ -334,6 +335,10 @@ function gatewayThreadShellProjection(thread: OrchestrationShellSnapshot["thread
     settledAt: thread.settledAt,
     title: thread.title,
     status: gatewayStatusFromThread(thread),
+    hasPendingApprovals: thread.hasPendingApprovals,
+    hasPendingUserInput: thread.hasPendingUserInput,
+    backgroundLiveness: thread.backgroundLiveness ?? null,
+    planProgress: thread.planProgress ?? null,
     latestTurn: thread.latestTurn,
     session:
       thread.session === null
@@ -393,10 +398,35 @@ function gatewayActivity(
   };
 }
 
+function pendingRequestFlags(
+  activities: OrchestrationThreadDetailSnapshot["thread"]["activities"],
+): { readonly hasPendingApprovals: boolean; readonly hasPendingUserInput: boolean } {
+  const approvals = new Set<string>();
+  const inputs = new Set<string>();
+  for (const activity of activities) {
+    const payload = activity.payload;
+    const requestId =
+      typeof payload === "object" && payload !== null && !Array.isArray(payload)
+        ? (payload as Record<string, unknown>).requestId
+        : undefined;
+    if (typeof requestId !== "string") continue;
+    if (activity.kind === "approval.requested") approvals.add(requestId);
+    else if (activity.kind === "approval.resolved") approvals.delete(requestId);
+    else if (activity.kind === "user-input.requested") inputs.add(requestId);
+    else if (
+      activity.kind === "user-input.resolved" ||
+      activity.kind === "user-input.answer-submitted"
+    )
+      inputs.delete(requestId);
+  }
+  return { hasPendingApprovals: approvals.size > 0, hasPendingUserInput: inputs.size > 0 };
+}
+
 const decodeProfile = Schema.decodeUnknownSync(McpGatewayProfile);
 const decodeProfiles = Schema.decodeUnknownEffect(Schema.Array(McpGatewayProfile));
 
 export function gatewayThreadProjection(thread: OrchestrationThreadDetailSnapshot["thread"]) {
+  const pending = pendingRequestFlags(thread.activities);
   return {
     id: thread.id,
     projectId: thread.projectId,
@@ -406,7 +436,10 @@ export function gatewayThreadProjection(thread: OrchestrationThreadDetailSnapsho
       session: thread.session,
       latestUserMessageAt:
         thread.messages.findLast((message) => message.role === "user")?.createdAt ?? null,
+      ...pending,
     }),
+    hasPendingApprovals: pending.hasPendingApprovals,
+    hasPendingUserInput: pending.hasPendingUserInput,
     modelSelection: thread.modelSelection,
     profileSnapshot: thread.profileSnapshot,
     settledAt: thread.settledAt,
@@ -449,9 +482,19 @@ export function gatewayStatusFromThread(
   thread: Pick<
     OrchestrationShellSnapshot["threads"][number],
     "latestTurn" | "session" | "latestUserMessageAt"
-  >,
+  > &
+    Partial<
+      Pick<
+        OrchestrationShellSnapshot["threads"][number],
+        "hasPendingApprovals" | "hasPendingUserInput"
+      >
+    >,
   now = DateTime.formatIso(DateTime.nowUnsafe()),
-): string {
+): GatewayThreadExecutionState {
+  // A blocked chat outranks its session status: the agent may still hold a live
+  // session while it waits on the user, and a coordinator needs the blocker.
+  if (thread.hasPendingApprovals === true) return "waiting-approval";
+  if (thread.hasPendingUserInput === true) return "waiting-input";
   if (thread.session?.status === "running" || thread.session?.status === "starting")
     return "running";
   if (hasQueuedTurnStart(thread, { now })) return "queued";

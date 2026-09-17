@@ -4,7 +4,7 @@ import * as NodeCrypto from "node:crypto";
 import * as DateTime from "effect/DateTime";
 import { z } from "zod";
 
-import { GatewayError, type GatewayRuntimePort } from "./port.ts";
+import { GatewayError, GATEWAY_THREAD_EXECUTION_STATES, type GatewayRuntimePort } from "./port.ts";
 import {
   callGatewayTool,
   handoffInputSchema,
@@ -31,6 +31,7 @@ const pr = {
   number: z.number().int().min(1),
 };
 const webhook = { environmentId, webhookId: z.string().trim().min(1) };
+const executionState = z.enum(GATEWAY_THREAD_EXECUTION_STATES);
 
 const profileFields = {
   name: z.string().trim().min(1).max(200),
@@ -57,6 +58,23 @@ const profileFields = {
   environmentIds: z.array(z.string().trim().min(1)).optional(),
 };
 
+const createThreadFields = {
+  environmentId,
+  projectId: z.string().trim().min(1),
+  title: z.string().trim().min(1),
+  profile: z.string().trim().min(1).optional(),
+  profileId: z.string().trim().min(1).optional(),
+  reasoningEffort: z.string().trim().min(1).optional(),
+  modelSelection: z
+    .object({ instanceId: z.string().trim().min(1), model: z.string().trim().min(1) })
+    .strict()
+    .optional(),
+  runtimeMode: z.enum(["approval-required", "auto-accept-edits", "auto", "full-access"]).optional(),
+  interactionMode: z.enum(["default", "plan"]).optional(),
+  idempotencyKey,
+  correlationId: optionalRequestContext.correlationId,
+};
+
 type ToolSpec = readonly [description: string, inputSchema: z.ZodRawShape];
 
 const TOOL_SPECS = {
@@ -65,11 +83,12 @@ const TOOL_SPECS = {
     { environmentId, ...optionalRequestContext },
   ],
   t3_get_agents_view: [
-    "List the Agents board for an environment: agent specializations and their chat/run summaries, including thread IDs and status. Use this to find an agent’s running or completed work without searching unrelated threads. Filter by profileId and state (active means unsettled, including completed chats). Use t3_get_thread or t3_open_thread with a returned threadId for details.",
+    "List the Agents board for an environment: agent specializations and their chat/run summaries, including thread IDs and status. Use this to find an agent’s running or completed work without searching unrelated threads. Filter by profileId, state (active means unsettled, including completed chats), and executionState (for example running or waiting-input). Use t3_get_thread or t3_open_thread with a returned threadId for details.",
     {
       environmentId,
       profileId: z.string().trim().min(1).optional(),
       state: z.enum(["active", "settled", "all"]).optional(),
+      executionState: executionState.optional(),
       ...optionalRequestContext,
     },
   ],
@@ -123,10 +142,11 @@ const TOOL_SPECS = {
     { environmentId, ...optionalRequestContext },
   ],
   t3_list_threads: [
-    "List chats in one T3 environment, optionally filtered by agent profileId, project, and active/settled state.",
+    "List chats in one T3 environment, optionally filtered by agent profileId, project, active/settled state, and executionState. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly.",
     {
       environmentId,
       state: z.enum(["all", "active", "settled"]).optional(),
+      executionState: executionState.optional(),
       projectId: z.string().trim().min(1).optional(),
       profileId: z.string().trim().min(1).optional(),
       ...optionalRequestContext,
@@ -161,6 +181,17 @@ const TOOL_SPECS = {
     "Read durable operation events after a sequence cursor.",
     { environmentId, threadId: threadId.optional(), ...page, ...optionalRequestContext },
   ],
+  t3_wait_for_thread_status: [
+    "Wait (bounded) for one chat’s execution status to change. Reuses the durable replay/live event stream: pass afterSequence from a previous result to catch up without missing a transition, or omit it to start from the current position. Returns status, previousStatus, changed, matched, timedOut, and cursor for the next call. Waits until timeoutMs (default 30000) elapses; a waiting-input/waiting-approval status means the chat needs the user.",
+    {
+      environmentId,
+      threadId,
+      untilStatuses: z.array(executionState).min(1).optional(),
+      afterSequence: z.number().int().min(0).optional(),
+      timeoutMs: z.number().int().min(250).max(120_000).optional(),
+      ...optionalRequestContext,
+    },
+  ],
   t3_list_artifacts: [
     "List durable artifacts for one chat.",
     { environmentId, threadId, ...optionalRequestContext },
@@ -175,25 +206,12 @@ const TOOL_SPECS = {
     },
   ],
   t3_create_thread: [
-    "Create a chat with an immutable resolved profile snapshot. For agent tasks, pass profileId from t3_list_agents to snapshot that agent’s instructions and settings. Then use t3_send_message to start work.",
-    {
-      environmentId,
-      projectId: z.string().trim().min(1),
-      title: z.string().trim().min(1),
-      profile: z.string().trim().min(1).optional(),
-      profileId: z.string().trim().min(1).optional(),
-      reasoningEffort: z.string().trim().min(1).optional(),
-      modelSelection: z
-        .object({ instanceId: z.string().trim().min(1), model: z.string().trim().min(1) })
-        .strict()
-        .optional(),
-      runtimeMode: z
-        .enum(["approval-required", "auto-accept-edits", "auto", "full-access"])
-        .optional(),
-      interactionMode: z.enum(["default", "plan"]).optional(),
-      idempotencyKey,
-      correlationId: optionalRequestContext.correlationId,
-    },
+    "Create a chat with an immutable resolved profile snapshot. For agent tasks, pass profileId from t3_list_agents to snapshot that agent’s instructions and settings. Then use t3_send_message to start work. Prefer t3_create_and_start_thread when you already have the opening task.",
+    createThreadFields,
+  ],
+  t3_create_and_start_thread: [
+    "Create a chat and send its opening task in one idempotent operation. Requires create and send scope. Retrying with the same idempotencyKey reuses the same chat and message instead of duplicating work. Returns explicit creation, message delivery, and current executionState; partial means the chat exists but the message was not confirmed, so inspect the returned threadId and retry rather than creating another chat.",
+    { ...createThreadFields, text: z.string().trim().min(1) },
   ],
   t3_send_message: [
     "Send a user message to an existing T3 chat.",
