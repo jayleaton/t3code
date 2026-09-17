@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-  EnvironmentId,
-  OrchestrationThreadShell,
-  type McpGatewayProfile,
-} from "@t3tools/contracts";
-import * as Schema from "effect/Schema";
+import { EnvironmentId, ThreadId, RunId, type McpGatewayProfile } from "@t3tools/contracts";
+import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { v2ThreadShell } from "./agents.testFixtures";
+import * as DateTime from "effect/DateTime";
 import {
   agentThreadStatus,
   groupAgentThreads,
@@ -23,27 +21,13 @@ const profile: McpGatewayProfile = {
   createdAt: "2026-09-06T00:00:00.000Z",
   updatedAt: "2026-09-06T00:00:00.000Z",
 };
-const decodeThread = Schema.decodeUnknownSync(OrchestrationThreadShell);
-const thread = (id: string, profileId: string | null, settledAt: string | null = null) => ({
-  environmentId: EnvironmentId.make("local"),
-  ...decodeThread({
-    id,
-    projectId: "p",
+const thread = (id: string, profileId: string | null, settledAt: string | null = null) =>
+  presentThreadShell(EnvironmentId.make("local"), {
+    ...v2ThreadShell,
+    id: ThreadId.make(id),
     title: id,
-    modelSelection: { instanceId: "codex", model: "old-gpt" },
-    runtimeMode: "approval-required",
-    interactionMode: "default",
-    branch: null,
-    worktreePath: null,
-    latestTurn: null,
-    session: null,
-    createdAt: "2026-09-06T00:00:00.000Z",
-    updatedAt: "2026-09-06T00:00:00.000Z",
-    latestUserMessageAt: null,
-    hasPendingApprovals: false,
-    hasPendingUserInput: false,
-    hasActionableProposedPlan: false,
-    settledAt,
+    modelSelection: { ...v2ThreadShell.modelSelection, model: "old-gpt" },
+    settledAt: settledAt === null ? null : DateTime.makeUnsafe(settledAt),
     ...(profileId
       ? {
           profileSnapshot: {
@@ -59,8 +43,7 @@ const thread = (id: string, profileId: string | null, settledAt: string | null =
           },
         }
       : {}),
-  }),
-});
+  });
 describe("agent thread grouping", () => {
   it("keeps old revisions grouped, retains removed agents, and recedes settled work", () => {
     const old = thread("old-model", "write");
@@ -79,9 +62,9 @@ describe("agent thread grouping", () => {
 describe("agent chat focus", () => {
   const completed = () => ({
     ...thread("complete", "write"),
-    latestTurn: {
-      turnId: "turn" as NonNullable<ReturnType<typeof thread>["latestTurn"]>["turnId"],
-      state: "completed" as const,
+    latestRun: {
+      runId: RunId.make("run"),
+      status: "completed" as const,
       requestedAt: "2026-09-06T00:00:00.000Z",
       startedAt: "2026-09-06T00:00:00.000Z",
       completedAt: "2026-09-06T00:02:00.000Z",
@@ -100,7 +83,7 @@ describe("agent chat focus", () => {
     expect(isAgentChatInFocus(thread("idle", "write"), undefined, false)).toBe(true);
     const running = {
       ...completed(),
-      latestTurn: { ...completed().latestTurn, state: "running" as const, completedAt: null },
+      latestRun: { ...completed().latestRun, status: "running" as const, completedAt: null },
     };
     expect(agentThreadStatus(running)).toBe("running");
     expect(isAgentChatInFocus(running, "2026-09-06T00:03:00.000Z", false)).toBe(true);
@@ -114,12 +97,12 @@ describe("agent workspace selection", () => {
   it("includes completed unsettled work across environments, filters by agent, and clears back to All", () => {
     const done = {
       ...thread("completed task", "write"),
-      latestTurn: {
-        turnId: "turn" as NonNullable<ReturnType<typeof thread>["latestTurn"]>["turnId"],
-        state: "completed" as const,
-        requestedAt: "2026-09-06T00:00:00.000Z",
+      latestRun: {
+        runId: RunId.make("done"),
+        status: "completed" as const,
+        requestedAt: "2026-09-06T00:00:00Z",
         startedAt: null,
-        completedAt: "2026-09-06T00:02:00.000Z",
+        completedAt: "2026-09-06T00:02:00Z",
         assistantMessageId: null,
       },
     };

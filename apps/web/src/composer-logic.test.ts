@@ -1,3 +1,4 @@
+import { resolveComposerDispatchMode } from "@t3tools/client-runtime/state/composer-dispatch";
 import { filterComposerPullRequestMatches } from "@t3tools/shared/composerPullRequestMatches";
 import { EnvironmentId, MessageId, ThreadId, type AssistantCitation } from "@t3tools/contracts";
 import {
@@ -61,6 +62,51 @@ describe("formatAssistantCitationForComposer", () => {
 });
 
 describe("composerSubmissionIntentForEnter", () => {
+  it.each([
+    ["enter", "one line", false, "foreground"],
+    ["enter", "two\nlines", false, "foreground"],
+    ["mod-enter-multiline", "one line", false, "foreground"],
+    ["mod-enter-multiline", "two\nlines", false, null],
+    ["mod-enter-multiline", "two\nlines", true, "foreground"],
+    ["mod-enter", "one line", false, null],
+    ["mod-enter", "one line", true, "foreground"],
+  ] as const)("uses %s for %j with modifier=%s", (sendShortcut, prompt, modifierKey, expected) => {
+    expect(
+      composerSubmissionIntentForEnter({
+        isMobileViewport: false,
+        shiftKey: false,
+        modifierKey,
+        isDraftThread: false,
+        sendShortcut,
+        prompt,
+      }),
+    ).toBe(expected);
+  });
+
+  it.each([
+    ["enter", false, "alternate"],
+    ["enter", true, null],
+    ["mod-enter-multiline", false, "foreground"],
+    ["mod-enter-multiline", true, "alternate"],
+    ["mod-enter", false, "foreground"],
+    ["mod-enter", true, "alternate"],
+  ] as const)(
+    "resolves running follow-ups with %s and shift=%s",
+    (sendShortcut, shiftKey, expected) => {
+      expect(
+        composerSubmissionIntentForEnter({
+          isMobileViewport: false,
+          shiftKey,
+          modifierKey: true,
+          isDraftThread: false,
+          isRunning: true,
+          sendShortcut,
+          prompt: "two\nlines",
+        }),
+      ).toBe(expected);
+    },
+  );
+
   it("submits plain Enter on desktop", () => {
     expect(
       composerSubmissionIntentForEnter({
@@ -650,4 +696,38 @@ describe("parseStandaloneComposerSlashCommand", () => {
   it("ignores slash commands with extra message text", () => {
     expect(parseStandaloneComposerSlashCommand("/plan explain this")).toBeNull();
   });
+});
+
+describe("V2 follow-up shortcuts", () => {
+  it.each([
+    ["enter", "hello", false],
+    ["mod-enter", "hello", true],
+    ["mod-enter-multiline", "hello", false],
+    ["mod-enter-multiline", "hello\nworld", true],
+  ] as const)(
+    "honors %s and reverses the server queue action",
+    (sendShortcut, prompt, modifierKey) => {
+      for (const followUpBehavior of ["queue", "steer"] as const) {
+        for (const alternate of [false, true]) {
+          const intent = composerSubmissionIntentForEnter({
+            isMobileViewport: false,
+            isDraftThread: false,
+            isRunning: true,
+            sendShortcut,
+            prompt,
+            modifierKey: modifierKey || alternate,
+            shiftKey: modifierKey && alternate,
+          });
+          expect(intent).not.toBeNull();
+          expect(
+            resolveComposerDispatchMode({
+              running: true,
+              alternateModifier: intent === "alternate",
+              activeTurnDefault: followUpBehavior,
+            }),
+          ).toBe(alternate ? (followUpBehavior === "queue" ? "steer" : "queue") : followUpBehavior);
+        }
+      }
+    },
+  );
 });

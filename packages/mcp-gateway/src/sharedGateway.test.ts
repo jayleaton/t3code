@@ -342,7 +342,7 @@ describe("shared MCP gateway", () => {
           environmentId: "local",
           sequence: 1,
           type: "thread.started",
-          occurredAt: "2026-09-16T00:00:00.000Z",
+          occurredAt: "2026-09-15T00:00:00.000Z",
           data: {},
         },
       }),

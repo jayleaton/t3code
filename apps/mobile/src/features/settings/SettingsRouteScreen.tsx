@@ -598,6 +598,7 @@ function GeneralSettingsSection() {
   return (
     <SettingsSection title="General">
       <SettingsRow icon="folder" label="Project Grouping" target="SettingsProjectGrouping" />
+      <SettingsRow icon="arrow.turn.left.up" label="Follow-ups" target="SettingsFollowUp" />
       {Platform.OS === "ios" ? (
         <SettingsRow icon="keyboard" label="Keyboard" target="SettingsKeyboard" />
       ) : null}
