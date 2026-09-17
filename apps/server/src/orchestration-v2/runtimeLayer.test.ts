@@ -1,3 +1,4 @@
+import { SourceControlProviderRegistry } from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
@@ -76,6 +77,11 @@ import {
   layer as threadCommandExecutorLayer,
 } from "./ThreadCommandExecutor.ts";
 
+const PlatformTestLayer = Layer.merge(
+  NodeServices.layer,
+  Layer.mock(SourceControlProviderRegistry)({ resolveLink: () => Effect.die("unused title link") }),
+);
+
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-orchestration-v2-runtime-layer-",
 });
@@ -89,7 +95,7 @@ const alternateInstanceId = ProviderInstanceId.make("codex_alternate");
 const VcsDriverRegistryTestLayer = VcsDriverRegistry.layer.pipe(
   Layer.provide(VcsProcess.layer),
   Layer.provide(ServerConfigLayer),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(PlatformTestLayer),
 );
 
 const CheckpointStoreTestLayer = CheckpointStore.layer.pipe(
@@ -165,7 +171,7 @@ const TestLayer = Layer.mergeAll(
   Layer.provide(TestProviderInstanceRegistry),
   Layer.provide(GitWorkflowTestLayer),
   Layer.provide(ProjectServiceTestLayer),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(PlatformTestLayer),
 );
 
 const LegacyImportTestLayer = OrchestrationV2LayerLive.pipe(
@@ -177,7 +183,7 @@ const LegacyImportTestLayer = OrchestrationV2LayerLive.pipe(
   Layer.provide(TestProviderInstanceRegistry),
   Layer.provide(GitWorkflowTestLayer),
   Layer.provide(ProjectServiceTestLayer),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(PlatformTestLayer),
 );
 
 const ProjectDeletionTestLayer = Layer.mergeAll(
@@ -215,7 +221,7 @@ const ProjectDeletionTestLayer = Layer.mergeAll(
   Layer.provide(ServerSettingsService.layerTest()),
   Layer.provide(TestProviderInstanceRegistry),
   Layer.provide(GitWorkflowTestLayer),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(PlatformTestLayer),
 );
 
 it.layer(ProjectDeletionTestLayer)("project deletion during thread commands", (it) => {
@@ -350,7 +356,7 @@ const SharedApplicationDataPlaneTestLayer = Layer.merge(
   Layer.provide(TestProviderInstanceRegistry),
   Layer.provide(GitWorkflowTestLayer),
   Layer.provide(ProjectServiceTestLayer),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(PlatformTestLayer),
 );
 
 it.layer(TestLayer)("OrchestrationV2LayerLive", (it) => {
@@ -510,6 +516,38 @@ it.layer(TestLayer)("OrchestrationV2LayerLive", (it) => {
           assert.deepEqual(
             (yield* outbox.listByCommandId(commandId)).map((effect) => effect.request.type),
             ["provider-thread.rollback"],
+          );
+          yield* orchestrator.dispatch({
+            type: "thread.metadata.update",
+            commandId: CommandId.make("runtime-rollback-share"),
+            threadId,
+            worktreePath: null,
+          });
+          const sharedCommandId = CommandId.make("runtime-rollback-shared");
+          const sequence = yield* orchestrator.getThreadEventSequence(threadId);
+          const shared = yield* orchestrator
+            .dispatch({
+              type: "checkpoint.rollback",
+              commandId: sharedCommandId,
+              threadId,
+              checkpointId,
+              scopeId: scope.id,
+            })
+            .pipe(Effect.flip);
+          assert.match(String(shared.cause), /isolated worktree/);
+          assert.equal(yield* orchestrator.getThreadEventSequence(threadId), sequence);
+          assert.deepEqual(yield* outbox.listByCommandId(sharedCommandId), []);
+          const conversationOnly = yield* orchestrator.dispatch({
+            type: "checkpoint.rollback",
+            commandId: CommandId.make("runtime-rollback-conversation"),
+            threadId,
+            checkpointId,
+            scopeId: scope.id,
+            restoreFiles: false,
+          });
+          assert.deepEqual(
+            conversationOnly.storedEvents.map((stored) => stored.event.type),
+            ["checkpoint.rollback-requested"],
           );
         } else {
           const error = yield* rollback.pipe(Effect.flip);
@@ -1302,8 +1340,7 @@ it.layer(LegacyImportTestLayer)("OrchestrationV2 legacy import", (it) => {
       `;
 
       yield* importer.reconcileShells;
-      const rebuilt = yield* maintenance.rebuild;
-      assert.isTrue(rebuilt.valid);
+      assert.isTrue((yield* maintenance.verify).valid);
 
       yield* threadManagement.dispatch({
         type: "thread.metadata.update",

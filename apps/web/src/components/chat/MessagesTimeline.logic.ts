@@ -29,7 +29,6 @@ import {
   type WorkLogEntry,
 } from "../../session-logic";
 import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
-import type { QueuedComposerMessage } from "../../queuedMessageStore";
 import {
   type MessageId,
   type WorktreeSetupSnapshot,
@@ -347,6 +346,7 @@ export type MessagesTimelineRow =
       id: string;
       createdAt: string | null;
       snapshot: WorktreeSetupSnapshot;
+      embedded: boolean;
     }
   | {
       kind: "work";
@@ -949,7 +949,6 @@ export function deriveMessagesTimelineRows(input: {
   /** Live bootstrap progress. Renders a stage card under the first user message. */
   worktreeSetup?: WorktreeSetupSnapshot | null;
   /** Messages sent during the running turn, rendered after the live rows. */
-  queuedMessages?: ReadonlyArray<QueuedComposerMessage>;
 }): MessagesTimelineRow[] {
   const turnDiffSummaryByAssistantMessageId = new Map<MessageId, TurnDiffSummary>();
   for (const summary of input.turnDiffSummaries) {
@@ -1410,31 +1409,68 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  // The setup card takes the place of the working and thinking placeholders
-  // while a worktree is being prepared. It stays after the setup settles so a
-  // failure and its actions remain visible until the thread state moves on.
-  if (input.worktreeSetup) {
+  // Until the agent's turn is live, the setup card sits under the send with
+  // the working header above it (the header reads "Setting up worktree…" and
+  // later swaps its text in place, so nothing moves at the handoff). "Live"
+  // means the turn is in the timeline, not just that the server dispatched
+  // it: the card must not vanish in the gap between. Once the turn is live
+  // the stage list leaves the timeline; a script that is still running is
+  // surfaced by the working header itself. A failed or cancelled setup stays
+  // under the send so its outcome and actions remain reachable.
+  const setupHandedOff =
+    input.worktreeSetup !== null &&
+    input.worktreeSetup !== undefined &&
+    worktreeSetupAgentStarted(input.worktreeSetup) &&
+    input.latestRun?.startedAt != null;
+  const setupRunning = !setupHandedOff && input.worktreeSetup?.phase === "running";
+  if (input.worktreeSetup && (!setupHandedOff || input.worktreeSetup.phase !== "running")) {
     const setupRow = {
       kind: "worktree-setup",
       id: WORKTREE_SETUP_ROW_ID,
       createdAt: input.worktreeSetup.startedAt,
       snapshot: input.worktreeSetup,
+      embedded: setupHandedOff,
     } as const;
     const firstUserRowIndex = nextRows.findIndex(
       (row) => row.kind === "message" && row.message.role === "user",
     );
-    if (firstUserRowIndex >= 0) {
-      nextRows.splice(firstUserRowIndex + 1, 0, setupRow);
+    // While the setup runs, the working header leads the card in the same
+    // slot it keeps once the agent's own turn takes over. The main pass may
+    // already have placed that header (a bootstrap counts as working).
+    const workingRowIndex = setupRunning ? nextRows.findIndex((row) => row.kind === "working") : -1;
+    if (workingRowIndex >= 0) {
+      nextRows.splice(workingRowIndex + 1, 0, setupRow);
     } else {
-      nextRows.push(setupRow);
+      const insertAt = firstUserRowIndex >= 0 ? firstUserRowIndex + 1 : nextRows.length;
+      nextRows.splice(
+        insertAt,
+        0,
+        ...(setupRunning
+          ? [
+              {
+                kind: "working",
+                id: "working-indicator-row",
+                createdAt: input.worktreeSetup.startedAt,
+              } as const,
+              setupRow,
+            ]
+          : [setupRow]),
+      );
     }
-    return attachTrailingToolGroupsToAssistant(nextRows);
   }
 
-  if (input.isWorking && activeTurnHeaderIndex === input.timelineEntries.length) {
+  // A running setup owns the working slot above its card and shows no
+  // activity row of its own; every other state gets the usual tail.
+  const hasWorkingRow = nextRows.some((row) => row.kind === "working");
+  if (input.isWorking && !hasWorkingRow && activeTurnHeaderIndex === input.timelineEntries.length) {
     appendWorkingRow();
   }
-  if (input.isWorking && !hasActiveCompaction && (!hasActivityRow || latestToolFailed)) {
+  if (
+    input.isWorking &&
+    !setupRunning &&
+    !hasActiveCompaction &&
+    (!hasActivityRow || latestToolFailed)
+  ) {
     nextRows.push({
       kind: "thinking",
       id: LIVE_ACTIVITY_ROW_ID,
@@ -1497,6 +1533,11 @@ function attachCreatedThreadSummaries(
 }
 
 const WORKTREE_SETUP_ROW_ID = "worktree-setup-row";
+
+/** True once the bootstrap handed off to the agent (async setup script may still run). */
+export function worktreeSetupAgentStarted(snapshot: WorktreeSetupSnapshot): boolean {
+  return snapshot.stages.some((stage) => stage.id === "agent" && stage.status === "done");
+}
 
 type MessagesTimelineRowsInput = Parameters<typeof deriveMessagesTimelineRows>[0];
 

@@ -12,15 +12,13 @@ needs acceptance testing.
 ## Prerequisites and upstream movement
 
 This draft imports pingdotgg/t3code#2829 at
-`163e8e65fa8c2391f19b547ec07e360a9ce4f470` (reviewed while open), on fork main
-`57fa730c5103ca7f57dfec0db5bfb10cc4fae561`. Fork PR #4 at
-`95defded7d8a819c0dd30a71f37c44f98d08bccf` is merged separately as a prerequisite;
-its branch remains independently reviewable. A later fetch found upstream at
-`c2dbc35d71c056ca49e93114bb9534f366084fd6` with rewritten ancestry and 120 changed
-files against the reviewed tree (mostly worktree setup, titles, and navigation).
-That movement is not imported here; compare trees/range-diffs before updating,
-not just a linear commit range. The legacy-import fix remains needed in that tree. The upstream import is its own
-merge commit; the subsequent Agents commit is the functional adaptation.
+`1ee1d0464271295d7b389cff343c5862caf31afa` (reviewed while open on 2026-09-17),
+on fork main `bff01b2d0e`. Fork PR #4 and the subsequent Agents workspace,
+encryption identity, upgrade repair, loading retry, and release fixes are now in
+that main baseline. The upstream history was rewritten since the earlier reviewed
+`163e8e65fa8c2391f19b547ec07e360a9ce4f470`. The refresh uses that reviewed tree
+as the three-way merge base, preserving separate fork-main and upstream merge
+commits. Do not infer the reviewed changes from a linear upstream commit range.
 
 Do not install this draft over an existing installation. V2's event format,
 projection layout, receipt semantics, provider runtime, and client protocol are
@@ -33,13 +31,14 @@ permanent frozen copy of its runtime.
 
 ## Data boundary
 
-Fork main already owns migration 52. The unchanged upstream V2 migration module
-is registered as migration **53**, after the fork's compatibility migration 52.
+Fork main owns migrations through 54, including its upgrade repair and title state.
+The upstream V2 migration module is registered as migration **55**.
 This is a fork migration history, not interchangeable with an upstream V2 database.
 Tests use memory databases; integrated verification uses a read-only `VACUUM INTO`
 copy in the worktree. Never experiment against the installed database.
 
-Legacy import retains the profile snapshot and projects shell events through the
+Legacy import retains the profile snapshot. Upstream now owns the earlier draft's
+event-sink and transcript-ordinal fixes: it projects shell events through the
 native event sink. Reserve legacy transcript ordinals before writing those events:
 normalizing the first/last preview messages first consumes ordinals needed by the
 subsequent full transcript. The import regression checks visibility before replay
@@ -72,7 +71,7 @@ sequentially granting approvals.
 
 ## Reuse and retained fork surface
 
-The board, profile editing, machine-scoped project picker, enabled-model catalog,
+The current fork Agents workspace, profile editing, machine-scoped project picker, enabled-model catalog,
 and client gateway remain fork UI/application concerns. Embedded new/hover chats
 render the same V2 composer as normal chat, including attachments and model
 controls. Native projections provide status, transcript, PR links, and settlement.
@@ -85,3 +84,7 @@ snapshot, profile revision/tombstone settings merge, client grant/delivery store
 and machine-aware navigation. Desktop branding, fork release feed, bundled build
 version, and branded startup route remain independent of orchestration. Official
 T3 Connect/auth/relay configuration is retained; this draft requires no fork cloud.
+
+V2 now owns durable queued runs, queued editing, worktree preparation, and draft
+promotion. The fork's V1 browser-local message queue and worktree activity recovery
+are superseded by those native paths; they must not be layered on top of V2.

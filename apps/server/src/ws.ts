@@ -93,7 +93,6 @@ import {
   WS_METHODS,
   WsRpcGroup,
   WORKTREE_SETUP_ACTIVITY_KIND,
-  worktreeSetupActivityId,
   type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
@@ -122,6 +121,7 @@ import {
   coalesceShellApplicationEvents,
   coalesceStoredThreadEvents,
   composeShellStreamWithEnrichment,
+  dedupeShellEnrichment,
   shellStreamItemFromEnrichmentRefresh,
   shellStreamItemFromThreadShell,
   shellStreamItemsFromInitialSnapshot,
@@ -140,8 +140,9 @@ import {
   THREAD_RESUME_MAX_REPLAY_EVENTS,
 } from "./orchestration-v2/ThreadStream.ts";
 import {
-  THREAD_HISTORY_SNAPSHOT_ROW_LIMIT,
+  buildBoundedThreadProjection,
   THREAD_HISTORY_PAGE_POLICY,
+  THREAD_HISTORY_SNAPSHOT_ROW_LIMIT,
 } from "./orchestration-v2/threadHistoryPaging.ts";
 import {
   projectDomainEventForWire,
@@ -1627,6 +1628,7 @@ const makeWsRpcLayer = (
           );
 
           return stream.pipe(
+            dedupeShellEnrichment,
             Stream.mapError(
               (cause) =>
                 new OrchestrationV2GetShellSnapshotError({
@@ -1829,17 +1831,30 @@ const makeWsRpcLayer = (
         [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.getThreadProjection,
-            threadManagement.getThreadProjection(input.threadId).pipe(
-              Effect.map(projectThreadProjectionForWire),
-              Effect.mapError(
-                (cause) =>
-                  new OrchestrationV2GetThreadProjectionError({
-                    threadId: input.threadId,
-                    message: `Failed to load orchestration V2 thread ${input.threadId}`,
-                    cause,
-                  }),
+            // Pre-pagination clients still call this compatibility endpoint.
+            // Keep stale clients from materializing an unbounded transcript.
+            threadManagement
+              .getThreadSnapshotWindow(input.threadId, {
+                rowLimit: THREAD_HISTORY_SNAPSHOT_ROW_LIMIT,
+              })
+              .pipe(
+                Effect.map((snapshot) =>
+                  projectThreadProjectionForWire(
+                    buildBoundedThreadProjection({
+                      projection: snapshot.projection,
+                      snapshotSequence: snapshot.snapshotSequence,
+                    }).projection,
+                  ),
+                ),
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationV2GetThreadProjectionError({
+                      threadId: input.threadId,
+                      message: `Failed to load orchestration V2 thread ${input.threadId}`,
+                      cause,
+                    }),
+                ),
               ),
-            ),
             {
               "rpc.aggregate": "orchestrationV2",
               "orchestration_v2.thread_id": input.threadId,
@@ -2564,6 +2579,12 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "pull-requests",
             },
           ),
+        [WS_METHODS.pullRequestsChecks]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pullRequestsChecks,
+            withPullRequestViewer(input, pullRequests.checks(input)),
+            { "rpc.aggregate": "pull-requests" },
+          ),
         [WS_METHODS.pullRequestsActivity]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsActivity,
@@ -2929,6 +2950,8 @@ const makeWsRpcLayer = (
               if (
                 input.resource._tag === "attachment" ||
                 input.resource._tag === "native-app-icon" ||
+                // GitHub media names the repository it authenticates through itself.
+                input.resource._tag === "github-media" ||
                 (input.resource._tag === "media-file" && path.isAbsolute(input.resource.path))
               ) {
                 return yield* issueAssetUrl({ resource: input.resource });
@@ -3394,6 +3417,16 @@ const makeWsRpcLayer = (
                       })),
                     )
                   : Stream.empty;
+              const usageLimitSourceUpdates =
+                input.usageLimitSources === true
+                  ? usageLimitSources.streamChanges.pipe(
+                      Stream.map((sources) => ({
+                        version: 1 as const,
+                        type: "usageLimitSourcesUpdated" as const,
+                        payload: { sources },
+                      })),
+                    )
+                  : Stream.empty;
               const settingsUpdates = serverSettings.streamChanges.pipe(
                 Stream.map((settings) => ServerSettings.redactServerSettingsForClient(settings)),
                 Stream.map((settings) => ({
@@ -3407,7 +3440,10 @@ const makeWsRpcLayer = (
                 keybindingsUpdates,
                 Stream.merge(
                   providerStatuses,
-                  Stream.merge(settingsUpdates, environmentThemeUpdates),
+                  Stream.merge(
+                    settingsUpdates,
+                    Stream.merge(environmentThemeUpdates, usageLimitSourceUpdates),
+                  ),
                 ),
               );
 

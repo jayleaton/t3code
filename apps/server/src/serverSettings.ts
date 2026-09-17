@@ -17,8 +17,9 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
   ModelSelection,
+  ProjectId,
   ProjectScript,
-  type ProjectSettingsOverrides,
+  ProjectSettingsOverrides,
   type McpGatewayProfile,
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
@@ -27,6 +28,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   resolveProviderInstanceEnabled,
+  ResponseStreamingMode,
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
@@ -47,6 +49,7 @@ import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -337,7 +340,35 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
 export const layerTest = (overrides: DeepPartial<ServerSettings> = {}) =>
   Layer.effect(ServerSettingsService, makeTest(overrides));
 
-const ServerSettingsJson = fromLenientJson(ServerSettings);
+// Migrate saved token delivery without accepting it in settings writes or
+// letting one retired value reset the rest of the environment's settings.
+const PersistedResponseStreamingMode = Schema.Union([
+  ResponseStreamingMode,
+  Schema.Literal("token"),
+]).pipe(
+  Schema.decodeTo(
+    ResponseStreamingMode,
+    SchemaTransformation.transform({
+      decode: (mode) => (mode === "token" ? "paragraph" : mode),
+      encode: (mode) => mode,
+    }),
+  ),
+);
+const ServerSettingsJson = fromLenientJson(
+  Schema.Struct({
+    ...ServerSettings.fields,
+    responseStreamingMode: PersistedResponseStreamingMode.pipe(
+      Schema.withDecodingDefault(Effect.succeed("paragraph" as const)),
+    ),
+    projectSettingsOverrides: Schema.Record(
+      ProjectId,
+      Schema.Struct({
+        ...ProjectSettingsOverrides.fields,
+        responseStreamingMode: Schema.optionalKey(PersistedResponseStreamingMode),
+      }),
+    ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  }),
+);
 const decodeServerSettingsJsonExit = Schema.decodeUnknownExit(ServerSettingsJson);
 const PersistedOptionalProviderSettings = Schema.Struct({
   providers: Schema.optionalKey(

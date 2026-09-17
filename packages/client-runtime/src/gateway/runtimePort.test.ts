@@ -6,6 +6,7 @@ import {
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "@effect/vitest";
+import * as Fiber from "effect/Fiber";
 import * as Deferred from "effect/Deferred";
 import * as TestClock from "effect/testing/TestClock";
 import * as Crypto from "effect/Crypto";

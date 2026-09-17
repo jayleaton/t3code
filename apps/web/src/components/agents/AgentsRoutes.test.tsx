@@ -15,6 +15,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 vi.mock("./AgentChatRail", () => ({ AgentChatRail: () => <nav>Agent chats</nav> }));
 vi.mock("./AgentHandoffDialog", () => ({ AgentHandoffDialog: () => <div>Handoff dialog</div> }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => [] }));
+vi.mock("../../hooks/useThreadVisitedMigration", () => ({ useThreadVisitedMigration: () => {} }));
 vi.mock("../../state/server", () => ({ primaryServerKeybindingsAtom: {} }));
 vi.mock("../../hooks/useSettings", () => ({
   useLegacySidebarEnabled: () => false,

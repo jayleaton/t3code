@@ -3316,21 +3316,73 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const fetchRemote: GitVcsDriver.GitVcsDriver["Service"]["fetchRemote"] = Effect.fn("fetchRemote")(
     function* (input) {
-      const operation = "GitVcsDriver.fetchRemote";
       const args = ["fetch", "--quiet", input.remoteName];
-      const result = yield* executeGitWithStableDiagnostics(operation, input.cwd, args, {
+      const options = {
         env: STATUS_UPSTREAM_REFRESH_ENV,
-        allowNonZeroExit: true,
-      });
-      if (result.exitCode !== 0) {
-        return yield* new GitCommandError({
-          ...gitCommandContext({ operation, cwd: input.cwd, args }),
-          detail: fetchFailureDetail(result.stderr) ?? `git fetch ${input.remoteName} failed`,
-          ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
-          stdoutLength: result.stdout.length,
-          stderrLength: result.stderr.length,
-        });
+        fallbackErrorDetail: `git fetch ${input.remoteName} failed`,
+      };
+      const fetchAll = executeGitWithStableDiagnostics(
+        "GitVcsDriver.fetchRemote",
+        input.cwd,
+        args,
+        {
+          ...options,
+          allowNonZeroExit: true,
+        },
+      ).pipe(
+        Effect.flatMap((result) =>
+          result.exitCode === 0
+            ? Effect.void
+            : Effect.fail(
+                new GitCommandError({
+                  ...gitCommandContext({
+                    operation: "GitVcsDriver.fetchRemote",
+                    cwd: input.cwd,
+                    args,
+                  }),
+                  detail: fetchFailureDetail(result.stderr) ?? options.fallbackErrorDetail,
+                  ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
+                  stdoutLength: result.stdout.length,
+                  stderrLength: result.stderr.length,
+                }),
+              ),
+        ),
+      );
+      if (input.refName === undefined) {
+        return yield* fetchAll.pipe(Effect.asVoid);
       }
+      const branch =
+        parseRemoteRefWithRemoteNames(input.refName, [input.remoteName])?.branchName ??
+        input.refName;
+      const scopedArgs = [
+        ...args,
+        `+refs/heads/${branch}:refs/remotes/${input.remoteName}/${branch}`,
+      ];
+      const result = yield* executeGitWithStableDiagnostics(
+        "GitVcsDriver.fetchRemote",
+        input.cwd,
+        scopedArgs,
+        { ...options, allowNonZeroExit: true },
+      );
+      if (result.exitCode === 0) return;
+      if (
+        result.stderr
+          .split(/\r?\n/)
+          .includes(`fatal: couldn't find remote ref refs/heads/${branch}`)
+      ) {
+        return yield* fetchAll.pipe(Effect.asVoid);
+      }
+      return yield* new GitCommandError({
+        ...gitCommandContext({
+          operation: "GitVcsDriver.fetchRemote",
+          cwd: input.cwd,
+          args: scopedArgs,
+        }),
+        detail: fetchFailureDetail(result.stderr) ?? options.fallbackErrorDetail,
+        ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
+        stdoutLength: result.stdout.length,
+        stderrLength: result.stderr.length,
+      });
     },
   );
 

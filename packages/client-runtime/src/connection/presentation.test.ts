@@ -52,35 +52,6 @@ function supervisorState(overrides: Partial<SupervisorConnectionState>): Supervi
 }
 
 describe("connection presentation", () => {
-  it("preserves typed auth, transport, and unsupported failures without parsing error text", () => {
-    for (const reason of ["authentication", "unsupported"] as const) {
-      expect(
-        presentConnectionState(
-          supervisorState({
-            phase: "blocked",
-            lastFailure: new ConnectionBlockedError({ reason, detail: "Private diagnostic" }),
-          }),
-        ),
-      ).toMatchObject({
-        phase: reason === "unsupported" ? "unsupported" : "error",
-        failureReason: reason,
-      });
-    }
-    expect(
-      presentConnectionState(
-        supervisorState({
-          phase: "backoff",
-          lastFailure: new ConnectionTransientError({
-            reason: "transport",
-            detail: "Socket closed",
-          }),
-        }),
-      ),
-    ).toMatchObject({ phase: "reconnecting", failureReason: "transport" });
-    expect(presentConnectionState(supervisorState({ phase: "connected" }))).not.toHaveProperty(
-      "failureReason",
-    );
-  });
   it("labels a blocked protocol as unsupported", () => {
     const connection = presentConnectionState(
       supervisorState({

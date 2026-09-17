@@ -1,3 +1,4 @@
+import { findRecordedWorktreeSetup, resolveVisibleWorktreeSetup } from "./ChatView.logic";
 import {
   recallCheckoutIsRepo,
   rememberCheckoutIsRepo,
@@ -20,6 +21,7 @@ import {
   RunId,
   TurnItemId,
   type OrchestrationV2ProjectedTurnItem,
+  type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
 import * as DateTime from "effect/DateTime";

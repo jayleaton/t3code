@@ -7,6 +7,7 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import { listLinkedPullRequestThreads } from "../pullRequest/linkedThreads.ts";
 import { EventSinkV2, layer as eventSinkLayer } from "./EventSink.ts";
 import { layer as eventStoreLayer } from "./EventStore.ts";
 import {
@@ -175,6 +176,19 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
         )
       `;
 
+      yield* sql`
+        INSERT INTO projection_thread_pull_requests (
+          thread_id, host, repository, number, url, source, linked_at, snapshot_json
+        ) VALUES
+          (${threadId}, 'github.com', 'pingdotgg/t3code', 9002,
+            'https://github.com/pingdotgg/t3code/pull/9002', 'created',
+            '2026-01-03T00:00:00.000Z',
+            '{"state":"open","title":"Second PR","headBranch":"feature-two","baseBranch":"main","isDraft":false,"updatedAt":"2026-01-03T00:00:00.000Z","syncedAt":"2026-01-03T00:00:00.000Z"}'),
+          (${threadId}, 'github.com', 'pingdotgg/t3code', 9003,
+            'https://github.com/pingdotgg/t3code/pull/9003', 'manual',
+            '2026-01-04T00:00:00.000Z', NULL)
+      `;
+
       assert.equal(yield* importer.pendingThreadCount, 1);
       const profileSnapshot = {
         profileId: "review",
@@ -208,6 +222,7 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
       assert.equal(visibleBeforeReplay.thread.profileSnapshot?.profileId, "review");
       const rebuilt = yield* maintenance.rebuild;
       assert.isTrue(rebuilt.valid);
+      assert.isTrue((yield* maintenance.verify).valid);
       const shellProjection = yield* projections.getThreadProjection(threadId);
       assert.equal(shellProjection.thread.historyOrigin, "v1_import");
       assert.equal(shellProjection.thread.branch, "main");
@@ -226,6 +241,19 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
         DateTime.makeUnsafe("2026-01-03T12:00:00.000Z"),
       );
       assert.equal(shellProjection.thread.linkedPullRequest?.number, 9000);
+      assert.deepStrictEqual(
+        (shellProjection.thread.pullRequests ?? []).map((link) => link.number),
+        [9002, 9003, 9000],
+      );
+      assert.equal(shellProjection.thread.pullRequests?.[0]?.snapshot?.title, "Second PR");
+      assert.deepStrictEqual(
+        (yield* listLinkedPullRequestThreads({
+          host: "github.com",
+          repository: "pingdotgg/t3code",
+          number: 9002,
+        })).threads.map((thread) => thread.id),
+        [threadId],
+      );
       const shellSnapshot = yield* projections.getShellSnapshot();
       assert.equal(
         shellSnapshot.threads.find((thread) => thread.id === threadId)?.historyOrigin,
@@ -315,7 +343,8 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
           '$.snoozedUntil',
           '$.snoozedAt',
           '$.unsettledAt',
-          '$.linkedPullRequest'
+          '$.linkedPullRequest',
+          '$.pullRequests'
         )
         WHERE thread_id = ${threadId}
       `;
@@ -335,6 +364,11 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
         DateTime.makeUnsafe("2026-01-03T12:00:00.000Z"),
       );
       assert.equal(repaired.thread.linkedPullRequest?.number, 9000);
+      assert.deepStrictEqual(
+        (repaired.thread.pullRequests ?? []).map((link) => link.number),
+        [9002, 9003, 9000],
+      );
+      assert.equal(repaired.thread.pullRequests?.[0]?.snapshot?.title, "Second PR");
       const eventCountBeforeRetry = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count
         FROM orchestration_events
@@ -407,12 +441,17 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
       yield* importer.reconcileShells;
       yield* maintenance.rebuild;
       const shellProjection = yield* projections.getThreadProjection(threadId);
+      assert.deepStrictEqual(
+        (shellProjection.thread.pullRequests ?? []).map((link) => link.number),
+        [9000],
+      );
       const previousRepairThread = {
         ...shellProjection.thread,
         title: "Renamed in v2",
         pinnedAt: null,
         pinOrderKey: null,
         linkedPullRequest: null,
+        pullRequests: [],
       };
       delete previousRepairThread.branchPullRequest;
       delete previousRepairThread.activeOrderKey;
@@ -438,6 +477,7 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
       assert.isNull(repaired.thread.pinnedAt);
       assert.isNull(repaired.thread.pinOrderKey);
       assert.isNull(repaired.thread.linkedPullRequest);
+      assert.deepStrictEqual(repaired.thread.pullRequests, []);
       assert.equal(repaired.thread.branchPullRequest?.number, 9001);
       assert.equal(repaired.thread.activeOrderKey, "az");
 

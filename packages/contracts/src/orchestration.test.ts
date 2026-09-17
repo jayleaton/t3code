@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import { CommandId, ProjectId, ThreadId } from "./baseSchemas.ts";
 
 import {
+  ProjectIconOverride,
   ClientOrchestrationCommand,
   OrchestrationCommand,
   OrchestrationDispatchCommandError,

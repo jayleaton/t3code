@@ -9,6 +9,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
+import * as Metric from "effect/Metric";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
@@ -2428,7 +2429,11 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           if (Result.isFailure(result)) {
             assert.equal(
               result.failure.detail,
-              failure === "timeout" ? "Git command timed out." : "git fetch origin failed",
+              failure === "timeout"
+                ? "Git command timed out."
+                : failure === "offline"
+                  ? "Git could not reach the remote. Check the server's network connection and remote host, then retry."
+                  : "Git could not authenticate with the remote. Check Git credentials or SSH access on the server, then retry.",
             );
           }
         }),

@@ -25,6 +25,7 @@ const thread = (id: string, profileId: string | null, settledAt: string | null =
   presentThreadShell(EnvironmentId.make("local"), {
     ...v2ThreadShell,
     id: ThreadId.make(id),
+    title: id,
     modelSelection: { ...v2ThreadShell.modelSelection, model: "old-gpt" },
     settledAt: settledAt === null ? null : DateTime.makeUnsafe(settledAt),
     ...(profileId
@@ -96,12 +97,12 @@ describe("agent workspace selection", () => {
   it("includes completed unsettled work across environments, filters by agent, and clears back to All", () => {
     const done = {
       ...thread("completed task", "write"),
-      latestTurn: {
-        turnId: "turn" as NonNullable<ReturnType<typeof thread>["latestTurn"]>["turnId"],
-        state: "completed" as const,
-        requestedAt: "2026-09-06T00:00:00.000Z",
+      latestRun: {
+        runId: RunId.make("done"),
+        status: "completed" as const,
+        requestedAt: "2026-09-06T00:00:00Z",
         startedAt: null,
-        completedAt: "2026-09-06T00:02:00.000Z",
+        completedAt: "2026-09-06T00:02:00Z",
         assistantMessageId: null,
       },
     };

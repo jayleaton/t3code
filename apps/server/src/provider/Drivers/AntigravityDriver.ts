@@ -43,7 +43,10 @@ import {
 } from "../acp/AntigravityAcpSupport.ts";
 import type { AcpSessionRuntime, AcpSessionRuntimeStartResult } from "../acp/AcpSessionRuntime.ts";
 import type { ServerProviderDraft } from "../providerSnapshot.ts";
-import { removeAntigravitySessionFiles } from "../acp/AntigravitySessionFiles.ts";
+import {
+  removeAntigravityRuntimeTempDirs,
+  removeAntigravitySessionFiles,
+} from "../acp/AntigravitySessionFiles.ts";
 import { IdAllocatorV2 } from "../../orchestration-v2/IdAllocator.ts";
 import { ProviderContinuationRequests } from "../../orchestration-v2/ProviderContinuationRequests.ts";
 import { makeAntigravityAdapterV2 } from "../../orchestration-v2/Adapters/AntigravityAdapterV2.ts";

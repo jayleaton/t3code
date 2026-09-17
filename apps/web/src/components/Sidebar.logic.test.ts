@@ -4,7 +4,6 @@ import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import {
-  THREAD_JUMP_HINT_SHOW_DELAY_MS,
   animateSidebarLayoutChanges,
   archiveSelectedThreadEntries,
   buildBulkTitleRegenerationContextMenuItem,
@@ -48,6 +47,13 @@ import {
   sortSettledThreadsForSidebar,
   sortSidebarV2ProjectGroups,
   sortThreadsForSidebar,
+  shouldCreateNewThreadInCurrentProject,
+  shouldNavigateAfterThreadPark,
+  THREAD_JUMP_HINT_SHOW_DELAY_MS,
+  type SidebarListItem,
+  type SidebarListMarker,
+  type SidebarSection,
+  resolveSidebarDropVerb,
 } from "./Sidebar.logic";
 import { EnvironmentId, ProjectId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
 import {

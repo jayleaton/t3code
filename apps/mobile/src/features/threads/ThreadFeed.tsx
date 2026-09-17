@@ -87,12 +87,7 @@ import { isPdfFile } from "../../lib/filePreview";
 import { flattenThemeColor } from "../../lib/mobileTheme";
 import { PresentationSource } from "../../components/NativePresentation";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Animated, {
-  FadeIn,
-  FadeInUp,
-  LinearTransition,
-  type SharedValue,
-} from "react-native-reanimated";
+import Animated, { FadeIn, FadeInUp, type SharedValue } from "react-native-reanimated";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { useFontFamily } from "../../lib/useFontFamily";
@@ -231,10 +226,9 @@ function formatMessageTime(input: string): string {
   return MESSAGE_TIME_FORMATTER.format(timestamp);
 }
 
-const TURN_FOLD_HEIGHT = 42;
-
-const THREAD_FEED_LAYOUT_TRANSITION = LinearTransition.duration(THREAD_DISCLOSURE_TRANSITION_MS);
-const THREAD_FEED_IMMEDIATE_TRANSITION = LinearTransition.duration(0);
+// Fixed heights mirror renderFeedEntry's classNames and are only used while
+// text fits at the current font settings. Larger accessibility text is measured.
+const TURN_FOLD_HEIGHT = 42; // min-h-11 (38.5) + mb-1 (3.5), with the mobile 14px rem
 // Tailwind spacing on the mobile 14px rem: px-3.5 on the user bubble, px-1 on
 // assistant rows. Images size their frame from these before their own layout.
 const USER_BUBBLE_HORIZONTAL_PADDING = 3.5 * 3.5;
@@ -281,7 +275,6 @@ export interface ThreadFeedProps {
   readonly contentTopInset?: number;
   readonly contentBottomInset?: number;
   readonly historyControls?: ThreadFeedHistoryControls;
-  readonly topAccessory?: ReactNode;
   readonly contentMaxWidth?: number;
   readonly layoutVariant?: LayoutVariant;
   readonly usesAutomaticContentInsets?: boolean;
@@ -3018,7 +3011,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
                 {props.historyControls ? (
                   <ThreadFeedLoadEarlierControl {...props.historyControls} />
                 ) : null}
-                {props.topAccessory}
               </>
             }
             contentContainerStyle={{

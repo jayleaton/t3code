@@ -178,7 +178,6 @@ let MessagesTimeline: typeof import("./MessagesTimeline").MessagesTimeline;
 let resolvePreviewAnnotationImage: typeof import("./MessagesTimeline").resolvePreviewAnnotationImage;
 
 const ElementStub = class ElementStub {};
-
 function stubDomGlobals() {
   const classList = {
     add: () => {},
@@ -214,6 +213,7 @@ function stubDomGlobals() {
   });
 }
 
+beforeEach(stubDomGlobals);
 beforeAll(async () => {
   stubDomGlobals();
   ({ MessagesTimeline, resolvePreviewAnnotationImage } = await import("./MessagesTimeline"));

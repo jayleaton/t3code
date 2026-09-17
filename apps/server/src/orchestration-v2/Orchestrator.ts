@@ -37,9 +37,11 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
+import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -47,6 +49,10 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
+import {
+  isCheckpointRestoreIsolated,
+  SHARED_WORKSPACE_RESTORE_MESSAGE,
+} from "./CheckpointRestoreSafety.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
 import { CommandPolicyV2, resolveMessageDispatchIntent } from "./CommandPolicy.ts";
 import { CommandReceiptStoreV2 } from "./CommandReceiptStore.ts";
@@ -577,6 +583,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const idAllocator = yield* IdAllocatorV2;
   const projects = yield* ProjectionProjectRepository;
   const projectionStore = yield* ProjectionStoreV2;
+  const fileSystem = yield* FileSystem.FileSystem;
   const providerAdapters = yield* ProviderAdapterRegistryV2;
   const continuationRequests = yield* ProviderContinuationRequests;
   const providerSessions = yield* ProviderSessionManagerV2;
@@ -6491,9 +6498,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         run?.providerThreadId === null
           ? undefined
           : projection.providerThreads.find((candidate) => candidate.id === run?.providerThreadId);
-      const providerTurn = projection.providerTurns.find(
+      const hasBackgroundWork =
+        run?.id === projection.runs.at(-1)?.id &&
+        derivePendingBackgroundWork({
+          latestRun: run,
+          providerThreads: projection.providerThreads,
+          turnItems: projection.turnItems,
+          activeProviderThreadId: projection.thread.activeProviderThreadId,
+          runs: projection.runs,
+        }).length > 0;
+      const providerTurn = projection.providerTurns.findLast(
         (candidate) =>
-          candidate.runAttemptId === run?.activeAttemptId && candidate.status === "running",
+          candidate.runAttemptId === run?.activeAttemptId &&
+          (candidate.status === "running" || hasBackgroundWork),
       );
       if (run === undefined || rootNode === undefined || providerThread === undefined) {
         return yield* new OrchestratorDispatchError({
@@ -6836,6 +6853,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Checkpoint ${command.checkpointId} belongs to scope ${targetScope.id}, not ${command.scopeId}.`,
         });
       }
+      if (command.restoreFiles !== false) {
+        const isolated = yield* isCheckpointRestoreIsolated(projection.thread, targetScope, {
+          fileSystem,
+          projections: projectionStore,
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new OrchestratorDispatchError({
+                commandId: command.commandId,
+                commandType: command.type,
+                cause,
+              }),
+          ),
+        );
+        if (!isolated)
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: SHARED_WORKSPACE_RESTORE_MESSAGE,
+          });
+      }
+
       const targetOrdinal = targetCheckpoint.appRunOrdinal ?? 0;
       if (targetOrdinal > 0) {
         const targetRun = projection.runs.find((run) => run.ordinal === targetOrdinal);
@@ -8158,6 +8197,7 @@ export const layer: Layer.Layer<
   OrchestratorV2,
   never,
   | CheckpointServiceV2
+  | FileSystem.FileSystem
   | CommandPolicyV2
   | CommandReceiptStoreV2
   | ContextHandoffServiceV2

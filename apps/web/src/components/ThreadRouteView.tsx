@@ -1,10 +1,9 @@
-import { AgentsThreadView } from "../routes/agents.$environmentId.$threadId";
-import "./agents/agents.css";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
+import { AgentsThreadView } from "../routes/agents.$environmentId.$threadId";
 import ChatView from "./ChatView";
 import { resolveDraftPromotionNavigationTarget, threadHasStarted } from "./ChatView.logic";
 import { waitForDraftHeroTransition } from "./chat/draftHeroTransition";
@@ -16,14 +15,7 @@ import {
   useComposerDraftStore,
 } from "../composerDraftStore";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
-import {
-  useEnvironmentThreadRefs,
-  useThread,
-  useThreadDetail,
-  useThreadRefs,
-  useThreadShell,
-  useThreadStatus,
-} from "../state/entities";
+import { useEnvironmentThreadRefs, useThreadRefs, useThreadShell } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { environmentShell } from "../state/shell";
 import {
@@ -31,7 +23,6 @@ import {
   resolveThreadRouteRenderState,
   type ThreadRouteTarget,
 } from "../threadRoutes";
-import { resolveThreadSyncPhase } from "../threadSync";
 
 /**
  * The single chat surface behind both `/draft/$draftId` and
@@ -64,7 +55,7 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
     : null;
   const serverThreadRef: ScopedThreadRef | null =
     target.kind === "server" ? target.threadRef : (draftSession?.promotedTo ?? inferredThreadRef);
-  const serverThread = useThread(serverThreadRef);
+  const serverThread = useThreadShell(serverThreadRef);
   const backgroundSubmissionPending = useBackgroundDraftSubmissionPending(
     target.kind === "draft" ? serverThreadRef : null,
   );
@@ -80,9 +71,7 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   const shell = useEnvironmentQuery(
     serverThreadRef === null ? null : environmentShell.stateAtom(serverThreadRef.environmentId),
   );
-  const serverThreadShell = useThreadShell(serverThreadRef);
-  const serverThreadDetail = useThreadDetail(serverThreadRef);
-  const serverThreadStatus = useThreadStatus(serverThreadRef);
+  const serverThreadShell = serverThread;
   const environmentThreadRefs = useEnvironmentThreadRefs(serverThreadRef?.environmentId ?? null);
   const bootstrapComplete = shell.data?.snapshot._tag === "Some";
   const draftThread = useComposerDraftStore((store) =>
@@ -112,17 +101,11 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   );
   const renderState = resolveThreadRouteRenderState({
     bootstrapComplete,
-    serverThreadShellExists: serverThreadShell !== null,
-    serverThreadDetailExists: serverThreadDetail !== null,
-    serverThreadDetailDeleted: serverThreadStatus === "deleted",
+    serverThreadExists: serverThreadShell !== null,
+    serverThreadDeleted: serverThreadShell?.deletedAt != null,
     draftThreadExists: draftThread !== null,
   });
-  const threadSyncPhase = resolveThreadSyncPhase({
-    detailExists: serverThreadDetail !== null,
-    shellExists: serverThreadShell !== null,
-    status: serverThreadStatus,
-  });
-  const serverThreadStarted = threadHasStarted(serverThreadDetail);
+  const serverThreadStarted = threadHasStarted(serverThreadShell);
   const environmentHasAnyThreads = environmentThreadRefs.length > 0 || environmentHasDraftThreads;
 
   useEffect(() => {
@@ -208,7 +191,6 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
         environmentId={target.threadRef.environmentId}
         threadId={target.threadRef.threadId}
         routeKind="server"
-        threadSyncPhase={threadSyncPhase}
       />
     );
   }

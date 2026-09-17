@@ -53,6 +53,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
   const workspacePath = displayMode === "panel" ? (activeWorktreePath ?? workspaceRoot) : null;
   const workspaceDisplayName = resolveWorkspaceDisplayName(workspacePath);
   const workspaceKind = activeWorktreePath ? "Worktree" : "Project folder";
+  const composerFloatingLayerProps = useComposerMenuProps();
   const showPreviousWorktree = Boolean(previousWorktreeLabel && onUsePreviousWorktree);
   const envModeItems = useMemo(
     () => [

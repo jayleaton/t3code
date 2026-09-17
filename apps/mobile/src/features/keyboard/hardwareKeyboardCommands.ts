@@ -71,7 +71,7 @@ export function dispatchHardwareKeyboardCommand(command: HardwareKeyboardCommand
   for (let index = handlersInRegistrationOrder.length - 1; index >= 0; index -= 1) {
     const handler = handlersInRegistrationOrder[index];
     if (!handler) continue;
-    if (handler() !== false) return true;
+    if (handler(command) !== false) return true;
   }
   return false;
 }

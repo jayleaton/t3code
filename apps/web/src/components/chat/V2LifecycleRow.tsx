@@ -1,4 +1,5 @@
 import { Fragment } from "react";
+import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subagent-display";
 import {
   ProviderDriverKind,
   type OrchestrationV2Run,
@@ -25,7 +26,7 @@ import { formatShortTimestamp } from "../../timestampFormat";
 import { getTriggerDisplayModelName } from "./providerIconUtils";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
-import { T3Wordmark } from "../T3Wordmark";
+import { BrandMark } from "../BrandMark";
 
 const LIFECYCLE_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
   "run_interrupt_request",
@@ -215,7 +216,7 @@ export function V2LifecycleRow(props: {
         data-v2-item-type={item.type}
       >
         <span className="flex size-6 shrink-0 items-center justify-center">
-          <T3Wordmark className="size-4 text-icon-muted" aria-hidden />
+          <BrandMark className="size-4 text-icon-muted" aria-hidden />
         </span>
         <span className="min-w-0 flex-1 truncate">
           Created thread{item.title ? ` · ${item.title}` : ""}
@@ -239,7 +240,7 @@ export function V2LifecycleRow(props: {
     return (
       <SubagentTimelineLink
         status={item.status}
-        title={subagentDisplayTitle(item.title ?? "Subagent")}
+        title={formatSubagentDisplayTitle(item.title ?? "Subagent")}
         detail={detail}
         threadId={item.childThreadId}
         onOpenThread={props.onOpenThread}
@@ -315,10 +316,6 @@ function SubagentTimelineLink(props: {
       </Tooltip>
     </div>
   );
-}
-
-function subagentDisplayTitle(title: string): string {
-  return title.replace(/^Subagent:\s*/i, "");
 }
 
 /**

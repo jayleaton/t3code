@@ -78,6 +78,7 @@ import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import * as CodexResetCredit from "./provider/Layers/codexResetCredit.ts";
 import { AntigravityInstallation } from "./provider/AntigravityInstallation.ts";
 import { ProviderInstanceRegistry } from "./provider/Services/ProviderInstanceRegistry.ts";
+import { layerFromProviderInstanceRegistry as providerAdapterRegistryLayerFromProviderInstances } from "./orchestration-v2/ProviderAdapterRegistry.ts";
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
 import { ProviderUsageLimitsIngestionLive } from "./provider/Layers/ProviderUsageLimitsIngestion.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
@@ -500,7 +501,8 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   // canonical project/thread snapshots while mutations flow through v2.
   Layer.provideMerge(OrchestrationInfrastructureLayerLive),
   Layer.provideMerge(ServerSettingsLayerLive),
-  Layer.provideMerge(SourceControlProviderRegistryLayerLive),
+  // The asset route uses the registry's GitHub credential for private PR media.
+  Layer.provideMerge(Layer.mergeAll(SourceControlProviderRegistryLayerLive, GitHubCli.layer)),
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive, DeviceLayerLive)),
@@ -599,8 +601,11 @@ const makeRoutesLayer = Layer.mergeAll(
     websocketRpcRouteLayer,
   ),
   // The MCP session registry is provided globally (shared with V2 provider
-  // sessions) rather than inline here.
-  McpHttpServer.layer,
+  // sessions) rather than inline here. The orchestrator toolkit resolves
+  // delegation targets through the same live adapter facade the V2
+  // orchestrator uses, so MCP capability reporting can never drift from
+  // what dispatch can actually serve.
+  McpHttpServer.layer.pipe(Layer.provide(providerAdapterRegistryLayerFromProviderInstances)),
 ).pipe(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.

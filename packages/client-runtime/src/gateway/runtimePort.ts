@@ -87,17 +87,19 @@ const shellSnapshot = (environmentId: EnvironmentId) =>
 const threadSnapshot = (environmentId: EnvironmentId, threadId: ThreadId) =>
   Effect.gen(function* () {
     const registry = yield* EnvironmentRegistry;
-    return yield* registry.run(
-      environmentId,
-      subscribe(ORCHESTRATION_V2_WS_METHODS.subscribeThread, {
-        threadId,
-        acceptBoundedSnapshot: true,
-      }).pipe(
-        Stream.filter((item) => item.kind === "snapshot"),
-        Stream.runHead,
-        Effect.map((item) => Option.getOrThrow(item).projection),
-      ),
-    );
+    return yield* registry
+      .run(
+        environmentId,
+        subscribe(ORCHESTRATION_V2_WS_METHODS.subscribeThread, {
+          threadId,
+          acceptBoundedSnapshot: true,
+        }).pipe(
+          Stream.filter((item) => item.kind === "snapshot"),
+          Stream.runHead,
+          Effect.map((item) => Option.getOrThrow(item).projection),
+        ),
+      )
+      .pipe(Effect.timeout("20 seconds"));
   });
 
 export function resolveGatewayProfileModelSelection(

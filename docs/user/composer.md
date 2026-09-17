@@ -31,20 +31,22 @@ See [images and videos](#images-and-videos-in-messages) for previewing and savin
 
 ## Send while the agent is working
 
-On web and desktop, a message sent during a running turn waits at the end of the conversation as a
-dashed bubble. It goes out on its own when the agent finishes its next tool
-call, or when the turn ends. Use the arrow under the bubble to send it right
-away, or the X to move it back into the composer. Stop returns every queued
-message to the composer.
-
-In **Settings → General → Follow-up behavior**, choose **Queue** to keep this
-behavior or **Steer** to send new messages immediately. This setting applies to
-the current client. Messages already queued keep their place.
+On web and desktop, choose **Settings → General → Follow-up behavior** to queue
+new messages for a later turn or steer the running turn immediately. The setting
+applies to this client; already queued messages keep their place. Queued messages
+are saved on the server and can be edited, reordered, or removed above the composer.
+`Cmd+Enter` on macOS or `Ctrl+Enter` on Windows and Linux uses the opposite action:
+it steers when your default is Queue and queues when your default is Steer.
 
 Use `Cmd+Shift+Enter` on macOS or `Ctrl+Shift+Enter` on Windows and Linux to send
-the oldest queued message now. Change `thread.steerQueuedMessage` in
-**Settings → Keybindings** to use another shortcut. It leaves the current draft
-in the composer and waits if the agent needs an approval or an answer.
+the oldest queued message as a steer. This leaves the current draft intact and
+requires an active turn that supports steering. Change
+`thread.steerQueuedMessage` in **Settings → Keybindings** to use another shortcut.
+
+Mobile has the same choice under **Settings → Follow-ups**. While a turn is
+running the send button shows which action it will take. Long-press it to use the
+other action for a single message, or hold `Cmd` while sending from a hardware
+keyboard. The button only offers Steer when the running agent supports it.
 
 ## Queue messages offline on mobile
 

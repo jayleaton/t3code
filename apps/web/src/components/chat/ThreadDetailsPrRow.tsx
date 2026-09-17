@@ -1,5 +1,6 @@
+import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 /**
- * The thread details panel's pull request row: what the branch's pull request is, and the one
+ * The thread details panel's pull request row: what the thread's pull request is, and the one
  * thing worth doing to it right now.
  *
  * The row itself opens the pull request in the right panel, exactly as it always has. Around
@@ -11,13 +12,15 @@
  * answers what previously took opening the panel.
  *
  * Until the detail arrives — or where pull requests are not supported at all — the row renders
- * from the `vcs.status` summary alone, which is the plain row this panel showed before.
+ * from the linked snapshot or branch summary, or just the link when status is unavailable.
  */
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId, ProjectId, PullRequestRef } from "@t3tools/contracts";
+import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
 import { ArrowUpRightIcon, FileDiffIcon, GitBranchIcon, TriangleAlertIcon } from "lucide-react";
 import { useState, type MouseEvent as ReactMouseEvent } from "react";
 
+import { useLiveRefresh } from "~/hooks/useLiveRefresh";
 import { cn } from "~/lib/utils";
 import { useServerConfigs } from "~/state/entities";
 import { pullRequestEnvironment } from "~/state/pullRequests";
@@ -33,7 +36,9 @@ import {
   allowedPullRequestMergeMethods,
   resolveThreadPanelPullRequestAction,
 } from "../pullRequest/pullRequestDetail.logic";
+import { PullRequestChecksPopover } from "../pullRequest/PullRequestChecksPopover";
 import {
+  pullRequestChecksState,
   PullRequestCheckStatusIcon,
   PullRequestDiffStat,
   resolvePullRequestState,
@@ -70,6 +75,8 @@ import {
 export function ThreadDetailsPrRow({
   environmentId,
   pr,
+  number,
+  reference: linkedReference,
   status,
   project,
   label,
@@ -78,8 +85,10 @@ export function ThreadDetailsPrRow({
   onActed,
 }: {
   environmentId: EnvironmentId;
-  pr: NonNullable<ThreadPr>;
-  status: PrStatusIndicator;
+  pr: ThreadPr;
+  number: number;
+  reference?: Pick<PullRequestRef, "host" | "repository" | "number"> | null;
+  status: PrStatusIndicator | null;
   /** The thread's project, which is what the pull request is read through on the host. */
   project: EnvironmentProject | null;
   label: string;
@@ -91,25 +100,55 @@ export function ThreadDetailsPrRow({
   const serverConfigs = useServerConfigs();
   const supportsPullRequests =
     serverConfigs.get(environmentId)?.environment.capabilities.pullRequests === true;
-  // The identity's own spelling, the way the detail panel is addressed everywhere else.
-  const identity = project?.repositoryIdentity;
-  const repository =
-    identity?.displayName ??
-    (identity?.owner && identity.name ? `${identity.owner}/${identity.name}` : null);
+  const repository = sourceControlRepositorySelector(project?.repositoryIdentity);
   const reference: PullRequestRef | null =
-    supportsPullRequests && project !== null && repository !== null
-      ? { projectId: project.id as ProjectId, repository, number: pr.number }
+    supportsPullRequests && project !== null
+      ? linkedReference
+        ? { ...linkedReference, projectId: project.id as ProjectId }
+        : repository !== null
+          ? { projectId: project.id as ProjectId, repository, number }
+          : null
       : null;
   const detailQuery = useEnvironmentQuery(
-    reference === null ? null : pullRequestEnvironment.detail({ environmentId, input: reference }),
+    reference === null
+      ? null
+      : pullRequestEnvironment.detail({
+          environmentId,
+          input: { ...reference, allowStale: false },
+        }),
   );
-  const detail = detailQuery.data ?? null;
+  const supportsChecks =
+    serverConfigs.get(environmentId)?.environment.capabilities.pullRequestChecks === true;
+  const checksQuery = useEnvironmentQuery(
+    supportsChecks && reference !== null && detailQuery.data !== null
+      ? pullRequestEnvironment.checks({ environmentId, input: reference })
+      : null,
+  );
+  const detail =
+    detailQuery.data === null
+      ? null
+      : checksQuery.data !== null && checksQuery.dataUpdatedAt >= detailQuery.dataUpdatedAt
+        ? { ...detailQuery.data, ...checksQuery.data }
+        : detailQuery.data;
+  const open = reference !== null && (detail?.state ?? pr?.state) === "open";
+  const refreshKey = `${environmentId}:${project?.id}:${reference?.host}:${reference?.repository}:${number}`;
+  useLiveRefresh(detailQuery.isPending ? null : detailQuery.refresh, {
+    enabled: open,
+    key: `workspace-pr:${refreshKey}`,
+    intervalMs: 10 * 60_000,
+  });
+  useLiveRefresh(checksQuery.isPending || detailQuery.isPending ? null : checksQuery.refresh, {
+    enabled: open && supportsChecks && !(checksQuery.isSuccess && checksQuery.data === null),
+    key: `workspace-pr-checks:${refreshKey}`,
+    intervalMs: 45_000,
+  });
 
   const { actionPending, perform } = usePullRequestActionRunner({
     environmentId,
     reference,
     onSuccess: () => {
       detailQuery.refresh();
+      checksQuery.refresh();
       onActed?.();
     },
   });
@@ -117,9 +156,12 @@ export function ThreadDetailsPrRow({
   const [confirmingMerge, setConfirmingMerge] = useState(false);
 
   const rowAction = resolveThreadPanelPullRequestAction(detail);
+  if (confirmingMerge && rowAction !== "merge") {
+    setConfirmingMerge(false);
+  }
   const conflicting = isPullRequestConflicting(detail);
   const checksState = detail === null ? "none" : classifyPullRequestChecks(detail.checks);
-  const checksRunning = detail?.state === "open" && rowAction === null && checksState === "pending";
+  const checksRollup = detail === null ? null : pullRequestChecksState(detail.checks);
   const selectedMergeMethod = resolveSelectedMergeMethod(
     allowedPullRequestMergeMethods(detail),
     "merge",
@@ -157,27 +199,26 @@ export function ThreadDetailsPrRow({
     );
   };
 
-  // Once the host has answered, the glyph knows about drafts and conflicts, which the vcs
-  // summary does not. Draft outranks conflicts in it, same as the detail panel.
+  // Host details distinguish drafts; all panels share the same PR-state glyph.
   const statePresentation =
     detail === null
       ? null
       : resolvePullRequestState({
           state: detail.state,
           isDraft: detail.isDraft,
-          mergeability: detail.mergeability,
-          baseBranch: detail.baseBranch,
         });
   const icon = statePresentation ? (
     <statePresentation.Icon
       aria-hidden
       className={cn("-mx-0.5 size-4 shrink-0", statePresentation.toneClassName)}
     />
-  ) : (
+  ) : pr && status ? (
     <ChangeRequestStatusIcon
       state={pr.state}
       className={cn(THREAD_DETAILS_PANEL_ICON_CLASS, status.colorClass)}
     />
+  ) : (
+    <PullRequestGlyph.pullRequest className={THREAD_DETAILS_PANEL_ICON_CLASS} />
   );
 
   // Everything the host reported, at a glance. The row stays one line; the tooltip is where the
@@ -185,7 +226,7 @@ export function ThreadDetailsPrRow({
   // detail rows, so the two read as one family.
   const rowTooltip =
     detail === null || statePresentation === null ? (
-      <TooltipPopup side="top">{status.tooltip}</TooltipPopup>
+      <TooltipPopup side="top">{status?.tooltip ?? `Pull request #${number}`}</TooltipPopup>
     ) : (
       <TooltipPopup
         side="top"
@@ -302,7 +343,7 @@ export function ThreadDetailsPrRow({
 
   return (
     <>
-      {trailingAction || checksRunning ? (
+      {detail ? (
         <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
           <Tooltip>
             <TooltipTrigger
@@ -321,51 +362,43 @@ export function ThreadDetailsPrRow({
             </TooltipTrigger>
             {rowTooltip}
           </Tooltip>
-          <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
+          {checksRollup !== null && !conflicting && !detail.isDraft ? (
+            <>
+              <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
+              <PullRequestChecksPopover
+                checksState={checksRollup}
+                checks={detail.checks}
+                variant="count"
+              />
+            </>
+          ) : null}
           {trailingAction ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className={cn(
-                      THREAD_DETAILS_PANEL_LINK_SPLIT_ACTION_CLASS,
-                      trailingAction.destructive &&
-                        "text-destructive hover:text-destructive data-pressed:text-destructive",
-                    )}
-                    disabled={actionPending || handoff !== null}
-                    onClick={trailingAction.onClick}
-                  />
-                }
-              >
-                {trailingAction.pending ? trailingAction.pendingLabel : trailingAction.label}
-                {trailingAction.suffix}
-              </TooltipTrigger>
-              <TooltipPopup side="top">{trailingAction.tooltip}</TooltipPopup>
-            </Tooltip>
-          ) : (
-            // Checks are still running: the slot reports that instead of offering a merge that
-            // would race them. Not a button — there is nothing to press until they finish.
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <span className="flex h-9 shrink-0 cursor-default items-center gap-1.5 px-2.5 text-[13px] font-medium text-muted-foreground" />
-                }
-              >
-                <PullRequestCheckStatusIcon status="pending" />
-                <span className="tabular-nums">
-                  {detail === null
-                    ? null
-                    : `${detail.checks.filter((check) => check.status === "pending").length}/${detail.checks.length}`}
-                </span>
-              </TooltipTrigger>
-              <TooltipPopup side="top">
-                {detail ? describePullRequestChecks(detail.checks) : "Checks are running"}
-              </TooltipPopup>
-            </Tooltip>
-          )}
+            <>
+              <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className={cn(
+                        THREAD_DETAILS_PANEL_LINK_SPLIT_ACTION_CLASS,
+                        trailingAction.destructive &&
+                          "text-destructive hover:text-destructive data-pressed:text-destructive",
+                      )}
+                      disabled={actionPending || handoff !== null}
+                      onClick={trailingAction.onClick}
+                    />
+                  }
+                >
+                  {trailingAction.pending ? trailingAction.pendingLabel : trailingAction.label}
+                  {trailingAction.suffix}
+                </TooltipTrigger>
+                <TooltipPopup side="top">{trailingAction.tooltip}</TooltipPopup>
+              </Tooltip>
+            </>
+          ) : null}
         </div>
       ) : (
         <Tooltip>
@@ -392,7 +425,7 @@ export function ThreadDetailsPrRow({
             <AlertDialogHeader>
               <AlertDialogTitle>Merge pull request?</AlertDialogTitle>
               <AlertDialogDescription>
-                This merges #{pr.number} using {selectedMergeMethod}.
+                This merges #{number} using {selectedMergeMethod}.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>

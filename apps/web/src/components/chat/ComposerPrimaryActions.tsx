@@ -15,6 +15,10 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { composerFloatingLayerProps } from "./composerEventScope";
+import {
+  alternateComposerDispatchAction,
+  resolveComposerDispatchMode,
+} from "@t3tools/client-runtime/state/composer-dispatch";
 
 interface PendingActionState {
   questionIndex: number;
@@ -28,6 +32,8 @@ interface ComposerPrimaryActionsProps {
   compact: boolean;
   pendingAction: PendingActionState | null;
   isRunning: boolean;
+  followUpBehavior?: "queue" | "steer";
+  requiresSendModifier?: boolean;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
@@ -70,6 +76,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   compact,
   pendingAction,
   isRunning,
+  followUpBehavior = "steer",
+  requiresSendModifier = false,
   showPlanFollowUpPrompt,
   promptHasText,
   isSendBusy,
@@ -91,9 +99,13 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const shortcutModifiers = useShortcutModifierState();
   const isQueuing =
-    isRunning &&
     !isEditingQueuedMessage &&
-    (shortcutModifiers.metaKey || shortcutModifiers.ctrlKey);
+    resolveComposerDispatchMode({
+      running: isRunning,
+      activeTurnDefault: followUpBehavior,
+      alternateModifier: shortcutModifiers.metaKey || shortcutModifiers.ctrlKey,
+    }) === "queue";
+  const alternateAction = alternateComposerDispatchAction(followUpBehavior);
   const isSendDisabled = sendDisabledReason !== null;
   const stageBackdropVariant = useSidebarStageBackdropVariant(
     environmentIdentificationMode === "artwork",
@@ -260,7 +272,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             : null));
   const submitTooltip =
     submitStatus ??
-    (isRunning && !isEditingQueuedMessage ? "Enter to steer, Mod+Enter to queue" : submitLabel);
+    (isRunning && !isEditingQueuedMessage
+      ? `${requiresSendModifier ? "Mod+Enter" : "Enter"} to ${followUpBehavior}, ${requiresSendModifier ? "Mod+Shift+Enter" : "Mod+Enter"} to ${alternateAction}`
+      : submitLabel);
 
   const sendButton = (
     <button
