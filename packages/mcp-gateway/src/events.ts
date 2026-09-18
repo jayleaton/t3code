@@ -811,6 +811,26 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
       return rows.map(eventFromRow);
     },
     operationHistory: readOperationHistory,
+    /** Find the last retained matching event at a resume cursor, not at the current head. */
+    eventAtOrBefore: (
+      environmentId: string,
+      threadId: string,
+      sequence: number,
+      predicate: (event: GatewayEvent) => boolean,
+    ): GatewayEvent | undefined => {
+      // Validate retention even when a caller can satisfy its wait immediately.
+      readOperationHistory(environmentId, sequence, 0);
+      const rows = db
+        .prepare(
+          "SELECT * FROM events WHERE environmentId = ? AND threadId = ? AND sequence <= ? ORDER BY sequence DESC",
+        )
+        .iterate(environmentId, threadId, sequence);
+      for (const row of rows) {
+        const event = eventFromRow(row);
+        if (predicate(event)) return event;
+      }
+      return undefined;
+    },
     waitForEvent,
     latestSequence: (environmentId: string): number => {
       const row = db

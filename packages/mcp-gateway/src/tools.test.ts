@@ -2918,6 +2918,125 @@ describe("gateway coordinator operations", () => {
     });
   });
 
+  it("resumes from the cursor status when completion happens between calls", async () => {
+    const events = createGatewayEventStore();
+    let status = "running";
+    const port = {
+      ...makePort(),
+      listThreads: async () => ({ snapshotAt: "now", items: [{ id: "chat-1", status }] }),
+    };
+    const context = { port, grants: readGrants, events };
+    const running = events.emit({
+      environmentId: "local",
+      threadId: "chat-1",
+      type: "thread.started",
+      data: { status },
+    });
+    const request = { environmentId: "local", threadId: "chat-1", timeoutMs: 250 };
+    try {
+      const first = await callGatewayTool(context, "t3_wait_for_thread_status", {
+        ...request,
+        untilStatuses: ["running"],
+      });
+      expect(first.cursor).toBe(running.sequence);
+      status = "completed";
+      const completed = events.emit({
+        environmentId: "local",
+        threadId: "chat-1",
+        type: "thread.completed",
+        data: { status },
+      });
+      // Other chats and events without a status must not become the baseline.
+      events.emit({ environmentId: "local", threadId: "other", type: "thread.failed" });
+      expect(
+        await callGatewayTool(context, "t3_wait_for_thread_status", {
+          ...request,
+          afterSequence: first.cursor,
+        }),
+      ).toMatchObject({
+        previousStatus: "running",
+        status: "completed",
+        changed: true,
+        matched: true,
+        timedOut: false,
+        lastEvent: { sequence: completed.sequence },
+      });
+      const cursor = events.emit({
+        environmentId: "local",
+        threadId: "chat-1",
+        type: "thread.progress",
+      }).sequence;
+      expect(
+        await callGatewayTool(context, "t3_wait_for_thread_status", {
+          ...request,
+          afterSequence: cursor,
+        }),
+      ).toMatchObject({
+        previousStatus: "completed",
+        status: "completed",
+        changed: false,
+        matched: false,
+        timedOut: true,
+      });
+    } finally {
+      events.close();
+    }
+  });
+
+  it("does not invent a current baseline when no status exists at the cursor", async () => {
+    const events = createGatewayEventStore();
+    const port = {
+      ...makePort(),
+      listThreads: async () => ({
+        snapshotAt: "now",
+        items: [{ id: "chat-1", status: "completed" }],
+      }),
+    };
+    events.emit({ environmentId: "local", threadId: "chat-1", type: "thread.completed" });
+    try {
+      expect(
+        await callGatewayTool({ port, grants: readGrants, events }, "t3_wait_for_thread_status", {
+          environmentId: "local",
+          threadId: "chat-1",
+          afterSequence: 0,
+          timeoutMs: 250,
+        }),
+      ).toMatchObject({
+        previousStatus: null,
+        status: "completed",
+        matched: true,
+        timedOut: false,
+      });
+    } finally {
+      events.close();
+    }
+  });
+
+  it("rejects expired resume cursors even when the current status matches", async () => {
+    const events = createGatewayEventStore({ retentionEvents: 1 });
+    events.emit({ environmentId: "local", threadId: "chat-1", type: "thread.started" });
+    events.emit({ environmentId: "local", threadId: "chat-1", type: "thread.completed" });
+    const port = {
+      ...makePort(),
+      listThreads: async () => ({
+        snapshotAt: "now",
+        items: [{ id: "chat-1", status: "completed" }],
+      }),
+    };
+    try {
+      await expect(
+        callGatewayTool({ port, grants: readGrants, events }, "t3_wait_for_thread_status", {
+          environmentId: "local",
+          threadId: "chat-1",
+          afterSequence: 0,
+          untilStatuses: ["completed"],
+        }),
+      ).rejects.toMatchObject({ code: "cursor_expired" });
+    } finally {
+      events.close();
+    }
+  });
+
   it("returns immediately when the chat already matches and otherwise times out", async () => {
     const events = createGatewayEventStore();
     const port = {

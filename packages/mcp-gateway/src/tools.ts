@@ -1728,9 +1728,26 @@ export async function callGatewayTool(
         typeof input.afterSequence === "number"
           ? Math.max(0, Math.trunc(input.afterSequence))
           : events.latestSequence(environmentId);
+      const cursorEvent =
+        typeof input.afterSequence === "number"
+          ? events.eventAtOrBefore(
+              environmentId,
+              threadId,
+              requestedCursor,
+              (event) => gatewayEventExecutionState(event) !== undefined,
+            )
+          : undefined;
       const baseline = await findGatewayThread(context, environmentId, threadId);
-      const previousStatus =
+      const currentStatus =
         baseline === undefined ? null : (readThreadExecutionState(baseline) ?? null);
+      // A resumed call compares against the status at its cursor. Reading the
+      // current shell as the baseline would swallow changes between calls.
+      const previousStatus =
+        typeof input.afterSequence === "number"
+          ? cursorEvent === undefined
+            ? null
+            : (gatewayEventExecutionState(cursorEvent) ?? null)
+          : currentStatus;
       const matches = (candidate: GatewayThreadExecutionState | null | undefined): boolean => {
         if (candidate === undefined || candidate === null) return false;
         return untilStatuses === undefined
@@ -1741,8 +1758,8 @@ export async function callGatewayTool(
       const startedAt = Date.now();
       let cursor = requestedCursor;
       let lastEvent: GatewayEvent | undefined;
-      let status: GatewayThreadExecutionState | null = previousStatus;
-      let matched = untilStatuses !== undefined && matches(previousStatus);
+      let status: GatewayThreadExecutionState | null = currentStatus;
+      let matched = untilStatuses !== undefined && matches(currentStatus);
       let timedOut = false;
       if (!matched) {
         const deadline = startedAt + timeoutMs;

@@ -1,3 +1,4 @@
+import { derivePendingRequests } from "../pendingRequests.ts";
 import { performAgentHandoff } from "./handoff.ts";
 import {
   ApprovalRequestId,
@@ -398,35 +399,15 @@ function gatewayActivity(
   };
 }
 
-function pendingRequestFlags(
-  activities: OrchestrationThreadDetailSnapshot["thread"]["activities"],
-): { readonly hasPendingApprovals: boolean; readonly hasPendingUserInput: boolean } {
-  const approvals = new Set<string>();
-  const inputs = new Set<string>();
-  for (const activity of activities) {
-    const payload = activity.payload;
-    const requestId =
-      typeof payload === "object" && payload !== null && !Array.isArray(payload)
-        ? (payload as Record<string, unknown>).requestId
-        : undefined;
-    if (typeof requestId !== "string") continue;
-    if (activity.kind === "approval.requested") approvals.add(requestId);
-    else if (activity.kind === "approval.resolved") approvals.delete(requestId);
-    else if (activity.kind === "user-input.requested") inputs.add(requestId);
-    else if (
-      activity.kind === "user-input.resolved" ||
-      activity.kind === "user-input.answer-submitted"
-    )
-      inputs.delete(requestId);
-  }
-  return { hasPendingApprovals: approvals.size > 0, hasPendingUserInput: inputs.size > 0 };
-}
-
 const decodeProfile = Schema.decodeUnknownSync(McpGatewayProfile);
 const decodeProfiles = Schema.decodeUnknownEffect(Schema.Array(McpGatewayProfile));
 
 export function gatewayThreadProjection(thread: OrchestrationThreadDetailSnapshot["thread"]) {
-  const pending = pendingRequestFlags(thread.activities);
+  const requests = derivePendingRequests(thread.activities);
+  const pending = {
+    hasPendingApprovals: requests.approvals.length > 0,
+    hasPendingUserInput: requests.userInputs.length > 0,
+  };
   return {
     id: thread.id,
     projectId: thread.projectId,

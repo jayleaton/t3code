@@ -432,6 +432,75 @@ describe("Gateway Runtime Port", () => {
     ).toBe("idle");
   });
 
+  it.each([
+    ["approval", "stale pending approval request"],
+    ["approval", "unknown pending permission request"],
+    ["user-input", "unknown pending user-input request"],
+    ["user-input", "unknown pending codex user input request"],
+  ])("clears stale %s requests while preserving retryable failures (%s)", (kind, detail) => {
+    const request = {
+      id: "request",
+      sequence: 1,
+      turnId: null,
+      tone: "info",
+      kind: `${kind}.requested`,
+      summary: "Request",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      payload: {
+        requestId: "r1",
+        questions: [
+          {
+            id: "q",
+            header: "Choice",
+            question: "Continue?",
+            options: [{ label: "Yes", description: "Continue" }],
+          },
+        ],
+      },
+    };
+    const failure = {
+      ...request,
+      id: "failure",
+      sequence: 2,
+      kind: `provider.${kind}.respond.failed`,
+      payload: { requestId: "r1", detail },
+    };
+    const project = (activities: unknown[]) =>
+      gatewayThreadProjection({
+        id: "chat",
+        projectId: "p",
+        title: "Chat",
+        session: { status: "running" },
+        latestTurn: null,
+        messages: [],
+        checkpoints: [],
+        artifacts: [],
+        activities,
+      } as never);
+    expect(project([request]).status).toBe(
+      kind === "approval" ? "waiting-approval" : "waiting-input",
+    );
+    for (const activities of [
+      [request, failure],
+      [failure, request],
+    ]) {
+      expect(project(activities)).toMatchObject({
+        status: "running",
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+      });
+    }
+    expect(
+      project([
+        request,
+        { ...failure, payload: { requestId: "r1", detail: "Temporary network failure" } },
+      ]).status,
+    ).toBe(kind === "approval" ? "waiting-approval" : "waiting-input");
+    expect(
+      project([request, { ...failure, payload: { requestId: "another", detail } }]).status,
+    ).toBe(kind === "approval" ? "waiting-approval" : "waiting-input");
+  });
+
   it.each(["interrupted", "stopped"])("publishes observed %s session state", (status) => {
     const event = gatewayEventFromOrchestration(
       environmentId,
