@@ -375,6 +375,8 @@ export interface GatewayRuntimePort {
     };
     readonly runtimeMode?: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
     readonly interactionMode?: "default" | "plan";
+    readonly workspaceMode?: "checkout" | "worktree";
+    readonly baseBranch?: string;
     readonly requestId: string;
     readonly profileSelection?: {
       readonly profileId: string;

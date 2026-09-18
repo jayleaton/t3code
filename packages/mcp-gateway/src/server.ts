@@ -191,6 +191,8 @@ const TOOL_SPECS = {
         .enum(["approval-required", "auto-accept-edits", "auto", "full-access"])
         .optional(),
       interactionMode: z.enum(["default", "plan"]).optional(),
+      workspaceMode: z.enum(["checkout", "worktree"]).optional(),
+      baseBranch: z.string().trim().min(1).optional(),
       idempotencyKey,
       correlationId: optionalRequestContext.correlationId,
     },
