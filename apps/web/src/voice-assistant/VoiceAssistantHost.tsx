@@ -68,6 +68,10 @@ export interface VoiceAssistantHostValue {
   readonly releasePushToTalk: () => void;
   readonly cancel: () => void;
   readonly shortcutStatus: string;
+  /** Live status of the delegated device task, or null when none has started. */
+  readonly deviceTaskStatus: string | null;
+  /** Display name of the selected voice agent, for the waiting indicator. */
+  readonly deviceTaskAgentName: string | null;
 }
 
 const VoiceAssistantHostContext = createContext<VoiceAssistantHostValue>({
@@ -84,6 +88,8 @@ const VoiceAssistantHostContext = createContext<VoiceAssistantHostValue>({
   releasePushToTalk: () => undefined,
   cancel: () => undefined,
   shortcutStatus: "Hold-to-talk works while this browser is focused.",
+  deviceTaskStatus: null,
+  deviceTaskAgentName: null,
 });
 
 export function useVoiceAssistantHost(): VoiceAssistantHostValue {
@@ -478,6 +484,10 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
       releasePushToTalk,
       cancel,
       shortcutStatus,
+      deviceTaskStatus: execution.data?.status ?? null,
+      deviceTaskAgentName:
+        profiles.find((profile) => profile.profileId === settings.voiceAgentProfileId)?.name ??
+        null,
     }),
     [
       state,
@@ -492,6 +502,9 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
       releasePushToTalk,
       cancel,
       shortcutStatus,
+      execution.data?.status,
+      profiles,
+      settings.voiceAgentProfileId,
     ],
   );
   return (

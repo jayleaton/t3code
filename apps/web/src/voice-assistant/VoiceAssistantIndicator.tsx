@@ -1,4 +1,4 @@
-import { AudioLines, LoaderCircle, Mic } from "lucide-react";
+import { AudioLines, Bot, LoaderCircle, Mic } from "lucide-react";
 
 import { useVoiceAssistantHost } from "./VoiceAssistantHost";
 
@@ -28,14 +28,19 @@ function LevelBars({ level }: { readonly level: number }) {
  * "speaking" are distinguishable instead of an ambiguous spinner.
  */
 export function VoiceAssistantIndicator() {
-  const { state, microphoneLevel, microphoneActive, error } = useVoiceAssistantHost();
+  const { state, microphoneLevel, microphoneActive, error, deviceTaskStatus, deviceTaskAgentName } =
+    useVoiceAssistantHost();
   if (state.mode === "off") {
     return null;
   }
 
   const listening = microphoneActive || state.input === "capturing";
   const connected = state.transport === "ready";
+  const agent = deviceTaskAgentName ?? "the agent";
 
+  // The delegated harness runs out of band, so the model's own "thinking" state
+  // cannot describe it. When the assistant is idle and a device task is live,
+  // say what it is waiting on instead of showing nothing.
   const status = !connected
     ? ({
         label: error
@@ -51,7 +56,13 @@ export function VoiceAssistantIndicator() {
         ? ({ label: "Thinking…", icon: "thinking" } as const)
         : state.output === "speaking"
           ? ({ label: "Speaking…", icon: "speaking" } as const)
-          : null;
+          : deviceTaskStatus === "approval"
+            ? ({ label: "Needs your approval", icon: "agent" } as const)
+            : deviceTaskStatus === "input"
+              ? ({ label: "Needs your answer", icon: "agent" } as const)
+              : deviceTaskStatus === "running"
+                ? ({ label: `Waiting for ${agent}…`, icon: "agent" } as const)
+                : null;
 
   if (status === null) {
     return null;
@@ -68,6 +79,8 @@ export function VoiceAssistantIndicator() {
           <LoaderCircle className="size-4 text-muted-foreground" aria-hidden="true" />
         ) : status.icon === "speaking" ? (
           <AudioLines className="size-4 text-primary" aria-hidden="true" />
+        ) : status.icon === "agent" ? (
+          <Bot className="size-4 text-primary" aria-hidden="true" />
         ) : (
           <Mic className="size-4 text-primary" aria-hidden="true" />
         )}
