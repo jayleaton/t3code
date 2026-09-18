@@ -38,6 +38,7 @@ import {
 } from "./agents.logic";
 import { DesktopUpdateButton } from "../sidebar/SidebarUpdatePill";
 import { BrandMark } from "../BrandMark";
+import { VoiceAssistantIconButton } from "../voice/VoiceAssistantControl";
 import { openCommandPalette } from "../../commandPaletteBus";
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialog";
 
@@ -302,6 +303,10 @@ export function AgentsBoard() {
           {profiles.length === 0 && (
             <p className="agent-empty">No agents yet. Create an agent to start a chat.</p>
           )}
+          <footer className="agents-filters-voice">
+            <VoiceAssistantIconButton />
+            <span>Voice assistant</span>
+          </footer>
         </aside>
         <section className="agents-threads" aria-label="Threads">
           <header>

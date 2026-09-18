@@ -47,6 +47,18 @@ When a command window is open, it finalizes after five seconds without accepted 
 choose ten seconds in settings. Only your accepted speech extends the window — keyboard noise and
 the assistant's own voice do not.
 
+Open the voice control at the bottom of the left column to change these settings. **Push-to-talk
+key** records a shortcut: click it and press the keys you want (for example `⌥⌘Space` on macOS,
+`Ctrl+Alt+Space` elsewhere), or press a single function key such as `F8`. Press Escape while
+recording to cancel, or Backspace to clear it. The dialog's "Test your shortcut" line lights up when
+the recorded chord is pressed, so you can confirm it before relying on it.
+
+## Current status
+
+Provider credential setup, mode selection, and shortcut configuration are available. Live microphone
+capture, the local "Hey agent" wake engine, and spoken response playback are the next milestone; until
+they land, selecting a mode stores your preference but does not yet capture or speak audio.
+
 ## Capability notes
 
 - Speaker verification ("only respond to my voice") is a separate, opt-in milestone. It is a
