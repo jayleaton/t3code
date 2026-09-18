@@ -99,6 +99,33 @@ export class VoiceExecution extends Context.Service<
 
 const isVoiceExecutionError = Schema.is(VoiceExecutionError);
 
+/**
+ * Unwrap nested `Error.cause` links, which is how Effect's `UnknownError`
+ * carries the value a bare `Effect.try` threw. Without this the user hears
+ * "An error occurred in Effect.try" and the actionable reason (a dispatch
+ * validation message, a spawn failure, a provider error) is lost.
+ */
+const describeCause = (cause: unknown): string => {
+  if (!(cause instanceof Error)) return String(cause);
+  const seen = new Set<unknown>([cause]);
+  let message = cause.message;
+  let current: unknown = (cause as { readonly cause?: unknown }).cause;
+  for (let depth = 0; current != null && depth < 8; depth += 1) {
+    if (seen.has(current)) break;
+    seen.add(current);
+    if (current instanceof Error) {
+      if (current.message.length > 0 && !message.includes(current.message)) {
+        message = `${message}: ${current.message}`;
+      }
+      current = (current as { readonly cause?: unknown }).cause;
+      continue;
+    }
+    message = `${message}: ${String(current)}`;
+    break;
+  }
+  return message;
+};
+
 export const make = Effect.gen(function* () {
   const provider = yield* ProviderService;
   const catalog = yield* ProviderRegistry;
@@ -225,19 +252,28 @@ export const make = Effect.gen(function* () {
           message: "The voice agent is not available on this device.",
         });
       const providers = yield* catalog.getProviders;
-      const resolved = yield* Effect.try(() =>
-        resolveThreadCreateProfile<Parameters<typeof resolveThreadCreateProfile>[0]>(
-          {
-            profileSelection: {
-              profileId: profile.profileId,
-              revision: profile.revision,
-              overrideFields: [],
+      // A bare Effect.try would collapse every OrchestrationDispatchCommandError
+      // from the resolver (stale revision, read-only, unavailable provider or
+      // model) into "An error occurred in Effect.try", hiding the actionable
+      // reason from the spoken summary. Preserve the thrown message instead.
+      const resolved = yield* Effect.try({
+        try: () =>
+          resolveThreadCreateProfile<Parameters<typeof resolveThreadCreateProfile>[0]>(
+            {
+              profileSelection: {
+                profileId: profile.profileId,
+                revision: profile.revision,
+                overrideFields: [],
+              },
             },
-          },
-          [profile],
-          providers,
-        ),
-      );
+            [profile],
+            providers,
+          ),
+        catch: (cause) =>
+          new VoiceExecutionError({
+            message: describeCause(cause),
+          }),
+      });
       if (!resolved.modelSelection || !resolved.runtimeMode || resolved.runtimeMode === "read-only")
         return yield* new VoiceExecutionError({ message: "Choose a model for the voice agent." });
       const runtimeMode = resolved.runtimeMode;
@@ -307,7 +343,7 @@ export const make = Effect.gen(function* () {
               ...state,
               revision: state.revision + 1,
               status: "failed",
-              text: cause instanceof Error ? cause.message : String(cause),
+              text: describeCause(cause),
             });
             return yield* cause;
           }),
@@ -316,11 +352,15 @@ export const make = Effect.gen(function* () {
       return yield* read(id);
     },
     (effect) => lock.withPermit(effect),
+    (effect) =>
+      Effect.tapError(effect, (cause) =>
+        Effect.logWarning("voice.execute failed", { message: describeCause(cause) }),
+      ),
     Effect.mapError((cause) =>
       isVoiceExecutionError(cause)
         ? cause
         : new VoiceExecutionError({
-            message: cause instanceof Error ? cause.message : String(cause),
+            message: describeCause(cause),
           }),
     ),
   );
