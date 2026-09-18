@@ -8,11 +8,16 @@ const BASE64_CHUNK_SIZE = 0x8000;
 export interface GeminiLiveSocket {
   send(data: string): void;
   close(): void;
+  /** 0=CONNECTING, 1=OPEN; used to avoid sending before the handshake. */
+  readonly readyState?: number;
   onopen: ((event: unknown) => void) | null;
   onmessage: ((event: { readonly data: unknown }) => void) | null;
   onclose: ((event: { readonly code: number; readonly reason: string }) => void) | null;
   onerror: ((event: unknown) => void) | null;
 }
+
+const SOCKET_OPEN = 1;
+const MAX_PENDING_OUTBOUND = 512;
 
 export interface GeminiLiveTool {
   readonly name: string;
@@ -63,6 +68,7 @@ export class GeminiLiveConversation implements VoiceConversationPort {
   private socket: GeminiLiveSocket | null = null;
   private connected = false;
   private activity = false;
+  private pendingOutbound: string[] = [];
 
   constructor(options: GeminiLiveConversationOptions) {
     this.apiKey = options.apiKey;
@@ -89,8 +95,10 @@ export class GeminiLiveConversation implements VoiceConversationPort {
     this.socket = socket;
     this.connected = false;
     this.activity = false;
+    this.pendingOutbound = [];
     socket.onopen = () => {
       this.notifyOpen();
+      this.flushPendingOutbound();
     };
     socket.onmessage = (event) => {
       void this.handleMessage(event.data);
@@ -99,12 +107,15 @@ export class GeminiLiveConversation implements VoiceConversationPort {
       this.socket = null;
       this.connected = false;
       this.activity = false;
+      this.pendingOutbound = [];
       this.callbacks.onClose?.(event);
     };
     socket.onerror = () => {
       this.callbacks.onError?.(new Error("Gemini Live socket error."));
     };
-    socket.send(buildSetupMessage(this.model, this.systemInstruction, this.tools));
+    // The socket is normally CONNECTING here; sending now throws in the browser,
+    // so the setup frame is queued and flushed on open.
+    this.sendOrQueue(buildSetupMessage(this.model, this.systemInstruction, this.tools));
   }
 
   async disconnect(): Promise<void> {
@@ -112,15 +123,14 @@ export class GeminiLiveConversation implements VoiceConversationPort {
   }
 
   sendAudio(chunk: Uint8Array): void {
-    const socket = this.socket;
-    if (socket === null) {
+    if (this.socket === null) {
       return;
     }
     if (!this.activity) {
       this.activity = true;
-      socket.send(JSON.stringify({ realtimeInput: { activityStart: {} } }));
+      this.sendOrQueue(JSON.stringify({ realtimeInput: { activityStart: {} } }));
     }
-    socket.send(
+    this.sendOrQueue(
       JSON.stringify({
         realtimeInput: { audio: { mimeType: AUDIO_MIME_TYPE, data: encodeBase64(chunk) } },
       }),
@@ -128,7 +138,7 @@ export class GeminiLiveConversation implements VoiceConversationPort {
   }
 
   sendText(text: string): void {
-    this.socket?.send(
+    this.sendOrQueue(
       JSON.stringify({
         clientContent: { turns: [{ role: "user", parts: [{ text }] }], turnComplete: true },
       }),
@@ -144,13 +154,13 @@ export class GeminiLiveConversation implements VoiceConversationPort {
       return;
     }
     this.activity = false;
-    this.socket?.send(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
+    this.sendOrQueue(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
   }
 
   cancel(): void {
     if (this.activity) {
       this.activity = false;
-      this.socket?.send(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
+      this.sendOrQueue(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
     }
     this.closeSocket();
   }
@@ -163,6 +173,50 @@ export class GeminiLiveConversation implements VoiceConversationPort {
     this.callbacks.onOpen?.();
   }
 
+  /**
+   * Sends immediately when the socket is open, otherwise queues. The browser
+   * throws "Still in CONNECTING state" if `send` is called before the
+   * handshake completes, and that must never abort a session.
+   */
+  private sendOrQueue(message: string): void {
+    const socket = this.socket;
+    if (socket === null) {
+      return;
+    }
+    if (socket.readyState === undefined || socket.readyState === SOCKET_OPEN) {
+      try {
+        socket.send(message);
+        return;
+      } catch (error) {
+        this.callbacks.onError?.(toError(error));
+        return;
+      }
+    }
+    // Bound the queue so a socket that never opens cannot grow memory without
+    // limit; dropping the oldest audio is preferable to unbounded buffering.
+    if (this.pendingOutbound.length >= MAX_PENDING_OUTBOUND) {
+      this.pendingOutbound.shift();
+    }
+    this.pendingOutbound.push(message);
+  }
+
+  private flushPendingOutbound(): void {
+    const socket = this.socket;
+    if (socket === null) {
+      return;
+    }
+    const queued = this.pendingOutbound;
+    this.pendingOutbound = [];
+    for (const message of queued) {
+      try {
+        socket.send(message);
+      } catch (error) {
+        this.callbacks.onError?.(toError(error));
+        return;
+      }
+    }
+  }
+
   private closeSocket(): void {
     const socket = this.socket;
     if (socket === null) {
@@ -171,6 +225,7 @@ export class GeminiLiveConversation implements VoiceConversationPort {
     this.socket = null;
     this.connected = false;
     this.activity = false;
+    this.pendingOutbound = [];
     socket.close();
   }
 

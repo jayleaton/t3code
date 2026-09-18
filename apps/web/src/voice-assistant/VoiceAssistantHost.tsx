@@ -224,7 +224,16 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
       createSocket: (url) => new WebSocket(url) as unknown as GeminiLiveSocket,
       callbacks: {
         onOpen: () => controllerRef.current?.setTransport("ready"),
-        onClose: () => controllerRef.current?.setTransport("disconnected"),
+        onClose: (event) => {
+          controllerRef.current?.setTransport("disconnected");
+          // Surface an abnormal close (bad key, unknown model, quota) instead of
+          // silently showing "Disconnected".
+          if (event.code !== 1000 && event.code !== 1005) {
+            setError(
+              `Voice session closed (${event.code})${event.reason ? `: ${event.reason}` : ""}`,
+            );
+          }
+        },
         onError: (cause) => {
           setError(cause.message);
           controllerRef.current?.setTransport("failed");

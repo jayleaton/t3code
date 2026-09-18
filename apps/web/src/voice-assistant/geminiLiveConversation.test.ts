@@ -13,20 +13,27 @@ const EXPECTED_URL =
 class FakeSocket implements GeminiLiveSocket {
   readonly sent: string[] = [];
   closeCalls = 0;
+  readyState = 0;
   onopen: ((event: unknown) => void) | null = null;
   onmessage: ((event: { readonly data: unknown }) => void) | null = null;
   onclose: ((event: { readonly code: number; readonly reason: string }) => void) | null = null;
   onerror: ((event: unknown) => void) | null = null;
 
   send(data: string): void {
+    // Mirror the browser: sending before the handshake throws.
+    if (this.readyState !== 1) {
+      throw new Error("Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.");
+    }
     this.sent.push(data);
   }
 
   close(): void {
     this.closeCalls += 1;
+    this.readyState = 3;
   }
 
   open(): void {
+    this.readyState = 1;
     this.onopen?.({});
   }
 
@@ -35,6 +42,7 @@ class FakeSocket implements GeminiLiveSocket {
   }
 
   emitClose(event: { readonly code: number; readonly reason: string }): void {
+    this.readyState = 3;
     this.onclose?.(event);
   }
 }
@@ -99,10 +107,14 @@ function parsedFrames(socket: FakeSocket): ReadonlyArray<Record<string, unknown>
 }
 
 describe("GeminiLiveConversation", () => {
-  it("connect() opens the documented socket and sends the audio setup", async () => {
+  it("queues the setup frame until the socket opens, then flushes it", async () => {
     const { conversation, socket, urls } = createHarness();
 
     await conversation.connect();
+    // Nothing may be sent while the browser socket is still CONNECTING.
+    expect(socket.sent).toHaveLength(0);
+
+    socket.open();
 
     expect(urls).toEqual([EXPECTED_URL]);
     expect(socket.sent).toHaveLength(1);
@@ -111,9 +123,23 @@ describe("GeminiLiveConversation", () => {
     expect(asRecord(setup["generationConfig"])["responseModalities"]).toEqual(["AUDIO"]);
   });
 
+  it("queues audio sent before open and flushes it in order", async () => {
+    const { conversation, socket } = createHarness();
+    await conversation.connect();
+
+    conversation.sendAudio(new Uint8Array([1, 2, 3]));
+    expect(socket.sent).toHaveLength(0);
+
+    socket.open();
+
+    expect(countFrames(socket, '"activityStart"')).toBe(1);
+    expect(countFrames(socket, '"audio"')).toBe(1);
+  });
+
   it("sendAudio() opens the utterance once and round-trips the PCM bytes", async () => {
     const { conversation, socket } = createHarness();
     await conversation.connect();
+    socket.open();
     const chunk = new Uint8Array([0, 1, 2, 3, 250, 255]);
 
     conversation.sendAudio(chunk);
@@ -130,6 +156,7 @@ describe("GeminiLiveConversation", () => {
   it("finalizeInput() ends the utterance exactly once", async () => {
     const { conversation, socket } = createHarness();
     await conversation.connect();
+    socket.open();
     conversation.sendAudio(new Uint8Array([1, 2]));
 
     conversation.finalizeInput();
@@ -214,6 +241,7 @@ describe("GeminiLiveConversation", () => {
   it("cancel() ends an open activity and disconnect() is safe to repeat", async () => {
     const { conversation, socket } = createHarness();
     await conversation.connect();
+    socket.open();
     conversation.sendAudio(new Uint8Array([1, 2]));
 
     conversation.cancel();

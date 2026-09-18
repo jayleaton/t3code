@@ -203,6 +203,9 @@ class BrowserMicrophoneCapture implements MicrophoneCapture {
       };
       this.workletMessageHandler = handleMessage;
       workletNode.port.addEventListener("message", handleMessage);
+      // A MessagePort only dispatches on addEventListener after start() is
+      // called; without it the worklet's audio messages queue forever.
+      workletNode.port.start();
       sourceNode.connect(workletNode);
       // The processor emits silence; the destination edge just keeps it alive.
       workletNode.connect(context.destination);
