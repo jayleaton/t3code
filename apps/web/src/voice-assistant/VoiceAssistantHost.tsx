@@ -7,6 +7,8 @@ import {
   createGatewayRuntimePortFromContext,
   type GatewayRuntimePort,
 } from "@t3tools/client-runtime/gateway";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { ThreadId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import {
   createContext,
@@ -24,7 +26,7 @@ import { useAgentLibrary } from "../hooks/useAgentLibrary";
 import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
 import { newMessageId, newThreadId, randomUUID } from "../lib/utils";
 import { usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects } from "../state/entities";
+import { useProjects, useThreadShell } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { voiceAssistantEnvironment } from "../state/voiceAssistant";
 import { createMicrophoneCapture, type MicrophoneCapture } from "./audio/microphoneCapture";
@@ -94,6 +96,20 @@ const isTypingTarget = (target: EventTarget | null): boolean => {
 };
 
 const TEST_MICROPHONE_MS = 4000;
+
+/** Coarse state of the delegated thread, used only to trigger announcements. */
+function delegatedStatusOf(shell: {
+  readonly hasPendingApprovals: boolean;
+  readonly hasPendingUserInput: boolean;
+  readonly latestTurn: { readonly state?: string } | null;
+}): "idle" | "working" | "ready" | "failed" | "input" | "approval" {
+  if (shell.hasPendingApprovals) return "approval";
+  if (shell.hasPendingUserInput) return "input";
+  const state = shell.latestTurn?.state;
+  if (state === "error") return "failed";
+  if (state === "completed") return "ready";
+  return shell.latestTurn === null ? "idle" : "working";
+}
 
 /**
  * Owns the live voice runtime for the whole client.
@@ -195,6 +211,41 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
       }),
     [],
   );
+
+  // Watch the delegated thread so the assistant speaks up when work finishes or
+  // needs the user, instead of staying silent until the user asks again.
+  const agentThreadRef = useMemo(
+    () =>
+      environmentId !== null && agentThreadId.length > 0
+        ? scopeThreadRef(environmentId, ThreadId.make(agentThreadId))
+        : null,
+    [environmentId, agentThreadId],
+  );
+  const agentShell = useThreadShell(agentThreadRef);
+  const lastAgentStatusRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (agentShell === null) {
+      lastAgentStatusRef.current = null;
+      return;
+    }
+    const status = delegatedStatusOf(agentShell);
+    const previous = lastAgentStatusRef.current;
+    lastAgentStatusRef.current = status;
+    if (previous === null || previous === status) return;
+    const prompt =
+      status === "ready"
+        ? "System note: the delegated voice task just finished. Call get_voice_task_status and tell the user the result in one sentence."
+        : status === "failed"
+          ? "System note: the delegated voice task hit an error. Call get_voice_task_status and tell the user in one sentence."
+          : status === "approval"
+            ? "System note: the delegated voice task needs approval. Tell the user in one sentence."
+            : status === "input"
+              ? "System note: the delegated voice task is asking a question. Tell the user in one sentence."
+              : null;
+    if (prompt !== null) {
+      controllerRef.current?.announce(prompt);
+    }
+  }, [agentShell]);
 
   const requestMicrophoneAccess = useCallback(() => {
     setMicrophoneStatus((current) => (current === "off" ? "starting" : current));
