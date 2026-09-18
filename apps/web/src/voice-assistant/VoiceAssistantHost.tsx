@@ -39,6 +39,7 @@ import {
   VOICE_SYSTEM_INSTRUCTION,
   VOICE_TOOL_DECLARATIONS,
 } from "./voiceTools";
+import { summarizeVoiceValue, voiceTranscript } from "./voiceTranscriptStore";
 
 const OFF_STATE: VoiceAssistantState = {
   mode: "off",
@@ -152,6 +153,7 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
   const conversationRef = useRef<VoiceConversationPort | null>(null);
   const playbackRef = useRef<ReturnType<typeof createSpeakerPlayback> | null>(null);
   const testTimerRef = useRef<number | null>(null);
+  const turnKeyRef = useRef(0);
 
   // The controller holds this proxy for its whole life; attaching or detaching
   // the real Gemini session mutates the ref instead of rebuilding the mic.
@@ -368,14 +370,27 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
           controllerRef.current?.handleAssistantSpeechStart();
           playbackRef.current?.enqueue(chunk);
         },
-        onInputTranscript: (text) => controllerRef.current?.handleFinalTranscript(text),
-        onTurnComplete: () => controllerRef.current?.handleAssistantSpeechEnd(),
+        onInputTranscript: (text) => {
+          voiceTranscript.upsert(`user-${turnKeyRef.current}`, "user", text);
+          controllerRef.current?.handleFinalTranscript(text);
+        },
+        onOutputTranscript: (text) => {
+          voiceTranscript.upsert(`assistant-${turnKeyRef.current}`, "assistant", text);
+        },
+        onTurnComplete: () => {
+          turnKeyRef.current += 1;
+          controllerRef.current?.handleAssistantSpeechEnd();
+        },
         onInterrupted: () => controllerRef.current?.handleAssistantSpeechEnd(),
         onToolCall: (call) => {
           // Delegated work runs on the local agent (MCP/workspace tools); the
           // result is returned to the model, which speaks a short summary.
+          voiceTranscript.push("tool", `${call.name} ${summarizeVoiceValue(call.args)}`);
           void toolHandler(call)
-            .then((result) => conversation.sendToolResponse(call.id, result))
+            .then((result) => {
+              voiceTranscript.push("tool", `-> ${summarizeVoiceValue(result)}`);
+              conversation.sendToolResponse(call.id, result);
+            })
             .catch((cause: unknown) =>
               conversation.sendToolResponse(call.id, {
                 error: cause instanceof Error ? cause.message : "Tool execution failed.",

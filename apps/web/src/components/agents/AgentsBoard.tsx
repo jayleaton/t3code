@@ -39,6 +39,7 @@ import {
 import { DesktopUpdateButton } from "../sidebar/SidebarUpdatePill";
 import { BrandMark } from "../BrandMark";
 import { VoiceAssistantIconButton } from "../voice/VoiceAssistantControl";
+import { VoiceDebugChatIconButton } from "../../voice-assistant/VoiceDebugChat";
 import { openCommandPalette } from "../../commandPaletteBus";
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialog";
 
@@ -305,6 +306,7 @@ export function AgentsBoard() {
           )}
           <footer className="agents-filters-voice">
             <VoiceAssistantIconButton />
+            <VoiceDebugChatIconButton />
             <span>Voice assistant</span>
           </footer>
         </aside>
