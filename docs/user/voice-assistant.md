@@ -56,10 +56,12 @@ the recorded chord is pressed, so you can confirm it before relying on it.
 ## Voice agent
 
 Choose a **Voice agent** in the voice dialog to let the assistant delegate work. When you ask for
-something ("add a dark mode toggle"), the assistant hands the instruction to that agent, which runs
-on your device with its own provider, model, harness, and tools — including MCP and workspace
-access. The assistant then summarizes the result out loud and can check or stop the task by voice.
-Pick **Conversation only** to keep the assistant purely conversational.
+something ("add a dark mode toggle"), the assistant restates the task and confirms it with you, then
+hands the instruction to that agent, which runs on your device with its own provider, model, harness,
+and tools — including MCP and workspace access. All tasks share **one ongoing conversation** so the
+agent keeps context; use **Start a new voice conversation** to reset it. The assistant summarizes the
+result out loud and can check or stop the task by voice. Pick **Conversation only** to keep the
+assistant purely conversational.
 
 ## Current status
 

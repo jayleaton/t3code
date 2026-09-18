@@ -21,7 +21,7 @@ import {
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { useAgentLibrary } from "../hooks/useAgentLibrary";
-import { useClientSettings } from "../hooks/useSettings";
+import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
 import { newMessageId, newThreadId, randomUUID } from "../lib/utils";
 import { usePrimaryEnvironmentId } from "../state/environments";
 import { useProjects } from "../state/entities";
@@ -32,7 +32,11 @@ import { createSpeakerPlayback } from "./audio/speakerPlayback";
 import { GeminiLiveConversation, type GeminiLiveSocket } from "./geminiLiveConversation";
 import { VoiceAssistantIndicator } from "./VoiceAssistantIndicator";
 import { matchesVoiceShortcut } from "./pushToTalkShortcut";
-import { createVoiceToolHandler, VOICE_TOOL_DECLARATIONS } from "./voiceTools";
+import {
+  createVoiceToolHandler,
+  VOICE_SYSTEM_INSTRUCTION,
+  VOICE_TOOL_DECLARATIONS,
+} from "./voiceTools";
 
 const OFF_STATE: VoiceAssistantState = {
   mode: "off",
@@ -107,6 +111,8 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
   const shortcut = useClientSettings((settings) => settings.voicePushToTalkShortcut);
   const deviceId = useClientSettings((settings) => settings.voiceMicrophoneDeviceId);
   const agentProfileId = useClientSettings((settings) => settings.voiceAgentProfileId);
+  const agentThreadId = useClientSettings((settings) => settings.voiceAgentThreadId);
+  const updateSettings = useUpdateClientSettings();
   const environmentId = usePrimaryEnvironmentId();
   const runtime = useAtomValue(connectionAtomRuntime);
   const { profiles } = useAgentLibrary();
@@ -144,8 +150,24 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
 
   // Live values the tool executor needs, kept in a ref so the executor is built
   // once (preserving its "last task" memory) while still seeing current state.
-  const toolDepsRef = useRef({ runtime, environmentId, profiles, projects, agentProfileId });
-  toolDepsRef.current = { runtime, environmentId, profiles, projects, agentProfileId };
+  const toolDepsRef = useRef({
+    runtime,
+    environmentId,
+    profiles,
+    projects,
+    agentProfileId,
+    agentThreadId,
+    updateSettings,
+  });
+  toolDepsRef.current = {
+    runtime,
+    environmentId,
+    profiles,
+    projects,
+    agentProfileId,
+    agentThreadId,
+    updateSettings,
+  };
   const toolHandler = useMemo(
     () =>
       createVoiceToolHandler({
@@ -162,6 +184,11 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
           toolDepsRef.current.projects.find(
             (project) => project.environmentId === toolDepsRef.current.environmentId,
           )?.id ?? null,
+        getThreadId: () =>
+          toolDepsRef.current.agentThreadId.length > 0 ? toolDepsRef.current.agentThreadId : null,
+        storeThreadId: (threadId) => {
+          void toolDepsRef.current.updateSettings({ voiceAgentThreadId: threadId });
+        },
         newThreadId,
         newMessageId,
         newRequestId: randomUUID,
@@ -265,6 +292,7 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
     const conversation = new GeminiLiveConversation({
       apiKey: credentialToken,
       model: credentialModel,
+      systemInstruction: VOICE_SYSTEM_INSTRUCTION,
       ...(agentProfileId.trim().length > 0 ? { tools: VOICE_TOOL_DECLARATIONS } : {}),
       createSocket: (url) => new WebSocket(url) as unknown as GeminiLiveSocket,
       callbacks: {

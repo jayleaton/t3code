@@ -336,6 +336,7 @@ function MicrophoneRow() {
 
 function VoiceAgentRow() {
   const profileId = useClientSettings((settings) => settings.voiceAgentProfileId);
+  const threadId = useClientSettings((settings) => settings.voiceAgentThreadId);
   const update = useUpdateClientSettings();
   const { profiles } = useAgentLibrary();
   const selected = profiles.find((profile) => profile.profileId === profileId) ?? null;
@@ -346,14 +347,18 @@ function VoiceAgentRow() {
         <div className="min-w-0">
           <div className="text-sm text-foreground">Voice agent</div>
           <div className="text-xs leading-relaxed text-muted-foreground">
-            Tasks you ask for run on this agent, on this device, with its configured tools and MCP
-            access. Choose “Conversation only” to disable delegation.
+            Tasks you ask for run on this agent, on this device, in one ongoing conversation so it
+            keeps context. Its own tools and MCP access do the work.
           </div>
         </div>
         <Select
           value={profileId.length === 0 ? "none" : profileId}
           onValueChange={(value) =>
-            update({ voiceAgentProfileId: value === null || value === "none" ? "" : value })
+            update({
+              voiceAgentProfileId: value === null || value === "none" ? "" : value,
+              // A different agent must not inherit the previous one's thread.
+              voiceAgentThreadId: "",
+            })
           }
         >
           <SelectTrigger size="sm" className="w-44 shrink-0" aria-label="Voice agent">
@@ -375,6 +380,17 @@ function VoiceAgentRow() {
         <p className="text-xs text-warning-foreground">
           The selected agent is no longer available in this environment.
         </p>
+      ) : null}
+      {threadId.length > 0 ? (
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost-muted"
+          className="w-full"
+          onClick={() => update({ voiceAgentThreadId: "" })}
+        >
+          Start a new voice conversation
+        </Button>
       ) : null}
     </div>
   );

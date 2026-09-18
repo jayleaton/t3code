@@ -24,7 +24,11 @@ function createPort() {
       threadId: "thread-1",
     })),
     sendMessage: vi.fn(async (_input: SendMessageInput) => ({ status: "accepted" })),
-    getThread: vi.fn(async () => ({ id: "thread-1", status: "running" })),
+    getThread: vi.fn(async () => ({
+      id: "thread-1",
+      status: "running",
+      messages: [{ role: "assistant", text: "working on it" }],
+    })),
     controlThread: vi.fn(async (_input: ControlThreadInput) => ({ status: "accepted" })),
   };
 }
@@ -34,11 +38,16 @@ function createDeps(
   profileOverride: typeof profile | null = profile,
 ) {
   let sequence = 0;
+  let storedThreadId: string | null = null;
   const dependencies: VoiceToolDependencies = {
     getPort: () => port as unknown as GatewayRuntimePort,
     getEnvironmentId: () => "env-1",
     getProfile: () => profileOverride,
     resolveProjectId: () => "project-1",
+    getThreadId: () => storedThreadId,
+    storeThreadId: (threadId) => {
+      storedThreadId = threadId;
+    },
     newThreadId: () => `thread-${++sequence}`,
     newMessageId: () => `message-${++sequence}`,
     newRequestId: () => `request-${++sequence}`,
@@ -72,6 +81,35 @@ describe("voice tool handler", () => {
       text: "add a dark mode toggle to the settings page",
     });
     expect(result).toMatchObject({ status: "accepted", agent: "Fast Agent" });
+  });
+
+  it("reuses one thread across tasks instead of creating a new one each time", async () => {
+    const port = createPort();
+    const handle = createVoiceToolHandler(createDeps(port));
+
+    await handle({ id: "call-1", name: "run_voice_task", args: { prompt: "first task" } });
+    await handle({ id: "call-2", name: "run_voice_task", args: { prompt: "second task" } });
+
+    expect(port.createThread).toHaveBeenCalledTimes(1);
+    expect(port.sendMessage).toHaveBeenCalledTimes(2);
+    expect(port.sendMessage.mock.calls[1]?.[0]).toMatchObject({
+      threadId: "thread-1",
+      text: "second task",
+    });
+  });
+
+  it("returns a bounded summary instead of the whole transcript", async () => {
+    const port = createPort();
+    const handle = createVoiceToolHandler(createDeps(port));
+    await handle({ id: "call-1", name: "run_voice_task", args: { prompt: "do the thing" } });
+
+    const status = (await handle({ id: "call-2", name: "get_voice_task_status", args: {} })) as {
+      lastAgentMessage?: string | null;
+      messages?: unknown;
+    };
+
+    expect(status.lastAgentMessage).toBe("working on it");
+    expect(status.messages).toBeUndefined();
   });
 
   it("requires a configured agent before delegating", async () => {
