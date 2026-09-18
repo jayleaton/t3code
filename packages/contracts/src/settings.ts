@@ -1638,6 +1638,13 @@ export const ClientSettingsPatch = Schema.Struct({
   snapShotSound: Schema.optionalKey(SnapShotSound),
   snapShotFlash: Schema.optionalKey(Schema.Boolean),
   snapShotAnimations: Schema.optionalKey(Schema.Boolean),
+  voiceAssistantMode: Schema.optionalKey(VoiceAssistantMode),
+  voiceConversationProvider: Schema.optionalKey(VoiceConversationProvider),
+  voiceSilenceTimeoutSeconds: Schema.optionalKey(VoiceSilenceTimeoutSeconds),
+  voiceAnnounceCompletions: Schema.optionalKey(Schema.Boolean),
+  voiceAnnounceInputRequests: Schema.optionalKey(Schema.Boolean),
+  voiceAnnounceApprovals: Schema.optionalKey(Schema.Boolean),
+  voicePushToTalkShortcut: Schema.optionalKey(Schema.String),
   wordWrap: Schema.optionalKey(Schema.Boolean),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

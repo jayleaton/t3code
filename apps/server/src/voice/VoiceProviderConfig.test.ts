@@ -142,6 +142,29 @@ it.layer(NodeServices.layer)("VoiceProviderConfig", (it) => {
     ),
   );
 
+  it.effect("validates a replacement candidate without storing or persisting it", () =>
+    Effect.gen(function* () {
+      const config = yield* VoiceProviderConfig.VoiceProviderConfig;
+      const store = yield* ServerSecretStore.ServerSecretStore;
+
+      yield* config.setKey({ providerId: "gemini", apiKey: GEMINI_KEY });
+      const providers = yield* config.testKey({
+        providerId: "gemini",
+        apiKey: "candidate-key-7777",
+      });
+      const gemini = findStatus(providers, "gemini");
+
+      assert.equal(gemini.lastTest.status, "succeeded");
+      // The stored key and its hint are untouched by candidate validation.
+      assert.equal(gemini.keyHint, "...abcd");
+      const stored = yield* store.get(VOICE_PROVIDER_SPECS.gemini.secretName);
+      assert.isTrue(stored._tag === "Some");
+      if (stored._tag === "Some") {
+        assert.equal(new TextDecoder().decode(stored.value), GEMINI_KEY);
+      }
+    }).pipe(Effect.provide(makeLayer(() => Effect.succeed(testResult("succeeded"))))),
+  );
+
   it.effect("replacing a key resets the test result and updates the hint", () =>
     Effect.gen(function* () {
       const config = yield* VoiceProviderConfig.VoiceProviderConfig;

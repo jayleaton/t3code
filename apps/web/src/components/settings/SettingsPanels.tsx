@@ -1,5 +1,6 @@
 import { Spinner } from "~/components/ui/spinner";
 import { NotificationSettings } from "./NotificationSettings";
+import { VoiceAssistantProvidersSection } from "./VoiceAssistantProvidersSettings";
 import { ArchiveIcon, ArchiveX, CheckIcon, ChevronRightIcon, SettingsIcon } from "lucide-react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import type { CSSProperties, ReactNode } from "react";
@@ -2854,6 +2855,8 @@ export function GeneralSettingsPanel() {
           }
         />
       </SettingsSection>
+
+      <VoiceAssistantProvidersSection />
 
       <SettingsSection id="projects-and-threads" title="Projects & threads">
         <SettingsRow

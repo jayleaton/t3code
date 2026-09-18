@@ -197,6 +197,19 @@ export const make = Effect.gen(function* () {
       return yield* snapshot();
     }
 
+    // Candidate validation: probe the provided key, never persist it or its
+    // result. The caller commits it with `setKey` only after a pass.
+    if (input.apiKey !== undefined) {
+      const lastTest = yield* probe.probe({
+        providerId: input.providerId,
+        apiKey: input.apiKey,
+      });
+      const statuses = yield* snapshot();
+      return statuses.map((status) =>
+        status.providerId === input.providerId ? { ...status, lastTest } : status,
+      );
+    }
+
     const key = yield* store.get(spec.secretName);
     if (Option.isNone(key)) {
       return yield* fail(

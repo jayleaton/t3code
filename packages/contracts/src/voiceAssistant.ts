@@ -87,6 +87,11 @@ export type VoiceProviderRemoveKeyInput = typeof VoiceProviderRemoveKeyInput.Typ
 
 export const VoiceProviderTestKeyInput = Schema.Struct({
   providerId: VoiceProviderId,
+  /**
+   * When present, probes this candidate key without storing or persisting a
+   * result, so a replacement can be validated before it is committed.
+   */
+  apiKey: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type VoiceProviderTestKeyInput = typeof VoiceProviderTestKeyInput.Type;
 
