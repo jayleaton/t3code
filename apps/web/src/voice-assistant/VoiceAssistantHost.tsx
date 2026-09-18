@@ -1,6 +1,7 @@
 import {
   VoiceAssistantController,
   type VoiceAssistantState,
+  type VoiceConversationPort,
 } from "@t3tools/client-runtime/voice-assistant";
 import {
   createContext,
@@ -36,21 +37,32 @@ const OFF_STATE: VoiceAssistantState = {
   sessionGeneration: 0,
 };
 
+export type MicrophoneStatus = "off" | "starting" | "live" | "error";
+
 export interface VoiceAssistantHostValue {
   readonly state: VoiceAssistantState;
   readonly microphoneLevel: number;
+  readonly microphoneStatus: MicrophoneStatus;
+  readonly microphoneActive: boolean;
   readonly error: string | null;
   readonly environmentId: string | null;
+  readonly hasLiveCredential: boolean;
   /** Acquires/updates the microphone from a user gesture (device picker). */
   readonly requestMicrophoneAccess: () => void;
+  /** Opens the mic gate for a few seconds so the level meter can prove input. */
+  readonly testMicrophone: () => void;
 }
 
 const VoiceAssistantHostContext = createContext<VoiceAssistantHostValue>({
   state: OFF_STATE,
   microphoneLevel: 0,
+  microphoneStatus: "off",
+  microphoneActive: false,
   error: null,
   environmentId: null,
+  hasLiveCredential: false,
   requestMicrophoneAccess: () => undefined,
+  testMicrophone: () => undefined,
 });
 
 export function useVoiceAssistantHost(): VoiceAssistantHostValue {
@@ -65,11 +77,16 @@ const isTypingTarget = (target: EventTarget | null): boolean => {
   return tag === "input" || tag === "textarea" || tag === "select";
 };
 
+const TEST_MICROPHONE_MS = 4000;
+
 /**
- * Owns the live voice runtime for the whole client: it acquires the microphone,
- * opens one Gemini Live session when a mode is armed and a credential is
- * available, and routes the push-to-talk hotkey. Mounted once at the app root
- * so voice works while the user is elsewhere in the app.
+ * Owns the live voice runtime for the whole client.
+ *
+ * Microphone capture is deliberately independent of provider credentials: the
+ * user must be able to verify their input device (level meter, device picker)
+ * before any key exists. The Gemini Live conversation attaches separately once
+ * a credential is available, through a mutable proxy the controller already
+ * holds, so arming the mic never tears down capture.
  */
 export function VoiceAssistantHostProvider({ children }: { readonly children: ReactNode }) {
   const mode = useClientSettings((settings) => settings.voiceAssistantMode);
@@ -81,53 +98,84 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
   const credential = useEnvironmentQuery(
     environmentId === null || mode === "off"
       ? null
-      : voiceAssistantEnvironment.liveSessionCredential({
-          environmentId,
-          input: { provider },
-        }),
+      : voiceAssistantEnvironment.liveSessionCredential({ environmentId, input: { provider } }),
   );
   const credentialToken = credential.data?.token ?? null;
   const credentialModel = credential.data?.model ?? null;
 
   const [state, setState] = useState<VoiceAssistantState>(OFF_STATE);
   const [microphoneLevel, setMicrophoneLevel] = useState(0);
+  const [microphoneStatus, setMicrophoneStatus] = useState<MicrophoneStatus>("off");
+  const [microphoneActive, setMicrophoneActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
   const controllerRef = useRef<VoiceAssistantController | null>(null);
   const captureRef = useRef<MicrophoneCapture | null>(null);
+  const conversationRef = useRef<VoiceConversationPort | null>(null);
+  const playbackRef = useRef<ReturnType<typeof createSpeakerPlayback> | null>(null);
+  const testTimerRef = useRef<number | null>(null);
 
+  // The controller holds this proxy for its whole life; attaching or detaching
+  // the real Gemini session mutates the ref instead of rebuilding the mic.
+  const conversationProxy = useRef<VoiceConversationPort>({
+    connect: () => conversationRef.current?.connect() ?? Promise.resolve(),
+    disconnect: () => conversationRef.current?.disconnect() ?? Promise.resolve(),
+    sendAudio: (chunk) => conversationRef.current?.sendAudio(chunk),
+    sendText: (text) => conversationRef.current?.sendText(text),
+    finalizeInput: () => conversationRef.current?.finalizeInput(),
+    cancel: () => conversationRef.current?.cancel(),
+  });
+
+  const requestMicrophoneAccess = useCallback(() => {
+    setMicrophoneStatus((current) => (current === "off" ? "starting" : current));
+    void captureRef.current
+      ?.start()
+      .then(() => setMicrophoneStatus("live"))
+      .catch((cause: unknown) => {
+        setMicrophoneStatus("error");
+        setError(cause instanceof Error ? cause.message : "Microphone capture failed to start.");
+      });
+    void captureRef.current?.resume();
+  }, []);
+
+  const testMicrophone = useCallback(() => {
+    requestMicrophoneAccess();
+    const capture = captureRef.current;
+    if (capture === null) return;
+    void capture.beginUtterance().then(() => setMicrophoneActive(true));
+    if (testTimerRef.current !== null) {
+      window.clearTimeout(testTimerRef.current);
+    }
+    testTimerRef.current = window.setTimeout(() => {
+      testTimerRef.current = null;
+      setMicrophoneActive(false);
+      void capture.endUtterance();
+    }, TEST_MICROPHONE_MS);
+  }, [requestMicrophoneAccess]);
+
+  // Microphone + controller runtime, independent of any provider credential.
   useEffect(() => {
-    if (mode === "off" || credentialToken === null || credentialModel === null) {
+    if (mode === "off") {
+      setMicrophoneStatus("off");
+      setMicrophoneActive(false);
+      setMicrophoneLevel(0);
       return;
     }
     const playback = createSpeakerPlayback();
-    let controller: VoiceAssistantController | null = null;
-    const conversation = new GeminiLiveConversation({
-      apiKey: credentialToken,
-      model: credentialModel,
-      createSocket: (url) => new WebSocket(url) as unknown as GeminiLiveSocket,
-      callbacks: {
-        onOpen: () => controller?.setTransport("ready"),
-        onClose: () => controller?.setTransport("disconnected"),
-        onError: (cause) => {
-          setError(cause.message);
-          controller?.setTransport("failed");
-        },
-        onAudio: (chunk) => playback.enqueue(chunk),
-        onInputTranscript: (text) => controller?.handleFinalTranscript(text),
-        onTurnComplete: () => controller?.handleAssistantSpeechEnd(),
-        onInterrupted: () => controller?.handleAssistantSpeechEnd(),
-      },
-    });
+    playbackRef.current = playback;
     const capture = createMicrophoneCapture({
       ...(deviceId.length > 0 ? { deviceId } : {}),
-      onFrame: (frame) => conversation.sendAudio(frame),
-      onLevel: setMicrophoneLevel,
-      onError: (cause) => setError(cause.message),
+      onFrame: (frame) => conversationProxy.current.sendAudio(frame),
+      onLevel: (level) => setMicrophoneLevel(level),
+      onError: (cause) => {
+        setError(cause.message);
+        setMicrophoneStatus("error");
+      },
     });
-    controller = new VoiceAssistantController({
+    const controller = new VoiceAssistantController({
       ports: {
         capture,
-        conversation,
+        conversation: conversationProxy.current,
         playback: { stop: async () => playback.stop() },
       },
       conversationProvider: provider,
@@ -137,20 +185,81 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
     controllerRef.current = controller;
     captureRef.current = capture;
     setError(null);
-
-    void conversation.connect();
-    void capture.start().catch((cause: unknown) => {
-      setError(cause instanceof Error ? cause.message : "Microphone capture failed to start.");
-    });
+    setMicrophoneStatus("starting");
+    void capture
+      .start()
+      .then(() => setMicrophoneStatus("live"))
+      .catch((cause: unknown) => {
+        setMicrophoneStatus("error");
+        setError(cause instanceof Error ? cause.message : "Microphone capture failed to start.");
+      });
     void controller.setMode(mode);
 
     return () => {
+      if (testTimerRef.current !== null) {
+        window.clearTimeout(testTimerRef.current);
+        testTimerRef.current = null;
+      }
       controllerRef.current = null;
       captureRef.current = null;
+      playbackRef.current = null;
+      setMicrophoneActive(false);
+      setMicrophoneLevel(0);
       playback.dispose();
-      void controller?.dispose();
+      void controller.dispose();
     };
-  }, [mode, provider, timeout, credentialToken, credentialModel, deviceId]);
+  }, [mode, provider, timeout, deviceId]);
+
+  // Gemini Live session, attached only when a credential exists.
+  useEffect(() => {
+    if (mode === "off" || credentialToken === null || credentialModel === null) {
+      const existing = conversationRef.current;
+      conversationRef.current = null;
+      void existing?.disconnect();
+      return;
+    }
+    const conversation = new GeminiLiveConversation({
+      apiKey: credentialToken,
+      model: credentialModel,
+      createSocket: (url) => new WebSocket(url) as unknown as GeminiLiveSocket,
+      callbacks: {
+        onOpen: () => controllerRef.current?.setTransport("ready"),
+        onClose: () => controllerRef.current?.setTransport("disconnected"),
+        onError: (cause) => {
+          setError(cause.message);
+          controllerRef.current?.setTransport("failed");
+        },
+        onAudio: (chunk) => playbackRef.current?.enqueue(chunk),
+        onInputTranscript: (text) => controllerRef.current?.handleFinalTranscript(text),
+        onTurnComplete: () => controllerRef.current?.handleAssistantSpeechEnd(),
+        onInterrupted: () => controllerRef.current?.handleAssistantSpeechEnd(),
+      },
+    });
+    conversationRef.current = conversation;
+    void conversation.connect().catch((cause: unknown) => {
+      setError(cause instanceof Error ? cause.message : "Could not open the voice session.");
+    });
+    return () => {
+      if (conversationRef.current === conversation) {
+        conversationRef.current = null;
+      }
+      void conversation.disconnect();
+    };
+  }, [mode, credentialToken, credentialModel]);
+
+  // Browsers suspend an AudioContext created without a gesture; resume it on the
+  // first interaction so capture produces frames even before a hotkey press.
+  useEffect(() => {
+    const resume = () => {
+      void captureRef.current?.resume();
+    };
+    window.addEventListener("pointerdown", resume, { once: true });
+    window.addEventListener("keydown", resume, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", resume);
+      window.removeEventListener("keydown", resume);
+    };
+  }, []);
 
   useEffect(() => {
     if (mode === "off") return;
@@ -162,9 +271,6 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
       if (event.repeat || isTypingTarget(event.target)) return;
       if (shortcut.trim().length === 0 || !matchesVoiceShortcut(event, shortcut)) return;
       event.preventDefault();
-      // First press is a user gesture: make sure the mic/audio context exist and
-      // are resumed (browsers start an AudioContext suspended until a gesture).
-      void captureRef.current?.start().catch(() => undefined);
       void captureRef.current?.resume();
       void controllerRef.current?.pressPushToTalk();
     };
@@ -180,14 +286,19 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
     };
   }, [mode, shortcut]);
 
-  const requestMicrophoneAccess = useCallback(() => {
-    void captureRef.current?.start().catch(() => undefined);
-    void captureRef.current?.resume();
-  }, []);
-
   return (
     <VoiceAssistantHostContext.Provider
-      value={{ state, microphoneLevel, error, environmentId, requestMicrophoneAccess }}
+      value={{
+        state,
+        microphoneLevel,
+        microphoneStatus,
+        microphoneActive,
+        error,
+        environmentId,
+        hasLiveCredential: credentialToken !== null,
+        requestMicrophoneAccess,
+        testMicrophone,
+      }}
     >
       {children}
     </VoiceAssistantHostContext.Provider>

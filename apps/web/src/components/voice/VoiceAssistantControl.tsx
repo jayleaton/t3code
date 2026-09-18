@@ -172,11 +172,46 @@ const TRANSPORT_LABELS = {
 } as const;
 
 function LiveStatusBlock() {
-  const { state, microphoneLevel, error } = useVoiceAssistantHost();
+  const {
+    state,
+    microphoneLevel,
+    microphoneStatus,
+    microphoneActive,
+    error,
+    hasLiveCredential,
+    testMicrophone,
+  } = useVoiceAssistantHost();
   const shortcut = useClientSettings((settings) => settings.voicePushToTalkShortcut);
+
+  const micStatusLabel =
+    microphoneStatus === "live"
+      ? "Microphone active"
+      : microphoneStatus === "starting"
+        ? "Starting microphone…"
+        : microphoneStatus === "error"
+          ? "Microphone unavailable"
+          : "Microphone off";
 
   return (
     <div className="space-y-2 rounded-md border border-border/60 p-3">
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span className="text-muted-foreground">Microphone</span>
+        <Badge variant={microphoneStatus === "live" ? "success" : "outline"}>
+          {micStatusLabel}
+        </Badge>
+      </div>
+      <div className="flex items-center gap-2">
+        <Mic className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+          <div
+            className="h-full rounded-full bg-primary transition-[width] duration-100"
+            style={{ width: `${Math.round(microphoneLevel * 100)}%` }}
+          />
+        </div>
+        <Button type="button" size="xs" variant="outline" onClick={testMicrophone}>
+          Test mic
+        </Button>
+      </div>
       <div className="flex items-center justify-between gap-2 text-xs">
         <span className="text-muted-foreground">Live session</span>
         <Badge
@@ -191,17 +226,8 @@ function LiveStatusBlock() {
           {TRANSPORT_LABELS[state.transport]}
         </Badge>
       </div>
-      <div className="flex items-center gap-2">
-        <Mic className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-          <div
-            className="h-full rounded-full bg-primary transition-[width] duration-100"
-            style={{ width: `${Math.round(microphoneLevel * 100)}%` }}
-          />
-        </div>
-      </div>
-      {state.input === "capturing" ? (
-        <p className="text-xs text-foreground">Listening…</p>
+      {microphoneActive || state.input === "capturing" ? (
+        <p className="text-xs text-foreground">Listening… speak now.</p>
       ) : shortcut.trim().length > 0 ? (
         <p className="text-xs text-muted-foreground">
           Hold {formatVoiceShortcut(shortcut)} to talk.
@@ -209,6 +235,11 @@ function LiveStatusBlock() {
       ) : (
         <p className="text-xs text-muted-foreground">Set a push-to-talk key to talk.</p>
       )}
+      {!hasLiveCredential ? (
+        <p className="text-xs text-warning-foreground">
+          No Gemini API key is available for this environment, so replies cannot be spoken yet.
+        </p>
+      ) : null}
       {state.transcript ? (
         <p className="text-xs text-muted-foreground">Last request: “{state.transcript}”</p>
       ) : null}
