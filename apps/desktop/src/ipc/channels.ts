@@ -122,3 +122,6 @@ export const SEND_MANAGED_MCP_GATEWAY_MESSAGE_CHANNEL = "desktop:send-managed-mc
 export const CLOSE_MANAGED_MCP_GATEWAY_SESSION_CHANNEL =
   "desktop:close-managed-mcp-gateway-session";
 export const MANAGED_MCP_GATEWAY_EVENT_CHANNEL = "desktop:managed-mcp-gateway-event";
+
+export const VOICE_SHORTCUT_CONFIGURE = "desktop:voice-shortcut-configure";
+export const VOICE_SHORTCUT_EVENT = "desktop:voice-shortcut-event";

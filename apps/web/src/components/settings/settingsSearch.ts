@@ -258,6 +258,20 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["timestamp clock locale system browser os 12 hour 24 hour"],
   },
   {
+    id: "voice-conversation-provider",
+    title: "Voice conversation provider",
+    to: "/settings/general",
+    targetId: "voice-conversation-provider",
+    searchTerms: ["voice assistant gemini live openai realtime speech conversation provider"],
+  },
+  {
+    id: "voice-assistant",
+    title: "Voice assistant providers and keys",
+    to: "/settings/general",
+    targetId: "voice-assistant",
+    searchTerms: ["voice assistant jev typesafe gemini openai api key secret credential providers"],
+  },
+  {
     id: "response-streaming",
     title: "Response streaming",
     to: "/settings/general",

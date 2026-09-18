@@ -261,10 +261,10 @@ export const ListProvidersTool = readonlyTool(
 export const StartThreadTool = mutateTool(
   Tool.make("start_thread", {
     description:
-      "Create a new T3 thread in a project and send the first user prompt to the chosen provider and model. Omit provider/model to use the project default.",
+      "Create a new T3 thread in a project. Omit prompt to leave the thread empty without starting an agent; provide prompt to start its first turn. Omit provider/model to use the project default.",
     parameters: Schema.Struct({
       projectId: ProjectId,
-      prompt: Schema.String.check(Schema.isNonEmpty()),
+      prompt: Schema.optionalKey(TrimmedNonEmptyString),
       title: Schema.optionalKey(TrimmedNonEmptyString),
       provider: Schema.optionalKey(TrimmedNonEmptyString),
       instanceId: Schema.optionalKey(TrimmedNonEmptyString),

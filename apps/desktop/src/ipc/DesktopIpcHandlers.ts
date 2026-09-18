@@ -1,3 +1,4 @@
+import { installVoiceShortcut } from "./methods/voice.ts";
 import * as McpGatewayIpc from "./methods/mcpGateway.ts";
 import * as Effect from "effect/Effect";
 
@@ -78,6 +79,7 @@ import { getWslState, setWslBackendEnabled, setWslDistro, setWslOnly } from "./m
 export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers")(function* () {
   const ipc = yield* DesktopIpc.DesktopIpc;
   yield* installNotificationBadge();
+  yield* installVoiceShortcut();
   yield* PreviewIpc.installPreviewEventForwarding();
 
   yield* ipc.handle(AppActivationIpc.setReady);

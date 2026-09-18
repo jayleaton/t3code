@@ -1,3 +1,5 @@
+import { AuthOrchestrationReadScope, AuthOrchestrationOperateScope } from "@t3tools/contracts";
+import { McpSessionRegistry } from "./McpSessionRegistry.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type * as Types from "effect/Types";
@@ -55,11 +57,28 @@ function requestRemoteAddress(request: HttpServerRequest.HttpServerRequest): str
   return candidate.socket?.remoteAddress ?? candidate.remoteAddress ?? undefined;
 }
 
-const makeWorkspaceMcpAuthMiddleware = EnvironmentAuth.EnvironmentAuth.pipe(
-  Effect.map((serverAuth): WorkspaceMcpAuthMiddleware =>
+const makeWorkspaceMcpAuthMiddleware = Effect.all({
+  serverAuth: EnvironmentAuth.EnvironmentAuth,
+  registry: McpSessionRegistry,
+}).pipe(
+  Effect.map(({ serverAuth, registry }): WorkspaceMcpAuthMiddleware =>
     Effect.fn("WorkspaceMcpHttpServer.authenticateRequest")(function* (httpEffect) {
       const request = yield* HttpServerRequest.HttpServerRequest;
       const loopback = isLoopbackRemoteAddress(requestRemoteAddress(request));
+      const header = request.headers.authorization;
+      const invocation = header?.startsWith("Bearer ")
+        ? yield* registry.resolve(header.slice(7))
+        : undefined;
+      if (invocation) {
+        if (!invocation.capabilities.has("workspace")) return unauthorized;
+        return yield* httpEffect.pipe(
+          Effect.provideService(WorkspaceMcpAuth, {
+            kind: "session",
+            scopes: new Set([AuthOrchestrationReadScope, AuthOrchestrationOperateScope]),
+          }),
+          Effect.map(normalizeMcpHttpResponse),
+        );
+      }
       const principal = yield* serverAuth.authenticateHttpRequest(request).pipe(
         Effect.map((session): WorkspaceMcpPrincipal | null => ({
           kind: "session",

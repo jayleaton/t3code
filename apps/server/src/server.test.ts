@@ -46,6 +46,7 @@ import {
   EditorId,
   WorktreeSetupSnapshot,
   type WorktreeSetupStageId,
+  VoiceProviderConfigError,
 } from "@t3tools/contracts";
 import {
   computeDpopAccessTokenHash,
@@ -175,6 +176,9 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as VoiceProviderConfig from "./voice/VoiceProviderConfig.ts";
+import * as VoiceExecution from "./voice/VoiceExecution.ts";
+import * as VoiceLiveSessionCredential from "./voice/VoiceLiveSessionCredential.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
@@ -1212,7 +1216,43 @@ const buildAppUnderTest = (options?: {
       Layer.provide(workspaceAndProjectServicesLayer),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provide(GitHubCli.layer.pipe(Layer.provideMerge(VcsProcess.layer))),
-      Layer.provide(layerConfig),
+      Layer.provide(
+        Layer.mergeAll(
+          layerConfig,
+          // Voice provider credential management is exercised by its own focused
+          // tests; the router seam only needs an empty, dependency-free stub so
+          // the WS RPC group can be constructed.
+          Layer.succeed(
+            VoiceProviderConfig.VoiceProviderConfig,
+            VoiceProviderConfig.VoiceProviderConfig.of({
+              getStatuses: () => Effect.succeed([]),
+              setKey: () => Effect.succeed([]),
+              removeKey: () => Effect.succeed([]),
+              testKey: () => Effect.succeed([]),
+            }),
+          ),
+          Layer.succeed(
+            VoiceExecution.VoiceExecution,
+            VoiceExecution.VoiceExecution.of({
+              execute: (input) =>
+                Effect.succeed(VoiceExecution.emptyVoiceExecution(input.sessionId)),
+              subscribe: (id) => Stream.succeed(VoiceExecution.emptyVoiceExecution(id)),
+            }),
+          ),
+          Layer.succeed(
+            VoiceLiveSessionCredential.VoiceLiveSessionCredentialService,
+            VoiceLiveSessionCredential.VoiceLiveSessionCredentialService.of({
+              get: () =>
+                Effect.fail(
+                  new VoiceProviderConfigError({
+                    providerId: "gemini",
+                    message: "not stubbed",
+                  }),
+                ),
+            }),
+          ),
+        ),
+      ),
     );
 
     yield* Layer.build(appLayer);

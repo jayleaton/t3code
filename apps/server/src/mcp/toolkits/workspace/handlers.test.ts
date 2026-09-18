@@ -44,7 +44,7 @@ describe("workspace MCP commands", () => {
     });
   });
 
-  it("bootstraps a thread and first turn in one command", () => {
+  it("builds a first turn for an already-created thread", () => {
     const command = buildStartThreadCommand({
       commandId: CommandId.make("command-1"),
       threadId: ThreadId.make("thread-1"),
@@ -60,7 +60,7 @@ describe("workspace MCP commands", () => {
     expect(command.type).toBe("thread.turn.start");
     if (command.type === "thread.turn.start") {
       expect(command.message.text).toBe("Add dark mode to settings");
-      expect(command.bootstrap?.createThread?.title).toBe("Add dark mode to settings");
+      expect(command.bootstrap).toBeUndefined();
       expect(command.modelSelection?.instanceId).toBe("codex");
     }
   });

@@ -1219,6 +1219,10 @@ export const SystemSettingsPaneSchema = Schema.Literals(["full-disk-access"]);
 export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
 export interface DesktopBridge {
+  configureVoiceShortcut?: (
+    shortcut: string | null,
+  ) => Promise<{ registered: boolean; message: string }>;
+  onVoiceShortcut?: (listener: (phase: "down" | "up" | "failed") => void) => () => void;
   getAppBranding: () => DesktopAppBranding | null;
   getMcpGatewayLaunchConfig?: () => McpGatewayLaunchConfig | null;
   configureManagedMcpGateway?: (input: { token: string; port: number } | null) => Promise<void>;

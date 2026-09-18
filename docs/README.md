@@ -17,6 +17,7 @@
 - [Usage and limits](./user/usage.md)
 - [Product usage data](./user/telemetry.md)
 - [Voice and chat control (Workspace MCP)](./user/workspace-mcp.md)
+- [Voice assistant](./user/voice-assistant.md)
 - [Remote access](./user/remote-access.md)
 - [Running in the background](./user/background-service.md)
 - [Updating T3 Code](./user/updating.md)

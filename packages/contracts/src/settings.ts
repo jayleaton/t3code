@@ -38,6 +38,11 @@ import {
   ProviderInstanceId,
   type ProviderDriverKind,
 } from "./providerInstance.ts";
+import {
+  VoiceAssistantMode,
+  VoiceConversationProvider,
+  VoiceSilenceTimeoutSeconds,
+} from "./voiceAssistant.ts";
 import { PullRequestMergeMethod } from "./pullRequest.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
@@ -475,6 +480,32 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   snapShotFlash: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   snapShotAnimations: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // Voice assistant. "off" is fully disabled; arming voice is always an
+  // explicit user gesture, never an app-startup effect. The conversation
+  // provider selection chooses which stored credential the live adapter uses;
+  // the credential itself lives in the environment's secret store, never here.
+  voiceAssistantMode: VoiceAssistantMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("off" as const)),
+  ),
+  voiceConversationProvider: VoiceConversationProvider.pipe(
+    Schema.withDecodingDefault(Effect.succeed("gemini" as const)),
+  ),
+  // How long a command window stays open without accepted human speech.
+  voiceSilenceTimeoutSeconds: VoiceSilenceTimeoutSeconds.pipe(
+    Schema.withDecodingDefault(Effect.succeed(5 as const)),
+  ),
+  voiceAnnounceCompletions: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  voiceAnnounceInputRequests: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  voiceAnnounceApprovals: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // Desktop-only global accelerator (Electron format). Empty keeps push-to-talk
+  // in-app only, which is the default so we never hijack a global chord.
+  voicePushToTalkShortcut: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  // Empty means the system default input device.
+  voiceMicrophoneDeviceId: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  // Agent profile the voice assistant delegates tasks to. Empty disables tools.
+  voiceAgentProfileId: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  // The single conversation the voice agent reuses; cleared to start fresh.
+  voiceAgentSessionId: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
@@ -1613,6 +1644,16 @@ export const ClientSettingsPatch = Schema.Struct({
   snapShotSound: Schema.optionalKey(SnapShotSound),
   snapShotFlash: Schema.optionalKey(Schema.Boolean),
   snapShotAnimations: Schema.optionalKey(Schema.Boolean),
+  voiceAssistantMode: Schema.optionalKey(VoiceAssistantMode),
+  voiceConversationProvider: Schema.optionalKey(VoiceConversationProvider),
+  voiceSilenceTimeoutSeconds: Schema.optionalKey(VoiceSilenceTimeoutSeconds),
+  voiceAnnounceCompletions: Schema.optionalKey(Schema.Boolean),
+  voiceAnnounceInputRequests: Schema.optionalKey(Schema.Boolean),
+  voiceAnnounceApprovals: Schema.optionalKey(Schema.Boolean),
+  voicePushToTalkShortcut: Schema.optionalKey(Schema.String),
+  voiceMicrophoneDeviceId: Schema.optionalKey(Schema.String),
+  voiceAgentProfileId: Schema.optionalKey(Schema.String),
+  voiceAgentSessionId: Schema.optionalKey(Schema.String),
   wordWrap: Schema.optionalKey(Schema.Boolean),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

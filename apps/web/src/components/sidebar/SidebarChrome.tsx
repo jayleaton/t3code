@@ -1,10 +1,4 @@
-import {
-  ArrowLeftIcon,
-  BotIcon,
-  ChartNoAxesColumnIcon,
-  GitPullRequestIcon,
-  SettingsIcon,
-} from "lucide-react";
+import { ArrowLeftIcon, BotIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useCallback } from "react";
 import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
@@ -35,6 +29,8 @@ import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPr
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
+import { VoiceAssistantControl } from "../voice/VoiceAssistantControl";
+import { VoiceDebugChat } from "../../voice-assistant/VoiceDebugChat";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -224,6 +220,10 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             label="Usage"
             onClick={handleUsageClick}
           />
+          <SidebarMenuItem className="shrink-0">
+            <VoiceAssistantControl />
+          </SidebarMenuItem>
+          <VoiceDebugChat />
         </>
       )}
       <SidebarUpdatePill />

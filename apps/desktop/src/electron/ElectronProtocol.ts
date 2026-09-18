@@ -75,6 +75,10 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
     "'self'",
     "'unsafe-inline'",
     "'wasm-unsafe-eval'",
+    // AudioWorklet.addModule is gated by script-src, and the voice capture
+    // worklet is registered from a Blob URL. Without blob: here Electron
+    // rejects it with "Unable to load a worklet's module."
+    "blob:",
     ...(clerkOrigin ? [clerkOrigin] : []),
     "https://challenges.cloudflare.com",
   ];

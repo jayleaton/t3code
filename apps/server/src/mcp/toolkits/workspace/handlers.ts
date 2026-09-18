@@ -97,18 +97,6 @@ export function buildStartThreadCommand(input: {
     titleSeed: input.title,
     runtimeMode: input.runtimeMode,
     interactionMode: input.interactionMode,
-    bootstrap: {
-      createThread: {
-        projectId: input.projectId,
-        title: input.title,
-        modelSelection: input.modelSelection,
-        runtimeMode: input.runtimeMode,
-        interactionMode: input.interactionMode,
-        branch: null,
-        worktreePath: null,
-        createdAt: input.createdAt,
-      },
-    },
     createdAt: input.createdAt,
   };
 }
@@ -303,7 +291,7 @@ export const handlers = {
 
   start_thread: (input: {
     readonly projectId: ProjectId;
-    readonly prompt: string;
+    readonly prompt?: string | undefined;
     readonly title?: string | undefined;
     readonly provider?: string | undefined;
     readonly instanceId?: string | undefined;
@@ -340,25 +328,44 @@ export const handlers = {
         });
       }
       const threadId = ThreadId.make(yield* newId());
-      const title = input.title ?? titleFromPrompt(input.prompt);
+      const title = input.title ?? titleFromPrompt(input.prompt ?? "New thread");
       const createdAt = yield* nowIso;
-      yield* engine.dispatch(
-        buildStartThreadCommand({
-          commandId: CommandId.make(yield* newId()),
-          threadId,
-          messageId: MessageId.make(yield* newId()),
-          projectId: input.projectId,
-          title,
-          prompt: input.prompt,
-          modelSelection: {
-            instanceId: ProviderInstanceId.make(selection.instanceId),
-            model: selection.model,
-          },
-          runtimeMode: input.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-          interactionMode: input.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE,
-          createdAt,
-        }),
-      );
+      // WebSocket bootstrap expansion is not part of engine.dispatch. Create explicitly first.
+      yield* engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(yield* newId()),
+        threadId,
+        projectId: input.projectId,
+        title,
+        modelSelection: {
+          instanceId: ProviderInstanceId.make(selection.instanceId),
+          model: selection.model,
+        },
+        runtimeMode: input.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+        interactionMode: input.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE,
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      });
+      if (input.prompt !== undefined) {
+        yield* engine.dispatch(
+          buildStartThreadCommand({
+            commandId: CommandId.make(yield* newId()),
+            threadId,
+            messageId: MessageId.make(yield* newId()),
+            projectId: input.projectId,
+            title,
+            prompt: input.prompt,
+            modelSelection: {
+              instanceId: ProviderInstanceId.make(selection.instanceId),
+              model: selection.model,
+            },
+            runtimeMode: input.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+            interactionMode: input.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE,
+            createdAt,
+          }),
+        );
+      }
       return {
         threadId,
         title,

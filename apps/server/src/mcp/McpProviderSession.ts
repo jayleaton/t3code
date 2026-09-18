@@ -7,6 +7,7 @@ export interface McpProviderSessionConfig {
   readonly providerInstanceId: ProviderInstanceId;
   readonly endpoint: string;
   readonly gatewayEndpoint?: string;
+  readonly workspaceEndpoint?: string;
   readonly authorizationHeader: string;
   /** Capabilities the credential grants ("preview", "device"). */
   readonly capabilities: ReadonlySet<string>;
@@ -58,6 +59,15 @@ export function mcpHttpServers(config: McpProviderSessionConfig | undefined) {
   if (!config) return [];
   return [
     { name: "t3-code", url: config.endpoint, authorizationHeader: config.authorizationHeader },
+    ...(config.workspaceEndpoint
+      ? [
+          {
+            name: "t3-workspace",
+            url: config.workspaceEndpoint,
+            authorizationHeader: config.authorizationHeader,
+          },
+        ]
+      : []),
     ...(config.gatewayEndpoint
       ? [
           {

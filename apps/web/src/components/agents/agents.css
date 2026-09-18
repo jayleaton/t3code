@@ -1169,3 +1169,15 @@
   opacity: 0.5;
   cursor: default;
 }
+
+/* Voice assistant entry point pinned at the bottom of the agents filter column. */
+.agents-filters-voice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 2px 2px;
+  border-top: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 13px;
+}

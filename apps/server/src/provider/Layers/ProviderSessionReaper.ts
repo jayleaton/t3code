@@ -81,6 +81,17 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
+        // Device voice sessions have no orchestration projection. Their adapter owns liveness.
+        if (!thread) {
+          const sessions = yield* providerService.listSessions();
+          if (
+            sessions.some(
+              (session) => session.threadId === binding.threadId && session.status === "running",
+            )
+          )
+            continue;
+        }
+
         // The turn can settle while background work runs on (subagent
         // fleets, workflow runs, Monitor watch loops). Those live inside the
         // provider process, so stopping the session would kill them silently,
