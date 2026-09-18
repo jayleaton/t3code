@@ -161,3 +161,25 @@ it.effect("does not keep credentials of other threads alive", () =>
     expect(yield* registry.resolve(token)).toBeUndefined();
   }),
 );
+
+it.effect("grants and revokes project-independent workspace access only when requested", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry(() => 1000);
+    const ordinary = yield* registry.issue({
+      threadId: ThreadId.make("ordinary"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: new Set(["preview"]),
+    });
+    expect(ordinary.config.workspaceEndpoint).toBeUndefined();
+    const device = yield* registry.issue({
+      threadId: ThreadId.make("voice:device"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: new Set(["workspace"]),
+    });
+    expect(device.config.workspaceEndpoint).toBe("http://127.0.0.1:43123/mcp/workspace");
+    const token = device.config.authorizationHeader.slice(7);
+    expect((yield* registry.resolve(token))?.capabilities.has("workspace")).toBe(true);
+    yield* registry.revokeThread(ThreadId.make("voice:device"));
+    expect(yield* registry.resolve(token)).toBeUndefined();
+  }),
+);

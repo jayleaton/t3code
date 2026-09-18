@@ -177,6 +177,7 @@ import * as ReviewService from "./review/ReviewService.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as VoiceProviderConfig from "./voice/VoiceProviderConfig.ts";
+import * as VoiceExecution from "./voice/VoiceExecution.ts";
 import * as VoiceLiveSessionCredential from "./voice/VoiceLiveSessionCredential.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
@@ -1228,6 +1229,14 @@ const buildAppUnderTest = (options?: {
               setKey: () => Effect.succeed([]),
               removeKey: () => Effect.succeed([]),
               testKey: () => Effect.succeed([]),
+            }),
+          ),
+          Layer.succeed(
+            VoiceExecution.VoiceExecution,
+            VoiceExecution.VoiceExecution.of({
+              execute: (input) =>
+                Effect.succeed(VoiceExecution.emptyVoiceExecution(input.sessionId)),
+              subscribe: (id) => Stream.succeed(VoiceExecution.emptyVoiceExecution(id)),
             }),
           ),
           Layer.succeed(

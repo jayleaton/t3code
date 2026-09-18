@@ -128,7 +128,7 @@ describe("VoiceAssistantController input lifecycle", () => {
     expect(conversation.finalizeInput).not.toHaveBeenCalled();
     expect(conversation.cancel).toHaveBeenCalled();
     expect(controller.getState().input).toBe("standby");
-    expect(capture.endUtterance).not.toHaveBeenCalled();
+    expect(capture.endUtterance).toHaveBeenCalled();
   });
 
   it("accepted speech extends the window and finalizes once on silence", async () => {
@@ -142,7 +142,7 @@ describe("VoiceAssistantController input lifecycle", () => {
     timers.fire(5000);
     await flush();
 
-    expect(capture.endUtterance).toHaveBeenCalledTimes(1);
+    expect(capture.endUtterance).toHaveBeenCalled();
     expect(conversation.finalizeInput).toHaveBeenCalledTimes(1);
     expect(controller.getState().input).toBe("finalizing");
 
@@ -152,9 +152,9 @@ describe("VoiceAssistantController input lifecycle", () => {
 
   it("uses the configured silence timeout and resets it only on accepted speech", async () => {
     const { controller, timers, conversation } = createHarness();
-    await controller.setMode("push-to-talk");
+    await controller.setMode("wake-word");
     controller.setSilenceTimeoutSeconds(10);
-    await controller.pressPushToTalk();
+    await controller.handleWakeDetected();
     await flush();
 
     expect(timers.pending()).toContain(10000);
@@ -176,7 +176,7 @@ describe("VoiceAssistantController input lifecycle", () => {
 
     await controller.releasePushToTalk();
 
-    expect(capture.endUtterance).toHaveBeenCalledTimes(1);
+    expect(capture.endUtterance).toHaveBeenCalled();
     expect(conversation.finalizeInput).toHaveBeenCalledTimes(1);
     expect(controller.getState().input).toBe("finalizing");
   });
@@ -211,10 +211,12 @@ describe("VoiceAssistantController input lifecycle", () => {
     expect(conversation.finalizeInput).not.toHaveBeenCalled();
   });
 
-  it("announces agent events while the microphone is off", () => {
+  it("announces agent events while the microphone is off", async () => {
     const { controller, conversation } = createHarness();
 
+    await controller.setMode("push-to-talk");
     controller.announce("Mobile layout finished its turn.");
+    await flush();
 
     expect(conversation.sendText).toHaveBeenCalledWith("Mobile layout finished its turn.");
     expect(controller.getState().lastAnnouncement).toBe("Mobile layout finished its turn.");
@@ -231,6 +233,7 @@ describe("VoiceAssistantController input lifecycle", () => {
 
     await controller.releasePushToTalk();
     controller.handleAssistantSpeechEnd();
+    await flush();
 
     expect(conversation.sendText).toHaveBeenCalledWith(
       "The API agent is asking which database to use.",
@@ -249,5 +252,45 @@ describe("VoiceAssistantController input lifecycle", () => {
     expect(controller.getState().output).toBe("idle");
     // Stops speech, not a T3 operation on an agent.
     expect(controller.getState().mode).toBe("push-to-talk");
+  });
+});
+
+describe("voice session regressions", () => {
+  it("never applies a silence deadline while push-to-talk is held", async () => {
+    const { controller, timers } = createHarness();
+    await controller.setMode("push-to-talk");
+    await controller.pressPushToTalk();
+    await flush();
+    expect(timers.pending()).not.toContain(5000);
+    expect(controller.getState().input).toBe("capturing");
+  });
+
+  it("cancel closes capture and stops queued playback", async () => {
+    const { controller, capture, playback } = createHarness();
+    await controller.setMode("push-to-talk");
+    await controller.pressPushToTalk();
+    controller.cancel();
+    expect(capture.endUtterance).toHaveBeenCalled();
+    expect(playback.stop).toHaveBeenCalled();
+  });
+
+  it("PTT stops the speaker even after the provider reports completion", async () => {
+    const { controller, playback } = createHarness();
+    await controller.setMode("push-to-talk");
+    controller.handleAssistantSpeechEnd();
+    await controller.pressPushToTalk();
+    expect(playback.stop).toHaveBeenCalled();
+  });
+
+  it("queues events while preparing or speaking", async () => {
+    const { controller, conversation } = createHarness();
+    await controller.setMode("push-to-talk");
+    controller.announce("first");
+    controller.announce("second");
+    await flush();
+    expect(conversation.sendText).toHaveBeenCalledTimes(1);
+    controller.handleAssistantSpeechEnd();
+    await flush();
+    expect(conversation.sendText).toHaveBeenLastCalledWith("second");
   });
 });

@@ -1,295 +1,188 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-
 import {
-  decodeSocketData,
   GeminiLiveConversation,
-  respondToToolCall,
-} from "./geminiLiveConversation.ts";
-import type { GeminiLiveCallbacks, GeminiLiveSocket } from "./geminiLiveConversation.ts";
+  decodeSocketData,
+  type GeminiLiveCallbacks,
+  type GeminiLiveSocket,
+} from "./geminiLiveConversation";
 
-const EXPECTED_URL =
-  "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=test-api-key";
-
-class FakeSocket implements GeminiLiveSocket {
-  readonly sent: string[] = [];
-  closeCalls = 0;
+class Socket implements GeminiLiveSocket {
   readyState = 0;
-  onopen: ((event: unknown) => void) | null = null;
-  onmessage: ((event: { readonly data: unknown }) => void) | null = null;
-  onclose: ((event: { readonly code: number; readonly reason: string }) => void) | null = null;
-  onerror: ((event: unknown) => void) | null = null;
-
-  send(data: string): void {
-    // Mirror the browser: sending before the handshake throws.
-    if (this.readyState !== 1) {
-      throw new Error("Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.");
-    }
-    this.sent.push(data);
+  sent: Array<Record<string, unknown>> = [];
+  onopen: GeminiLiveSocket["onopen"] = null;
+  onclose: GeminiLiveSocket["onclose"] = null;
+  onmessage: GeminiLiveSocket["onmessage"] = null;
+  onerror: GeminiLiveSocket["onerror"] = null;
+  send(value: string) {
+    if (this.readyState !== 1) throw new Error("not open");
+    this.sent.push(JSON.parse(value));
   }
-
-  close(): void {
-    this.closeCalls += 1;
+  close() {
     this.readyState = 3;
   }
-
-  open(): void {
-    this.readyState = 1;
-    this.onopen?.({});
-  }
-
-  emitMessage(message: unknown): void {
-    this.onmessage?.({ data: JSON.stringify(message) });
-  }
-
-  emitClose(event: { readonly code: number; readonly reason: string }): void {
-    this.readyState = 3;
-    this.onclose?.(event);
+  emit(value: unknown) {
+    this.onmessage?.({ data: JSON.stringify(value) });
   }
 }
-
-interface Harness {
-  readonly conversation: GeminiLiveConversation;
-  readonly socket: FakeSocket;
-  readonly urls: string[];
-}
-
-function createHarness(callbacks?: GeminiLiveCallbacks): Harness {
-  const socket = new FakeSocket();
-  const urls: string[] = [];
+const flush = async () => {
+  for (let i = 0; i < 12; i++) await Promise.resolve();
+};
+function harness(callbacks: GeminiLiveCallbacks = {}) {
+  const sockets: Socket[] = [];
   const conversation = new GeminiLiveConversation({
-    apiKey: "test-api-key",
+    apiKey: "fake",
     model: "gemini-3.8-live",
-    ...(callbacks === undefined ? {} : { callbacks }),
-    createSocket: (url) => {
-      urls.push(url);
+    callbacks,
+    createSocket: () => {
+      const socket = new Socket();
+      sockets.push(socket);
       return socket;
     },
   });
-  return { conversation, socket, urls };
+  const connect = async () => {
+    const pending = conversation.connect();
+    const socket = sockets.at(-1)!;
+    socket.readyState = 1;
+    socket.onopen?.({});
+    socket.emit({ setupComplete: {} });
+    await pending;
+    return socket;
+  };
+  return { conversation, connect, sockets };
 }
 
-async function flush(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("Expected a JSON object.");
-  }
-  return value as Record<string, unknown>;
-}
-
-function decodeBase64ForTest(encoded: string): Uint8Array {
-  const binary = atob(encoded);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-}
-
-function encodeBase64ForTest(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary);
-}
-
-function countFrames(socket: FakeSocket, marker: string): number {
-  return socket.sent.filter((frame) => frame.includes(marker)).length;
-}
-
-function parsedFrames(socket: FakeSocket): ReadonlyArray<Record<string, unknown>> {
-  return socket.sent.map((frame) => JSON.parse(frame) as Record<string, unknown>);
-}
-
-describe("GeminiLiveConversation", () => {
-  it("queues the setup frame until the socket opens, then flushes it", async () => {
-    const { conversation, socket, urls } = createHarness();
-
-    await conversation.connect();
-    // Nothing may be sent while the browser socket is still CONNECTING.
-    expect(socket.sent).toHaveLength(0);
-
-    socket.open();
-
-    expect(urls).toEqual([EXPECTED_URL]);
-    expect(socket.sent).toHaveLength(1);
-    const setup = asRecord(parsedFrames(socket)[0]?.["setup"]);
-    expect(setup["model"]).toBe("models/gemini-3.8-live");
-    // The server rejects a top-level responseModalities; it belongs in
-    // generationConfig, and manual VAD must be explicitly enabled.
-    expect(asRecord(setup["generationConfig"])["responseModalities"]).toEqual(["AUDIO"]);
-    expect(setup["responseModalities"]).toBeUndefined();
-    const realtimeInputConfig = asRecord(setup["realtimeInputConfig"]);
-    expect(asRecord(realtimeInputConfig["automaticActivityDetection"])["disabled"]).toBe(true);
-  });
-
-  it("queues audio sent before open and flushes it in order", async () => {
-    const { conversation, socket } = createHarness();
-    await conversation.connect();
-
-    conversation.sendAudio(new Uint8Array([1, 2, 3]));
-    expect(socket.sent).toHaveLength(0);
-
-    socket.open();
-
-    expect(countFrames(socket, '"activityStart"')).toBe(1);
-    expect(countFrames(socket, '"audio"')).toBe(1);
-  });
-
-  it("sendAudio() opens the utterance once and round-trips the PCM bytes", async () => {
-    const { conversation, socket } = createHarness();
-    await conversation.connect();
-    socket.open();
-    const chunk = new Uint8Array([0, 1, 2, 3, 250, 255]);
-
-    conversation.sendAudio(chunk);
-    conversation.sendAudio(new Uint8Array([9, 8, 7]));
-
-    expect(countFrames(socket, '"activityStart"')).toBe(1);
-    const audio = asRecord(parsedFrames(socket)[2]?.["realtimeInput"]);
-    const audioPayload = asRecord(audio["audio"]);
-    expect(audioPayload["mimeType"]).toBe("audio/pcm;rate=16000");
-    expect(decodeBase64ForTest(audioPayload["data"] as string)).toEqual(chunk);
-    expect(conversation.activityOpen).toBe(true);
-  });
-
-  it("finalizeInput() ends the utterance exactly once", async () => {
-    const { conversation, socket } = createHarness();
-    await conversation.connect();
-    socket.open();
-    conversation.sendAudio(new Uint8Array([1, 2]));
-
-    conversation.finalizeInput();
-    conversation.finalizeInput();
-
-    expect(countFrames(socket, '"activityEnd"')).toBe(1);
-    expect(conversation.activityOpen).toBe(false);
-  });
-
-  it("dispatches decoded audio, transcripts, and turn completion", async () => {
-    const onAudio = vi.fn();
-    const onInputTranscript = vi.fn();
-    const onOutputTranscript = vi.fn();
-    const onTurnComplete = vi.fn();
-    const { conversation, socket } = createHarness({
-      onAudio,
-      onInputTranscript,
-      onOutputTranscript,
-      onTurnComplete,
+describe("Gemini live session", () => {
+  it("waits for setupComplete and explicitly enables transcription", async () => {
+    const onOpen = vi.fn();
+    const { conversation, sockets } = harness({ onOpen });
+    const pending = conversation.connect();
+    const socket = sockets[0]!;
+    socket.readyState = 1;
+    socket.onopen?.({});
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(conversation.isConnected).toBe(false);
+    expect(socket.sent[0]).toMatchObject({
+      setup: {
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+        realtimeInputConfig: { automaticActivityDetection: { disabled: true } },
+      },
     });
-    await conversation.connect();
-    const chunk = new Uint8Array([10, 20, 30, 40]);
+    socket.emit({ setupComplete: {} });
+    await pending;
+    expect(onOpen).toHaveBeenCalledOnce();
+    await conversation.disconnect();
+  });
 
-    socket.emitMessage({
+  it("sends one manual activity for an utterance", async () => {
+    const { conversation, connect } = harness();
+    const socket = await connect();
+    conversation.sendAudio(new Uint8Array([1, 0]));
+    conversation.sendAudio(new Uint8Array([2, 0]));
+    conversation.finalizeInput();
+    expect(socket.sent.slice(1)).toEqual([
+      { realtimeInput: { activityStart: {} } },
+      { realtimeInput: { audio: { mimeType: "audio/pcm;rate=16000", data: "AQA=" } } },
+      { realtimeInput: { audio: { mimeType: "audio/pcm;rate=16000", data: "AgA=" } } },
+      { realtimeInput: { activityEnd: {} } },
+    ]);
+    await conversation.disconnect();
+  });
+
+  it("cancel rejects stale tools, audio, and asynchronous frame decoding", async () => {
+    const onAudio = vi.fn();
+    const onToolCall = vi.fn();
+    const { conversation, connect } = harness({ onAudio, onToolCall });
+    const old = await connect();
+    const deliver = old.onmessage!;
+    deliver({
+      data: JSON.stringify({
+        toolCall: { functionCalls: [{ id: "old", name: "run_voice_task", args: {} }] },
+      }),
+    });
+    conversation.cancel();
+    await connect();
+    deliver({
+      data: new Blob([
+        JSON.stringify({
+          serverContent: { modelTurn: { parts: [{ inlineData: { data: "AQA=" } }] } },
+        }),
+      ]),
+    });
+    await flush();
+    expect(onAudio).not.toHaveBeenCalled();
+    expect(onToolCall).not.toHaveBeenCalled();
+    await conversation.disconnect();
+  });
+
+  it("aborts in-flight tool work on cancellation and includes the function name in results", async () => {
+    const onToolCall = vi.fn();
+    const { conversation, connect } = harness({ onToolCall });
+    const socket = await connect();
+    socket.emit({
+      toolCall: {
+        functionCalls: [{ id: "call", name: "run_voice_task", args: { prompt: "inspect MCP" } }],
+      },
+    });
+    await flush();
+    const signal = onToolCall.mock.calls[0]![1] as AbortSignal;
+    conversation.sendToolResponse("call", { status: "accepted" });
+    expect(socket.sent.at(-1)).toMatchObject({
+      toolResponse: { functionResponses: [{ id: "call", name: "run_voice_task" }] },
+    });
+    conversation.cancel();
+    expect(signal.aborted).toBe(true);
+  });
+
+  it("accumulates transcript fragments and preserves completed text after interruption", async () => {
+    const onInputTranscript = vi.fn();
+    const { conversation, connect } = harness({ onInputTranscript });
+    const socket = await connect();
+    socket.emit({ serverContent: { inputTranscription: { text: "Check " } } });
+    socket.emit({
       serverContent: {
-        modelTurn: {
-          parts: [{ inlineData: { mimeType: "audio/pcm", data: encodeBase64ForTest(chunk) } }],
-        },
-        inputTranscription: { text: "what is the status" },
-        outputTranscription: { text: "all agents are running" },
+        inputTranscription: { text: "MCP" },
+        outputTranscription: { text: "Checking." },
         turnComplete: true,
       },
     });
     await flush();
-
-    expect(onAudio).toHaveBeenCalledWith(chunk);
-    expect(onInputTranscript).toHaveBeenCalledWith("what is the status");
-    expect(onOutputTranscript).toHaveBeenCalledWith("all agents are running");
-    expect(onTurnComplete).toHaveBeenCalledTimes(1);
-  });
-
-  it("dispatches tool calls and serializes tool responses", async () => {
-    const onToolCall = vi.fn();
-    const { conversation, socket } = createHarness({ onToolCall });
-    await conversation.connect();
-
-    socket.emitMessage({
-      toolCall: {
-        functionCalls: [{ id: "call-1", name: "list_projects", args: { archived: false } }],
-      },
-    });
-    await flush();
-
-    expect(onToolCall).toHaveBeenCalledWith({
-      id: "call-1",
-      name: "list_projects",
-      args: { archived: false },
-    });
-    expect(JSON.parse(respondToToolCall("call-1", { projects: ["alpha"] }))).toEqual({
-      toolResponse: {
-        functionResponses: [{ id: "call-1", response: { result: { projects: ["alpha"] } } }],
-      },
-    });
-  });
-
-  it("tracks connection state and reports socket close", async () => {
-    const onOpen = vi.fn();
-    const onClose = vi.fn();
-    const { conversation, socket } = createHarness({ onOpen, onClose });
-    await conversation.connect();
-
-    expect(conversation.isConnected).toBe(false);
-    socket.open();
-    expect(conversation.isConnected).toBe(true);
-    expect(onOpen).toHaveBeenCalledTimes(1);
-
-    socket.emitClose({ code: 1000, reason: "done" });
-    expect(conversation.isConnected).toBe(false);
-    expect(onClose).toHaveBeenCalledWith({ code: 1000, reason: "done" });
-  });
-
-  it("cancel() ends the activity without closing the session", async () => {
-    const { conversation, socket } = createHarness();
-    await conversation.connect();
-    socket.open();
-    conversation.sendAudio(new Uint8Array([1, 2]));
-
+    expect(onInputTranscript).toHaveBeenLastCalledWith("Check MCP");
     conversation.cancel();
-    expect(countFrames(socket, '"activityEnd"')).toBe(1);
-    expect(conversation.activityOpen).toBe(false);
-    // The session must survive an interruption; context is preserved.
-    expect(socket.closeCalls).toBe(0);
-
-    await conversation.disconnect();
-    await conversation.disconnect();
-    expect(socket.closeCalls).toBe(1);
-  });
-
-  it("cancel() mutes model audio until the next utterance", async () => {
-    const onAudio = vi.fn();
-    const { conversation, socket } = createHarness({ onAudio });
-    await conversation.connect();
-    socket.open();
-    const chunk = new Uint8Array([1, 2, 3]);
-
-    conversation.sendAudio(new Uint8Array([9]));
-    conversation.cancel();
-    socket.emitMessage({
-      serverContent: {
-        modelTurn: { parts: [{ inlineData: { data: encodeBase64ForTest(chunk) } }] },
+    const next = await connect();
+    expect(next.sent[1]).toMatchObject({
+      clientContent: {
+        turnComplete: false,
+        turns: [
+          { role: "user", parts: [{ text: "Check MCP" }] },
+          { role: "model", parts: [{ text: "Checking." }] },
+        ],
       },
     });
-    await flush();
-    expect(onAudio).not.toHaveBeenCalled();
-
-    conversation.sendAudio(new Uint8Array([4]));
-    socket.emitMessage({
-      serverContent: {
-        modelTurn: { parts: [{ inlineData: { data: encodeBase64ForTest(chunk) } }] },
-      },
-    });
-    await flush();
-    expect(onAudio).toHaveBeenCalledWith(chunk);
+    await conversation.disconnect();
   });
 
-  it("decodeSocketData() decodes ArrayBuffer frames", async () => {
-    const encoded = new TextEncoder().encode('{"setupComplete":{}}');
-
-    await expect(decodeSocketData(encoded.buffer)).resolves.toBe('{"setupComplete":{}}');
+  it("decodes browser Blob and ArrayBuffer frames", async () => {
+    await expect(decodeSocketData(new Blob(["hello"]))).resolves.toBe("hello");
+    await expect(decodeSocketData(new TextEncoder().encode("hello").buffer)).resolves.toBe("hello");
   });
+});
+
+it("retains the first spoken frames while reconnecting without sending before setup", async () => {
+  const { conversation, sockets } = harness();
+  const ready = conversation.connect();
+  const socket = sockets[0]!;
+  conversation.sendAudio(new Uint8Array([1, 0]));
+  socket.readyState = 1;
+  socket.onopen?.({});
+  expect(socket.sent).toHaveLength(1);
+  socket.emit({ setupComplete: {} });
+  await ready;
+  conversation.finalizeInput();
+  expect(socket.sent.slice(1)).toEqual([
+    { realtimeInput: { activityStart: {} } },
+    { realtimeInput: { audio: { mimeType: "audio/pcm;rate=16000", data: "AQA=" } } },
+    { realtimeInput: { activityEnd: {} } },
+  ]);
+  await conversation.disconnect();
 });

@@ -148,6 +148,9 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           providerSessionId,
           providerInstanceId: scope.providerInstanceId,
           endpoint,
+          ...(scope.capabilities.has("workspace")
+            ? { workspaceEndpoint: `${endpoint}/workspace` }
+            : {}),
           ...(scope.capabilities.has("gateway") ? { gatewayEndpoint: `${endpoint}/gateway` } : {}),
           authorizationHeader: `Bearer ${rawToken}`,
           capabilities: scope.capabilities,

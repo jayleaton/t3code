@@ -52,6 +52,7 @@ export const ProviderSession = Schema.Struct({
 export type ProviderSession = typeof ProviderSession.Type;
 
 export const ProviderSessionStartInput = Schema.Struct({
+  executionScope: Schema.optional(Schema.Literal("device")),
   agentInstructions: Schema.optional(Schema.String),
   threadId: ThreadId,
   provider: Schema.optional(ProviderDriverKind),

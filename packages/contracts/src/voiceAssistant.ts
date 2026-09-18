@@ -142,3 +142,59 @@ export const VOICE_PROVIDER_LABELS: Readonly<Record<VoiceProviderId, string>> = 
   openai: "OpenAI voice",
   jev: "Jev / TypeSafe",
 };
+
+/** Voice sessions belong to a device, independently of orchestration projects. */
+export const VoiceExecutionInput = Schema.Union([
+  Schema.Struct({
+    action: Schema.Literal("run"),
+    sessionId: TrimmedNonEmptyString,
+    requestId: TrimmedNonEmptyString,
+    profileId: TrimmedNonEmptyString,
+    prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(100_000)),
+  }),
+  Schema.Struct({
+    action: Schema.Literals(["status", "stop", "close"]),
+    sessionId: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    action: Schema.Literal("answer"),
+    sessionId: TrimmedNonEmptyString,
+    requestId: TrimmedNonEmptyString,
+    answers: Schema.Record(Schema.String, Schema.Unknown),
+  }),
+  Schema.Struct({
+    action: Schema.Literal("respond"),
+    sessionId: TrimmedNonEmptyString,
+    requestId: TrimmedNonEmptyString,
+    approve: Schema.Boolean,
+  }),
+]);
+export type VoiceExecutionInput = typeof VoiceExecutionInput.Type;
+
+export const VoiceExecutionSnapshot = Schema.Struct({
+  sessionId: TrimmedNonEmptyString,
+  revision: NonNegativeInt,
+  status: Schema.Literals([
+    "idle",
+    "running",
+    "completed",
+    "failed",
+    "stopped",
+    "approval",
+    "input",
+  ]),
+  text: Schema.String,
+  pendingRequest: Schema.NullOr(
+    Schema.Struct({
+      requestId: TrimmedNonEmptyString,
+      description: Schema.String,
+      questions: Schema.optional(Schema.Unknown),
+    }),
+  ),
+});
+export type VoiceExecutionSnapshot = typeof VoiceExecutionSnapshot.Type;
+
+export class VoiceExecutionError extends Schema.TaggedError<VoiceExecutionError>()(
+  "VoiceExecutionError",
+  { message: Schema.String },
+) {}

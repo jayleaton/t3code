@@ -36,11 +36,13 @@ export const voiceTranscript = {
     entries =
       index >= 0
         ? entries.map((entry, at) => (at === index ? { id, role, text } : entry))
-        : [...entries, { id, role, text }];
+        : [...entries, { id, role, text }].slice(-200);
     emit();
   },
   push(role: VoiceTranscriptRole, text: string): void {
-    entries = [...entries, { id: `${role}-${Date.now()}-${entries.length}`, role, text }];
+    entries = [...entries, { id: `${role}-${Date.now()}-${entries.length}`, role, text }].slice(
+      -200,
+    );
     emit();
   },
   clear(): void {

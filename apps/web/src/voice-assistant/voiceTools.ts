@@ -1,4 +1,4 @@
-import type { GatewayRuntimePort } from "@t3tools/client-runtime/gateway";
+import type { VoiceExecutionPort } from "@t3tools/client-runtime/voice-assistant";
 import type { McpGatewayProfile } from "@t3tools/contracts";
 
 export interface VoiceToolDeclaration {
@@ -22,7 +22,7 @@ export const VOICE_TOOL_DECLARATIONS: ReadonlyArray<VoiceToolDeclaration> = [
   {
     name: "run_voice_task",
     description:
-      "Delegate a task to the user's configured voice agent. Call this immediately for any clear request; do not ask for permission first. The agent reuses one ongoing thread.",
+      "Delegate a task to the user's configured voice agent. Call this immediately for any clear request; do not ask for permission first. The agent runs on this device independently of projects.",
     parameters: {
       type: "object",
       properties: {
@@ -41,12 +41,27 @@ export const VOICE_TOOL_DECLARATIONS: ReadonlyArray<VoiceToolDeclaration> = [
       "Read the current state of the ongoing task. Use when the user asks how something is going.",
     parameters: {
       type: "object",
-      properties: {
-        threadId: {
-          type: "string",
-          description: "Usually omitted; the assistant tracks the one ongoing thread.",
-        },
-      },
+      properties: {},
+    },
+  },
+  {
+    name: "answer_voice_question",
+    description:
+      "Answer the device agent's pending structured question using the user's response. Key answers by the question ids returned by get_voice_task_status.",
+    parameters: {
+      type: "object",
+      properties: { requestId: { type: "string" }, answers: { type: "object" } },
+      required: ["requestId", "answers"],
+    },
+  },
+  {
+    name: "respond_voice_approval",
+    description:
+      "Respond to a pending device-agent approval only after the user explicitly approves or declines it. Never approve on your own.",
+    parameters: {
+      type: "object",
+      properties: { requestId: { type: "string" }, approve: { type: "boolean" } },
+      required: ["requestId", "approve"],
     },
   },
   {
@@ -54,12 +69,7 @@ export const VOICE_TOOL_DECLARATIONS: ReadonlyArray<VoiceToolDeclaration> = [
     description: "Stop the agent's current work on the ongoing task.",
     parameters: {
       type: "object",
-      properties: {
-        threadId: {
-          type: "string",
-          description: "Usually omitted; the assistant tracks the one ongoing thread.",
-        },
-      },
+      properties: {},
     },
   },
 ];
@@ -69,26 +79,23 @@ export const VOICE_TOOL_DECLARATIONS: ReadonlyArray<VoiceToolDeclaration> = [
  * and cautious about acting on a misheard instruction.
  */
 export const VOICE_SYSTEM_INSTRUCTION = [
-  "You are the voice layer of T3 Code, an assistant that runs coding tasks on the user's machine.",
+  "You are the voice layer of T3 Code. When a device executor is connected, your execution agent can use its machine tools and T3 MCP across projects.",
+  "The user speaks English. Interpret their speech as English and respond in English unless they explicitly ask to change languages. Do not infer a language change from an accent, a short utterance, background noise, or an uncertain transcript. Preserve technical names such as T3 and MCP; do not translate them.",
   "Keep every spoken reply to one or two short sentences. Never read code, diffs, logs, or long text aloud; summarize instead and offer details only if asked.",
   "Act immediately on clear requests. Do not ask the user for permission or confirmation before calling run_voice_task.",
-  "If a word sounds garbled or ambiguous, infer the most likely intent from context (for example 'T3 MCP' from 'T3MCP') and proceed, briefly saying what you assumed. Only ask a clarifying question when the request is genuinely unintelligible.",
+  "If speech is unclear, ask a brief clarification in English before executing a task. Do not invent words, translate uncertain audio into another language, or execute a command based on a guess. Silence and background noise are not requests.",
   "When the user asks how a task is going, check its status and summarize in one sentence; never read the agent's message verbatim unless the user asks for the full text.",
+  "If a tool reports a pending approval, explain what needs permission and wait for the user before calling respond_voice_approval.",
   "Never claim an outcome you have not read from a tool result.",
+  "If execution is unavailable, explain that limitation accurately. It does not mean an MCP server is offline; no MCP check has run. Do not invent reconnection steps.",
 ].join(" ");
 
 export interface VoiceToolDependencies {
-  readonly getPort: () => GatewayRuntimePort | null;
-  readonly getEnvironmentId: () => string | null;
+  readonly getPort: () => VoiceExecutionPort | null;
   readonly getProfile: () => McpGatewayProfile | null;
-  /** The project to create the delegated thread in, or null when none exists. */
-  readonly resolveProjectId: () => string | null;
-  /** The single thread the voice agent reuses across tasks, if one exists. */
-  readonly getThreadId: () => string | null;
-  readonly storeThreadId: (threadId: string) => void;
-  readonly newThreadId: () => string;
-  readonly newMessageId: () => string;
-  readonly newRequestId: () => string;
+  readonly getSessionId: () => string | null;
+  readonly storeSessionId: (sessionId: string) => void;
+  readonly newSessionId: () => string;
 }
 
 const stringArg = (args: unknown, key: string): string | null => {
@@ -97,125 +104,81 @@ const stringArg = (args: unknown, key: string): string | null => {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 };
 
-const record = (value: unknown): Record<string, unknown> =>
-  typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-
-/**
- * Executes the model's tool calls against one persistent agent thread, so the
- * agent keeps context across voice exchanges. Results are deliberately bounded:
- * the model only gets a short status summary, which is what keeps spoken
- * replies concise instead of regurgitating whole transcripts.
- */
 export function createVoiceToolHandler(dependencies: VoiceToolDependencies) {
-  let lastThreadId: string | null = null;
-
-  const knownThreadId = (): string | null => lastThreadId ?? dependencies.getThreadId();
-
-  return async function handleVoiceToolCall(call: VoiceToolCall): Promise<unknown> {
+  const completed = new Map<string, Promise<unknown>>();
+  let queue = Promise.resolve<unknown>(undefined);
+  async function execute(call: VoiceToolCall, signal?: AbortSignal): Promise<unknown> {
+    if (signal?.aborted) return { error: "Voice request was cancelled." };
     const port = dependencies.getPort();
-    const environmentId = dependencies.getEnvironmentId();
-    const profile = dependencies.getProfile();
-    if (port === null || environmentId === null || profile === null) {
+    if (!port)
       return {
         error:
-          "No voice agent is configured. Choose one in Settings, Voice assistant, before delegating tasks.",
+          "No compatible local executor is connected on this device. No command or MCP check was run. Use Connect this device in the voice panel to pair with an updated local T3 instance. Simply opening the desktop app does not pair this browser.",
       };
-    }
-
-    if (call.name === "run_voice_task") {
-      const prompt = stringArg(call.args, "prompt");
-      if (prompt === null) return { error: "A task prompt is required." };
-      const projectId = dependencies.resolveProjectId();
-      if (projectId === null) {
-        return { error: "Add a project on this environment before delegating tasks." };
-      }
-
-      // Reuse the one voice thread; only create when none exists or it is gone.
-      let threadId = knownThreadId();
-      if (threadId !== null) {
-        try {
-          await port.getThread(environmentId, threadId);
-        } catch {
-          threadId = null;
+    try {
+      let sessionId = dependencies.getSessionId();
+      if (call.name === "run_voice_task") {
+        const profile = dependencies.getProfile();
+        if (!profile) return { error: "Choose a voice agent in Settings." };
+        const prompt = stringArg(call.args, "prompt");
+        if (!prompt) return { error: "A task prompt is required." };
+        if (!sessionId) {
+          sessionId = dependencies.newSessionId();
+          dependencies.storeSessionId(sessionId);
         }
-      }
-      try {
-        if (threadId === null) {
-          threadId = dependencies.newThreadId();
-          await port.createThread({
-            environmentId,
-            projectId,
-            threadId,
-            title: "Voice assistant",
-            requestId: dependencies.newRequestId(),
-            profileSelection: {
-              profileId: profile.profileId,
-              revision: profile.revision,
-              overrideFields: [],
-            },
-          });
-          dependencies.storeThreadId(threadId);
-        }
-        await port.sendMessage({
-          environmentId,
-          threadId,
-          text: prompt,
-          messageId: dependencies.newMessageId(),
-          requestId: dependencies.newRequestId(),
+        const result = await port({
+          action: "run",
+          sessionId,
+          profileId: profile.profileId,
+          requestId: call.id,
+          prompt,
         });
-        lastThreadId = threadId;
         return {
-          status: "accepted",
-          threadId,
+          ...result,
           agent: profile.name,
-          note: "The agent started the task. Say one short sentence that it is underway; do not read this back.",
+          note: "Report the returned state accurately. Running means accepted, not completed.",
         };
-      } catch (cause) {
-        return { error: cause instanceof Error ? cause.message : "Could not start the task." };
       }
-    }
-
-    if (call.name === "get_voice_task_status") {
-      const threadId = stringArg(call.args, "threadId") ?? knownThreadId();
-      if (threadId === null) return { error: "No task has been started yet." };
-      try {
-        const thread = record(await port.getThread(environmentId, threadId));
-        const messages = Array.isArray(thread["messages"]) ? thread["messages"] : [];
-        const lastAssistant = [...messages]
-          .reverse()
-          .map(record)
-          .find((message) => message["role"] === "assistant");
-        const text = lastAssistant?.["text"];
-        return {
-          threadId,
-          status: thread["status"] ?? "unknown",
-          hasPendingApprovals: thread["hasPendingApprovals"] === true,
-          hasPendingUserInput: thread["hasPendingUserInput"] === true,
-          lastAgentMessage: typeof text === "string" ? text.slice(0, 600) : null,
-          note: "Summarize in one or two spoken sentences. Do not read the message verbatim unless asked.",
-        };
-      } catch (cause) {
-        return { error: cause instanceof Error ? cause.message : "Could not read the task." };
-      }
-    }
-
-    if (call.name === "stop_voice_task") {
-      const threadId = stringArg(call.args, "threadId") ?? knownThreadId();
-      if (threadId === null) return { error: "No task has been started yet." };
-      try {
-        await port.controlThread({
-          environmentId,
-          threadId,
-          action: "stop",
-          requestId: dependencies.newRequestId(),
-          messageId: dependencies.newMessageId(),
+      if (!sessionId) return { error: "No task has been started yet." };
+      if (call.name === "get_voice_task_status") return await port({ action: "status", sessionId });
+      if (call.name === "stop_voice_task") return await port({ action: "stop", sessionId });
+      if (call.name === "answer_voice_question") {
+        const requestId = stringArg(call.args, "requestId");
+        const answers =
+          typeof call.args === "object" && call.args !== null
+            ? (call.args as Record<string, unknown>).answers
+            : undefined;
+        if (!requestId || typeof answers !== "object" || answers === null || Array.isArray(answers))
+          return { error: "A pending request id and answers are required." };
+        return await port({
+          action: "answer",
+          sessionId,
+          requestId,
+          answers: answers as Record<string, unknown>,
         });
-        return { status: "stop-requested", threadId };
-      } catch (cause) {
-        return { error: cause instanceof Error ? cause.message : "Could not stop the task." };
       }
+      if (call.name === "respond_voice_approval") {
+        const requestId = stringArg(call.args, "requestId");
+        const approve =
+          typeof call.args === "object" && call.args !== null
+            ? (call.args as Record<string, unknown>).approve
+            : undefined;
+        if (!requestId || typeof approve !== "boolean")
+          return { error: "An approval request id and decision are required." };
+        return await port({ action: "respond", sessionId, requestId, approve });
+      }
+      return { error: `Unsupported tool: ${call.name}.` };
+    } catch (cause) {
+      return { error: cause instanceof Error ? cause.message : String(cause) };
     }
-
-    return { error: `Unsupported tool: ${call.name}.` };
+  }
+  return (call: VoiceToolCall, signal?: AbortSignal): Promise<unknown> => {
+    const prior = completed.get(call.id);
+    if (prior) return prior;
+    const result = queue.then(() => execute(call, signal));
+    queue = result.catch(() => undefined);
+    completed.set(call.id, result);
+    if (completed.size > 200) completed.delete(completed.keys().next().value!);
+    return result;
   };
 }

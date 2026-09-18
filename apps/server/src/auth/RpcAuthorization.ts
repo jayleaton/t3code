@@ -75,6 +75,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.voiceTestProviderKey]: AuthOrchestrationOperateScope,
   // Minting a live credential exposes usable key material to the client, so it
   // is secret administration, not a read.
+  [WS_METHODS.voiceExecute]: AuthOrchestrationOperateScope,
+  [WS_METHODS.voiceSubscribeExecution]: AuthOrchestrationOperateScope,
   [WS_METHODS.voiceGetLiveSessionCredential]: AuthOrchestrationOperateScope,
   [WS_METHODS.cloudGetRelayClientStatus]: AuthRelayReadScope,
   [WS_METHODS.cloudInstallRelayClient]: AuthRelayWriteScope,

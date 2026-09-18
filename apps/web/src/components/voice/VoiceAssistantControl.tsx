@@ -1,8 +1,4 @@
-import {
-  VOICE_PROVIDER_LABELS,
-  type VoiceAssistantMode,
-  type VoiceSilenceTimeoutSeconds,
-} from "@t3tools/contracts";
+import { VOICE_PROVIDER_LABELS, type VoiceAssistantMode } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { AudioLines, Mic, MicOff, XIcon } from "lucide-react";
 import {
@@ -15,7 +11,12 @@ import {
 
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
 import { useAgentLibrary } from "../../hooks/useAgentLibrary";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useVoiceDevice } from "../../voice-assistant/useVoiceDevice";
+import { usePrimaryEnvironmentId, useEnvironment } from "../../state/environments";
+import { connectPairing } from "../../connection/onboarding";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { isLoopbackVoiceUrl } from "../../voice-assistant/localDevice";
+import { Input } from "../ui/input";
 import { useEnvironmentQuery } from "../../state/query";
 import { voiceAssistantEnvironment } from "../../state/voiceAssistant";
 import {
@@ -47,8 +48,7 @@ const MODE_LABELS: Readonly<Record<VoiceAssistantMode, string>> = {
   "wake-word": "Hey agent",
 };
 
-const MODE_OPTIONS: ReadonlyArray<VoiceAssistantMode> = ["off", "push-to-talk", "wake-word"];
-const TIMEOUT_OPTIONS: ReadonlyArray<VoiceSilenceTimeoutSeconds> = [5, 10];
+const MODE_OPTIONS: ReadonlyArray<VoiceAssistantMode> = ["off", "push-to-talk"];
 
 const modeIcon = (mode: VoiceAssistantMode) => {
   if (mode === "off") return <MicOff aria-hidden="true" />;
@@ -182,6 +182,7 @@ function LiveStatusBlock() {
     error,
     hasLiveCredential,
     testMicrophone,
+    shortcutStatus,
   } = useVoiceAssistantHost();
   const shortcut = useClientSettings((settings) => settings.voicePushToTalkShortcut);
 
@@ -192,7 +193,9 @@ function LiveStatusBlock() {
         ? "Starting microphone…"
         : microphoneStatus === "error"
           ? "Microphone unavailable"
-          : "Microphone off";
+          : state.mode !== "off"
+            ? "Ready — hold to talk"
+            : "Microphone off";
 
   return (
     <div className="space-y-2 rounded-md border border-border/60 p-3">
@@ -243,6 +246,7 @@ function LiveStatusBlock() {
           be spoken yet.
         </p>
       ) : null}
+      <p className="text-xs text-muted-foreground">{shortcutStatus}</p>
       {state.transcript ? (
         <p className="text-xs text-muted-foreground">Last request: “{state.transcript}”</p>
       ) : null}
@@ -337,7 +341,7 @@ function MicrophoneRow() {
 
 function VoiceAgentRow() {
   const profileId = useClientSettings((settings) => settings.voiceAgentProfileId);
-  const threadId = useClientSettings((settings) => settings.voiceAgentThreadId);
+  const sessionId = useClientSettings((settings) => settings.voiceAgentSessionId);
   const update = useUpdateClientSettings();
   const { profiles } = useAgentLibrary();
   const selected = profiles.find((profile) => profile.profileId === profileId) ?? null;
@@ -348,8 +352,8 @@ function VoiceAgentRow() {
         <div className="min-w-0">
           <div className="text-sm text-foreground">Voice agent</div>
           <div className="text-xs leading-relaxed text-muted-foreground">
-            Tasks you ask for run on this agent, on this device, in one ongoing conversation so it
-            keeps context. Its own tools and MCP access do the work.
+            Tasks run on this device in a dedicated conversation. The agent uses its machine tools
+            and T3 MCP across projects.
           </div>
         </div>
         <Select
@@ -357,8 +361,8 @@ function VoiceAgentRow() {
           onValueChange={(value) =>
             update({
               voiceAgentProfileId: value === null || value === "none" ? "" : value,
-              // A different agent must not inherit the previous one's thread.
-              voiceAgentThreadId: "",
+              // A different agent must not inherit the previous one's session.
+              voiceAgentSessionId: "",
             })
           }
         >
@@ -382,14 +386,14 @@ function VoiceAgentRow() {
           The selected agent is no longer available in this environment.
         </p>
       ) : null}
-      {threadId.length > 0 ? (
+      {sessionId.length > 0 ? (
         <Button
           type="button"
           size="xs"
           variant="ghost-muted"
           className="w-full"
           onClick={() => {
-            update({ voiceAgentThreadId: "" });
+            update({ voiceAgentSessionId: "" });
             voiceTranscript.clear();
           }}
         >
@@ -428,7 +432,7 @@ function ModeRow() {
 
   return (
     <div className="space-y-2">
-      <div className="grid grid-cols-3 gap-1.5">
+      <div className="grid grid-cols-2 gap-1.5">
         {MODE_OPTIONS.map((option) => (
           <Button
             key={option}
@@ -464,31 +468,119 @@ function ModeRow() {
   );
 }
 
-function TimeoutRow() {
-  const timeout = useClientSettings((settings) => settings.voiceSilenceTimeoutSeconds);
-  const update = useUpdateClientSettings();
+function VoiceDestinationRow() {
+  const environmentId = useVoiceDevice();
+  const environment = useEnvironment(environmentId);
+  const pair = useAtomCommand(connectPairing);
+  const [showPairing, setShowPairing] = useState(false);
+  const [pairingUrl, setPairingUrl] = useState("");
+  const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const connect = async () => {
+    if (!isLoopbackVoiceUrl(pairingUrl.trim())) {
+      setMessage(
+        "Use a pairing URL beginning with http://localhost or http://127.0.0.1 from T3 on this device.",
+      );
+      return;
+    }
+    setPending(true);
+    setMessage(null);
+    try {
+      const result = await pair({ pairingUrl: pairingUrl.trim() });
+      if (result._tag === "Success") {
+        setPairingUrl("");
+        setShowPairing(false);
+        setMessage(
+          "Paired. If the executor does not appear, update the local T3 instance to a version with voice execution support.",
+        );
+      } else
+        setMessage(
+          "Could not pair with local T3. Check the pairing link and allow local network access in your browser.",
+        );
+    } finally {
+      setPending(false);
+    }
+  };
   return (
-    <div className="flex items-center justify-between gap-3">
-      <div className="min-w-0">
-        <div className="text-sm text-foreground">Silence before finishing</div>
-        <div className="text-xs text-muted-foreground">
-          How long a command window waits without accepted speech.
-        </div>
-      </div>
-      <div className="flex shrink-0 items-center gap-1.5">
-        {TIMEOUT_OPTIONS.map((seconds) => (
+    <div className="space-y-2 text-xs text-muted-foreground">
+      <p>
+        {environmentId
+          ? `Device executor: ${environment?.label ?? "Connected"}. Tasks run here, independently of the project you are viewing.`
+          : "Voice is connected, but device execution is not. Pair with an updated T3 instance running on this computer."}
+      </p>
+      {!environmentId ? (
+        <>
           <Button
-            key={seconds}
             type="button"
             size="xs"
-            variant={timeout === seconds ? "default" : "outline"}
-            onClick={() => update({ voiceSilenceTimeoutSeconds: seconds })}
+            variant="outline"
+            onClick={() => setShowPairing((value) => !value)}
           >
-            {seconds}s
+            {showPairing ? "Cancel" : "Connect this device"}
           </Button>
-        ))}
-      </div>
+          {showPairing ? (
+            <div className="space-y-2">
+              <p>
+                Copy a local pairing link from T3 on this computer. Use its localhost address, and
+                allow local network access if your browser asks. This connection is saved only in
+                this browser.
+              </p>
+              <Input
+                aria-label="Local T3 pairing URL"
+                type="password"
+                autoComplete="off"
+                value={pairingUrl}
+                onChange={(event) => setPairingUrl(event.target.value)}
+                placeholder="http://localhost:3773/pair#token=…"
+              />
+              <Button
+                type="button"
+                size="xs"
+                disabled={pending || !pairingUrl.trim()}
+                onClick={() => void connect()}
+              >
+                {pending ? "Connecting…" : "Pair local T3"}
+              </Button>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+      {message ? <p role="status">{message}</p> : null}
     </div>
+  );
+}
+
+function TalkButton() {
+  const { state, pressPushToTalk, releasePushToTalk, cancel, hasLiveCredential } =
+    useVoiceAssistantHost();
+  return (
+    <Button
+      type="button"
+      className="w-full"
+      disabled={state.mode === "off" || !hasLiveCredential}
+      onPointerDown={(event) => {
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        pressPushToTalk();
+      }}
+      onPointerUp={releasePushToTalk}
+      onPointerCancel={cancel}
+      onLostPointerCapture={releasePushToTalk}
+      onKeyDown={(event) => {
+        if (!event.repeat && (event.key === " " || event.key === "Enter")) {
+          event.preventDefault();
+          pressPushToTalk();
+        }
+      }}
+      onKeyUp={(event) => {
+        if (event.key === " " || event.key === "Enter") {
+          event.preventDefault();
+          releasePushToTalk();
+        }
+      }}
+    >
+      {state.input === "capturing" ? "Release to send" : "Hold to talk"}
+    </Button>
   );
 }
 
@@ -548,22 +640,24 @@ function VoiceAssistantDialogContent() {
       <DialogHeader>
         <DialogTitle>Voice assistant</DialogTitle>
         <DialogDescription>
-          Choose how the assistant listens and speaks. Credentials live in the selected
-          environment's secret store, not on this device.
+          Choose how the assistant listens and speaks. Credentials are stored in the connected
+          environment.
         </DialogDescription>
       </DialogHeader>
       <DialogPanel className="space-y-4">
         <ModeRow />
         <LiveStatusBlock />
         <MicrophoneRow />
+        <VoiceDestinationRow />
         <VoiceAgentRow />
+        <TalkButton />
         <PushToTalkShortcutRecorder />
         <HotkeyTestRow />
-        <TimeoutRow />
+
         <div className="space-y-3 border-t border-border/50 pt-3">
           <AnnouncementRow
             label="Speak completions"
-            description="Announce when a thread finishes its turn or hits an error."
+            description="Announce when a device task finishes or fails."
             settingKey="voiceAnnounceCompletions"
           />
           <AnnouncementRow

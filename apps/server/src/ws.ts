@@ -148,6 +148,7 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as VoiceProviderConfig from "./voice/VoiceProviderConfig.ts";
+import * as VoiceExecution from "./voice/VoiceExecution.ts";
 import * as VoiceLiveSessionCredential from "./voice/VoiceLiveSessionCredential.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
@@ -630,6 +631,7 @@ const makeWsRpcLayer = (
       const agentSessionScanner = yield* AgentSessionScanner.AgentSessionScanner;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
+      const voiceExecution = yield* VoiceExecution.VoiceExecution;
       const voiceProviderConfig = yield* VoiceProviderConfig.VoiceProviderConfig;
       const voiceLiveSessionCredential =
         yield* VoiceLiveSessionCredential.VoiceLiveSessionCredentialService;
@@ -2753,6 +2755,8 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "voice" },
           ),
+        [WS_METHODS.voiceExecute]: (input) => voiceExecution.execute(input),
+        [WS_METHODS.voiceSubscribeExecution]: (input) => voiceExecution.subscribe(input.sessionId),
         [WS_METHODS.voiceGetLiveSessionCredential]: (input) =>
           observeRpcEffect(
             WS_METHODS.voiceGetLiveSessionCredential,

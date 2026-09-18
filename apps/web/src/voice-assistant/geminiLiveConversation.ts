@@ -17,7 +17,6 @@ export interface GeminiLiveSocket {
 }
 
 const SOCKET_OPEN = 1;
-const MAX_PENDING_OUTBOUND = 512;
 
 export interface GeminiLiveTool {
   readonly name: string;
@@ -36,11 +35,14 @@ export interface GeminiLiveCallbacks {
   readonly onSpeechEnd?: () => void;
   readonly onTurnComplete?: () => void;
   readonly onInterrupted?: () => void;
-  readonly onToolCall?: (call: {
-    readonly id: string;
-    readonly name: string;
-    readonly args: unknown;
-  }) => void;
+  readonly onToolCall?: (
+    call: {
+      readonly id: string;
+      readonly name: string;
+      readonly args: unknown;
+    },
+    signal: AbortSignal,
+  ) => void;
 }
 
 export interface GeminiLiveConversationOptions {
@@ -58,66 +60,129 @@ export interface GeminiLiveConversationOptions {
  * transport; the API key is only ever used to build the connect URL.
  */
 export class GeminiLiveConversation implements VoiceConversationPort {
-  private readonly apiKey: string;
-  private readonly model: string;
-  private readonly systemInstruction: string | undefined;
-  private readonly tools: ReadonlyArray<GeminiLiveTool>;
-  private readonly callbacks: GeminiLiveCallbacks;
-  private readonly createSocket: (url: string) => GeminiLiveSocket;
-
   private socket: GeminiLiveSocket | null = null;
-  private connected = false;
+  private ready = false;
   private activity = false;
-  private pendingOutbound: string[] = [];
-  private muted = false;
+  private pendingAudio: Uint8Array[] = [];
+  private pendingAudioBytes = 0;
+  private connection: Promise<void> | null = null;
+  private rejectConnection: ((cause: Error) => void) | null = null;
+  private setupTimer: ReturnType<typeof setTimeout> | null = null;
+  private generation = 0;
+  private turn = new AbortController();
+  private toolNames = new Map<string, string>();
+  private history: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }> = [];
+  private inputText = "";
+  private outputText = "";
 
-  constructor(options: GeminiLiveConversationOptions) {
-    this.apiKey = options.apiKey;
-    this.model = options.model;
-    this.systemInstruction = options.systemInstruction;
-    this.tools = options.tools ?? [];
-    this.callbacks = options.callbacks ?? {};
-    this.createSocket = options.createSocket;
-  }
+  constructor(private readonly options: GeminiLiveConversationOptions) {}
 
   get isConnected(): boolean {
-    return this.connected;
+    return this.ready;
   }
-
   get activityOpen(): boolean {
     return this.activity;
   }
 
-  async connect(): Promise<void> {
-    if (this.socket !== null) {
-      return;
-    }
-    const socket = this.createSocket(buildSocketUrl(this.apiKey));
+  connect(): Promise<void> {
+    if (this.ready) return Promise.resolve();
+    if (this.connection !== null) return this.connection;
+    const generation = ++this.generation;
+    this.turn = new AbortController();
+    const socket = this.options.createSocket(buildSocketUrl(this.options.apiKey));
     this.socket = socket;
-    this.connected = false;
-    this.activity = false;
-    this.muted = false;
-    this.pendingOutbound = [];
-    socket.onopen = () => {
-      this.notifyOpen();
-      this.flushPendingOutbound();
-    };
-    socket.onmessage = (event) => {
-      void this.handleMessage(event.data);
-    };
-    socket.onclose = (event) => {
-      this.socket = null;
-      this.connected = false;
-      this.activity = false;
-      this.pendingOutbound = [];
-      this.callbacks.onClose?.(event);
-    };
-    socket.onerror = () => {
-      this.callbacks.onError?.(new Error("Gemini Live socket error."));
-    };
-    // The socket is normally CONNECTING here; sending now throws in the browser,
-    // so the setup frame is queued and flushed on open.
-    this.sendOrQueue(buildSetupMessage(this.model, this.systemInstruction, this.tools));
+    const current = () => this.socket === socket && this.generation === generation;
+    this.connection = new Promise<void>((resolve, reject) => {
+      this.rejectConnection = reject;
+      this.setupTimer = setTimeout(() => {
+        if (!current()) return;
+        const error = new Error("Gemini did not finish connecting. Try push-to-talk again.");
+        this.closeSocket(error);
+        this.options.callbacks?.onError?.(error);
+      }, 15_000);
+      socket.onopen = () => {
+        if (current())
+          socket.send(
+            buildSetupMessage(
+              this.options.model,
+              this.options.systemInstruction,
+              this.options.tools ?? [],
+            ),
+          );
+      };
+      // Serialize Blob decoding so audio, tools, and completion retain wire order.
+      let inbound = Promise.resolve();
+      socket.onmessage = (event) => {
+        inbound = inbound
+          .then(async () => {
+            const message: unknown = JSON.parse(await decodeSocketData(event.data));
+            if (!current()) return;
+            if (!isRecord(message)) throw new Error("Gemini sent a non-object message.");
+            if (isRecord(message["setupComplete"])) {
+              if (this.setupTimer !== null) clearTimeout(this.setupTimer);
+              this.setupTimer = null;
+              this.ready = true;
+              this.rejectConnection = null;
+              if (this.history.length > 0)
+                this.send({ clientContent: { turns: this.history, turnComplete: false } });
+              const pending = this.pendingAudio;
+              this.pendingAudio = [];
+              this.pendingAudioBytes = 0;
+              for (const chunk of pending) this.sendAudio(chunk);
+              resolve();
+              this.options.callbacks?.onOpen?.();
+            }
+            if (isRecord(message["error"]))
+              throw new Error(String(message["error"]["message"] ?? "Gemini session failed."));
+            const cancelled = message["toolCallCancellation"];
+            if (isRecord(cancelled)) {
+              this.turn.abort();
+              this.turn = new AbortController();
+            }
+            const content = message["serverContent"];
+            if (isRecord(content)) this.handleContent(content);
+            const tool = message["toolCall"];
+            if (
+              isRecord(tool) &&
+              Array.isArray(tool["functionCalls"]) &&
+              !this.turn.signal.aborted
+            ) {
+              for (const call of tool["functionCalls"]) {
+                if (
+                  !isRecord(call) ||
+                  typeof call["id"] !== "string" ||
+                  typeof call["name"] !== "string"
+                )
+                  continue;
+                if (this.toolNames.has(call["id"])) continue;
+                this.toolNames.set(call["id"], call["name"]);
+                this.options.callbacks?.onToolCall?.(
+                  { id: call["id"], name: call["name"], args: call["args"] },
+                  this.turn.signal,
+                );
+              }
+            }
+          })
+          .catch((cause: unknown) => {
+            if (!current()) return;
+            const error = toError(cause);
+            this.closeSocket(error);
+            this.options.callbacks?.onError?.(error);
+          });
+      };
+      socket.onerror = () => {
+        if (!current()) return;
+        const error = new Error("Gemini Live connection failed. Try push-to-talk again.");
+        this.closeSocket(error);
+        this.options.callbacks?.onError?.(error);
+      };
+      socket.onclose = (event) => {
+        if (!current()) return;
+        this.closeSocket(new Error(event.reason || "Gemini connection closed."));
+        this.options.callbacks?.onClose?.(event);
+      };
+    });
+    return this.connection;
   }
 
   async disconnect(): Promise<void> {
@@ -125,216 +190,123 @@ export class GeminiLiveConversation implements VoiceConversationPort {
   }
 
   sendAudio(chunk: Uint8Array): void {
-    if (this.socket === null) {
+    if (chunk.length === 0 || this.socket === null) return;
+    if (!this.ready) {
+      if (this.pendingAudioBytes + chunk.byteLength > 1_000_000) {
+        const error = new Error("Voice connection is taking too long. Please try again.");
+        this.closeSocket(error);
+        this.options.callbacks?.onError?.(error);
+        return;
+      }
+      this.pendingAudio.push(chunk.slice());
+      this.pendingAudioBytes += chunk.byteLength;
       return;
     }
-    // A new utterance resumes model output after an interruption.
-    this.muted = false;
     if (!this.activity) {
       this.activity = true;
-      this.sendOrQueue(JSON.stringify({ realtimeInput: { activityStart: {} } }));
+      this.send({ realtimeInput: { activityStart: {} } });
     }
-    this.sendOrQueue(
-      JSON.stringify({
-        realtimeInput: { audio: { mimeType: AUDIO_MIME_TYPE, data: encodeBase64(chunk) } },
-      }),
-    );
+    this.send({
+      realtimeInput: { audio: { mimeType: AUDIO_MIME_TYPE, data: encodeBase64(chunk) } },
+    });
   }
 
   sendText(text: string): void {
-    this.sendOrQueue(
-      JSON.stringify({
-        clientContent: { turns: [{ role: "user", parts: [{ text }] }], turnComplete: true },
-      }),
-    );
+    this.send({
+      clientContent: { turns: [{ role: "user", parts: [{ text }] }], turnComplete: true },
+    });
   }
 
-  /** Answers one function call; the model continues from the result. */
   sendToolResponse(callId: string, result: unknown): void {
-    this.sendOrQueue(respondToToolCall(callId, result));
+    const name = this.toolNames.get(callId);
+    if (name === undefined || this.turn.signal.aborted) return;
+    this.send({
+      toolResponse: { functionResponses: [{ id: callId, name, response: { result } }] },
+    });
   }
 
-  /**
-   * Local VAD owns utterance boundaries; repeat calls are ignored so a
-   * straggling finalize cannot close an utterance twice.
-   */
   finalizeInput(): void {
     if (!this.activity) {
+      this.options.callbacks?.onTurnComplete?.();
       return;
     }
     this.activity = false;
-    this.sendOrQueue(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
+    this.send({ realtimeInput: { activityEnd: {} } });
   }
 
-  /**
-   * Cancels the current activity without closing the session: dropping the
-   * socket here would silently end the conversation and lose all context.
-   * `disconnect()` is the only teardown path.
-   */
+  // Closing the cancelled session is the definitive boundary for late audio and
+  // tool calls. Completed conversation text is restored on the next connection.
   cancel(): void {
-    if (this.activity) {
-      this.activity = false;
-      this.sendOrQueue(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
-    }
-    // Stop surfacing model audio/transcripts for the interrupted turn until the
-    // next utterance or turn completion.
-    this.muted = true;
+    this.closeSocket();
   }
 
-  private notifyOpen(): void {
-    if (this.connected) {
-      return;
+  private send(value: unknown): void {
+    if (
+      this.ready &&
+      this.socket !== null &&
+      (this.socket.readyState === undefined || this.socket.readyState === SOCKET_OPEN)
+    ) {
+      this.socket.send(JSON.stringify(value));
     }
-    this.connected = true;
-    this.callbacks.onOpen?.();
   }
 
-  /**
-   * Sends immediately when the socket is open, otherwise queues. The browser
-   * throws "Still in CONNECTING state" if `send` is called before the
-   * handshake completes, and that must never abort a session.
-   */
-  private sendOrQueue(message: string): void {
+  private closeSocket(cause = new Error("Voice session cancelled.")): void {
     const socket = this.socket;
-    if (socket === null) {
-      return;
-    }
-    if (socket.readyState === undefined || socket.readyState === SOCKET_OPEN) {
-      try {
-        socket.send(message);
-        return;
-      } catch (error) {
-        this.callbacks.onError?.(toError(error));
-        return;
-      }
-    }
-    // Bound the queue so a socket that never opens cannot grow memory without
-    // limit; dropping the oldest audio is preferable to unbounded buffering.
-    if (this.pendingOutbound.length >= MAX_PENDING_OUTBOUND) {
-      this.pendingOutbound.shift();
-    }
-    this.pendingOutbound.push(message);
-  }
-
-  private flushPendingOutbound(): void {
-    const socket = this.socket;
-    if (socket === null) {
-      return;
-    }
-    const queued = this.pendingOutbound;
-    this.pendingOutbound = [];
-    for (const message of queued) {
-      try {
-        socket.send(message);
-      } catch (error) {
-        this.callbacks.onError?.(toError(error));
-        return;
-      }
-    }
-  }
-
-  private closeSocket(): void {
-    const socket = this.socket;
-    if (socket === null) {
-      return;
-    }
     this.socket = null;
-    this.connected = false;
+    this.generation += 1;
+    this.ready = false;
     this.activity = false;
-    this.muted = false;
-    this.pendingOutbound = [];
-    socket.close();
-  }
-
-  private async handleMessage(data: unknown): Promise<void> {
-    let text: string;
-    try {
-      text = await decodeSocketData(data);
-    } catch (error) {
-      this.callbacks.onError?.(toError(error));
-      return;
-    }
-
-    let message: unknown;
-    try {
-      message = JSON.parse(text);
-    } catch {
-      this.callbacks.onError?.(new Error("Gemini Live sent malformed JSON."));
-      return;
-    }
-    if (!isRecord(message)) {
-      this.callbacks.onError?.(new Error("Gemini Live sent a non-object message."));
-      return;
-    }
-
-    if (isRecord(message["setupComplete"])) {
-      this.notifyOpen();
-    }
-    const serverContent = message["serverContent"];
-    if (isRecord(serverContent)) {
-      this.handleServerContent(serverContent);
-    }
-    const toolCall = message["toolCall"];
-    if (isRecord(toolCall)) {
-      this.handleToolCall(toolCall);
+    this.pendingAudio = [];
+    this.pendingAudioBytes = 0;
+    this.turn.abort();
+    this.toolNames.clear();
+    this.inputText = "";
+    this.outputText = "";
+    if (this.setupTimer !== null) clearTimeout(this.setupTimer);
+    this.setupTimer = null;
+    this.rejectConnection?.(cause);
+    this.rejectConnection = null;
+    this.connection = null;
+    if (socket !== null) {
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onclose = null;
+      socket.onerror = null;
+      socket.close();
     }
   }
 
-  private handleServerContent(content: Record<string, unknown>): void {
-    if (this.muted) {
-      // The interrupted turn may still stream a little audio; drop it, and
-      // unmute once the server confirms the turn is over.
-      if (content["turnComplete"] === true) {
-        this.muted = false;
-        this.callbacks.onTurnComplete?.();
-      }
-      return;
+  private handleContent(content: Record<string, unknown>): void {
+    const callbacks = this.options.callbacks;
+    if (content["interrupted"] === true) {
+      callbacks?.onInterrupted?.();
+      this.outputText = "";
     }
-    const inputTranscription = content["inputTranscription"];
-    if (isRecord(inputTranscription) && typeof inputTranscription["text"] === "string") {
-      this.callbacks.onInputTranscript?.(inputTranscription["text"]);
+    const input = content["inputTranscription"];
+    if (isRecord(input) && typeof input["text"] === "string") {
+      this.inputText += input["text"];
+      callbacks?.onInputTranscript?.(this.inputText);
     }
-    const outputTranscription = content["outputTranscription"];
-    if (isRecord(outputTranscription) && typeof outputTranscription["text"] === "string") {
-      this.callbacks.onOutputTranscript?.(outputTranscription["text"]);
+    const output = content["outputTranscription"];
+    if (isRecord(output) && typeof output["text"] === "string") {
+      this.outputText += output["text"];
+      callbacks?.onOutputTranscript?.(this.outputText);
     }
-
     const modelTurn = content["modelTurn"];
     if (isRecord(modelTurn) && Array.isArray(modelTurn["parts"])) {
       for (const part of modelTurn["parts"]) {
-        if (!isRecord(part)) {
-          continue;
-        }
-        const inlineData = part["inlineData"];
-        if (isRecord(inlineData) && typeof inlineData["data"] === "string") {
-          this.callbacks.onAudio?.(decodeBase64(inlineData["data"]));
-        }
+        if (!isRecord(part) || !isRecord(part["inlineData"])) continue;
+        const data = part["inlineData"]["data"];
+        if (typeof data === "string") callbacks?.onAudio?.(decodeBase64(data));
       }
     }
-
     if (content["turnComplete"] === true) {
-      this.callbacks.onTurnComplete?.();
-    }
-    if (content["interrupted"] === true) {
-      this.callbacks.onInterrupted?.();
-    }
-  }
-
-  private handleToolCall(toolCall: Record<string, unknown>): void {
-    const functionCalls = toolCall["functionCalls"];
-    if (!Array.isArray(functionCalls)) {
-      return;
-    }
-    for (const call of functionCalls) {
-      if (!isRecord(call)) {
-        continue;
-      }
-      const id = call["id"];
-      const name = call["name"];
-      if (typeof id !== "string" || typeof name !== "string") {
-        continue;
-      }
-      this.callbacks.onToolCall?.({ id, name, args: call["args"] });
+      if (this.inputText) this.history.push({ role: "user", parts: [{ text: this.inputText }] });
+      if (this.outputText) this.history.push({ role: "model", parts: [{ text: this.outputText }] });
+      this.history = this.history.slice(-12);
+      this.inputText = "";
+      this.outputText = "";
+      callbacks?.onTurnComplete?.();
     }
   }
 }
@@ -384,6 +356,8 @@ function buildSetupMessage(
     setup: {
       model: `models/${model}`,
       generationConfig: { responseModalities: ["AUDIO"] },
+      inputAudioTranscription: {},
+      outputAudioTranscription: {},
       realtimeInputConfig: { automaticActivityDetection: { disabled: true } },
       ...(systemInstruction ? { systemInstruction: { parts: [{ text: systemInstruction }] } } : {}),
       ...(tools.length > 0 ? { tools: [{ functionDeclarations: tools }] } : {}),

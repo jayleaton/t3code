@@ -481,6 +481,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistry;
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const deviceSessions = new Set<ThreadId>();
   const projectionQuery = yield* Effect.serviceOption(
     ProjectionSnapshotQuery.ProjectionSnapshotQuery,
   );
@@ -908,7 +909,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         browser: settings.enableAgentBrowserAccess,
         device: settings.enableAgentDeviceAccess,
       };
-      if (!browserOverridden && !deviceOverridden) return environment;
+      if (deviceSessions.has(threadId) || (!browserOverridden && !deviceOverridden))
+        return environment;
       // Provider-only runtimes may omit orchestration. An unresolved project
       // must not bypass an explicit project override, but a capability no
       // project overrides keeps its environment value.
@@ -938,6 +940,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   ) {
     const capabilities = new Set<McpInvocationContext.McpCapability>(["pull-requests"]);
     if (activeGatewayAvailable()) capabilities.add("gateway");
+    if (deviceSessions.has(threadId)) capabilities.add("workspace");
     const access = yield* agentAccessSettings(threadId);
     if (access.browser) capabilities.add("preview");
     if (access.device) capabilities.add("device");
@@ -990,7 +993,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     });
   const clearMcpSession = (threadId: ThreadId) =>
     McpSessionRegistry.revokeActiveMcpThread(threadId).pipe(
-      Effect.tap(() => Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
+      Effect.tap(() =>
+        Effect.sync(() => {
+          deviceSessions.delete(threadId);
+          McpProviderSession.clearMcpProviderSession(threadId);
+        }),
+      ),
     );
 
   const publishRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
@@ -1434,6 +1442,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         payload: rawInput,
       });
 
+      if (parsed.executionScope === "device") deviceSessions.add(threadId);
+      else deviceSessions.delete(threadId);
       const resolvedInstanceId = yield* requireBindingInstanceId(
         "ProviderService.startSession",
         parsed,
@@ -1536,7 +1546,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const session = yield* adapter
           .startSession({
             ...input,
-            agentInstructions: yield* resolveAgentInstructions(threadId),
+            agentInstructions:
+              input.agentInstructions ?? (yield* resolveAgentInstructions(threadId)),
             providerInstanceId: resolvedInstanceId,
             ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
             ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),

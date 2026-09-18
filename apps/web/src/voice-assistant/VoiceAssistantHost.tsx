@@ -1,14 +1,10 @@
 import {
   VoiceAssistantController,
   type VoiceAssistantState,
-  type VoiceConversationPort,
 } from "@t3tools/client-runtime/voice-assistant";
-import {
-  createGatewayRuntimePortFromContext,
-  type GatewayRuntimePort,
-} from "@t3tools/client-runtime/gateway";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { ThreadId } from "@t3tools/contracts";
+import { createVoiceExecutionPort } from "@t3tools/client-runtime/voice-assistant";
+import { useVoiceDevice } from "./useVoiceDevice";
+import { usePrimaryEnvironmentId } from "../state/environments";
 import { useAtomValue } from "@effect/atom-react";
 import {
   createContext,
@@ -24,9 +20,7 @@ import {
 import { connectionAtomRuntime } from "../connection/runtime";
 import { useAgentLibrary } from "../hooks/useAgentLibrary";
 import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
-import { newMessageId, newThreadId, randomUUID } from "../lib/utils";
-import { usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useThreadShell } from "../state/entities";
+import { randomUUID } from "../lib/utils";
 import { useEnvironmentQuery } from "../state/query";
 import { voiceAssistantEnvironment } from "../state/voiceAssistant";
 import { createMicrophoneCapture, type MicrophoneCapture } from "./audio/microphoneCapture";
@@ -70,6 +64,10 @@ export interface VoiceAssistantHostValue {
   readonly requestMicrophoneAccess: () => void;
   /** Opens the mic gate for a few seconds so the level meter can prove input. */
   readonly testMicrophone: () => void;
+  readonly pressPushToTalk: () => void;
+  readonly releasePushToTalk: () => void;
+  readonly cancel: () => void;
+  readonly shortcutStatus: string;
 }
 
 const VoiceAssistantHostContext = createContext<VoiceAssistantHostValue>({
@@ -82,6 +80,10 @@ const VoiceAssistantHostContext = createContext<VoiceAssistantHostValue>({
   hasLiveCredential: false,
   requestMicrophoneAccess: () => undefined,
   testMicrophone: () => undefined,
+  pressPushToTalk: () => undefined,
+  releasePushToTalk: () => undefined,
+  cancel: () => undefined,
+  shortcutStatus: "Hold-to-talk works while this browser is focused.",
 });
 
 export function useVoiceAssistantHost(): VoiceAssistantHostValue {
@@ -98,397 +100,402 @@ const isTypingTarget = (target: EventTarget | null): boolean => {
 
 const TEST_MICROPHONE_MS = 4000;
 
-/** Coarse state of the delegated thread, used only to trigger announcements. */
-function delegatedStatusOf(shell: {
-  readonly hasPendingApprovals: boolean;
-  readonly hasPendingUserInput: boolean;
-  readonly latestTurn: { readonly state?: string } | null;
-}): "idle" | "working" | "ready" | "failed" | "input" | "approval" {
-  if (shell.hasPendingApprovals) return "approval";
-  if (shell.hasPendingUserInput) return "input";
-  const state = shell.latestTurn?.state;
-  if (state === "error") return "failed";
-  if (state === "completed") return "ready";
-  return shell.latestTurn === null ? "idle" : "working";
-}
-
-/**
- * Owns the live voice runtime for the whole client.
- *
- * Microphone capture is deliberately independent of provider credentials: the
- * user must be able to verify their input device (level meter, device picker)
- * before any key exists. The Gemini Live conversation attaches separately once
- * a credential is available, through a mutable proxy the controller already
- * holds, so arming the mic never tears down capture.
- */
+/** Owns one session per selected voice environment, agent, and input device. */
 export function VoiceAssistantHostProvider({ children }: { readonly children: ReactNode }) {
-  const mode = useClientSettings((settings) => settings.voiceAssistantMode);
-  const provider = useClientSettings((settings) => settings.voiceConversationProvider);
-  const timeout = useClientSettings((settings) => settings.voiceSilenceTimeoutSeconds);
-  const shortcut = useClientSettings((settings) => settings.voicePushToTalkShortcut);
-  const deviceId = useClientSettings((settings) => settings.voiceMicrophoneDeviceId);
-  const agentProfileId = useClientSettings((settings) => settings.voiceAgentProfileId);
-  const agentThreadId = useClientSettings((settings) => settings.voiceAgentThreadId);
-  const updateSettings = useUpdateClientSettings();
-  const environmentId = usePrimaryEnvironmentId();
+  const settings = useClientSettings();
+  const mode = settings.voiceAssistantMode === "wake-word" ? "off" : settings.voiceAssistantMode;
+  const provider = settings.voiceConversationProvider;
+  const environmentId = useVoiceDevice();
+  const credentialEnvironmentId = usePrimaryEnvironmentId();
   const runtime = useAtomValue(connectionAtomRuntime);
   const { profiles } = useAgentLibrary();
-  const projects = useProjects();
+  const updateSettings = useUpdateClientSettings();
   const credential = useEnvironmentQuery(
-    environmentId === null || mode === "off"
+    credentialEnvironmentId === null || mode === "off"
       ? null
-      : voiceAssistantEnvironment.liveSessionCredential({ environmentId, input: { provider } }),
+      : voiceAssistantEnvironment.liveSessionCredential({
+          environmentId: credentialEnvironmentId,
+          input: { provider },
+        }),
   );
-  const credentialToken = credential.data?.token ?? null;
-  const credentialModel = credential.data?.model ?? null;
-
-  // Hold the last good credential so a background revalidation (which briefly
-  // yields no data) cannot tear down and rebuild the live session, wiping the
-  // model's context between turns. A genuinely new token still reconnects.
-  const [activeCredential, setActiveCredential] = useState<{
-    readonly token: string;
-    readonly model: string;
-  } | null>(null);
-  useEffect(() => {
-    if (mode === "off") {
-      setActiveCredential(null);
-      return;
-    }
-    if (credentialToken === null || credentialModel === null) return;
-    setActiveCredential((previous) =>
-      previous !== null && previous.token === credentialToken && previous.model === credentialModel
-        ? previous
-        : { token: credentialToken, model: credentialModel },
-    );
-  }, [mode, credentialToken, credentialModel]);
-
+  const token = credential.error === null ? (credential.data?.token ?? null) : null;
+  const model = credential.data?.model ?? null;
   const [state, setState] = useState<VoiceAssistantState>(OFF_STATE);
   const [microphoneLevel, setMicrophoneLevel] = useState(0);
-  const [microphoneStatus, setMicrophoneStatus] = useState<MicrophoneStatus>("off");
-  const [microphoneActive, setMicrophoneActive] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
+  const [shortcutStatus, setShortcutStatus] = useState(
+    "Hold-to-talk works while this browser is focused.",
+  );
+  const globalShortcut = useRef(false);
   const controllerRef = useRef<VoiceAssistantController | null>(null);
   const captureRef = useRef<MicrophoneCapture | null>(null);
-  const conversationRef = useRef<VoiceConversationPort | null>(null);
   const playbackRef = useRef<ReturnType<typeof createSpeakerPlayback> | null>(null);
   const testTimerRef = useRef<number | null>(null);
-  const turnKeyRef = useRef(0);
-
-  // The controller holds this proxy for its whole life; attaching or detaching
-  // the real Gemini session mutates the ref instead of rebuilding the mic.
-  const conversationProxy = useRef<VoiceConversationPort>({
-    connect: () => conversationRef.current?.connect() ?? Promise.resolve(),
-    disconnect: () => conversationRef.current?.disconnect() ?? Promise.resolve(),
-    sendAudio: (chunk) => conversationRef.current?.sendAudio(chunk),
-    sendText: (text) => conversationRef.current?.sendText(text),
-    finalizeInput: () => conversationRef.current?.finalizeInput(),
-    cancel: () => conversationRef.current?.cancel(),
-  });
-
-  // Live values the tool executor needs, kept in a ref so the executor is built
-  // once (preserving its "last task" memory) while still seeing current state.
-  const toolDepsRef = useRef({
-    runtime,
-    environmentId,
-    profiles,
-    projects,
-    agentProfileId,
-    agentThreadId,
-    updateSettings,
-  });
-  toolDepsRef.current = {
-    runtime,
-    environmentId,
-    profiles,
-    projects,
-    agentProfileId,
-    agentThreadId,
-    updateSettings,
-  };
-  const toolHandler = useMemo(
-    () =>
-      createVoiceToolHandler({
-        getPort: (): GatewayRuntimePort | null => {
-          const value = toolDepsRef.current.runtime;
-          return value._tag === "Success" ? createGatewayRuntimePortFromContext(value.value) : null;
-        },
-        getEnvironmentId: () => toolDepsRef.current.environmentId,
-        getProfile: () =>
-          toolDepsRef.current.profiles.find(
-            (profile) => profile.profileId === toolDepsRef.current.agentProfileId,
-          ) ?? null,
-        resolveProjectId: () =>
-          toolDepsRef.current.projects.find(
-            (project) => project.environmentId === toolDepsRef.current.environmentId,
-          )?.id ?? null,
-        getThreadId: () =>
-          toolDepsRef.current.agentThreadId.length > 0 ? toolDepsRef.current.agentThreadId : null,
-        storeThreadId: (threadId) => {
-          void toolDepsRef.current.updateSettings({ voiceAgentThreadId: threadId });
-        },
-        newThreadId,
-        newMessageId,
-        newRequestId: randomUUID,
-      }),
-    [],
-  );
-
-  // Watch the delegated thread so the assistant speaks up when work finishes or
-  // needs the user, instead of staying silent until the user asks again.
-  const agentThreadRef = useMemo(
-    () =>
-      environmentId !== null && agentThreadId.length > 0
-        ? scopeThreadRef(environmentId, ThreadId.make(agentThreadId))
-        : null,
-    [environmentId, agentThreadId],
-  );
-  const agentShell = useThreadShell(agentThreadRef);
-  const lastAgentStatusRef = useRef<string | null>(null);
+  const [resetVersion, setResetVersion] = useState(0);
+  const previousThread = useRef(settings.voiceAgentSessionId);
   useEffect(() => {
-    if (agentShell === null) {
-      lastAgentStatusRef.current = null;
-      return;
-    }
-    const status = delegatedStatusOf(agentShell);
-    const previous = lastAgentStatusRef.current;
-    lastAgentStatusRef.current = status;
-    if (previous === null || previous === status) return;
-    const prompt =
-      status === "ready"
-        ? "System note: the delegated voice task just finished. Call get_voice_task_status and tell the user the result in one sentence."
-        : status === "failed"
-          ? "System note: the delegated voice task hit an error. Call get_voice_task_status and tell the user in one sentence."
-          : status === "approval"
-            ? "System note: the delegated voice task needs approval. Tell the user in one sentence."
-            : status === "input"
-              ? "System note: the delegated voice task is asking a question. Tell the user in one sentence."
-              : null;
-    if (prompt !== null) {
-      controllerRef.current?.announce(prompt);
-    }
-  }, [agentShell]);
+    if (previousThread.current && !settings.voiceAgentSessionId)
+      setResetVersion((value) => value + 1);
+    previousThread.current = settings.voiceAgentSessionId;
+  }, [settings.voiceAgentSessionId]);
 
-  const requestMicrophoneAccess = useCallback(() => {
-    setMicrophoneStatus((current) => (current === "off" ? "starting" : current));
-    void captureRef.current
-      ?.start()
-      .then(() => setMicrophoneStatus("live"))
-      .catch((cause: unknown) => {
-        setMicrophoneStatus("error");
-        setError(cause instanceof Error ? cause.message : "Microphone capture failed to start.");
-      });
-    void captureRef.current?.resume();
-  }, []);
+  const live = useRef({ settings, runtime, profiles, environmentId, updateSettings });
+  live.current = { settings, runtime, profiles, environmentId, updateSettings };
 
-  const testMicrophone = useCallback(() => {
-    requestMicrophoneAccess();
-    const capture = captureRef.current;
-    if (capture === null) return;
-    void capture.beginUtterance().then(() => setMicrophoneActive(true));
-    if (testTimerRef.current !== null) {
-      window.clearTimeout(testTimerRef.current);
-    }
-    testTimerRef.current = window.setTimeout(() => {
-      testTimerRef.current = null;
-      setMicrophoneActive(false);
-      void capture.endUtterance();
-    }, TEST_MICROPHONE_MS);
-  }, [requestMicrophoneAccess]);
-
-  // Microphone + controller runtime, independent of any provider credential.
   useEffect(() => {
-    if (mode === "off") {
-      setState(OFF_STATE);
-      setMicrophoneStatus("off");
-      setMicrophoneActive(false);
-      setMicrophoneLevel(0);
-      return;
-    }
-    const playback = createSpeakerPlayback();
-    playbackRef.current = playback;
+    setState(OFF_STATE);
+    setError(null);
+    setTesting(false);
+    setMicrophoneLevel(0);
+    if (mode === "off" || token === null || model === null) return;
+    let disposed = false;
+    let providerFinished = false;
+    let turnNumber = 0;
+    const sessionId = randomUUID();
+    const toolHandler = createVoiceToolHandler({
+      getPort: () => {
+        const { runtime: value, environmentId: deviceId } = live.current;
+        return value._tag === "Success" && deviceId
+          ? createVoiceExecutionPort(value.value, deviceId)
+          : null;
+      },
+      getProfile: () =>
+        live.current.profiles.find(
+          (p) => p.profileId === live.current.settings.voiceAgentProfileId,
+        ) ?? null,
+      getSessionId: () => live.current.settings.voiceAgentSessionId || null,
+      storeSessionId: (threadId) => {
+        live.current = {
+          ...live.current,
+          settings: { ...live.current.settings, voiceAgentSessionId: threadId },
+        };
+        void live.current.updateSettings({ voiceAgentSessionId: threadId });
+      },
+      newSessionId: randomUUID,
+    });
+    const fail = (cause: unknown) => {
+      if (disposed) return;
+      controller.cancel();
+      controller.setTransport("failed");
+      setError(cause instanceof Error ? cause.message : "Voice session failed.");
+    };
+    const playback = createSpeakerPlayback({
+      onDrained: () => {
+        if (!disposed && providerFinished) controller.handleAssistantSpeechEnd();
+      },
+    });
     const capture = createMicrophoneCapture({
-      ...(deviceId.length > 0 ? { deviceId } : {}),
-      onFrame: (frame) => conversationProxy.current.sendAudio(frame),
-      onLevel: (level) => setMicrophoneLevel(level),
-      onError: (cause) => {
-        setError(cause.message);
-        setMicrophoneStatus("error");
+      ...(settings.voiceMicrophoneDeviceId ? { deviceId: settings.voiceMicrophoneDeviceId } : {}),
+      onFrame: (frame) => {
+        if (!disposed && controller.getState().input === "capturing") conversation.sendAudio(frame);
+      },
+      onLevel: (level) => {
+        if (!disposed) setMicrophoneLevel(level);
+      },
+      onError: fail,
+    });
+    const conversation = new GeminiLiveConversation({
+      apiKey: token,
+      model,
+      systemInstruction: VOICE_SYSTEM_INSTRUCTION,
+      ...(settings.voiceAgentProfileId ? { tools: VOICE_TOOL_DECLARATIONS } : {}),
+      createSocket: (url) => new WebSocket(url) as unknown as GeminiLiveSocket,
+      callbacks: {
+        onOpen: () => {
+          if (!disposed) {
+            controller.setTransport("ready");
+            setError(null);
+          }
+        },
+        onClose: (event) => {
+          if (!disposed)
+            fail(new Error(event.reason || "Voice disconnected. Press push-to-talk to reconnect."));
+        },
+        onError: fail,
+        onAudio: (chunk) => {
+          if (disposed || controller.getState().input === "capturing") return;
+          providerFinished = false;
+          controller.handleAssistantSpeechStart();
+          playback.enqueue(chunk);
+        },
+        onInputTranscript: (text) => {
+          if (disposed) return;
+          voiceTranscript.upsert(`${sessionId}-user-${turnNumber}`, "user", text);
+          controller.handleFinalTranscript(text);
+        },
+        onOutputTranscript: (text) => {
+          if (!disposed)
+            voiceTranscript.upsert(`${sessionId}-assistant-${turnNumber}`, "assistant", text);
+        },
+        onTurnComplete: () => {
+          if (disposed) return;
+          turnNumber += 1;
+          providerFinished = true;
+          if (!playback.speaking) controller.handleAssistantSpeechEnd();
+        },
+        onInterrupted: () => {
+          playback.stop();
+          providerFinished = true;
+          if (!disposed) controller.handleAssistantSpeechEnd();
+        },
+        onToolCall: (call, signal) => {
+          if (disposed || signal.aborted) return;
+          voiceTranscript.push("tool", `${call.name} ${summarizeVoiceValue(call.args)}`);
+          void toolHandler(call, signal)
+            .then((result) => {
+              if (disposed || signal.aborted) return;
+              voiceTranscript.push("tool", `→ ${summarizeVoiceValue(result)}`);
+              conversation.sendToolResponse(call.id, result);
+            })
+            .catch((cause: unknown) => {
+              if (!disposed && !signal.aborted)
+                conversation.sendToolResponse(call.id, { error: String(cause) });
+            });
+        },
       },
     });
     const controller = new VoiceAssistantController({
-      ports: {
-        capture,
-        conversation: conversationProxy.current,
-        playback: { stop: async () => playback.stop() },
-      },
+      ports: { capture, conversation, playback: { stop: async () => playback.stop() } },
       conversationProvider: provider,
-      silenceTimeoutSeconds: timeout,
-      onStateChange: setState,
+      silenceTimeoutSeconds: 5,
+      onStateChange: (value) => {
+        if (!disposed) setState(value);
+      },
     });
     controllerRef.current = controller;
     captureRef.current = capture;
-    setError(null);
-    setMicrophoneStatus("starting");
-    void capture
-      .start()
-      .then(() => setMicrophoneStatus("live"))
-      .catch((cause: unknown) => {
-        setMicrophoneStatus("error");
-        setError(cause instanceof Error ? cause.message : "Microphone capture failed to start.");
-      });
-    void controller.setMode(mode);
-
+    playbackRef.current = playback;
+    void controller
+      .setMode(mode)
+      .then(() => {
+        if (disposed) return;
+        controller.setTransport("connecting");
+        return conversation.connect();
+      })
+      .catch(fail);
     return () => {
-      if (testTimerRef.current !== null) {
-        window.clearTimeout(testTimerRef.current);
-        testTimerRef.current = null;
-      }
+      disposed = true;
+      if (testTimerRef.current !== null) window.clearTimeout(testTimerRef.current);
+      testTimerRef.current = null;
       controllerRef.current = null;
       captureRef.current = null;
       playbackRef.current = null;
-      setMicrophoneActive(false);
-      setMicrophoneLevel(0);
       playback.dispose();
       void controller.dispose();
     };
-  }, [mode, provider, timeout, deviceId]);
+  }, [
+    mode,
+    provider,
+    token,
+    model,
+    environmentId,
+    credentialEnvironmentId,
+    settings.voiceMicrophoneDeviceId,
+    settings.voiceAgentProfileId,
+    resetVersion,
+  ]);
 
-  // Gemini Live session, attached only when a credential exists.
+  const execution = useEnvironmentQuery(
+    environmentId && settings.voiceAgentSessionId
+      ? voiceAssistantEnvironment.execution({
+          environmentId,
+          input: { sessionId: settings.voiceAgentSessionId },
+        })
+      : null,
+  );
+  const lastAgentEvent = useRef<string | null>(null);
   useEffect(() => {
-    if (mode === "off" || activeCredential === null) {
-      const existing = conversationRef.current;
-      conversationRef.current = null;
-      void existing?.disconnect();
+    const state = execution.data;
+    if (!state) {
+      lastAgentEvent.current = null;
       return;
     }
-    const conversation = new GeminiLiveConversation({
-      apiKey: activeCredential.token,
-      model: activeCredential.model,
-      systemInstruction: VOICE_SYSTEM_INSTRUCTION,
-      ...(agentProfileId.trim().length > 0 ? { tools: VOICE_TOOL_DECLARATIONS } : {}),
-      createSocket: (url) => new WebSocket(url) as unknown as GeminiLiveSocket,
-      callbacks: {
-        onOpen: () => controllerRef.current?.setTransport("ready"),
-        onClose: (event) => {
-          controllerRef.current?.setTransport("disconnected");
-          // Surface an abnormal close (bad key, unknown model, quota) instead of
-          // silently showing "Disconnected".
-          if (event.code !== 1000 && event.code !== 1005) {
-            setError(
-              `Voice session closed (${event.code})${event.reason ? `: ${event.reason}` : ""}`,
-            );
-          }
-        },
-        onError: (cause) => {
-          setError(cause.message);
-          controllerRef.current?.setTransport("failed");
-        },
-        onAudio: (chunk) => {
-          // First model audio of the turn flips the indicator from Thinking to
-          // Speaking, so the user can tell it heard them.
-          controllerRef.current?.handleAssistantSpeechStart();
-          playbackRef.current?.enqueue(chunk);
-        },
-        onInputTranscript: (text) => {
-          voiceTranscript.upsert(`user-${turnKeyRef.current}`, "user", text);
-          controllerRef.current?.handleFinalTranscript(text);
-        },
-        onOutputTranscript: (text) => {
-          voiceTranscript.upsert(`assistant-${turnKeyRef.current}`, "assistant", text);
-        },
-        onTurnComplete: () => {
-          turnKeyRef.current += 1;
-          controllerRef.current?.handleAssistantSpeechEnd();
-        },
-        onInterrupted: () => controllerRef.current?.handleAssistantSpeechEnd(),
-        onToolCall: (call) => {
-          // Delegated work runs on the local agent (MCP/workspace tools); the
-          // result is returned to the model, which speaks a short summary.
-          voiceTranscript.push("tool", `${call.name} ${summarizeVoiceValue(call.args)}`);
-          void toolHandler(call)
-            .then((result) => {
-              voiceTranscript.push("tool", `-> ${summarizeVoiceValue(result)}`);
-              conversation.sendToolResponse(call.id, result);
-            })
-            .catch((cause: unknown) =>
-              conversation.sendToolResponse(call.id, {
-                error: cause instanceof Error ? cause.message : "Tool execution failed.",
-              }),
-            );
-        },
-      },
-    });
-    conversationRef.current = conversation;
-    void conversation.connect().catch((cause: unknown) => {
-      setError(cause instanceof Error ? cause.message : "Could not open the voice session.");
-    });
-    return () => {
-      if (conversationRef.current === conversation) {
-        conversationRef.current = null;
-      }
-      void conversation.disconnect();
-    };
-  }, [mode, activeCredential, agentProfileId, toolHandler]);
+    const identity = `${environmentId}:${state.sessionId}:${state.revision}:${state.status}`;
+    if (lastAgentEvent.current === identity) return;
+    lastAgentEvent.current = identity;
+    if (
+      state.status === "approval"
+        ? !settings.voiceAnnounceApprovals
+        : state.status === "input"
+          ? !settings.voiceAnnounceInputRequests
+          : !settings.voiceAnnounceCompletions
+    )
+      return;
+    if (!["completed", "failed", "approval", "input"].includes(state.status)) return;
+    controllerRef.current?.announce(
+      `The device task is now ${state.status}. Call get_voice_task_status and briefly explain the result or pending approval.`,
+    );
+  }, [
+    execution.data,
+    environmentId,
+    settings.voiceAnnounceApprovals,
+    settings.voiceAnnounceCompletions,
+    settings.voiceAnnounceInputRequests,
+  ]);
 
-  // Browsers suspend an AudioContext created without a gesture; resume it on the
-  // first interaction so capture produces frames even before a hotkey press.
+  // Resetting a conversation closes its provider process and MCP credentials.
   useEffect(() => {
-    const resume = () => {
-      void captureRef.current?.resume();
-    };
-    window.addEventListener("pointerdown", resume, { once: true });
-    window.addEventListener("keydown", resume, { once: true });
+    if (!environmentId || !settings.voiceAgentSessionId || runtime._tag !== "Success") return;
+    const port = createVoiceExecutionPort(runtime.value, environmentId);
+    const sessionId = settings.voiceAgentSessionId;
     return () => {
-      window.removeEventListener("pointerdown", resume);
-      window.removeEventListener("keydown", resume);
+      void port({ action: "close", sessionId }).catch(() => undefined);
     };
+  }, [environmentId, settings.voiceAgentSessionId, runtime]);
+
+  const testMicrophone = useCallback(() => {
+    const capture = captureRef.current;
+    if (capture === null || controllerRef.current?.getState().input !== "standby") return;
+    if (testTimerRef.current !== null) window.clearTimeout(testTimerRef.current);
+    setTesting(true);
+    // A microphone test only measures locally; it never opens the upload gate.
+    void capture.start().catch((cause: unknown) => {
+      setError(String(cause));
+      setTesting(false);
+    });
+    testTimerRef.current = window.setTimeout(() => {
+      testTimerRef.current = null;
+      setTesting(false);
+      void capture.endUtterance();
+    }, TEST_MICROPHONE_MS);
+  }, []);
+
+  const pressPushToTalk = useCallback(() => {
+    if (testTimerRef.current !== null) window.clearTimeout(testTimerRef.current);
+    testTimerRef.current = null;
+    setTesting(false);
+    setError(null);
+    void playbackRef.current?.resume().catch((cause: unknown) => setError(String(cause)));
+    void controllerRef.current?.pressPushToTalk();
+  }, []);
+  const releasePushToTalk = useCallback(() => {
+    void controllerRef.current?.releasePushToTalk();
+  }, []);
+  const cancel = useCallback(() => {
+    controllerRef.current?.cancel();
   }, []);
 
   useEffect(() => {
+    const bridge = window.desktopBridge;
+    if (!bridge?.configureVoiceShortcut || !bridge.onVoiceShortcut) return;
+    let active = true;
+    const unsubscribe = bridge.onVoiceShortcut((phase) => {
+      if (!active) return;
+      if (phase === "down") {
+        if (document.activeElement?.closest("[data-keybinding-capture]")) return;
+        pressPushToTalk();
+      } else if (phase === "up") releasePushToTalk();
+      else {
+        globalShortcut.current = false;
+        cancel();
+        setShortcutStatus(
+          "Global voice shortcut stopped. Use the in-app shortcut or re-enable voice.",
+        );
+      }
+    });
+    void bridge
+      .configureVoiceShortcut(mode === "off" ? null : settings.voicePushToTalkShortcut || null)
+      .then((result) => {
+        if (!active) return;
+        globalShortcut.current = result.registered;
+        setShortcutStatus(result.message);
+      })
+      .catch((cause: unknown) => {
+        if (active) setShortcutStatus(String(cause));
+      });
+    return () => {
+      active = false;
+      globalShortcut.current = false;
+      unsubscribe();
+      void bridge.configureVoiceShortcut?.(null);
+    };
+  }, [mode, settings.voicePushToTalkShortcut, pressPushToTalk, releasePushToTalk, cancel]);
+
+  useEffect(() => {
     if (mode === "off") return;
+    let heldCode: string | null = null;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        controllerRef.current?.cancel();
+        heldCode = null;
+        cancel();
         return;
       }
-      if (event.repeat || isTypingTarget(event.target)) return;
-      if (shortcut.trim().length === 0 || !matchesVoiceShortcut(event, shortcut)) return;
-      // Capture-phase, and stop propagation so a focused button cannot treat
-      // the key as a Space/Enter activation and open the dialog.
+      if (
+        globalShortcut.current ||
+        event.repeat ||
+        heldCode !== null ||
+        isTypingTarget(event.target)
+      )
+        return;
+      if (!matchesVoiceShortcut(event, settings.voicePushToTalkShortcut)) return;
       event.preventDefault();
       event.stopPropagation();
-      void captureRef.current?.resume();
-      void controllerRef.current?.pressPushToTalk();
+      heldCode = event.code || event.key;
+      pressPushToTalk();
     };
     const onKeyUp = (event: KeyboardEvent) => {
-      if (shortcut.trim().length === 0 || !matchesVoiceShortcut(event, shortcut)) return;
+      // Modifier release order must not leave the microphone stuck open.
+      if (
+        heldCode === null ||
+        ((event.code || event.key) !== heldCode &&
+          !["Alt", "Meta", "Control", "Shift"].includes(event.key))
+      )
+        return;
       event.preventDefault();
-      event.stopPropagation();
-      void controllerRef.current?.releasePushToTalk();
+      heldCode = null;
+      releasePushToTalk();
     };
-    window.addEventListener("keydown", onKeyDown, { capture: true });
-    window.addEventListener("keyup", onKeyUp, { capture: true });
+    const onBlur = () => {
+      if (heldCode !== null) {
+        heldCode = null;
+        cancel();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keyup", onKeyUp, true);
+    window.addEventListener("blur", onBlur);
     return () => {
-      window.removeEventListener("keydown", onKeyDown, { capture: true });
-      window.removeEventListener("keyup", onKeyUp, { capture: true });
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keyup", onKeyUp, true);
+      window.removeEventListener("blur", onBlur);
+      onBlur();
     };
-  }, [mode, shortcut]);
+  }, [mode, settings.voicePushToTalkShortcut, pressPushToTalk, releasePushToTalk, cancel]);
 
+  const value = useMemo<VoiceAssistantHostValue>(
+    () => ({
+      state,
+      microphoneLevel,
+      microphoneStatus: testing || state.input === "capturing" ? "live" : "off",
+      microphoneActive: testing || state.input === "capturing",
+      error: error ?? state.lastError ?? credential.error,
+      environmentId,
+      hasLiveCredential: token !== null,
+      requestMicrophoneAccess: testMicrophone,
+      testMicrophone,
+      pressPushToTalk,
+      releasePushToTalk,
+      cancel,
+      shortcutStatus,
+    }),
+    [
+      state,
+      microphoneLevel,
+      testing,
+      error,
+      credential.error,
+      environmentId,
+      token,
+      testMicrophone,
+      pressPushToTalk,
+      releasePushToTalk,
+      cancel,
+      shortcutStatus,
+    ],
+  );
   return (
-    <VoiceAssistantHostContext.Provider
-      value={{
-        state,
-        microphoneLevel,
-        microphoneStatus,
-        microphoneActive,
-        error,
-        environmentId,
-        hasLiveCredential: activeCredential !== null,
-        requestMicrophoneAccess,
-        testMicrophone,
-      }}
-    >
+    <VoiceAssistantHostContext.Provider value={value}>
       {children}
       <VoiceAssistantIndicator />
     </VoiceAssistantHostContext.Provider>

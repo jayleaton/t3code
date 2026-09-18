@@ -14,36 +14,4 @@ export {
   type VoiceTransportPhase,
 } from "./ports.ts";
 export { VoiceAssistantController } from "./controller.ts";
-export {
-  buildAnnouncement,
-  isAnnouncementEnabled,
-  notificationIdentity,
-  notificationPriority,
-  VoiceSpeechQueue,
-  type VoiceAnnouncementPreferences,
-  type VoiceNotification,
-  type VoiceNotificationKind,
-  type VoiceSpeechQueueOptions,
-} from "./notifications.ts";
-export {
-  bindAnswerToPendingRequest,
-  createProposal,
-  isAffirmative,
-  isNegative,
-  isVoiceMutation,
-  proposalIdempotencyKey,
-  resolveDecisionFallback,
-  resolveExactTarget,
-  validateProposal,
-  VOICE_COMMAND_KINDS,
-  type BindAnswerResult,
-  type CreateProposalInput,
-  type PendingRequestTarget,
-  type ProposalValidation,
-  type Resolvable,
-  type ResolveResult,
-  type VoiceCommandKind,
-  type VoiceProposedCommand,
-  type VoiceTarget,
-  type VoiceValidationState,
-} from "./commands.ts";
+export { createVoiceExecutionPort, type VoiceExecutionPort } from "./execution.ts";

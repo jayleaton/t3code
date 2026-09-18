@@ -4946,7 +4946,7 @@ describe("agent browser access", () => {
     access: boolean | { readonly browser: boolean; readonly device: boolean },
     threadId: ThreadId,
     projectOverride?: boolean | { readonly browser?: boolean; readonly device?: boolean },
-    options?: { readonly withoutOrchestration?: boolean },
+    options?: { readonly withoutOrchestration?: boolean; readonly deviceScope?: boolean },
   ) =>
     Effect.gen(function* () {
       const enableAgentBrowserAccess = typeof access === "boolean" ? access : access.browser;
@@ -5060,11 +5060,32 @@ describe("agent browser access", () => {
           providerInstanceId: codexInstanceId,
           threadId,
           runtimeMode: "full-access",
+          ...(options?.deviceScope
+            ? {
+                executionScope: "device" as const,
+                agentInstructions: "Device-level voice instructions",
+              }
+            : {}),
         });
       }).pipe(Effect.provide(providerLayer));
 
+      if (options?.deviceScope)
+        assert.equal(
+          codex.startSession.mock.calls[0]?.[0].agentInstructions,
+          "Device-level voice instructions",
+        );
       return issued;
     });
+
+  it.effect("device sessions use environment access without requiring a project", () =>
+    Effect.gen(function* () {
+      const id = asThreadId("voice:device-access");
+      assert.deepEqual(
+        yield* startSessionWith(true, id, false, { withoutOrchestration: true, deviceScope: true }),
+        [{ threadId: id, capabilities: ["device", "preview", "pull-requests", "workspace"] }],
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 
   it.effect("grants managed gateway access only while the desktop relay is enabled", () =>
     Effect.scoped(

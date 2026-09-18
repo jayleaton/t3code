@@ -14,12 +14,24 @@ const UNAVAILABLE_MESSAGE = "Microphone capture is not available in this browser
  */
 const WORKLET_SOURCE = `
 class T3VoiceCaptureProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.pending = new Float32Array(320);
+    this.length = 0;
+  }
   process(inputs) {
     const input = inputs[0];
     if (input && input.length > 0) {
       const channel = input[0];
       if (channel && channel.length > 0) {
-        this.port.postMessage(channel.slice());
+        for (let i = 0; i < channel.length; i++) {
+          this.pending[this.length++] = channel[i];
+          if (this.length === this.pending.length) {
+            this.port.postMessage(this.pending);
+            this.pending = new Float32Array(320);
+            this.length = 0;
+          }
+        }
       }
     }
     return true;
@@ -74,6 +86,8 @@ class BrowserMicrophoneCapture implements MicrophoneCapture {
   private streaming = false;
   private lastLevelAt = 0;
   private disposed = false;
+  private generation = 0;
+  private stopping: Promise<void> = Promise.resolve();
 
   constructor(options: MicrophoneCaptureOptions) {
     this.targetSampleRate = options.targetSampleRate ?? DEFAULT_TARGET_SAMPLE_RATE;
@@ -90,7 +104,7 @@ class BrowserMicrophoneCapture implements MicrophoneCapture {
     if (this.disposed) {
       throw new Error("Microphone capture has already been disposed.");
     }
-    const attempt = this.startInternal();
+    const attempt = this.stopping.then(() => this.startInternal());
     this.startPromise = attempt;
     attempt.catch(() => {
       if (this.startPromise === attempt) {
@@ -125,13 +139,25 @@ class BrowserMicrophoneCapture implements MicrophoneCapture {
   }
 
   async beginUtterance(): Promise<void> {
+    const generation = ++this.generation;
+    await this.start();
+    if (generation !== this.generation || this.disposed) return;
+    await this.resume();
+    if (generation !== this.generation || this.disposed) return;
     this.streaming = true;
-    return Promise.resolve();
   }
 
   async endUtterance(): Promise<void> {
+    this.generation += 1;
     this.streaming = false;
-    return Promise.resolve();
+    const pending = this.startPromise;
+    this.startPromise = null;
+    this.stopping = this.stopping.then(async () => {
+      await pending?.catch(() => undefined);
+      await this.releaseResources();
+      this.onLevel?.(0);
+    });
+    return this.stopping;
   }
 
   preRoll(): Uint8Array | null {
@@ -143,6 +169,9 @@ class BrowserMicrophoneCapture implements MicrophoneCapture {
       return;
     }
     this.disposed = true;
+    this.generation += 1;
+    this.streaming = false;
+    await this.stopping;
     const pending = this.startPromise;
     if (pending !== null) {
       try {
@@ -166,7 +195,7 @@ class BrowserMicrophoneCapture implements MicrophoneCapture {
         throw new Error(UNAVAILABLE_MESSAGE);
       }
 
-      const context = new AudioContextCtor();
+      const context = new AudioContextCtor({ sampleRate: this.targetSampleRate });
       this.context = context;
       const worklet = (context as { audioWorklet?: AudioWorklet }).audioWorklet;
       if (worklet === undefined || typeof worklet.addModule !== "function") {

@@ -9,8 +9,6 @@ const UNAVAILABLE_MESSAGE = "Audio playback is not available in this browser.";
  * crackling.
  */
 const SCHEDULE_LEAD_SECONDS = 0.04;
-/** Linear edge fade to remove the click at each chunk boundary. */
-const EDGE_FADE_SECONDS = 0.004;
 
 export interface SpeakerPlaybackOptions {
   /** PCM sample rate of the incoming chunks; defaults to Gemini Live's 24000. */
@@ -22,6 +20,7 @@ export interface SpeakerPlaybackOptions {
 export interface SpeakerPlayback {
   /** Schedules a PCM16 little-endian chunk; lazily creates/resumes the context. */
   enqueue(pcm16: Uint8Array): void;
+  resume(): Promise<void>;
   /** Stops all scheduled audio immediately, resets the queue, fires `onDrained`. */
   stop(): void;
   readonly speaking: boolean;
@@ -59,7 +58,13 @@ class WebAudioSpeakerPlayback implements SpeakerPlayback {
     }
     const context = this.ensureContext();
     const samples = int16ToFloat32(bytesToInt16(pcm16));
-    applyEdgeFade(samples, this.sampleRate);
+    const restarting = this.cursorTime <= context.currentTime;
+    // Ramp only after silence; fading each network chunk creates audible modulation.
+    if (restarting) {
+      const ramp = Math.min(samples.length, Math.round(this.sampleRate * 0.005));
+      for (let i = 0; i < ramp; i++) samples[i] = samples[i]! * (i / ramp);
+    }
+
     const buffer = context.createBuffer(1, samples.length, this.sampleRate);
     buffer.getChannelData(0).set(samples);
 
@@ -69,14 +74,13 @@ class WebAudioSpeakerPlayback implements SpeakerPlayback {
 
     // Keep a small jitter buffer: if the cursor has fallen behind the clock
     // (network stall), resume with a lead instead of slamming audio in.
-    const cursor =
-      this.cursorTime > 0 ? this.cursorTime : context.currentTime + SCHEDULE_LEAD_SECONDS;
-    const startAt = Math.max(context.currentTime + SCHEDULE_LEAD_SECONDS, cursor);
+    const startAt = restarting ? context.currentTime + SCHEDULE_LEAD_SECONDS : this.cursorTime;
     this.cursorTime = startAt + buffer.duration;
     this.sources.add(source);
     const handleEnded = () => {
       this.endedHandlers.delete(source);
       this.sources.delete(source);
+      source.disconnect();
       if (this.sources.size === 0) {
         this.cursorTime = 0;
         this.onDrained?.();
@@ -87,9 +91,13 @@ class WebAudioSpeakerPlayback implements SpeakerPlayback {
     source.start(startAt);
   }
 
+  async resume(): Promise<void> {
+    const context = this.ensureContext();
+    if (context.state === "suspended") await context.resume();
+  }
+
   stop(): void {
     this.cancelSources();
-    this.onDrained?.();
   }
 
   dispose(): void {
@@ -151,19 +159,6 @@ function bytesToInt16(bytes: Uint8Array): Int16Array {
     samples[index] = view.getInt16(index * 2, true);
   }
   return samples;
-}
-
-/** Fades the first and last few milliseconds so chunk edges do not click. */
-function applyEdgeFade(samples: Float32Array, sampleRate: number): void {
-  const fade = Math.min(Math.floor(sampleRate * EDGE_FADE_SECONDS), Math.floor(samples.length / 2));
-  if (fade <= 1) {
-    return;
-  }
-  for (let index = 0; index < fade; index += 1) {
-    const gain = index / fade;
-    samples[index] = (samples[index] ?? 0) * gain;
-    samples[samples.length - 1 - index] = (samples[samples.length - 1 - index] ?? 0) * gain;
-  }
 }
 
 function resolveAudioContextConstructor(): AudioContextConstructor | null {

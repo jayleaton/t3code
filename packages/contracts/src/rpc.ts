@@ -94,6 +94,9 @@ import { KeybindingsConfigError } from "./keybindings.ts";
 import {
   VoiceGetLiveSessionCredentialInput,
   VoiceLiveSessionCredential,
+  VoiceExecutionInput,
+  VoiceExecutionSnapshot,
+  VoiceExecutionError,
   VoiceProviderConfigError,
   VoiceProviderConfigSnapshot,
   VoiceProviderGetConfigInput,
@@ -400,6 +403,8 @@ export const WS_METHODS = {
   serverRefreshUsageRates: "server.refreshUsageRates",
 
   // Voice assistant provider credentials
+  voiceExecute: "voice.execute",
+  voiceSubscribeExecution: "voice.subscribeExecution",
   voiceGetProviderConfig: "voice.getProviderConfig",
   voiceSetProviderKey: "voice.setProviderKey",
   voiceRemoveProviderKey: "voice.removeProviderKey",
@@ -702,6 +707,18 @@ const WsServerGetBackgroundPolicyRpc = Rpc.make(WS_METHODS.serverGetBackgroundPo
   payload: Schema.Struct({}),
   success: BackgroundPolicySnapshot,
   error: EnvironmentAuthorizationError,
+});
+
+const WsVoiceExecuteRpc = Rpc.make(WS_METHODS.voiceExecute, {
+  payload: VoiceExecutionInput,
+  success: VoiceExecutionSnapshot,
+  error: Schema.Union([VoiceExecutionError, EnvironmentAuthorizationError]),
+});
+const WsVoiceSubscribeExecutionRpc = Rpc.make(WS_METHODS.voiceSubscribeExecution, {
+  payload: Schema.Struct({ sessionId: Schema.String }),
+  success: VoiceExecutionSnapshot,
+  error: Schema.Union([VoiceExecutionError, EnvironmentAuthorizationError]),
+  stream: true,
 });
 
 const WsVoiceGetProviderConfigRpc = Rpc.make(WS_METHODS.voiceGetProviderConfig, {
@@ -1486,6 +1503,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsVoiceRemoveProviderKeyRpc,
   WsVoiceTestProviderKeyRpc,
   WsVoiceGetLiveSessionCredentialRpc,
+  WsVoiceExecuteRpc,
+  WsVoiceSubscribeExecutionRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsPullRequestsListRpc,

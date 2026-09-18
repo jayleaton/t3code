@@ -63,6 +63,15 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
 }
 
 contextBridge.exposeInMainWorld("desktopBridge", {
+  configureVoiceShortcut: (shortcut) =>
+    ipcRenderer.invoke(IpcChannels.VOICE_SHORTCUT_CONFIGURE, shortcut),
+  onVoiceShortcut: (listener) => {
+    const receive = (_event: unknown, phase: unknown) => {
+      if (phase === "down" || phase === "up" || phase === "failed") listener(phase);
+    };
+    ipcRenderer.on(IpcChannels.VOICE_SHORTCUT_EVENT, receive);
+    return () => ipcRenderer.removeListener(IpcChannels.VOICE_SHORTCUT_EVENT, receive);
+  },
   getAppBranding: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_APP_BRANDING_CHANNEL);
     if (typeof result !== "object" || result === null) {

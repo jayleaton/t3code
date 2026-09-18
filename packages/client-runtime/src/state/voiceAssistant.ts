@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 
 import {
   createAtomCommandScheduler,
+  createEnvironmentRpcSubscriptionAtomFamily,
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
 } from "./runtime.ts";
@@ -42,6 +43,7 @@ export function createVoiceAssistantEnvironmentAtoms<R, E>(
     // Long-lived enough that background revalidation does not churn the live
     // session; the host additionally pins the last good credential.
     staleTimeMs: 60_000,
+    refreshTrigger: ({ environmentId }) => refreshes(environmentId),
     idleTtlMs: 5 * 60_000,
   });
 
@@ -58,6 +60,10 @@ export function createVoiceAssistantEnvironmentAtoms<R, E>(
   };
 
   return {
+    execution: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "voice-execution",
+      tag: WS_METHODS.voiceSubscribeExecution,
+    }),
     providerConfig,
     liveSessionCredential,
     setProviderKey: createEnvironmentRpcCommand(runtime, {

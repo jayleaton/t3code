@@ -505,7 +505,7 @@ export const ClientSettingsSchema = Schema.Struct({
   // Agent profile the voice assistant delegates tasks to. Empty disables tools.
   voiceAgentProfileId: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   // The single conversation the voice agent reuses; cleared to start fresh.
-  voiceAgentThreadId: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  voiceAgentSessionId: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
@@ -1653,7 +1653,7 @@ export const ClientSettingsPatch = Schema.Struct({
   voicePushToTalkShortcut: Schema.optionalKey(Schema.String),
   voiceMicrophoneDeviceId: Schema.optionalKey(Schema.String),
   voiceAgentProfileId: Schema.optionalKey(Schema.String),
-  voiceAgentThreadId: Schema.optionalKey(Schema.String),
+  voiceAgentSessionId: Schema.optionalKey(Schema.String),
   wordWrap: Schema.optionalKey(Schema.Boolean),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

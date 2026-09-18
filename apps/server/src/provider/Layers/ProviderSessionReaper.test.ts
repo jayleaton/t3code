@@ -5,6 +5,7 @@ import {
   TurnId,
   ProviderDriverKind,
   ProviderInstanceId,
+  type ProviderSession,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -174,6 +175,7 @@ describe("ProviderSessionReaper", () => {
   }
 
   async function createHarness(input: {
+    readonly liveSessions?: ReadonlyArray<ProviderSession>;
     readonly readModel: ReturnType<typeof makeReadModel>;
     readonly stopSessionImplementation?: (input: {
       readonly threadId: ThreadId;
@@ -197,7 +199,7 @@ describe("ProviderSessionReaper", () => {
       respondToRequest: () => unsupported(),
       respondToUserInput: () => unsupported(),
       stopSession,
-      listSessions: () => Effect.succeed([]),
+      listSessions: () => Effect.succeed(input.liveSessions ?? []),
       getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
       assertConversationRollbackSupported: () => unsupported(),
       getInstanceInfo: (instanceId) => {
@@ -269,6 +271,42 @@ describe("ProviderSessionReaper", () => {
     runtime = ManagedRuntime.make(layer);
     return { stopSession, stoppedThreadIds };
   }
+
+  it("keeps an active projectless device session and reaps it after it goes idle", async () => {
+    const threadId = ThreadId.make("voice:reaper");
+    const live: ProviderSession[] = [
+      {
+        threadId,
+        provider: ProviderDriverKind.make("codex"),
+        runtimeMode: "full-access",
+        status: "running",
+        createdAt: "2026-04-14T00:00:00.000Z",
+        updatedAt: "2026-04-14T00:00:00.000Z",
+      },
+    ];
+    const harness = await createHarness({ readModel: makeReadModel([]), liveSessions: live });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "codex",
+        providerInstanceId: null,
+        adapterKey: "codex",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        resumeCursor: null,
+        runtimePayload: null,
+      }),
+    );
+    await sweepAt(Date.parse("2026-04-14T01:00:00.000Z"));
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    live.length = 0;
+    await sweepAt(Date.parse("2026-04-14T01:00:01.000Z"));
+    expect(harness.stopSession).toHaveBeenCalledWith({ threadId });
+  });
 
   it("reaps stale persisted sessions without active turns", async () => {
     const threadId = ThreadId.make("thread-reaper-stale");

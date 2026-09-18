@@ -122,6 +122,7 @@ import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as VoiceProviderConfig from "./voice/VoiceProviderConfig.ts";
 import * as VoiceProviderProbe from "./voice/VoiceProviderProbe.ts";
+import * as VoiceExecution from "./voice/VoiceExecution.ts";
 import * as VoiceLiveSessionCredential from "./voice/VoiceLiveSessionCredential.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import {
@@ -450,7 +451,10 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
   ),
 );
 
-const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
+const ProviderRuntimeLayerLive = Layer.mergeAll(
+  ProviderSessionReaperLive,
+  VoiceExecution.layer,
+).pipe(
   // Subscribes to `account.rate-limits.updated` so usage bars track live
   // telemetry instead of waiting for the next status probe.
   Layer.provideMerge(ProviderUsageLimitsIngestionLive),
@@ -591,11 +595,11 @@ export const makeRoutesLayer = Layer.mergeAll(
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,
   ),
-  Layer.mergeAll(McpHttpServer.layer, McpGatewayHttpServer.layer).pipe(
-    Layer.provide(McpSessionRegistry.layer),
-    Layer.fresh,
-  ),
-  WorkspaceMcpHttpServer.layer.pipe(Layer.fresh),
+  Layer.mergeAll(
+    McpHttpServer.layer,
+    McpGatewayHttpServer.layer,
+    WorkspaceMcpHttpServer.layer,
+  ).pipe(Layer.provide(McpSessionRegistry.layer), Layer.fresh),
 ).pipe(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.

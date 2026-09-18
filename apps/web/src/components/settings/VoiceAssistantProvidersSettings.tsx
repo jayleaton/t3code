@@ -1,5 +1,6 @@
+import { usePrimaryEnvironmentId } from "../../state/environments";
 import {
-  type EnvironmentId,
+  EnvironmentId,
   VOICE_PROVIDER_LABELS,
   type VoiceProviderConfigSnapshot,
   type VoiceProviderKeyStatus,
@@ -13,7 +14,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 
-import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
+import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { voiceAssistantEnvironment } from "../../state/voiceAssistant";
@@ -183,12 +184,15 @@ function ProviderKeyRow({
           <span className="block">
             {isPlanned
               ? "Stored for when the adapter ships. It never looks functional before then."
-              : `Used for ${status.role === "decision" ? "narrow routing decisions" : "speech conversations"}.`}{" "}
+              : status.role === "decision"
+                ? "Not used by the current voice runtime."
+                : "Used for speech conversations."}{" "}
             {STORAGE_EXPLANATION}
           </span>
           {status.role === "decision" ? (
             <span className="block">
-              Optional. Without it, exact-target commands and completion announcements still work.
+              Leave this unset for voice conversation, agent delegation, and completion
+              announcements.
             </span>
           ) : null}
           {configuredHint ? <span className="block">{configuredHint}</span> : null}
@@ -336,9 +340,7 @@ function VoiceProviderKeys({
 
 export function VoiceAssistantProvidersSection() {
   const { environments } = useEnvironments();
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<EnvironmentId | null>(null);
-  const environmentId = selectedEnvironmentId ?? primaryEnvironmentId;
+  const environmentId = usePrimaryEnvironmentId();
 
   const conversationProvider = useScopedSettings((settings) => settings.voiceConversationProvider);
   const updateSettings = useUpdateScopedSettings();
@@ -388,35 +390,9 @@ export function VoiceAssistantProvidersSection() {
         }
       />
       <SettingsRow
-        title="Credential owner"
-        description="Choose which environment stores the voice provider keys. This is independent of the agent environment selected in chat."
-        control={
-          <Select
-            value={environmentId}
-            onValueChange={(value) => setSelectedEnvironmentId(value as EnvironmentId | null)}
-          >
-            <SelectTrigger
-              size="sm"
-              className="w-full sm:w-64"
-              aria-label="Voice credential environment"
-            >
-              <SelectValue>
-                {environmentId === null ? "No environment" : environmentLabel}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectPopup align="end" alignItemWithTrigger={false}>
-              {environments.map((environment) => (
-                <SelectItem
-                  key={environment.environmentId}
-                  hideIndicator
-                  value={environment.environmentId}
-                >
-                  {environment.label}
-                </SelectItem>
-              ))}
-            </SelectPopup>
-          </Select>
-        }
+        title="Voice credentials"
+        description="Voice provider keys are stored in this environment. Your microphone stays on the device you are using."
+        control={<span>{environmentId ? environmentLabel : "Connect an environment"}</span>}
       />
       {environmentId === null ? (
         <SettingsRow
