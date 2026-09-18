@@ -1,4 +1,4 @@
-import { AudioLines, Mic } from "lucide-react";
+import { AudioLines, LoaderCircle, Mic } from "lucide-react";
 
 import { useVoiceAssistantHost } from "./VoiceAssistantHost";
 
@@ -23,28 +23,49 @@ function LevelBars({ level }: { readonly level: number }) {
 }
 
 /**
- * Always-visible status while the assistant is capturing or speaking, so
- * push-to-talk is obvious even with the settings dialog closed. Rendered by the
- * host provider, which owns the runtime state.
+ * Always-visible status while voice is armed, so push-to-talk is obvious even
+ * with the settings dialog closed, and so "waiting", "thinking", and
+ * "speaking" are distinguishable instead of an ambiguous spinner.
  */
 export function VoiceAssistantIndicator() {
   const { state, microphoneLevel, microphoneActive } = useVoiceAssistantHost();
+  if (state.mode === "off") {
+    return null;
+  }
+
   const listening = microphoneActive || state.input === "capturing";
-  const speaking = state.output === "speaking";
-  if (!listening && !speaking) {
+  const connected = state.transport === "ready";
+
+  const status = !connected
+    ? ({ label: "Connecting…", icon: "connecting" } as const)
+    : listening
+      ? ({ label: "Listening…", icon: "listening" } as const)
+      : state.output === "preparing"
+        ? ({ label: "Thinking…", icon: "thinking" } as const)
+        : state.output === "speaking"
+          ? ({ label: "Speaking…", icon: "speaking" } as const)
+          : null;
+
+  if (status === null) {
     return null;
   }
 
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center">
-      <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-border/60 bg-card/95 px-4 py-2 shadow-lg backdrop-blur-sm">
-        {listening ? (
-          <Mic className="size-4 text-primary" aria-hidden="true" />
-        ) : (
+      <div
+        role="status"
+        aria-live="polite"
+        className="pointer-events-auto flex items-center gap-3 rounded-full border border-border/60 bg-card/95 px-4 py-2 shadow-lg backdrop-blur-sm"
+      >
+        {status.icon === "connecting" || status.icon === "thinking" ? (
+          <LoaderCircle className="size-4 animate-spin text-muted-foreground" aria-hidden="true" />
+        ) : status.icon === "speaking" ? (
           <AudioLines className="size-4 text-primary" aria-hidden="true" />
+        ) : (
+          <Mic className="size-4 text-primary" aria-hidden="true" />
         )}
-        <span className="text-sm text-foreground">{listening ? "Listening…" : "Speaking…"}</span>
-        {listening ? <LevelBars level={microphoneLevel} /> : null}
+        <span className="text-sm text-foreground">{status.label}</span>
+        {status.icon === "listening" ? <LevelBars level={microphoneLevel} /> : null}
       </div>
     </div>
   );

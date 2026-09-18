@@ -173,16 +173,16 @@ class BrowserMicrophoneCapture implements MicrophoneCapture {
         throw new Error(UNAVAILABLE_MESSAGE);
       }
 
-      const stream = await mediaDevices.getUserMedia({
-        audio:
-          this.deviceId === undefined
-            ? true
-            : {
-                deviceId: { exact: this.deviceId },
-                echoCancellation: true,
-                noiseSuppression: true,
-              },
-      });
+      // Echo cancellation is essential: the assistant's own speech plays
+      // through the speakers while the mic is live during barge-in, and without
+      // it the model can hear itself as a feedback loop that sounds like noise.
+      const audioConstraints: MediaTrackConstraints = {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        ...(this.deviceId === undefined ? {} : { deviceId: { exact: this.deviceId } }),
+      };
+      const stream = await mediaDevices.getUserMedia({ audio: audioConstraints });
       this.stream = stream;
 
       const workletUrl = URL.createObjectURL(

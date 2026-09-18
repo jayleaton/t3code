@@ -240,7 +240,12 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
           setError(cause.message);
           controllerRef.current?.setTransport("failed");
         },
-        onAudio: (chunk) => playbackRef.current?.enqueue(chunk),
+        onAudio: (chunk) => {
+          // First model audio of the turn flips the indicator from Thinking to
+          // Speaking, so the user can tell it heard them.
+          controllerRef.current?.handleAssistantSpeechStart();
+          playbackRef.current?.enqueue(chunk);
+        },
         onInputTranscript: (text) => controllerRef.current?.handleFinalTranscript(text),
         onTurnComplete: () => controllerRef.current?.handleAssistantSpeechEnd(),
         onInterrupted: () => controllerRef.current?.handleAssistantSpeechEnd(),
@@ -281,19 +286,24 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
       }
       if (event.repeat || isTypingTarget(event.target)) return;
       if (shortcut.trim().length === 0 || !matchesVoiceShortcut(event, shortcut)) return;
+      // Capture-phase, and stop propagation so a focused button cannot treat
+      // the key as a Space/Enter activation and open the dialog.
       event.preventDefault();
+      event.stopPropagation();
       void captureRef.current?.resume();
       void controllerRef.current?.pressPushToTalk();
     };
     const onKeyUp = (event: KeyboardEvent) => {
       if (shortcut.trim().length === 0 || !matchesVoiceShortcut(event, shortcut)) return;
+      event.preventDefault();
+      event.stopPropagation();
       void controllerRef.current?.releasePushToTalk();
     };
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    window.addEventListener("keyup", onKeyUp, { capture: true });
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+      window.removeEventListener("keyup", onKeyUp, { capture: true });
     };
   }, [mode, shortcut]);
 
