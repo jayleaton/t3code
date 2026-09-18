@@ -209,6 +209,49 @@ describe("MCP gateway server", () => {
     await gateway.server.close();
   });
 
+  it.each(["t3_create_thread", "t3_create_and_start_thread"] as const)(
+    "%s forwards worktree creation options through the MCP boundary",
+    async (toolName) => {
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const creates: Array<Parameters<GatewayRuntimePort["createThread"]>[0]> = [];
+      const gateway = createMcpGateway({
+        port: {
+          ...port,
+          createThread: async (input) => {
+            creates.push(input);
+            return port.createThread(input);
+          },
+        },
+        grants: { local: ["create", "send"] },
+      });
+      const client = new Client({ name: "gateway-test", version: "1.0.0" });
+      await gateway.connect(serverTransport);
+      await client.connect(clientTransport);
+
+      try {
+        const result = await client.callTool({
+          name: toolName,
+          arguments: {
+            environmentId: "local",
+            projectId: "project-1",
+            title: "Worktree chat",
+            ...(toolName === "t3_create_and_start_thread" ? { text: "Inspect this worktree" } : {}),
+            workspaceMode: "worktree",
+            baseBranch: " main ",
+            idempotencyKey: "worktree-create-1",
+          },
+        });
+
+        expect(result.isError).not.toBe(true);
+        expect(creates).toHaveLength(1);
+        expect(creates[0]).toMatchObject({ workspaceMode: "worktree", baseBranch: "main" });
+      } finally {
+        await client.close();
+        await gateway.server.close();
+      }
+    },
+  );
+
   it("applies grant changes after the MCP server is already connected", async () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     let grants: Readonly<Record<string, ReadonlyArray<"read" | "create" | "send">>> = {};

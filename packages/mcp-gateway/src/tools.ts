@@ -1569,6 +1569,12 @@ export async function callGatewayTool(
           ...(resolvedInteractionMode === undefined
             ? {}
             : { interactionMode: resolvedInteractionMode }),
+          ...(input.workspaceMode === undefined
+            ? {}
+            : { workspaceMode: input.workspaceMode as "checkout" | "worktree" }),
+          ...(input.baseBranch === undefined
+            ? {}
+            : { baseBranch: requiredString(input, "baseBranch") }),
           ...(authoritativeProfileRef === undefined
             ? {}
             : {
