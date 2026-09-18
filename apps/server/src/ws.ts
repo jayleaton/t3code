@@ -148,6 +148,7 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as VoiceProviderConfig from "./voice/VoiceProviderConfig.ts";
+import * as VoiceLiveSessionCredential from "./voice/VoiceLiveSessionCredential.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
@@ -630,6 +631,8 @@ const makeWsRpcLayer = (
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const voiceProviderConfig = yield* VoiceProviderConfig.VoiceProviderConfig;
+      const voiceLiveSessionCredential =
+        yield* VoiceLiveSessionCredential.VoiceLiveSessionCredentialService;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
       yield* Effect.addFinalizer(() =>
         Ref.get(rpcClientIds).pipe(
@@ -2748,6 +2751,12 @@ const makeWsRpcLayer = (
               const providers = yield* voiceProviderConfig.testKey(input);
               return { environmentId, providers };
             }),
+            { "rpc.aggregate": "voice" },
+          ),
+        [WS_METHODS.voiceGetLiveSessionCredential]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.voiceGetLiveSessionCredential,
+            voiceLiveSessionCredential.get(input),
             { "rpc.aggregate": "voice" },
           ),
         [WS_METHODS.cloudGetRelayClientStatus]: (_input) =>

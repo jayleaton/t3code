@@ -36,6 +36,14 @@ export function createVoiceAssistantEnvironmentAtoms<R, E>(
     refreshTrigger: ({ environmentId }) => refreshes(environmentId),
   });
 
+  const liveSessionCredential = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:voice:live-session-credential",
+    tag: WS_METHODS.voiceGetLiveSessionCredential,
+    // Credentials are short-lived in spirit; never reuse across mounts.
+    staleTimeMs: 0,
+    idleTtlMs: 60_000,
+  });
+
   const mutationOptions = {
     scheduler: commandScheduler,
     concurrency: {
@@ -50,6 +58,7 @@ export function createVoiceAssistantEnvironmentAtoms<R, E>(
 
   return {
     providerConfig,
+    liveSessionCredential,
     setProviderKey: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:voice:set-provider-key",
       tag: WS_METHODS.voiceSetProviderKey,

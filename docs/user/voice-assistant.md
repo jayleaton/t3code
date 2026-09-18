@@ -55,9 +55,11 @@ the recorded chord is pressed, so you can confirm it before relying on it.
 
 ## Current status
 
-Provider credential setup, mode selection, and shortcut configuration are available. Live microphone
-capture, the local "Hey agent" wake engine, and spoken response playback are the next milestone; until
-they land, selecting a mode stores your preference but does not yet capture or speak audio.
+Provider credential setup, mode selection, shortcut configuration, microphone capture, and spoken
+playback are available for **Push-to-talk**: add a Gemini API key, set a push-to-talk key, select
+Push-to-talk, then hold the key and talk. The local "Hey agent" wake engine is the next milestone, so
+wake-word mode stores your preference but does not listen yet. The live model id can be overridden
+with `T3CODE_GEMINI_LIVE_MODEL` if the provider renames it.
 
 ## Capability notes
 

@@ -92,6 +92,8 @@ import {
 } from "./review.ts";
 import { KeybindingsConfigError } from "./keybindings.ts";
 import {
+  VoiceGetLiveSessionCredentialInput,
+  VoiceLiveSessionCredential,
   VoiceProviderConfigError,
   VoiceProviderConfigSnapshot,
   VoiceProviderGetConfigInput,
@@ -402,6 +404,7 @@ export const WS_METHODS = {
   voiceSetProviderKey: "voice.setProviderKey",
   voiceRemoveProviderKey: "voice.removeProviderKey",
   voiceTestProviderKey: "voice.testProviderKey",
+  voiceGetLiveSessionCredential: "voice.getLiveSessionCredential",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -722,6 +725,12 @@ const WsVoiceRemoveProviderKeyRpc = Rpc.make(WS_METHODS.voiceRemoveProviderKey, 
 const WsVoiceTestProviderKeyRpc = Rpc.make(WS_METHODS.voiceTestProviderKey, {
   payload: VoiceProviderTestKeyInput,
   success: VoiceProviderConfigSnapshot,
+  error: Schema.Union([VoiceProviderConfigError, EnvironmentAuthorizationError]),
+});
+
+const WsVoiceGetLiveSessionCredentialRpc = Rpc.make(WS_METHODS.voiceGetLiveSessionCredential, {
+  payload: VoiceGetLiveSessionCredentialInput,
+  success: VoiceLiveSessionCredential,
   error: Schema.Union([VoiceProviderConfigError, EnvironmentAuthorizationError]),
 });
 
@@ -1476,6 +1485,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsVoiceSetProviderKeyRpc,
   WsVoiceRemoveProviderKeyRpc,
   WsVoiceTestProviderKeyRpc,
+  WsVoiceGetLiveSessionCredentialRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsPullRequestsListRpc,

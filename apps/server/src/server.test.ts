@@ -46,6 +46,7 @@ import {
   EditorId,
   WorktreeSetupSnapshot,
   type WorktreeSetupStageId,
+  VoiceProviderConfigError,
 } from "@t3tools/contracts";
 import {
   computeDpopAccessTokenHash,
@@ -176,6 +177,7 @@ import * as ReviewService from "./review/ReviewService.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as VoiceProviderConfig from "./voice/VoiceProviderConfig.ts";
+import * as VoiceLiveSessionCredential from "./voice/VoiceLiveSessionCredential.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
@@ -1226,6 +1228,18 @@ const buildAppUnderTest = (options?: {
               setKey: () => Effect.succeed([]),
               removeKey: () => Effect.succeed([]),
               testKey: () => Effect.succeed([]),
+            }),
+          ),
+          Layer.succeed(
+            VoiceLiveSessionCredential.VoiceLiveSessionCredentialService,
+            VoiceLiveSessionCredential.VoiceLiveSessionCredentialService.of({
+              get: () =>
+                Effect.fail(
+                  new VoiceProviderConfigError({
+                    providerId: "gemini",
+                    message: "not stubbed",
+                  }),
+                ),
             }),
           ),
         ),

@@ -23,6 +23,7 @@ import {
 } from "../../voice-assistant/pushToTalkShortcut";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { useVoiceAssistantHost } from "../../voice-assistant/VoiceAssistantHost";
 import {
   Dialog,
   DialogDescription,
@@ -156,6 +157,65 @@ function HotkeyTestRow() {
       <span className={held ? "text-foreground" : "text-muted-foreground"}>
         {held ? "Detected — holding" : "Press the key to test"}
       </span>
+    </div>
+  );
+}
+
+const TRANSPORT_LABELS = {
+  disconnected: "Disconnected",
+  connecting: "Connecting",
+  ready: "Connected",
+  reconnecting: "Reconnecting",
+  failed: "Failed",
+} as const;
+
+function LiveStatusBlock() {
+  const { state, microphoneLevel, error } = useVoiceAssistantHost();
+  const shortcut = useClientSettings((settings) => settings.voicePushToTalkShortcut);
+
+  return (
+    <div className="space-y-2 rounded-md border border-border/60 p-3">
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span className="text-muted-foreground">Live session</span>
+        <Badge
+          variant={
+            state.transport === "ready"
+              ? "success"
+              : state.transport === "failed"
+                ? "error"
+                : "outline"
+          }
+        >
+          {TRANSPORT_LABELS[state.transport]}
+        </Badge>
+      </div>
+      <div className="flex items-center gap-2">
+        <Mic className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+          <div
+            className="h-full rounded-full bg-primary transition-[width] duration-100"
+            style={{ width: `${Math.round(microphoneLevel * 100)}%` }}
+          />
+        </div>
+      </div>
+      {state.input === "capturing" ? (
+        <p className="text-xs text-foreground">Listening…</p>
+      ) : shortcut.trim().length > 0 ? (
+        <p className="text-xs text-muted-foreground">
+          Hold {formatVoiceShortcut(shortcut)} to talk.
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">Set a push-to-talk key to talk.</p>
+      )}
+      {state.transcript ? (
+        <p className="text-xs text-muted-foreground">Last request: “{state.transcript}”</p>
+      ) : null}
+      {state.lastAnnouncement ? (
+        <p className="text-xs text-muted-foreground">
+          Last announcement: “{state.lastAnnouncement}”
+        </p>
+      ) : null}
+      {error ? <p className="text-xs text-destructive">{error}</p> : null}
     </div>
   );
 }
@@ -314,6 +374,7 @@ function VoiceAssistantDialogContent() {
       </DialogHeader>
       <DialogPanel className="space-y-4">
         <ModeRow />
+        <LiveStatusBlock />
         <PushToTalkShortcutRecorder />
         <HotkeyTestRow />
         <TimeoutRow />
@@ -348,8 +409,8 @@ function VoiceAssistantDialogContent() {
           </Badge>
         </div>
         <p className="text-[11px] leading-relaxed text-muted-foreground">
-          Live microphone capture, the Hey agent wake engine, and response playback arrive in the
-          next milestone. This dialog configures how they will behave.
+          Push-to-talk captures, sends, and plays back audio through the selected provider. The “Hey
+          agent” wake engine is the next milestone; until then push-to-talk is the way to talk.
         </p>
       </DialogPanel>
       <DialogFooter>

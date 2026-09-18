@@ -13,6 +13,19 @@ import { IsoDateTime, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchema
 export const VoiceProviderId = Schema.Literals(["gemini", "openai", "jev"]);
 export type VoiceProviderId = typeof VoiceProviderId.Type;
 
+/** Conversation providers, in the order the selector should present them. */
+export const VOICE_CONVERSATION_PROVIDER_IDS = ["gemini", "openai"] as const;
+export type VoiceConversationProviderId = (typeof VOICE_CONVERSATION_PROVIDER_IDS)[number];
+
+export const VoiceConversationProvider = Schema.Literals(VOICE_CONVERSATION_PROVIDER_IDS);
+export type VoiceConversationProvider = typeof VoiceConversationProvider.Type;
+
+export const VoiceAssistantMode = Schema.Literals(["off", "push-to-talk", "wake-word"]);
+export type VoiceAssistantMode = typeof VoiceAssistantMode.Type;
+
+export const VoiceSilenceTimeoutSeconds = Schema.Literals([5, 10]);
+export type VoiceSilenceTimeoutSeconds = typeof VoiceSilenceTimeoutSeconds.Type;
+
 export const VoiceProviderRole = Schema.Literals(["conversation", "decision"]);
 export type VoiceProviderRole = typeof VoiceProviderRole.Type;
 
@@ -95,6 +108,27 @@ export const VoiceProviderTestKeyInput = Schema.Struct({
 });
 export type VoiceProviderTestKeyInput = typeof VoiceProviderTestKeyInput.Type;
 
+/**
+ * A live session credential for the conversation provider, scoped to one
+ * authorized client. `authMode` is explicit so the client can never assume a
+ * short-lived token when it actually holds a long-lived key; the server logs
+ * and UI can report which mode is in use.
+ */
+export const VoiceLiveSessionCredential = Schema.Struct({
+  provider: VoiceConversationProvider,
+  model: TrimmedNonEmptyString,
+  authMode: Schema.Literals(["api-key", "ephemeral-token"]),
+  token: TrimmedNonEmptyString,
+  endpointUrl: TrimmedNonEmptyString,
+  expiresAt: Schema.NullOr(IsoDateTime),
+});
+export type VoiceLiveSessionCredential = typeof VoiceLiveSessionCredential.Type;
+
+export const VoiceGetLiveSessionCredentialInput = Schema.Struct({
+  provider: VoiceConversationProvider,
+});
+export type VoiceGetLiveSessionCredentialInput = typeof VoiceGetLiveSessionCredentialInput.Type;
+
 export class VoiceProviderConfigError extends Schema.TaggedError<VoiceProviderConfigError>()(
   "VoiceProviderConfigError",
   {
@@ -108,16 +142,3 @@ export const VOICE_PROVIDER_LABELS: Readonly<Record<VoiceProviderId, string>> = 
   openai: "OpenAI voice",
   jev: "Jev / TypeSafe",
 };
-
-/** Conversation providers, in the order the selector should present them. */
-export const VOICE_CONVERSATION_PROVIDER_IDS = ["gemini", "openai"] as const;
-export type VoiceConversationProviderId = (typeof VOICE_CONVERSATION_PROVIDER_IDS)[number];
-
-export const VoiceConversationProvider = Schema.Literals(VOICE_CONVERSATION_PROVIDER_IDS);
-export type VoiceConversationProvider = typeof VoiceConversationProvider.Type;
-
-export const VoiceAssistantMode = Schema.Literals(["off", "push-to-talk", "wake-word"]);
-export type VoiceAssistantMode = typeof VoiceAssistantMode.Type;
-
-export const VoiceSilenceTimeoutSeconds = Schema.Literals([5, 10]);
-export type VoiceSilenceTimeoutSeconds = typeof VoiceSilenceTimeoutSeconds.Type;
