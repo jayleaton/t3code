@@ -2,7 +2,15 @@ import {
   VoiceAssistantController,
   type VoiceAssistantState,
 } from "@t3tools/client-runtime/voice-assistant";
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { useClientSettings } from "../hooks/useSettings";
 import { usePrimaryEnvironmentId } from "../state/environments";
@@ -33,6 +41,8 @@ export interface VoiceAssistantHostValue {
   readonly microphoneLevel: number;
   readonly error: string | null;
   readonly environmentId: string | null;
+  /** Acquires/updates the microphone from a user gesture (device picker). */
+  readonly requestMicrophoneAccess: () => void;
 }
 
 const VoiceAssistantHostContext = createContext<VoiceAssistantHostValue>({
@@ -40,6 +50,7 @@ const VoiceAssistantHostContext = createContext<VoiceAssistantHostValue>({
   microphoneLevel: 0,
   error: null,
   environmentId: null,
+  requestMicrophoneAccess: () => undefined,
 });
 
 export function useVoiceAssistantHost(): VoiceAssistantHostValue {
@@ -65,6 +76,7 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
   const provider = useClientSettings((settings) => settings.voiceConversationProvider);
   const timeout = useClientSettings((settings) => settings.voiceSilenceTimeoutSeconds);
   const shortcut = useClientSettings((settings) => settings.voicePushToTalkShortcut);
+  const deviceId = useClientSettings((settings) => settings.voiceMicrophoneDeviceId);
   const environmentId = usePrimaryEnvironmentId();
   const credential = useEnvironmentQuery(
     environmentId === null || mode === "off"
@@ -107,6 +119,7 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
       },
     });
     const capture = createMicrophoneCapture({
+      ...(deviceId.length > 0 ? { deviceId } : {}),
       onFrame: (frame) => conversation.sendAudio(frame),
       onLevel: setMicrophoneLevel,
       onError: (cause) => setError(cause.message),
@@ -137,7 +150,7 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
       playback.dispose();
       void controller?.dispose();
     };
-  }, [mode, provider, timeout, credentialToken, credentialModel]);
+  }, [mode, provider, timeout, credentialToken, credentialModel, deviceId]);
 
   useEffect(() => {
     if (mode === "off") return;
@@ -149,8 +162,10 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
       if (event.repeat || isTypingTarget(event.target)) return;
       if (shortcut.trim().length === 0 || !matchesVoiceShortcut(event, shortcut)) return;
       event.preventDefault();
-      // First press is a user gesture: make sure the mic/audio context exist.
+      // First press is a user gesture: make sure the mic/audio context exist and
+      // are resumed (browsers start an AudioContext suspended until a gesture).
       void captureRef.current?.start().catch(() => undefined);
+      void captureRef.current?.resume();
       void controllerRef.current?.pressPushToTalk();
     };
     const onKeyUp = (event: KeyboardEvent) => {
@@ -165,8 +180,15 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
     };
   }, [mode, shortcut]);
 
+  const requestMicrophoneAccess = useCallback(() => {
+    void captureRef.current?.start().catch(() => undefined);
+    void captureRef.current?.resume();
+  }, []);
+
   return (
-    <VoiceAssistantHostContext.Provider value={{ state, microphoneLevel, error, environmentId }}>
+    <VoiceAssistantHostContext.Provider
+      value={{ state, microphoneLevel, error, environmentId, requestMicrophoneAccess }}
+    >
       {children}
     </VoiceAssistantHostContext.Provider>
   );

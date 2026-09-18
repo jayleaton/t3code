@@ -6,6 +6,7 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import { AudioLines, Mic, MicOff, XIcon } from "lucide-react";
 import {
+  useCallback,
   useEffect,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -35,6 +36,7 @@ import {
   DialogTrigger,
 } from "../ui/dialog";
 import { SidebarMenuButton } from "../ui/sidebar";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 
 const MODE_LABELS: Readonly<Record<VoiceAssistantMode, string>> = {
@@ -220,6 +222,85 @@ function LiveStatusBlock() {
   );
 }
 
+function MicrophoneRow() {
+  const deviceId = useClientSettings((settings) => settings.voiceMicrophoneDeviceId);
+  const update = useUpdateClientSettings();
+  const { requestMicrophoneAccess } = useVoiceAssistantHost();
+  const [devices, setDevices] = useState<readonly MediaDeviceInfo[]>([]);
+
+  const refresh = useCallback(() => {
+    const mediaDevices = navigator.mediaDevices;
+    if (mediaDevices === undefined || typeof mediaDevices.enumerateDevices !== "function") return;
+    void mediaDevices
+      .enumerateDevices()
+      .then((all) => setDevices(all.filter((device) => device.kind === "audioinput")))
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const mediaDevices = navigator.mediaDevices;
+    if (mediaDevices === undefined) return;
+    mediaDevices.addEventListener("devicechange", refresh);
+    return () => mediaDevices.removeEventListener("devicechange", refresh);
+  }, [refresh]);
+
+  const labelsHidden = devices.length > 0 && devices.every((device) => device.label.length === 0);
+  const selectedLabel =
+    deviceId.length === 0
+      ? "System default"
+      : devices.find((device) => device.deviceId === deviceId)?.label || "Selected microphone";
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm text-foreground">Microphone</div>
+          <div className="text-xs text-muted-foreground">The input device voice listens to.</div>
+        </div>
+        <Select
+          value={deviceId.length === 0 ? "default" : deviceId}
+          onValueChange={(value) =>
+            update({ voiceMicrophoneDeviceId: value === null || value === "default" ? "" : value })
+          }
+        >
+          <SelectTrigger size="sm" className="w-44 shrink-0" aria-label="Microphone">
+            <SelectValue>{selectedLabel}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup align="end" alignItemWithTrigger={false}>
+            <SelectItem hideIndicator value="default">
+              System default
+            </SelectItem>
+            {devices.map((device, index) => (
+              <SelectItem
+                key={device.deviceId || `device-${index}`}
+                hideIndicator
+                value={device.deviceId || `device-${index}`}
+              >
+                {device.label || `Microphone ${index + 1}`}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+      </div>
+      {labelsHidden ? (
+        <Button
+          type="button"
+          size="xs"
+          variant="outline"
+          className="w-full"
+          onClick={() => {
+            requestMicrophoneAccess();
+            window.setTimeout(refresh, 700);
+          }}
+        >
+          Allow microphone access to see device names
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 function ModeRow() {
   const navigate = useNavigate();
   const mode = useClientSettings((settings) => settings.voiceAssistantMode);
@@ -375,6 +456,7 @@ function VoiceAssistantDialogContent() {
       <DialogPanel className="space-y-4">
         <ModeRow />
         <LiveStatusBlock />
+        <MicrophoneRow />
         <PushToTalkShortcutRecorder />
         <HotkeyTestRow />
         <TimeoutRow />

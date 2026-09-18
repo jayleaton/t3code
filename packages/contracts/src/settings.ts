@@ -500,6 +500,8 @@ export const ClientSettingsSchema = Schema.Struct({
   // Desktop-only global accelerator (Electron format). Empty keeps push-to-talk
   // in-app only, which is the default so we never hijack a global chord.
   voicePushToTalkShortcut: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  // Empty means the system default input device.
+  voiceMicrophoneDeviceId: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
@@ -1645,6 +1647,7 @@ export const ClientSettingsPatch = Schema.Struct({
   voiceAnnounceInputRequests: Schema.optionalKey(Schema.Boolean),
   voiceAnnounceApprovals: Schema.optionalKey(Schema.Boolean),
   voicePushToTalkShortcut: Schema.optionalKey(Schema.String),
+  voiceMicrophoneDeviceId: Schema.optionalKey(Schema.String),
   wordWrap: Schema.optionalKey(Schema.Boolean),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

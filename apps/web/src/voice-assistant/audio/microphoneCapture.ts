@@ -31,6 +31,8 @@ registerProcessor("${WORKLET_PROCESSOR_NAME}", T3VoiceCaptureProcessor);
 export interface MicrophoneCaptureOptions {
   /** Output frame rate; defaults to 16000 for the Gemini Live input format. */
   readonly targetSampleRate?: number;
+  /** Specific input device; empty/undefined uses the system default. */
+  readonly deviceId?: string;
   /** Receives Int16 little-endian frames at the target rate while streaming. */
   readonly onFrame?: (pcm16: Uint8Array) => void;
   /** Receives 0..1 RMS levels, throttled to roughly 10Hz. */
@@ -41,6 +43,8 @@ export interface MicrophoneCaptureOptions {
 export interface MicrophoneCapture extends VoiceCapturePort {
   /** Idempotent; safe to call repeatedly. */
   start(): Promise<void>;
+  /** Resumes a suspended AudioContext; call from a user gesture (hotkey press). */
+  resume(): Promise<void>;
   /** True while the utterance upload gate is open. */
   getStreaming(): boolean;
   /** Idempotent and safe before `start()`. */
@@ -55,6 +59,7 @@ type AudioContextConstructor = new (options?: AudioContextOptions) => AudioConte
 
 class BrowserMicrophoneCapture implements MicrophoneCapture {
   private readonly targetSampleRate: number;
+  private readonly deviceId: string | undefined;
   private readonly onFrame: ((pcm16: Uint8Array) => void) | undefined;
   private readonly onLevel: ((level: number) => void) | undefined;
   private readonly onError: ((error: Error) => void) | undefined;
@@ -72,6 +77,7 @@ class BrowserMicrophoneCapture implements MicrophoneCapture {
 
   constructor(options: MicrophoneCaptureOptions) {
     this.targetSampleRate = options.targetSampleRate ?? DEFAULT_TARGET_SAMPLE_RATE;
+    this.deviceId = options.deviceId && options.deviceId.length > 0 ? options.deviceId : undefined;
     this.onFrame = options.onFrame;
     this.onLevel = options.onLevel;
     this.onError = options.onError;
@@ -96,6 +102,18 @@ class BrowserMicrophoneCapture implements MicrophoneCapture {
 
   getStreaming(): boolean {
     return this.streaming;
+  }
+
+  /** Resumes the AudioContext; browsers suspend it until a user gesture. */
+  async resume(): Promise<void> {
+    const context = this.context;
+    if (context !== null && context.state === "suspended") {
+      try {
+        await context.resume();
+      } catch {
+        // A later press will retry; do not surface a transient resume failure.
+      }
+    }
   }
 
   async openWake(): Promise<void> {
@@ -155,7 +173,16 @@ class BrowserMicrophoneCapture implements MicrophoneCapture {
         throw new Error(UNAVAILABLE_MESSAGE);
       }
 
-      const stream = await mediaDevices.getUserMedia({ audio: true });
+      const stream = await mediaDevices.getUserMedia({
+        audio:
+          this.deviceId === undefined
+            ? true
+            : {
+                deviceId: { exact: this.deviceId },
+                echoCancellation: true,
+                noiseSuppression: true,
+              },
+      });
       this.stream = stream;
 
       const workletUrl = URL.createObjectURL(
