@@ -273,6 +273,7 @@ CREATE TABLE IF NOT EXISTS idempotency (
 
 export const MAX_WEBHOOK_RETRIES = 5;
 export const WEBHOOK_BACKOFF_CAP_MS = 5 * 60 * 1000;
+const RETENTION_SWEEP_INTERVAL_EVENTS = 256;
 
 export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
   const retentionEvents = input.retentionEvents ?? 100_000;
@@ -300,6 +301,7 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
   }
   const listeners = new Set<(event: GatewayEvent) => void>();
   const statusListeners = new Set<() => void>();
+  let eventsSinceRetentionSweep = 0;
   const notifyStatus = () => {
     for (const listener of statusListeners) listener();
   };
@@ -451,7 +453,8 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
       db.exec("ROLLBACK");
       throw error;
     }
-    trim();
+    eventsSinceRetentionSweep += 1;
+    if (eventsSinceRetentionSweep >= RETENTION_SWEEP_INTERVAL_EVENTS) trim();
     for (const listener of listeners) listener(stored);
     notifyStatus();
     return stored;
@@ -487,6 +490,7 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
           )`,
     ).run(cutoff, retentionEvents);
     db.prepare("DELETE FROM deliveries WHERE eventId NOT IN (SELECT eventId FROM events)").run();
+    eventsSinceRetentionSweep = 0;
   };
 
   const ingest = (event: Parameters<typeof emit>[0]): GatewayEvent => {
@@ -1212,6 +1216,7 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
       db.prepare("DELETE FROM idempotency WHERE key = ?").run(key);
     },
     close: (): void => {
+      if (eventsSinceRetentionSweep > 0) trim();
       db.close();
     },
   };

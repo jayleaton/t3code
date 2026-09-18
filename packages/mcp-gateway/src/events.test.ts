@@ -133,6 +133,43 @@ describe("gateway event store", () => {
     expect(store.history("env-1", 1, 10).map((event) => event.type)).toEqual(["b", "c"]);
   });
 
+  it("amortizes retention sweeps during replay and trims before history reads", () => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-events-replay-"));
+    const file = NodePath.join(directory, "events.sqlite");
+    const store = createGatewayEventStore({
+      file,
+      retentionEvents: 2,
+      retentionDays: 7,
+      now: () => clock.value,
+      newEventId: () => `evt-${++counter}`,
+    });
+    try {
+      store.emit({ environmentId: "env-1", type: "a" });
+      store.emit({ environmentId: "env-1", type: "b" });
+      store.emit({ environmentId: "env-1", type: "c" });
+
+      const beforeRead = new NodeSqlite.DatabaseSync(file, { readOnly: true });
+      expect(
+        (beforeRead.prepare("SELECT COUNT(*) AS count FROM events").get() as { count: number })
+          .count,
+      ).toBe(3);
+      beforeRead.close();
+
+      expect(() => store.history("env-1", 0, 10)).toThrowError(
+        expect.objectContaining({ code: "cursor_expired" }),
+      );
+      const afterRead = new NodeSqlite.DatabaseSync(file, { readOnly: true });
+      expect(
+        (afterRead.prepare("SELECT COUNT(*) AS count FROM events").get() as { count: number })
+          .count,
+      ).toBe(2);
+      afterRead.close();
+    } finally {
+      store.close();
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("keeps subscriptions with monotonic idempotent acks and typed cursors", () => {
     const store = makeStore();
     store.emit({ environmentId: "env-1", type: "thread.started" });
