@@ -147,6 +147,7 @@ import { importRecentAgentThreads } from "./project/AgentSessionImporter.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as VoiceProviderConfig from "./voice/VoiceProviderConfig.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
@@ -628,6 +629,7 @@ const makeWsRpcLayer = (
       const agentSessionScanner = yield* AgentSessionScanner.AgentSessionScanner;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
+      const voiceProviderConfig = yield* VoiceProviderConfig.VoiceProviderConfig;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
       yield* Effect.addFinalizer(() =>
         Ref.get(rpcClientIds).pipe(
@@ -2708,6 +2710,46 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverGetBackgroundPolicy, backgroundPolicy.snapshot, {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.voiceGetProviderConfig]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.voiceGetProviderConfig,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const providers = yield* voiceProviderConfig.getStatuses();
+              return { environmentId, providers };
+            }),
+            { "rpc.aggregate": "voice" },
+          ),
+        [WS_METHODS.voiceSetProviderKey]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.voiceSetProviderKey,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const providers = yield* voiceProviderConfig.setKey(input);
+              return { environmentId, providers };
+            }),
+            { "rpc.aggregate": "voice" },
+          ),
+        [WS_METHODS.voiceRemoveProviderKey]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.voiceRemoveProviderKey,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const providers = yield* voiceProviderConfig.removeKey(input);
+              return { environmentId, providers };
+            }),
+            { "rpc.aggregate": "voice" },
+          ),
+        [WS_METHODS.voiceTestProviderKey]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.voiceTestProviderKey,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const providers = yield* voiceProviderConfig.testKey(input);
+              return { environmentId, providers };
+            }),
+            { "rpc.aggregate": "voice" },
+          ),
         [WS_METHODS.cloudGetRelayClientStatus]: (_input) =>
           observeRpcEffect(WS_METHODS.cloudGetRelayClientStatus, relayClient.resolve, {
             "rpc.aggregate": "cloud",

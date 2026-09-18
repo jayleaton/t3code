@@ -38,6 +38,11 @@ import {
   ProviderInstanceId,
   type ProviderDriverKind,
 } from "./providerInstance.ts";
+import {
+  VoiceAssistantMode,
+  VoiceConversationProvider,
+  VoiceSilenceTimeoutSeconds,
+} from "./voiceAssistant.ts";
 import { PullRequestMergeMethod } from "./pullRequest.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
@@ -475,6 +480,26 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   snapShotFlash: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   snapShotAnimations: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // Voice assistant. "off" is fully disabled; arming voice is always an
+  // explicit user gesture, never an app-startup effect. The conversation
+  // provider selection chooses which stored credential the live adapter uses;
+  // the credential itself lives in the environment's secret store, never here.
+  voiceAssistantMode: VoiceAssistantMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("off" as const)),
+  ),
+  voiceConversationProvider: VoiceConversationProvider.pipe(
+    Schema.withDecodingDefault(Effect.succeed("gemini" as const)),
+  ),
+  // How long a command window stays open without accepted human speech.
+  voiceSilenceTimeoutSeconds: VoiceSilenceTimeoutSeconds.pipe(
+    Schema.withDecodingDefault(Effect.succeed(5 as const)),
+  ),
+  voiceAnnounceCompletions: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  voiceAnnounceInputRequests: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  voiceAnnounceApprovals: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // Desktop-only global accelerator (Electron format). Empty keeps push-to-talk
+  // in-app only, which is the default so we never hijack a global chord.
+  voicePushToTalkShortcut: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;

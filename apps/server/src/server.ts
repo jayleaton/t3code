@@ -120,6 +120,8 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as VoiceProviderConfig from "./voice/VoiceProviderConfig.ts";
+import * as VoiceProviderProbe from "./voice/VoiceProviderProbe.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import {
   connectHttpApiLayer,
@@ -488,6 +490,9 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // Core Services
   Layer.provideMerge(ServerSettingsLayerLive),
   Layer.provideMerge(CheckpointingLayerLive),
+  // Voice provider credentials are environment-owned secrets; the service only
+  // reads them for the live adapter and never returns key material to clients.
+  Layer.provideMerge(VoiceProviderConfig.layer.pipe(Layer.provide(VoiceProviderProbe.layer))),
   // `GitHubCli` is the registry's own instance, exposed because the asset route fetches
   // GitHub-hosted pull request media with the repository's credential.
   Layer.provideMerge(

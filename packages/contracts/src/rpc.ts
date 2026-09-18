@@ -92,6 +92,14 @@ import {
 } from "./review.ts";
 import { KeybindingsConfigError } from "./keybindings.ts";
 import {
+  VoiceProviderConfigError,
+  VoiceProviderConfigSnapshot,
+  VoiceProviderGetConfigInput,
+  VoiceProviderRemoveKeyInput,
+  VoiceProviderSetKeyInput,
+  VoiceProviderTestKeyInput,
+} from "./voiceAssistant.ts";
+import {
   ClientOrchestrationCommand,
   ORCHESTRATION_WS_METHODS,
   OrchestrationDispatchCommandError,
@@ -389,6 +397,12 @@ export const WS_METHODS = {
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
 
+  // Voice assistant provider credentials
+  voiceGetProviderConfig: "voice.getProviderConfig",
+  voiceSetProviderKey: "voice.setProviderKey",
+  voiceRemoveProviderKey: "voice.removeProviderKey",
+  voiceTestProviderKey: "voice.testProviderKey",
+
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
@@ -685,6 +699,30 @@ const WsServerGetBackgroundPolicyRpc = Rpc.make(WS_METHODS.serverGetBackgroundPo
   payload: Schema.Struct({}),
   success: BackgroundPolicySnapshot,
   error: EnvironmentAuthorizationError,
+});
+
+const WsVoiceGetProviderConfigRpc = Rpc.make(WS_METHODS.voiceGetProviderConfig, {
+  payload: VoiceProviderGetConfigInput,
+  success: VoiceProviderConfigSnapshot,
+  error: Schema.Union([VoiceProviderConfigError, EnvironmentAuthorizationError]),
+});
+
+const WsVoiceSetProviderKeyRpc = Rpc.make(WS_METHODS.voiceSetProviderKey, {
+  payload: VoiceProviderSetKeyInput,
+  success: VoiceProviderConfigSnapshot,
+  error: Schema.Union([VoiceProviderConfigError, EnvironmentAuthorizationError]),
+});
+
+const WsVoiceRemoveProviderKeyRpc = Rpc.make(WS_METHODS.voiceRemoveProviderKey, {
+  payload: VoiceProviderRemoveKeyInput,
+  success: VoiceProviderConfigSnapshot,
+  error: Schema.Union([VoiceProviderConfigError, EnvironmentAuthorizationError]),
+});
+
+const WsVoiceTestProviderKeyRpc = Rpc.make(WS_METHODS.voiceTestProviderKey, {
+  payload: VoiceProviderTestKeyInput,
+  success: VoiceProviderConfigSnapshot,
+  error: Schema.Union([VoiceProviderConfigError, EnvironmentAuthorizationError]),
 });
 
 const PullRequestRpcError = Schema.Union([
@@ -1434,6 +1472,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,
+  WsVoiceGetProviderConfigRpc,
+  WsVoiceSetProviderKeyRpc,
+  WsVoiceRemoveProviderKeyRpc,
+  WsVoiceTestProviderKeyRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsPullRequestsListRpc,
