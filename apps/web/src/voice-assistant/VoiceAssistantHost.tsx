@@ -4,17 +4,27 @@ import {
   type VoiceConversationPort,
 } from "@t3tools/client-runtime/voice-assistant";
 import {
+  createGatewayRuntimePortFromContext,
+  type GatewayRuntimePort,
+} from "@t3tools/client-runtime/gateway";
+import { useAtomValue } from "@effect/atom-react";
+import {
   createContext,
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
 
+import { connectionAtomRuntime } from "../connection/runtime";
+import { useAgentLibrary } from "../hooks/useAgentLibrary";
 import { useClientSettings } from "../hooks/useSettings";
+import { newMessageId, newThreadId, randomUUID } from "../lib/utils";
 import { usePrimaryEnvironmentId } from "../state/environments";
+import { useProjects } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { voiceAssistantEnvironment } from "../state/voiceAssistant";
 import { createMicrophoneCapture, type MicrophoneCapture } from "./audio/microphoneCapture";
@@ -22,6 +32,7 @@ import { createSpeakerPlayback } from "./audio/speakerPlayback";
 import { GeminiLiveConversation, type GeminiLiveSocket } from "./geminiLiveConversation";
 import { VoiceAssistantIndicator } from "./VoiceAssistantIndicator";
 import { matchesVoiceShortcut } from "./pushToTalkShortcut";
+import { createVoiceToolHandler, VOICE_TOOL_DECLARATIONS } from "./voiceTools";
 
 const OFF_STATE: VoiceAssistantState = {
   mode: "off",
@@ -95,7 +106,11 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
   const timeout = useClientSettings((settings) => settings.voiceSilenceTimeoutSeconds);
   const shortcut = useClientSettings((settings) => settings.voicePushToTalkShortcut);
   const deviceId = useClientSettings((settings) => settings.voiceMicrophoneDeviceId);
+  const agentProfileId = useClientSettings((settings) => settings.voiceAgentProfileId);
   const environmentId = usePrimaryEnvironmentId();
+  const runtime = useAtomValue(connectionAtomRuntime);
+  const { profiles } = useAgentLibrary();
+  const projects = useProjects();
   const credential = useEnvironmentQuery(
     environmentId === null || mode === "off"
       ? null
@@ -126,6 +141,33 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
     finalizeInput: () => conversationRef.current?.finalizeInput(),
     cancel: () => conversationRef.current?.cancel(),
   });
+
+  // Live values the tool executor needs, kept in a ref so the executor is built
+  // once (preserving its "last task" memory) while still seeing current state.
+  const toolDepsRef = useRef({ runtime, environmentId, profiles, projects, agentProfileId });
+  toolDepsRef.current = { runtime, environmentId, profiles, projects, agentProfileId };
+  const toolHandler = useMemo(
+    () =>
+      createVoiceToolHandler({
+        getPort: (): GatewayRuntimePort | null => {
+          const value = toolDepsRef.current.runtime;
+          return value._tag === "Success" ? createGatewayRuntimePortFromContext(value.value) : null;
+        },
+        getEnvironmentId: () => toolDepsRef.current.environmentId,
+        getProfile: () =>
+          toolDepsRef.current.profiles.find(
+            (profile) => profile.profileId === toolDepsRef.current.agentProfileId,
+          ) ?? null,
+        resolveProjectId: () =>
+          toolDepsRef.current.projects.find(
+            (project) => project.environmentId === toolDepsRef.current.environmentId,
+          )?.id ?? null,
+        newThreadId,
+        newMessageId,
+        newRequestId: randomUUID,
+      }),
+    [],
+  );
 
   const requestMicrophoneAccess = useCallback(() => {
     setMicrophoneStatus((current) => (current === "off" ? "starting" : current));
@@ -223,6 +265,7 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
     const conversation = new GeminiLiveConversation({
       apiKey: credentialToken,
       model: credentialModel,
+      ...(agentProfileId.trim().length > 0 ? { tools: VOICE_TOOL_DECLARATIONS } : {}),
       createSocket: (url) => new WebSocket(url) as unknown as GeminiLiveSocket,
       callbacks: {
         onOpen: () => controllerRef.current?.setTransport("ready"),
@@ -249,6 +292,17 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
         onInputTranscript: (text) => controllerRef.current?.handleFinalTranscript(text),
         onTurnComplete: () => controllerRef.current?.handleAssistantSpeechEnd(),
         onInterrupted: () => controllerRef.current?.handleAssistantSpeechEnd(),
+        onToolCall: (call) => {
+          // Delegated work runs on the local agent (MCP/workspace tools); the
+          // result is returned to the model, which speaks a short summary.
+          void toolHandler(call)
+            .then((result) => conversation.sendToolResponse(call.id, result))
+            .catch((cause: unknown) =>
+              conversation.sendToolResponse(call.id, {
+                error: cause instanceof Error ? cause.message : "Tool execution failed.",
+              }),
+            );
+        },
       },
     });
     conversationRef.current = conversation;
@@ -261,7 +315,7 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
       }
       void conversation.disconnect();
     };
-  }, [mode, credentialToken, credentialModel]);
+  }, [mode, credentialToken, credentialModel, agentProfileId, toolHandler]);
 
   // Browsers suspend an AudioContext created without a gesture; resume it on the
   // first interaction so capture produces frames even before a hotkey press.

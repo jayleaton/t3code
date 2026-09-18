@@ -502,6 +502,8 @@ export const ClientSettingsSchema = Schema.Struct({
   voicePushToTalkShortcut: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   // Empty means the system default input device.
   voiceMicrophoneDeviceId: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  // Agent profile the voice assistant delegates tasks to. Empty disables tools.
+  voiceAgentProfileId: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
@@ -1648,6 +1650,7 @@ export const ClientSettingsPatch = Schema.Struct({
   voiceAnnounceApprovals: Schema.optionalKey(Schema.Boolean),
   voicePushToTalkShortcut: Schema.optionalKey(Schema.String),
   voiceMicrophoneDeviceId: Schema.optionalKey(Schema.String),
+  voiceAgentProfileId: Schema.optionalKey(Schema.String),
   wordWrap: Schema.optionalKey(Schema.Boolean),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

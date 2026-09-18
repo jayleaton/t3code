@@ -149,6 +149,11 @@ export class GeminiLiveConversation implements VoiceConversationPort {
     );
   }
 
+  /** Answers one function call; the model continues from the result. */
+  sendToolResponse(callId: string, result: unknown): void {
+    this.sendOrQueue(respondToToolCall(callId, result));
+  }
+
   /**
    * Local VAD owns utterance boundaries; repeat calls are ignored so a
    * straggling finalize cannot close an utterance twice.

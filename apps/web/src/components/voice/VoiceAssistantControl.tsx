@@ -14,6 +14,7 @@ import {
 } from "react";
 
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
+import { useAgentLibrary } from "../../hooks/useAgentLibrary";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { voiceAssistantEnvironment } from "../../state/voiceAssistant";
@@ -333,6 +334,52 @@ function MicrophoneRow() {
   );
 }
 
+function VoiceAgentRow() {
+  const profileId = useClientSettings((settings) => settings.voiceAgentProfileId);
+  const update = useUpdateClientSettings();
+  const { profiles } = useAgentLibrary();
+  const selected = profiles.find((profile) => profile.profileId === profileId) ?? null;
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm text-foreground">Voice agent</div>
+          <div className="text-xs leading-relaxed text-muted-foreground">
+            Tasks you ask for run on this agent, on this device, with its configured tools and MCP
+            access. Choose “Conversation only” to disable delegation.
+          </div>
+        </div>
+        <Select
+          value={profileId.length === 0 ? "none" : profileId}
+          onValueChange={(value) =>
+            update({ voiceAgentProfileId: value === null || value === "none" ? "" : value })
+          }
+        >
+          <SelectTrigger size="sm" className="w-44 shrink-0" aria-label="Voice agent">
+            <SelectValue>{selected?.name ?? "Conversation only"}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup align="end" alignItemWithTrigger={false}>
+            <SelectItem hideIndicator value="none">
+              Conversation only
+            </SelectItem>
+            {profiles.map((profile) => (
+              <SelectItem key={profile.profileId} hideIndicator value={profile.profileId}>
+                {profile.name}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+      </div>
+      {selected === null && profileId.length > 0 ? (
+        <p className="text-xs text-warning-foreground">
+          The selected agent is no longer available in this environment.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function ModeRow() {
   const navigate = useNavigate();
   const mode = useClientSettings((settings) => settings.voiceAssistantMode);
@@ -489,6 +536,7 @@ function VoiceAssistantDialogContent() {
         <ModeRow />
         <LiveStatusBlock />
         <MicrophoneRow />
+        <VoiceAgentRow />
         <PushToTalkShortcutRecorder />
         <HotkeyTestRow />
         <TimeoutRow />
