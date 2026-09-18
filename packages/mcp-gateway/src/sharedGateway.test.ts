@@ -19,7 +19,7 @@ import * as Stream from "effect/Stream";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { afterEach, describe, expect, it, vi } from "@effect/vitest";
-import WebSocket from "ws";
+import WebSocket, { WebSocketServer } from "ws";
 
 import { createBridgeRuntimePort, type GatewayGrants } from "./bridge.ts";
 import { connectSharedGateway, launchSharedOwner } from "./sharedLauncher.ts";
@@ -573,6 +573,36 @@ describe("shared MCP gateway", () => {
     await expect(mcp(input, launch)).rejects.toThrow("older gateway");
     expect(launch).not.toHaveBeenCalled();
     expect(NodeFS.existsSync(input.stateFile)).toBe(false);
+  });
+
+  it("distinguishes a gateway protocol mismatch from configuration and authentication failures", async () => {
+    const input = await config();
+    const server = new WebSocketServer({ host: "127.0.0.1", port: input.port });
+    await new Promise<void>((resolve, reject) => {
+      server.once("listening", resolve);
+      server.once("error", reject);
+    });
+    cleanup.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    server.on("connection", (socket) => {
+      socket.send(
+        JSON.stringify({
+          type: "challenge",
+          protocol: "t3-mcp-shared-v0",
+          nonce: "mismatched-nonce",
+          configuration: sharedGatewayConfiguration(input),
+        }),
+      );
+    });
+    const failure = await connectMcpSession({
+      port: input.port,
+      token: input.token,
+      configuration: sharedGatewayConfiguration(input),
+    }).then(
+      () => undefined,
+      (error: unknown) => error as Error,
+    );
+    expect(failure?.message).toContain("Gateway protocol mismatch");
+    expect(failure?.message).not.toContain("authentication failed");
   });
 
   it("forwards stdio from five real child processes without exiting when the first session closes", async () => {

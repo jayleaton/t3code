@@ -2712,3 +2712,385 @@ describe("MCP Agents board", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("gateway coordinator operations", () => {
+  const readGrants = { local: ["read"] } as const;
+
+  it("filters chats by explicit execution state while preserving active/settled meaning", async () => {
+    const port = makePort();
+    port.listThreads = async () => ({
+      snapshotAt: "now",
+      items: [
+        { id: "running", projectId: "p", settledAt: null, status: "running" },
+        { id: "waiting", projectId: "p", settledAt: null, status: "waiting-input" },
+        { id: "completed", projectId: "p", settledAt: null, status: "completed" },
+        {
+          id: "settled-done",
+          projectId: "p",
+          settledAt: "2026-09-07T00:00:00.000Z",
+          status: "completed",
+        },
+      ],
+    });
+    const context = { port, grants: readGrants };
+    expect(
+      await callGatewayTool(context, "t3_list_threads", {
+        environmentId: "local",
+        state: "active",
+        executionState: "running",
+      }),
+    ).toMatchObject({ items: [{ id: "running" }] });
+    expect(
+      await callGatewayTool(context, "t3_list_threads", {
+        environmentId: "local",
+        state: "active",
+        executionState: "waiting-input",
+      }),
+    ).toMatchObject({ items: [{ id: "waiting" }] });
+    // state=active keeps its unsettled meaning and still includes completed chats.
+    expect(
+      await callGatewayTool(context, "t3_list_threads", {
+        environmentId: "local",
+        state: "active",
+      }),
+    ).toMatchObject({ items: [{ id: "running" }, { id: "waiting" }, { id: "completed" }] });
+    await expect(
+      callGatewayTool(context, "t3_list_threads", {
+        environmentId: "local",
+        executionState: "bogus",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+  });
+
+  it("filters the Agents board by execution state", async () => {
+    const profiles: GatewayProfile[] = [
+      {
+        profileId: "review",
+        name: "Reviewer",
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+      },
+    ];
+    const port = {
+      ...makePort({ profiles }),
+      listThreads: vi.fn(async () => ({
+        snapshotAt: "now",
+        items: [
+          {
+            id: "running",
+            profileSnapshot: { profileId: "review" },
+            status: "running",
+            settledAt: null,
+          },
+          {
+            id: "blocked",
+            profileSnapshot: { profileId: "review" },
+            status: "waiting-approval",
+            settledAt: null,
+          },
+        ],
+      })),
+    };
+    const result = await callGatewayTool({ port, grants: readGrants }, "t3_get_agents_view", {
+      environmentId: "local",
+      executionState: "waiting-approval",
+    });
+    expect(result).toMatchObject({
+      items: [{ profileId: "review", runs: [{ threadId: "blocked" }] }],
+    });
+  });
+
+  it("creates and starts a chat idempotently and reports both phases", async () => {
+    const port = makePort();
+    const createThread = vi.spyOn(port, "createThread");
+    const sendMessage = vi.spyOn(port, "sendMessage");
+    const events = createGatewayEventStore();
+    const context = { port, grants, events };
+    const request = {
+      environmentId: "local",
+      projectId: "local-project",
+      title: "Start work",
+      modelSelection: { instanceId: "codex", model: "gpt-5" },
+      text: "Run the checks",
+      idempotencyKey: "start-1",
+    };
+
+    const first = await callGatewayTool(context, "t3_create_and_start_thread", request);
+    expect(first).toMatchObject({
+      status: "started",
+      partial: false,
+      retryable: false,
+      creation: { status: "accepted" },
+      message: { status: "accepted" },
+    });
+    expect(first.threadId).toMatch(/^mcp-thread-v2-/u);
+    expect(createThread).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+
+    const second = await callGatewayTool(context, "t3_create_and_start_thread", request);
+    expect(second.threadId).toBe(first.threadId);
+    expect(second.message.messageId).toBe(first.message.messageId);
+    expect(createThread).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a partial create-and-start inspectable and retryable without duplicating the chat", async () => {
+    const port = makePort();
+    const createThread = vi.spyOn(port, "createThread");
+    let failSend = true;
+    const sendMessage = vi.spyOn(port, "sendMessage").mockImplementation(async (request) => {
+      if (failSend) throw new Error("bridge offline");
+      return {
+        requestId: request.requestId,
+        commandId: request.requestId,
+        status: "accepted" as const,
+        threadId: request.threadId,
+        messageId: request.messageId,
+      };
+    });
+    const events = createGatewayEventStore();
+    const context = { port, grants, events };
+    const request = {
+      environmentId: "local",
+      projectId: "local-project",
+      title: "Start work",
+      modelSelection: { instanceId: "codex", model: "gpt-5" },
+      text: "Run",
+      idempotencyKey: "start-partial",
+    };
+
+    const partial = await callGatewayTool(context, "t3_create_and_start_thread", request);
+    expect(partial).toMatchObject({
+      status: "partial",
+      partial: true,
+      retryable: true,
+      message: null,
+      error: { code: "upstream_failure" },
+    });
+    expect(partial.threadId).toMatch(/^mcp-thread-v2-/u);
+
+    failSend = false;
+    const retried = await callGatewayTool(context, "t3_create_and_start_thread", request);
+    expect(retried).toMatchObject({
+      status: "started",
+      partial: false,
+      threadId: partial.threadId,
+    });
+    expect(createThread).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for a chat to reach a requested status and returns a resumable cursor", async () => {
+    const events = createGatewayEventStore();
+    let status = "running";
+    const port = {
+      ...makePort(),
+      listThreads: async () => ({
+        snapshotAt: "now",
+        items: [{ id: "chat-1", projectId: "p", title: "Chat", status, settledAt: null }],
+      }),
+    };
+    const context = { port, grants: readGrants, events };
+    const wait = callGatewayTool(context, "t3_wait_for_thread_status", {
+      environmentId: "local",
+      threadId: "chat-1",
+      untilStatuses: ["completed"],
+      timeoutMs: 1_000,
+    });
+    // @effect-diagnostics-next-line globalTimers:off - Flushes the baseline read before emitting the live event so the wait listener is installed.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    status = "completed";
+    const event = events.emit({
+      environmentId: "local",
+      threadId: "chat-1",
+      type: "thread.completed",
+      data: { status: "completed" },
+    });
+
+    await expect(wait).resolves.toMatchObject({
+      status: "completed",
+      previousStatus: "running",
+      changed: true,
+      matched: true,
+      timedOut: false,
+      cursor: event.sequence,
+      thread: { id: "chat-1", status: "completed" },
+    });
+  });
+
+  it("resumes from the cursor status when completion happens between calls", async () => {
+    const events = createGatewayEventStore();
+    let status = "running";
+    const port = {
+      ...makePort(),
+      listThreads: async () => ({ snapshotAt: "now", items: [{ id: "chat-1", status }] }),
+    };
+    const context = { port, grants: readGrants, events };
+    const running = events.emit({
+      environmentId: "local",
+      threadId: "chat-1",
+      type: "thread.started",
+      data: { status },
+    });
+    const request = { environmentId: "local", threadId: "chat-1", timeoutMs: 250 };
+    try {
+      const first = await callGatewayTool(context, "t3_wait_for_thread_status", {
+        ...request,
+        untilStatuses: ["running"],
+      });
+      expect(first.cursor).toBe(running.sequence);
+      status = "completed";
+      const completed = events.emit({
+        environmentId: "local",
+        threadId: "chat-1",
+        type: "thread.completed",
+        data: { status },
+      });
+      // Other chats and events without a status must not become the baseline.
+      events.emit({ environmentId: "local", threadId: "other", type: "thread.failed" });
+      expect(
+        await callGatewayTool(context, "t3_wait_for_thread_status", {
+          ...request,
+          afterSequence: first.cursor,
+        }),
+      ).toMatchObject({
+        previousStatus: "running",
+        status: "completed",
+        changed: true,
+        matched: true,
+        timedOut: false,
+        lastEvent: { sequence: completed.sequence },
+      });
+      const cursor = events.emit({
+        environmentId: "local",
+        threadId: "chat-1",
+        type: "thread.progress",
+      }).sequence;
+      expect(
+        await callGatewayTool(context, "t3_wait_for_thread_status", {
+          ...request,
+          afterSequence: cursor,
+        }),
+      ).toMatchObject({
+        previousStatus: "completed",
+        status: "completed",
+        changed: false,
+        matched: false,
+        timedOut: true,
+      });
+    } finally {
+      events.close();
+    }
+  });
+
+  it("does not invent a current baseline when no status exists at the cursor", async () => {
+    const events = createGatewayEventStore();
+    const port = {
+      ...makePort(),
+      listThreads: async () => ({
+        snapshotAt: "now",
+        items: [{ id: "chat-1", status: "completed" }],
+      }),
+    };
+    events.emit({ environmentId: "local", threadId: "chat-1", type: "thread.completed" });
+    try {
+      expect(
+        await callGatewayTool({ port, grants: readGrants, events }, "t3_wait_for_thread_status", {
+          environmentId: "local",
+          threadId: "chat-1",
+          afterSequence: 0,
+          timeoutMs: 250,
+        }),
+      ).toMatchObject({
+        previousStatus: null,
+        status: "completed",
+        matched: true,
+        timedOut: false,
+      });
+    } finally {
+      events.close();
+    }
+  });
+
+  it("rejects expired resume cursors even when the current status matches", async () => {
+    const events = createGatewayEventStore({ retentionEvents: 1 });
+    events.emit({ environmentId: "local", threadId: "chat-1", type: "thread.started" });
+    events.emit({ environmentId: "local", threadId: "chat-1", type: "thread.completed" });
+    const port = {
+      ...makePort(),
+      listThreads: async () => ({
+        snapshotAt: "now",
+        items: [{ id: "chat-1", status: "completed" }],
+      }),
+    };
+    try {
+      await expect(
+        callGatewayTool({ port, grants: readGrants, events }, "t3_wait_for_thread_status", {
+          environmentId: "local",
+          threadId: "chat-1",
+          afterSequence: 0,
+          untilStatuses: ["completed"],
+        }),
+      ).rejects.toMatchObject({ code: "cursor_expired" });
+    } finally {
+      events.close();
+    }
+  });
+
+  it("returns immediately when the chat already matches and otherwise times out", async () => {
+    const events = createGatewayEventStore();
+    const port = {
+      ...makePort(),
+      listThreads: async () => ({
+        snapshotAt: "now",
+        items: [{ id: "chat-1", projectId: "p", status: "waiting-input", settledAt: null }],
+      }),
+    };
+    const context = { port, grants: readGrants, events };
+    await expect(
+      callGatewayTool(context, "t3_wait_for_thread_status", {
+        environmentId: "local",
+        threadId: "chat-1",
+        untilStatuses: ["waiting-input"],
+      }),
+    ).resolves.toMatchObject({
+      status: "waiting-input",
+      previousStatus: "waiting-input",
+      changed: false,
+      matched: true,
+      timedOut: false,
+    });
+    await expect(
+      callGatewayTool(context, "t3_wait_for_thread_status", {
+        environmentId: "local",
+        threadId: "chat-1",
+        untilStatuses: ["completed"],
+        timeoutMs: 250,
+      }),
+    ).resolves.toMatchObject({ status: "waiting-input", matched: false, timedOut: true });
+  });
+
+  it("requires the durable event store and a valid target status", async () => {
+    const port = {
+      ...makePort(),
+      listThreads: async () => ({
+        snapshotAt: "now",
+        items: [{ id: "chat-1", projectId: "p", status: "running", settledAt: null }],
+      }),
+    };
+    await expect(
+      callGatewayTool({ port, grants: readGrants }, "t3_wait_for_thread_status", {
+        environmentId: "local",
+        threadId: "chat-1",
+      }),
+    ).rejects.toMatchObject({ code: "not_configured" });
+    const events = createGatewayEventStore();
+    await expect(
+      callGatewayTool({ port, grants: readGrants, events }, "t3_wait_for_thread_status", {
+        environmentId: "local",
+        threadId: "chat-1",
+        untilStatuses: ["nope"],
+      }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+  });
+});

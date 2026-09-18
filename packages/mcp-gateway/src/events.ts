@@ -650,6 +650,97 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
     };
   };
 
+  const readOperationHistory = (
+    environmentId: string,
+    afterSequence: number,
+    limit: number,
+    threadId?: string,
+  ): ReadonlyArray<GatewayEvent> => {
+    trim();
+    if (cursorExpired(environmentId, afterSequence)) {
+      throw new GatewayError({
+        code: "cursor_expired",
+        message: `Cursor ${afterSequence} is older than event retention for environment ${environmentId}; request a fresh snapshot.`,
+        retryable: false,
+        environmentId,
+      });
+    }
+    const rows = (
+      threadId === undefined
+        ? db
+            .prepare(
+              "SELECT * FROM events WHERE environmentId = ? AND sequence > ? ORDER BY sequence ASC LIMIT ?",
+            )
+            .all(environmentId, afterSequence, limit)
+        : db
+            .prepare(
+              "SELECT * FROM events WHERE environmentId = ? AND threadId = ? AND sequence > ? ORDER BY sequence ASC LIMIT ?",
+            )
+            .all(environmentId, threadId, afterSequence, limit)
+    ) as Array<Record<string, unknown>>;
+    return rows.map(eventFromRow);
+  };
+
+  // Bounded, cursor-aware wait over the same durable stream that backs replay.
+  // The live listener is installed before replay so no event can slip between
+  // the two paths; events are deduped by id. `undefined` means the timeout
+  // elapsed; a retention gap rejects with the store's cursor_expired error.
+  const waitForEvent = (input2: {
+    readonly environmentId: string;
+    readonly threadId?: string;
+    readonly afterSequence?: number;
+    readonly timeoutMs: number;
+    readonly predicate?: (event: GatewayEvent) => boolean;
+  }): Promise<GatewayEvent | undefined> =>
+    new Promise((resolve, reject) => {
+      const afterSequence = input2.afterSequence ?? 0;
+      const seen = new Set<string>();
+      let settled = false;
+      const cleanup = () => {
+        clearTimeout(timer);
+        listeners.delete(onEvent);
+      };
+      const finish = (event?: GatewayEvent) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(event);
+      };
+      const fail = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+      const consider = (event: GatewayEvent) => {
+        if (settled) return;
+        if (event.environmentId !== input2.environmentId) return;
+        if (input2.threadId !== undefined && event.threadId !== input2.threadId) return;
+        if (event.sequence <= afterSequence) return;
+        if (seen.has(event.eventId)) return;
+        seen.add(event.eventId);
+        if (input2.predicate !== undefined && !input2.predicate(event)) return;
+        finish(event);
+      };
+      const onEvent = (event: GatewayEvent) => consider(event);
+      // @effect-diagnostics-next-line globalTimers:off - Bounded Node sidecar wait; the caller owns the deadline and the timer is always cleared.
+      const timer = setTimeout(() => finish(undefined), Math.max(1, input2.timeoutMs));
+      listeners.add(onEvent);
+      try {
+        for (const event of readOperationHistory(
+          input2.environmentId,
+          afterSequence,
+          500,
+          input2.threadId,
+        )) {
+          consider(event);
+          if (settled) break;
+        }
+      } catch (error) {
+        fail(error);
+      }
+    });
+
   return {
     /** Live delivery hook. Durable subscription cursors remain in SQLite; the
      * callback is only the transport used while an MCP session is connected. */
@@ -723,36 +814,28 @@ export function createGatewayEventStore(input: GatewayEventStoreInput = {}) {
         ) as Array<Record<string, unknown>>;
       return rows.map(eventFromRow);
     },
-    operationHistory: (
+    operationHistory: readOperationHistory,
+    /** Find the last retained matching event at a resume cursor, not at the current head. */
+    eventAtOrBefore: (
       environmentId: string,
-      afterSequence: number,
-      limit: number,
-      threadId?: string,
-    ): ReadonlyArray<GatewayEvent> => {
-      trim();
-      if (cursorExpired(environmentId, afterSequence)) {
-        throw new GatewayError({
-          code: "cursor_expired",
-          message: `Cursor ${afterSequence} is older than event retention for environment ${environmentId}; request a fresh snapshot.`,
-          retryable: false,
-          environmentId,
-        });
+      threadId: string,
+      sequence: number,
+      predicate: (event: GatewayEvent) => boolean,
+    ): GatewayEvent | undefined => {
+      // Validate retention even when a caller can satisfy its wait immediately.
+      readOperationHistory(environmentId, sequence, 0);
+      const rows = db
+        .prepare(
+          "SELECT * FROM events WHERE environmentId = ? AND threadId = ? AND sequence <= ? ORDER BY sequence DESC",
+        )
+        .iterate(environmentId, threadId, sequence);
+      for (const row of rows) {
+        const event = eventFromRow(row);
+        if (predicate(event)) return event;
       }
-      const rows = (
-        threadId === undefined
-          ? db
-              .prepare(
-                "SELECT * FROM events WHERE environmentId = ? AND sequence > ? ORDER BY sequence ASC LIMIT ?",
-              )
-              .all(environmentId, afterSequence, limit)
-          : db
-              .prepare(
-                "SELECT * FROM events WHERE environmentId = ? AND threadId = ? AND sequence > ? ORDER BY sequence ASC LIMIT ?",
-              )
-              .all(environmentId, threadId, afterSequence, limit)
-      ) as Array<Record<string, unknown>>;
-      return rows.map(eventFromRow);
+      return undefined;
     },
+    waitForEvent,
     latestSequence: (environmentId: string): number => {
       const row = db
         .prepare("SELECT lastSequence FROM sequences WHERE environmentId = ?")

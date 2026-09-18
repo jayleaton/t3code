@@ -3,13 +3,15 @@ import * as NodeCrypto from "node:crypto";
 
 import {
   GatewayError,
+  GATEWAY_THREAD_EXECUTION_STATES,
   type GatewayApprovalDecision,
   type GatewayProfile,
   type GatewayRuntimePort,
   type GatewayScope,
   type GatewayThreadControlAction,
+  type GatewayThreadExecutionState,
 } from "./port.ts";
-import type { GatewayEventStore } from "./events.ts";
+import type { GatewayEvent, GatewayEventStore } from "./events.ts";
 
 export type GatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
 export type GatewayGrantSource = GatewayGrants | (() => GatewayGrants);
@@ -267,6 +269,100 @@ function requireEventStore(context: GatewayToolContext): GatewayEventStore {
     });
   }
   return context.events;
+}
+
+const EXECUTION_STATE_SET = new Set<string>(GATEWAY_THREAD_EXECUTION_STATES);
+
+function readThreadExecutionState(
+  thread: Record<string, unknown>,
+): GatewayThreadExecutionState | undefined {
+  const status = thread.status;
+  return typeof status === "string" && EXECUTION_STATE_SET.has(status)
+    ? (status as GatewayThreadExecutionState)
+    : undefined;
+}
+
+function parseExecutionStateFilter(
+  input: Record<string, unknown>,
+): GatewayThreadExecutionState | undefined {
+  const value = input.executionState;
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !EXECUTION_STATE_SET.has(value)) {
+    throw new GatewayError({
+      code: "invalid_input",
+      message: `executionState must be one of: ${GATEWAY_THREAD_EXECUTION_STATES.join(", ")}.`,
+      retryable: false,
+      details: { allowedExecutionStates: GATEWAY_THREAD_EXECUTION_STATES },
+    });
+  }
+  return value as GatewayThreadExecutionState;
+}
+
+async function findGatewayThread(
+  context: GatewayToolContext,
+  environmentId: string,
+  threadId: string,
+): Promise<Record<string, unknown> | undefined> {
+  const page = await context.port.listThreads(environmentId);
+  return page.items.find(
+    (candidate) => typeof candidate.id === "string" && candidate.id === threadId,
+  );
+}
+
+/** Status hinted by a runtime event; undefined when the event carries no state. */
+function gatewayEventExecutionState(event: GatewayEvent): GatewayThreadExecutionState | undefined {
+  const status = event.data.status;
+  if (typeof status === "string" && EXECUTION_STATE_SET.has(status)) {
+    return status as GatewayThreadExecutionState;
+  }
+  switch (event.type) {
+    case "thread.started":
+      return "running";
+    case "thread.completed":
+      return "completed";
+    case "thread.failed":
+      return "failed";
+    case "thread.interrupted":
+      return "interrupted";
+    case "approval.requested":
+      return "waiting-approval";
+    case "input.requested":
+      return "waiting-input";
+    default:
+      return undefined;
+  }
+}
+
+function boundedTimeoutMs(value: unknown, fallback: number): number {
+  const requested = typeof value === "number" ? Math.trunc(value) : fallback;
+  if (!Number.isFinite(requested)) return fallback;
+  return Math.max(250, Math.min(120_000, requested));
+}
+
+function parseUntilStatuses(
+  value: unknown,
+): ReadonlyArray<GatewayThreadExecutionState> | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new GatewayError({
+      code: "invalid_input",
+      message: "untilStatuses must be a non-empty array of execution states.",
+      retryable: false,
+    });
+  }
+  const parsed: GatewayThreadExecutionState[] = [];
+  for (const candidate of value) {
+    if (typeof candidate !== "string" || !EXECUTION_STATE_SET.has(candidate)) {
+      throw new GatewayError({
+        code: "invalid_input",
+        message: `untilStatuses must only contain: ${GATEWAY_THREAD_EXECUTION_STATES.join(", ")}.`,
+        retryable: false,
+        details: { allowedExecutionStates: GATEWAY_THREAD_EXECUTION_STATES },
+      });
+    }
+    parsed.push(candidate as GatewayThreadExecutionState);
+  }
+  return parsed;
 }
 
 // Stable canonical JSON for idempotency payload comparison: unknown fields and
@@ -781,6 +877,7 @@ export async function callGatewayTool(
     case "t3_list_threads": {
       const environmentId = environmentWithScope(context, input, "read");
       const state = z.enum(["all", "active", "settled"]).default("all").parse(input.state);
+      const executionState = parseExecutionStateFilter(input);
       const page = await context.port.listThreads(environmentId);
       const projectId = typeof input.projectId === "string" ? input.projectId : undefined;
       const profileId = typeof input.profileId === "string" ? input.profileId : undefined;
@@ -792,7 +889,8 @@ export async function callGatewayTool(
             (projectId === undefined || thread.projectId === projectId) &&
             (profileId === undefined || snapshot?.profileId === profileId) &&
             (state === "all" ||
-              (state === "settled" ? thread.settledAt != null : thread.settledAt == null))
+              (state === "settled" ? thread.settledAt != null : thread.settledAt == null)) &&
+            (executionState === undefined || readThreadExecutionState(thread) === executionState)
           );
         }),
       };
@@ -855,6 +953,7 @@ export async function callGatewayTool(
           state: z.enum(["active", "settled", "all"]).default("active"),
         })
         .parse(input);
+      const executionState = parseExecutionStateFilter(input);
       const [profiles, page] = await Promise.all([
         authoritativeProfiles(context, environmentId),
         context.port.listThreads(environmentId),
@@ -868,6 +967,8 @@ export async function callGatewayTool(
           state !== "all" &&
           (state === "settled" ? thread.settledAt == null : thread.settledAt != null)
         )
+          continue;
+        if (executionState !== undefined && readThreadExecutionState(thread) !== executionState)
           continue;
         const runs = runsByProfile.get(agentId) ?? [];
         runs.push({
@@ -1537,6 +1638,226 @@ export async function callGatewayTool(
           prepared === undefined ? recoverPreV2Create() : context.port.createThread(prepared),
         () => buildRequest(currentIdentity),
       );
+    }
+    case "t3_create_and_start_thread": {
+      const environmentId = environmentWithScopes(context, input, ["create", "send"]);
+      const idempotencyKey = requiredIdempotencyKey(input);
+      const messageText = requiredString(input, "text");
+      const createInput = Object.fromEntries(
+        Object.entries(input).filter(([key]) => key !== "text"),
+      );
+      const creation = await callGatewayTool(context, "t3_create_thread", createInput);
+      const threadId =
+        typeof creation?.threadId === "string" ? (creation.threadId as string) : undefined;
+      if (threadId === undefined) {
+        throw new GatewayError({
+          code: "upstream_failure",
+          message: "Chat creation was accepted without an authoritative chat id.",
+          retryable: true,
+        });
+      }
+      const readShell = async () => {
+        try {
+          return await findGatewayThread(context, environmentId, threadId);
+        } catch {
+          return undefined;
+        }
+      };
+      let message: Record<string, unknown> | null = null;
+      let error: Record<string, unknown> | undefined;
+      try {
+        const sent = await callGatewayTool(context, "t3_send_message", {
+          environmentId,
+          threadId,
+          text: messageText,
+          idempotencyKey,
+          ...(typeof input.correlationId === "string"
+            ? { correlationId: input.correlationId }
+            : {}),
+        });
+        message = {
+          requestId: typeof sent?.requestId === "string" ? sent.requestId : null,
+          messageId: typeof sent?.messageId === "string" ? sent.messageId : null,
+          status: typeof sent?.status === "string" ? sent.status : "accepted",
+        };
+      } catch (caught) {
+        // Creation already succeeded and is durably receipted under this
+        // idempotency key. Return the reachable chat plus the delivery failure
+        // so the caller can inspect or retry instead of creating a duplicate.
+        error =
+          caught instanceof GatewayError
+            ? caught.toJSON()
+            : {
+                code: "upstream_failure",
+                message: caught instanceof Error ? caught.message : String(caught),
+                retryable: true,
+              };
+      }
+      const finalThread = await readShell();
+      const executionState =
+        finalThread === undefined ? null : (readThreadExecutionState(finalThread) ?? null);
+      return {
+        environmentId,
+        threadId,
+        status: error === undefined ? "started" : "partial",
+        partial: error !== undefined,
+        retryable: error === undefined ? false : error.retryable === true,
+        executionState,
+        creation: {
+          requestId: typeof creation?.requestId === "string" ? creation.requestId : null,
+          status: typeof creation?.status === "string" ? creation.status : "accepted",
+        },
+        message,
+        ...(error === undefined ? {} : { error }),
+        ...(finalThread === undefined
+          ? {}
+          : {
+              thread: {
+                id: threadId,
+                title: typeof finalThread.title === "string" ? finalThread.title : null,
+                projectId: typeof finalThread.projectId === "string" ? finalThread.projectId : null,
+                status: executionState,
+                settledAt: finalThread.settledAt ?? null,
+                updatedAt: finalThread.updatedAt ?? null,
+              },
+            }),
+        snapshotAt: "runtime",
+      };
+    }
+    case "t3_wait_for_thread_status": {
+      const events = requireEventStore(context);
+      const environmentId = environmentWithScope(context, input, "read");
+      const threadId = requiredString(input, "threadId");
+      const untilStatuses = parseUntilStatuses(input.untilStatuses);
+      const timeoutMs = boundedTimeoutMs(input.timeoutMs, 30_000);
+      const requestedCursor =
+        typeof input.afterSequence === "number"
+          ? Math.max(0, Math.trunc(input.afterSequence))
+          : events.latestSequence(environmentId);
+      const cursorEvent =
+        typeof input.afterSequence === "number"
+          ? events.eventAtOrBefore(
+              environmentId,
+              threadId,
+              requestedCursor,
+              (event) => gatewayEventExecutionState(event) !== undefined,
+            )
+          : undefined;
+      const baseline = await findGatewayThread(context, environmentId, threadId);
+      const currentStatus =
+        baseline === undefined ? null : (readThreadExecutionState(baseline) ?? null);
+      // A resumed call compares against the status at its cursor. Reading the
+      // current shell as the baseline would swallow changes between calls.
+      const previousStatus =
+        typeof input.afterSequence === "number"
+          ? cursorEvent === undefined
+            ? null
+            : (gatewayEventExecutionState(cursorEvent) ?? null)
+          : currentStatus;
+      const matches = (candidate: GatewayThreadExecutionState | null | undefined): boolean => {
+        if (candidate === undefined || candidate === null) return false;
+        return untilStatuses === undefined
+          ? candidate !== previousStatus
+          : untilStatuses.includes(candidate);
+      };
+      // @effect-diagnostics-next-line globalDate:off - This tool handler is plain Node, not an Effect service; elapsed time is only reported to the caller.
+      const startedAt = Date.now();
+      let cursor = requestedCursor;
+      let lastEvent: GatewayEvent | undefined;
+      let status: GatewayThreadExecutionState | null = currentStatus;
+      let matched = untilStatuses !== undefined && matches(currentStatus);
+      let timedOut = false;
+      if (!matched) {
+        const deadline = startedAt + timeoutMs;
+        for (;;) {
+          // @effect-diagnostics-next-line globalDate:off - Plain Node tool handler; only bounds this wait.
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) {
+            timedOut = true;
+            break;
+          }
+          const event = await events.waitForEvent({
+            environmentId,
+            threadId,
+            afterSequence: cursor,
+            timeoutMs: remaining,
+            predicate: (candidate) => gatewayEventExecutionState(candidate) !== undefined,
+          });
+          if (event === undefined) {
+            timedOut = true;
+            break;
+          }
+          cursor = Math.max(cursor, event.sequence);
+          lastEvent = event;
+          const candidate = gatewayEventExecutionState(event);
+          if (!matches(candidate)) continue;
+          // Confirm against the authoritative shell so a replayed historical
+          // event cannot satisfy a wait after the status already moved on.
+          const verified = await findGatewayThread(context, environmentId, threadId).catch(
+            () => undefined,
+          );
+          const verifiedStatus =
+            verified === undefined ? candidate : (readThreadExecutionState(verified) ?? candidate);
+          if (matches(verifiedStatus)) {
+            status = verifiedStatus ?? status;
+            matched = true;
+            break;
+          }
+        }
+      }
+      const finalThread =
+        (await findGatewayThread(context, environmentId, threadId).catch(() => undefined)) ??
+        baseline;
+      if (finalThread !== undefined) {
+        status = readThreadExecutionState(finalThread) ?? status;
+      }
+      return {
+        environmentId,
+        threadId,
+        status,
+        previousStatus,
+        changed: status !== previousStatus,
+        matched,
+        timedOut,
+        // @effect-diagnostics-next-line globalDate:off - Reports elapsed wait time to the caller.
+        waitedMs: Date.now() - startedAt,
+        cursor: Math.max(cursor, events.latestSequence(environmentId), lastEvent?.sequence ?? 0),
+        ...(lastEvent === undefined
+          ? {}
+          : {
+              lastEvent: {
+                eventId: lastEvent.eventId,
+                type: lastEvent.type,
+                sequence: lastEvent.sequence,
+                occurredAt: lastEvent.occurredAt,
+                ...(gatewayEventExecutionState(lastEvent) === undefined
+                  ? {}
+                  : { status: gatewayEventExecutionState(lastEvent) }),
+              },
+            }),
+        thread:
+          finalThread === undefined
+            ? null
+            : {
+                id: typeof finalThread.id === "string" ? finalThread.id : threadId,
+                title: typeof finalThread.title === "string" ? finalThread.title : null,
+                projectId: typeof finalThread.projectId === "string" ? finalThread.projectId : null,
+                status,
+                settledAt: finalThread.settledAt ?? null,
+                hasPendingApprovals: finalThread.hasPendingApprovals === true,
+                hasPendingUserInput: finalThread.hasPendingUserInput === true,
+                latestTurnState:
+                  typeof finalThread.latestTurn === "object" && finalThread.latestTurn !== null
+                    ? ((finalThread.latestTurn as Record<string, unknown>).state ?? null)
+                    : null,
+                sessionStatus:
+                  typeof finalThread.session === "object" && finalThread.session !== null
+                    ? ((finalThread.session as Record<string, unknown>).status ?? null)
+                    : null,
+                updatedAt: finalThread.updatedAt ?? null,
+              },
+        snapshotAt: "runtime",
+      };
     }
     case "t3_send_message": {
       const environmentId = environmentWithScope(context, input, "send");

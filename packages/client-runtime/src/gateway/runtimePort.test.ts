@@ -373,6 +373,134 @@ describe("Gateway Runtime Port", () => {
     },
   );
 
+  it("reports pending approval and user input ahead of live session state", () => {
+    const running = {
+      session: { status: "running" },
+      latestTurn: {
+        state: "running",
+        requestedAt: "2026-09-07T00:00:00.000Z",
+        startedAt: "2026-09-07T00:00:00.000Z",
+        completedAt: null,
+      },
+      latestUserMessageAt: null,
+    } as Parameters<typeof gatewayStatusFromThread>[0];
+    expect(gatewayStatusFromThread({ ...running, hasPendingApprovals: true })).toBe(
+      "waiting-approval",
+    );
+    expect(
+      gatewayStatusFromThread({
+        ...running,
+        hasPendingApprovals: false,
+        hasPendingUserInput: true,
+      }),
+    ).toBe("waiting-input");
+  });
+
+  it("derives a waiting status for a single chat from its activity window", () => {
+    const base = {
+      id: "thread-1",
+      projectId: "project-1",
+      title: "Thread",
+      settledAt: null,
+      modelSelection: { instanceId: "codex", model: "gpt" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      latestTurn: null,
+      session: null,
+      messages: [],
+      checkpoints: [],
+      artifacts: [],
+    };
+    const requested = {
+      id: "activity-1",
+      sequence: 1,
+      turnId: null,
+      tone: "approval",
+      kind: "approval.requested",
+      summary: "Approve",
+      payload: { requestId: "a1" },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+    expect(gatewayThreadProjection({ ...base, activities: [requested] } as never).status).toBe(
+      "waiting-approval",
+    );
+    expect(
+      gatewayThreadProjection({
+        ...base,
+        activities: [{ ...requested, id: "activity-2", sequence: 2, kind: "approval.resolved" }],
+      } as never).status,
+    ).toBe("idle");
+  });
+
+  it.each([
+    ["approval", "stale pending approval request"],
+    ["approval", "unknown pending permission request"],
+    ["user-input", "unknown pending user-input request"],
+    ["user-input", "unknown pending codex user input request"],
+  ])("clears stale %s requests while preserving retryable failures (%s)", (kind, detail) => {
+    const request = {
+      id: "request",
+      sequence: 1,
+      turnId: null,
+      tone: "info",
+      kind: `${kind}.requested`,
+      summary: "Request",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      payload: {
+        requestId: "r1",
+        questions: [
+          {
+            id: "q",
+            header: "Choice",
+            question: "Continue?",
+            options: [{ label: "Yes", description: "Continue" }],
+          },
+        ],
+      },
+    };
+    const failure = {
+      ...request,
+      id: "failure",
+      sequence: 2,
+      kind: `provider.${kind}.respond.failed`,
+      payload: { requestId: "r1", detail },
+    };
+    const project = (activities: unknown[]) =>
+      gatewayThreadProjection({
+        id: "chat",
+        projectId: "p",
+        title: "Chat",
+        session: { status: "running" },
+        latestTurn: null,
+        messages: [],
+        checkpoints: [],
+        artifacts: [],
+        activities,
+      } as never);
+    expect(project([request]).status).toBe(
+      kind === "approval" ? "waiting-approval" : "waiting-input",
+    );
+    for (const activities of [
+      [request, failure],
+      [failure, request],
+    ]) {
+      expect(project(activities)).toMatchObject({
+        status: "running",
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+      });
+    }
+    expect(
+      project([
+        request,
+        { ...failure, payload: { requestId: "r1", detail: "Temporary network failure" } },
+      ]).status,
+    ).toBe(kind === "approval" ? "waiting-approval" : "waiting-input");
+    expect(
+      project([request, { ...failure, payload: { requestId: "another", detail } }]).status,
+    ).toBe(kind === "approval" ? "waiting-approval" : "waiting-input");
+  });
+
   it.each(["interrupted", "stopped"])("publishes observed %s session state", (status) => {
     const event = gatewayEventFromOrchestration(
       environmentId,

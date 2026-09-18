@@ -37,10 +37,15 @@ the launcher that started it exits. It shuts down after 30 seconds with no MCP s
 finishing any in-flight webhook delivery before closing the store.
 
 All launchers sharing an address must use the same bridge token, state file, retention setting,
-repository allowlist and initial grants. A different configuration, wrong token, unrelated
-listener or older gateway causes an explicit connection error. A launcher does not claim to
-provide a working MCP session when its bridge is unavailable. Independent gateways must use
-distinct bridge ports and state files.
+repository allowlist and initial grants. A launcher does not claim to provide a working MCP
+session when its bridge is unavailable. Independent gateways must use distinct bridge ports and
+state files.
+
+Connection failures name the class of mismatch instead of one generic error: a gateway protocol
+version mismatch, a state-file or configuration mismatch (different state file, retention,
+allowlist, or grants), or a bridge-token authentication failure. The diagnostics never include
+the token or other credentials. Start or stop the process that owns the port according to the
+reported class, then reconnect.
 
 If the owner stops, attached MCP sessions disconnect. Reconnect through the MCP host to start
 or attach to an owner again. The desktop uses its existing bridge reconnect behavior. The

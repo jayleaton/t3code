@@ -1,3 +1,4 @@
+import { derivePendingRequests } from "../pendingRequests.ts";
 import { performAgentHandoff } from "./handoff.ts";
 import {
   ApprovalRequestId,
@@ -42,6 +43,7 @@ import type {
   GatewayRuntimeEvent,
   GatewayRuntimeEventSource,
   GatewayRuntimePort,
+  GatewayThreadExecutionState,
 } from "./port.ts";
 
 export interface GatewayEffectRuntime {
@@ -334,6 +336,10 @@ function gatewayThreadShellProjection(thread: OrchestrationShellSnapshot["thread
     settledAt: thread.settledAt,
     title: thread.title,
     status: gatewayStatusFromThread(thread),
+    hasPendingApprovals: thread.hasPendingApprovals,
+    hasPendingUserInput: thread.hasPendingUserInput,
+    backgroundLiveness: thread.backgroundLiveness ?? null,
+    planProgress: thread.planProgress ?? null,
     latestTurn: thread.latestTurn,
     session:
       thread.session === null
@@ -397,6 +403,11 @@ const decodeProfile = Schema.decodeUnknownSync(McpGatewayProfile);
 const decodeProfiles = Schema.decodeUnknownEffect(Schema.Array(McpGatewayProfile));
 
 export function gatewayThreadProjection(thread: OrchestrationThreadDetailSnapshot["thread"]) {
+  const requests = derivePendingRequests(thread.activities);
+  const pending = {
+    hasPendingApprovals: requests.approvals.length > 0,
+    hasPendingUserInput: requests.userInputs.length > 0,
+  };
   return {
     id: thread.id,
     projectId: thread.projectId,
@@ -406,7 +417,10 @@ export function gatewayThreadProjection(thread: OrchestrationThreadDetailSnapsho
       session: thread.session,
       latestUserMessageAt:
         thread.messages.findLast((message) => message.role === "user")?.createdAt ?? null,
+      ...pending,
     }),
+    hasPendingApprovals: pending.hasPendingApprovals,
+    hasPendingUserInput: pending.hasPendingUserInput,
     modelSelection: thread.modelSelection,
     profileSnapshot: thread.profileSnapshot,
     settledAt: thread.settledAt,
@@ -449,9 +463,19 @@ export function gatewayStatusFromThread(
   thread: Pick<
     OrchestrationShellSnapshot["threads"][number],
     "latestTurn" | "session" | "latestUserMessageAt"
-  >,
+  > &
+    Partial<
+      Pick<
+        OrchestrationShellSnapshot["threads"][number],
+        "hasPendingApprovals" | "hasPendingUserInput"
+      >
+    >,
   now = DateTime.formatIso(DateTime.nowUnsafe()),
-): string {
+): GatewayThreadExecutionState {
+  // A blocked chat outranks its session status: the agent may still hold a live
+  // session while it waits on the user, and a coordinator needs the blocker.
+  if (thread.hasPendingApprovals === true) return "waiting-approval";
+  if (thread.hasPendingUserInput === true) return "waiting-input";
   if (thread.session?.status === "running" || thread.session?.status === "starting")
     return "running";
   if (hasQueuedTurnStart(thread, { now })) return "queued";
