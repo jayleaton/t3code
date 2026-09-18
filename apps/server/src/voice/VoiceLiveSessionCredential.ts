@@ -15,12 +15,13 @@ const GEMINI_LIVE_ENDPOINT =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 
 /**
- * Live model id. Overridable so a model rename does not need a code change
- * while we are still validating against the provider.
+ * Live model id. `gemini-3.8-live` is the non-extended-thinking Live model and
+ * does not accept `thinking_level`, so the session setup omits any thinking
+ * config. Overridable so a model rename does not need a code change.
  */
 const resolveGeminiLiveModel = (): string => {
   const override = process.env.T3CODE_GEMINI_LIVE_MODEL?.trim();
-  return override && override.length > 0 ? override : "gemini-live-2.5-flash-preview";
+  return override && override.length > 0 ? override : "gemini-3.8-live";
 };
 
 /**

@@ -58,7 +58,7 @@ function createHarness(callbacks?: GeminiLiveCallbacks): Harness {
   const urls: string[] = [];
   const conversation = new GeminiLiveConversation({
     apiKey: "test-api-key",
-    model: "gemini-2.0-flash-live-001",
+    model: "gemini-3.8-live",
     ...(callbacks === undefined ? {} : { callbacks }),
     createSocket: (url) => {
       urls.push(url);
@@ -119,8 +119,12 @@ describe("GeminiLiveConversation", () => {
     expect(urls).toEqual([EXPECTED_URL]);
     expect(socket.sent).toHaveLength(1);
     const setup = asRecord(parsedFrames(socket)[0]?.["setup"]);
-    expect(setup["model"]).toBe("models/gemini-2.0-flash-live-001");
-    expect(asRecord(setup["generationConfig"])["responseModalities"]).toEqual(["AUDIO"]);
+    expect(setup["model"]).toBe("models/gemini-3.8-live");
+    // Current API: modalities are top level and manual VAD is explicit.
+    expect(setup["responseModalities"]).toEqual(["AUDIO"]);
+    const realtimeInputConfig = asRecord(setup["realtimeInputConfig"]);
+    expect(asRecord(realtimeInputConfig["automaticActivityDetection"])["disabled"]).toBe(true);
+    expect(setup["generationConfig"]).toBeUndefined();
   });
 
   it("queues audio sent before open and flushes it in order", async () => {
