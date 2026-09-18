@@ -39,9 +39,10 @@ export function createVoiceAssistantEnvironmentAtoms<R, E>(
   const liveSessionCredential = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "environment-data:voice:live-session-credential",
     tag: WS_METHODS.voiceGetLiveSessionCredential,
-    // Credentials are short-lived in spirit; never reuse across mounts.
-    staleTimeMs: 0,
-    idleTtlMs: 60_000,
+    // Long-lived enough that background revalidation does not churn the live
+    // session; the host additionally pins the last good credential.
+    staleTimeMs: 60_000,
+    idleTtlMs: 5 * 60_000,
   });
 
   const mutationOptions = {

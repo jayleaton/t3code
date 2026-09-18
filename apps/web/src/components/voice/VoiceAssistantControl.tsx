@@ -26,6 +26,7 @@ import {
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { useVoiceAssistantHost } from "../../voice-assistant/VoiceAssistantHost";
+import { voiceTranscript } from "../../voice-assistant/voiceTranscriptStore";
 import {
   Dialog,
   DialogDescription,
@@ -387,7 +388,10 @@ function VoiceAgentRow() {
           size="xs"
           variant="ghost-muted"
           className="w-full"
-          onClick={() => update({ voiceAgentThreadId: "" })}
+          onClick={() => {
+            update({ voiceAgentThreadId: "" });
+            voiceTranscript.clear();
+          }}
         >
           Start a new voice conversation
         </Button>

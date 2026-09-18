@@ -142,6 +142,26 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
   const credentialToken = credential.data?.token ?? null;
   const credentialModel = credential.data?.model ?? null;
 
+  // Hold the last good credential so a background revalidation (which briefly
+  // yields no data) cannot tear down and rebuild the live session, wiping the
+  // model's context between turns. A genuinely new token still reconnects.
+  const [activeCredential, setActiveCredential] = useState<{
+    readonly token: string;
+    readonly model: string;
+  } | null>(null);
+  useEffect(() => {
+    if (mode === "off") {
+      setActiveCredential(null);
+      return;
+    }
+    if (credentialToken === null || credentialModel === null) return;
+    setActiveCredential((previous) =>
+      previous !== null && previous.token === credentialToken && previous.model === credentialModel
+        ? previous
+        : { token: credentialToken, model: credentialModel },
+    );
+  }, [mode, credentialToken, credentialModel]);
+
   const [state, setState] = useState<VoiceAssistantState>(OFF_STATE);
   const [microphoneLevel, setMicrophoneLevel] = useState(0);
   const [microphoneStatus, setMicrophoneStatus] = useState<MicrophoneStatus>("off");
@@ -336,15 +356,15 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
 
   // Gemini Live session, attached only when a credential exists.
   useEffect(() => {
-    if (mode === "off" || credentialToken === null || credentialModel === null) {
+    if (mode === "off" || activeCredential === null) {
       const existing = conversationRef.current;
       conversationRef.current = null;
       void existing?.disconnect();
       return;
     }
     const conversation = new GeminiLiveConversation({
-      apiKey: credentialToken,
-      model: credentialModel,
+      apiKey: activeCredential.token,
+      model: activeCredential.model,
       systemInstruction: VOICE_SYSTEM_INSTRUCTION,
       ...(agentProfileId.trim().length > 0 ? { tools: VOICE_TOOL_DECLARATIONS } : {}),
       createSocket: (url) => new WebSocket(url) as unknown as GeminiLiveSocket,
@@ -409,7 +429,7 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
       }
       void conversation.disconnect();
     };
-  }, [mode, credentialToken, credentialModel, agentProfileId, toolHandler]);
+  }, [mode, activeCredential, agentProfileId, toolHandler]);
 
   // Browsers suspend an AudioContext created without a gesture; resume it on the
   // first interaction so capture produces frames even before a hotkey press.
@@ -464,7 +484,7 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
         microphoneActive,
         error,
         environmentId,
-        hasLiveCredential: credentialToken !== null,
+        hasLiveCredential: activeCredential !== null,
         requestMicrophoneAccess,
         testMicrophone,
       }}
