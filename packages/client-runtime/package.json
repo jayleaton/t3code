@@ -91,6 +91,10 @@
       "types": "./src/voice-input/index.ts",
       "default": "./src/voice-input/index.ts"
     },
+    "./voice-assistant": {
+      "types": "./src/voice-assistant/index.ts",
+      "default": "./src/voice-assistant/index.ts"
+    },
     "./relay": {
       "types": "./src/relay/index.ts",
       "default": "./src/relay/index.ts"
