@@ -559,6 +559,11 @@ export function VoiceAssistantControl() {
           aria-label={`Voice assistant: ${MODE_LABELS[settings]}`}
           size="icon"
           className={settings === "off" ? undefined : "text-foreground"}
+          onKeyDown={(event) => {
+            // The push-to-talk chord is often Space-based; never let Space
+            // activate this trigger and open the dialog.
+            if (event.key === " " || event.key === "Spacebar") event.preventDefault();
+          }}
         >
           {modeIcon(settings)}
         </SidebarMenuButton>
@@ -579,6 +584,9 @@ export function VoiceAssistantIconButton({ className }: { readonly className?: s
           size="icon-xs"
           variant={settings === "off" ? "outline" : "default"}
           className={className}
+          onKeyDown={(event) => {
+            if (event.key === " " || event.key === "Spacebar") event.preventDefault();
+          }}
         >
           {modeIcon(settings)}
         </Button>

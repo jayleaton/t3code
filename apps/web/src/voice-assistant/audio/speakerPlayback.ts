@@ -2,6 +2,15 @@ import { int16ToFloat32 } from "./pcm.ts";
 
 const DEFAULT_SAMPLE_RATE = 24_000;
 const UNAVAILABLE_MESSAGE = "Audio playback is not available in this browser.";
+/**
+ * Small lead-in so a chunk that arrives just after the cursor has passed starts
+ * smoothly instead of butting against the live clock. Chunks arrive over the
+ * network in bursts; without this the gaps and immediate restarts sound like
+ * crackling.
+ */
+const SCHEDULE_LEAD_SECONDS = 0.04;
+/** Linear edge fade to remove the click at each chunk boundary. */
+const EDGE_FADE_SECONDS = 0.004;
 
 export interface SpeakerPlaybackOptions {
   /** PCM sample rate of the incoming chunks; defaults to Gemini Live's 24000. */
@@ -50,6 +59,7 @@ class WebAudioSpeakerPlayback implements SpeakerPlayback {
     }
     const context = this.ensureContext();
     const samples = int16ToFloat32(bytesToInt16(pcm16));
+    applyEdgeFade(samples, this.sampleRate);
     const buffer = context.createBuffer(1, samples.length, this.sampleRate);
     buffer.getChannelData(0).set(samples);
 
@@ -57,8 +67,11 @@ class WebAudioSpeakerPlayback implements SpeakerPlayback {
     source.buffer = buffer;
     source.connect(context.destination);
 
-    // Underruns start immediately; otherwise chunks are butted end to end.
-    const startAt = Math.max(context.currentTime, this.cursorTime);
+    // Keep a small jitter buffer: if the cursor has fallen behind the clock
+    // (network stall), resume with a lead instead of slamming audio in.
+    const cursor =
+      this.cursorTime > 0 ? this.cursorTime : context.currentTime + SCHEDULE_LEAD_SECONDS;
+    const startAt = Math.max(context.currentTime + SCHEDULE_LEAD_SECONDS, cursor);
     this.cursorTime = startAt + buffer.duration;
     this.sources.add(source);
     const handleEnded = () => {
@@ -138,6 +151,19 @@ function bytesToInt16(bytes: Uint8Array): Int16Array {
     samples[index] = view.getInt16(index * 2, true);
   }
   return samples;
+}
+
+/** Fades the first and last few milliseconds so chunk edges do not click. */
+function applyEdgeFade(samples: Float32Array, sampleRate: number): void {
+  const fade = Math.min(Math.floor(sampleRate * EDGE_FADE_SECONDS), Math.floor(samples.length / 2));
+  if (fade <= 1) {
+    return;
+  }
+  for (let index = 0; index < fade; index += 1) {
+    const gain = index / fade;
+    samples[index] = (samples[index] ?? 0) * gain;
+    samples[samples.length - 1 - index] = (samples[samples.length - 1 - index] ?? 0) * gain;
+  }
 }
 
 function resolveAudioContextConstructor(): AudioContextConstructor | null {
