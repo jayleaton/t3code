@@ -349,15 +349,15 @@ function buildSetupMessage(
   systemInstruction: string | undefined,
   tools: ReadonlyArray<GeminiLiveTool>,
 ): string {
-  // Shape follows the current Live API WebSocket reference:
-  // `responseModalities` is top level in `setup`, and manual VAD must be opted
-  // into by disabling automatic activity detection before sending
-  // activityStart/activityEnd. `gemini-3.8-live` does not support
-  // thinking_level, so no thinking config is sent.
+  // Shape verified against the live v1beta WebSocket proto: the server rejects
+  // a top-level `responseModalities` ("Unknown name ... at 'setup'"), so it
+  // belongs under `generationConfig`. Manual VAD is opted into by disabling
+  // automatic activity detection, and `gemini-3.8-live` takes no thinking
+  // config (`thinking_level` is unsupported for that model).
   return JSON.stringify({
     setup: {
       model: `models/${model}`,
-      responseModalities: ["AUDIO"],
+      generationConfig: { responseModalities: ["AUDIO"] },
       realtimeInputConfig: { automaticActivityDetection: { disabled: true } },
       ...(systemInstruction ? { systemInstruction: { parts: [{ text: systemInstruction }] } } : {}),
       ...(tools.length > 0 ? { tools: [{ functionDeclarations: tools }] } : {}),

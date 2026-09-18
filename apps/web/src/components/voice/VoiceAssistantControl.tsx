@@ -235,9 +235,10 @@ function LiveStatusBlock() {
       ) : (
         <p className="text-xs text-muted-foreground">Set a push-to-talk key to talk.</p>
       )}
-      {!hasLiveCredential ? (
+      {state.mode !== "off" && !hasLiveCredential ? (
         <p className="text-xs text-warning-foreground">
-          No Gemini API key is available for this environment, so replies cannot be spoken yet.
+          Voice is armed but no Gemini API key is available for this environment, so replies cannot
+          be spoken yet.
         </p>
       ) : null}
       {state.transcript ? (
