@@ -69,6 +69,7 @@ export class GeminiLiveConversation implements VoiceConversationPort {
   private connected = false;
   private activity = false;
   private pendingOutbound: string[] = [];
+  private muted = false;
 
   constructor(options: GeminiLiveConversationOptions) {
     this.apiKey = options.apiKey;
@@ -95,6 +96,7 @@ export class GeminiLiveConversation implements VoiceConversationPort {
     this.socket = socket;
     this.connected = false;
     this.activity = false;
+    this.muted = false;
     this.pendingOutbound = [];
     socket.onopen = () => {
       this.notifyOpen();
@@ -126,6 +128,8 @@ export class GeminiLiveConversation implements VoiceConversationPort {
     if (this.socket === null) {
       return;
     }
+    // A new utterance resumes model output after an interruption.
+    this.muted = false;
     if (!this.activity) {
       this.activity = true;
       this.sendOrQueue(JSON.stringify({ realtimeInput: { activityStart: {} } }));
@@ -157,12 +161,19 @@ export class GeminiLiveConversation implements VoiceConversationPort {
     this.sendOrQueue(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
   }
 
+  /**
+   * Cancels the current activity without closing the session: dropping the
+   * socket here would silently end the conversation and lose all context.
+   * `disconnect()` is the only teardown path.
+   */
   cancel(): void {
     if (this.activity) {
       this.activity = false;
       this.sendOrQueue(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
     }
-    this.closeSocket();
+    // Stop surfacing model audio/transcripts for the interrupted turn until the
+    // next utterance or turn completion.
+    this.muted = true;
   }
 
   private notifyOpen(): void {
@@ -225,6 +236,7 @@ export class GeminiLiveConversation implements VoiceConversationPort {
     this.socket = null;
     this.connected = false;
     this.activity = false;
+    this.muted = false;
     this.pendingOutbound = [];
     socket.close();
   }
@@ -264,6 +276,15 @@ export class GeminiLiveConversation implements VoiceConversationPort {
   }
 
   private handleServerContent(content: Record<string, unknown>): void {
+    if (this.muted) {
+      // The interrupted turn may still stream a little audio; drop it, and
+      // unmute once the server confirms the turn is over.
+      if (content["turnComplete"] === true) {
+        this.muted = false;
+        this.callbacks.onTurnComplete?.();
+      }
+      return;
+    }
     const inputTranscription = content["inputTranscription"];
     if (isRecord(inputTranscription) && typeof inputTranscription["text"] === "string") {
       this.callbacks.onInputTranscript?.(inputTranscription["text"]);

@@ -243,7 +243,7 @@ describe("GeminiLiveConversation", () => {
     expect(onClose).toHaveBeenCalledWith({ code: 1000, reason: "done" });
   });
 
-  it("cancel() ends an open activity and disconnect() is safe to repeat", async () => {
+  it("cancel() ends the activity without closing the session", async () => {
     const { conversation, socket } = createHarness();
     await conversation.connect();
     socket.open();
@@ -252,14 +252,39 @@ describe("GeminiLiveConversation", () => {
     conversation.cancel();
     expect(countFrames(socket, '"activityEnd"')).toBe(1);
     expect(conversation.activityOpen).toBe(false);
-    expect(socket.closeCalls).toBe(1);
+    // The session must survive an interruption; context is preserved.
+    expect(socket.closeCalls).toBe(0);
 
+    await conversation.disconnect();
+    await conversation.disconnect();
+    expect(socket.closeCalls).toBe(1);
+  });
+
+  it("cancel() mutes model audio until the next utterance", async () => {
+    const onAudio = vi.fn();
+    const { conversation, socket } = createHarness({ onAudio });
+    await conversation.connect();
+    socket.open();
+    const chunk = new Uint8Array([1, 2, 3]);
+
+    conversation.sendAudio(new Uint8Array([9]));
     conversation.cancel();
-    expect(socket.closeCalls).toBe(1);
+    socket.emitMessage({
+      serverContent: {
+        modelTurn: { parts: [{ inlineData: { data: encodeBase64ForTest(chunk) } }] },
+      },
+    });
+    await flush();
+    expect(onAudio).not.toHaveBeenCalled();
 
-    await conversation.disconnect();
-    await conversation.disconnect();
-    expect(socket.closeCalls).toBe(1);
+    conversation.sendAudio(new Uint8Array([4]));
+    socket.emitMessage({
+      serverContent: {
+        modelTurn: { parts: [{ inlineData: { data: encodeBase64ForTest(chunk) } }] },
+      },
+    });
+    await flush();
+    expect(onAudio).toHaveBeenCalledWith(chunk);
   });
 
   it("decodeSocketData() decodes ArrayBuffer frames", async () => {

@@ -20,6 +20,7 @@ import { voiceAssistantEnvironment } from "../state/voiceAssistant";
 import { createMicrophoneCapture, type MicrophoneCapture } from "./audio/microphoneCapture";
 import { createSpeakerPlayback } from "./audio/speakerPlayback";
 import { GeminiLiveConversation, type GeminiLiveSocket } from "./geminiLiveConversation";
+import { VoiceAssistantIndicator } from "./VoiceAssistantIndicator";
 import { matchesVoiceShortcut } from "./pushToTalkShortcut";
 
 const OFF_STATE: VoiceAssistantState = {
@@ -156,6 +157,7 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
   // Microphone + controller runtime, independent of any provider credential.
   useEffect(() => {
     if (mode === "off") {
+      setState(OFF_STATE);
       setMicrophoneStatus("off");
       setMicrophoneActive(false);
       setMicrophoneLevel(0);
@@ -310,6 +312,7 @@ export function VoiceAssistantHostProvider({ children }: { readonly children: Re
       }}
     >
       {children}
+      <VoiceAssistantIndicator />
     </VoiceAssistantHostContext.Provider>
   );
 }
