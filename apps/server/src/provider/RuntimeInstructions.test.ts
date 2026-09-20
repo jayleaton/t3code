@@ -26,3 +26,10 @@ describe("buildRuntimeInstructions", () => {
     expect(instructions).not.toContain("reasoning effort");
   });
 });
+
+it("describes missing thread MCP tools without requiring PR linking", () => {
+  const instructions = buildRuntimeInstructions({ harness: "Command Code", threadMcpTools: false });
+  expect(instructions).not.toContain("<pull_request_linking>");
+  expect(instructions).toContain("skip thread linking and return the PR URL");
+  expect(instructions).toContain("Do not repeatedly search for unavailable tools");
+});

@@ -105,6 +105,8 @@ it.effect(
       yield* adapter.sendTurn({ threadId, input: "second", interactionMode: "plan" });
       yield* takeTurn(queue);
       const log = yield* fs.readFileString(`${cwd}/calls.jsonl`);
+      assert.include(log, "<tool_availability>");
+      assert.notInclude(log, "<pull_request_linking>");
       assert.include(log, "Follow the saved agent role.");
       assert.include(log, '"--resume","native-one"');
       assert.include(log, '"--plan"');
@@ -150,6 +152,25 @@ for (const prompt of ["early-error", "bad-json", "limit"]) {
         "failed",
       );
       assert.equal((yield* adapter.listSessions())[0]?.status, "ready");
+      if (prompt === "limit") {
+        assert.include(
+          events
+            .flatMap((event) =>
+              event.type === "turn.completed" ? [event.payload.errorMessage ?? ""] : [],
+            )
+            .join("\n"),
+          "The session is saved; send a follow-up to continue.",
+        );
+        const resumed = yield* adapter.sendTurn({ threadId, input: "continue" });
+        assert.deepEqual(resumed.resumeCursor, { sessionId: "native-one" });
+        const continuedEvents = yield* takeTurn(queue);
+        assert.include(
+          continuedEvents.map((event) =>
+            event.type === "turn.completed" ? event.payload.state : "",
+          ),
+          "completed",
+        );
+      }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 }
