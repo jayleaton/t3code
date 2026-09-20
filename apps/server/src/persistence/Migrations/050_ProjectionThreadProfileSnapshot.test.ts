@@ -9,7 +9,7 @@ import { ProjectionThreadMessageRepositoryLive } from "../Layers/ProjectionThrea
 import { ProjectionThreadMessageRepository } from "../Services/ProjectionThreadMessages.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 
 layer("agents migration 52 upgrade", (it) => {
   it.effect("repairs message reads when a shipped build already recorded migration 52", () =>

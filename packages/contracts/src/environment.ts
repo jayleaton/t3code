@@ -99,6 +99,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       Absent on servers from before inline context shipped, which drop the records and forward
       the links as literal text -- so a client must serialize context the legacy way for them. */
   inlineMessageContext: Schema.optionalKey(Schema.Boolean),
+  /** Server rejects required worktrees instead of falling back to the project checkout. */
+  requiredWorktreeBootstrap: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.settle / thread.unsettle commands. Absent on
       pre-settlement servers, so clients treat missing as unsupported and
       never send the commands under version skew. */
@@ -108,6 +110,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   agentLibrarySync: Schema.optionalKey(Schema.Boolean),
   /** First-turn bootstrap retains the selected agent profile. Missing means update before sending agent drafts. */
   agentThreadBootstrap: Schema.optionalKey(Schema.Boolean),
+  storageCleanup: Schema.optionalKey(Schema.Boolean),
+  projectWorktreeCleanup: Schema.optionalKey(Schema.Boolean),
   /** Server persists the opt-in for continuing interrupted threads after restarts. */
   threadRestartContinuation: Schema.optionalKey(Schema.Boolean),
   /** Server resolves `projectSettingsOverrides`; older servers ignore the key. */
@@ -190,14 +194,6 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
 });
 export type ExecutionEnvironmentDescriptor = typeof ExecutionEnvironmentDescriptor.Type;
 
-export const EnvironmentConnectionState = Schema.Literals([
-  "connecting",
-  "connected",
-  "disconnected",
-  "error",
-]);
-export type EnvironmentConnectionState = typeof EnvironmentConnectionState.Type;
-
 export const RepositoryIdentityLocator = Schema.Struct({
   source: Schema.Literal("git-remote"),
   remoteName: TrimmedNonEmptyString,
@@ -229,9 +225,3 @@ export const ScopedThreadRef = Schema.Struct({
   threadId: ThreadId,
 });
 export type ScopedThreadRef = typeof ScopedThreadRef.Type;
-
-export const ScopedThreadSessionRef = Schema.Struct({
-  environmentId: EnvironmentId,
-  threadId: ThreadId,
-});
-export type ScopedThreadSessionRef = typeof ScopedThreadSessionRef.Type;
