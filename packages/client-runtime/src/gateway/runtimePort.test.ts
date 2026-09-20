@@ -1,4 +1,4 @@
-import { EnvironmentId, type ServerProvider } from "@t3tools/contracts";
+import { EnvironmentId, type OrchestrationEvent, type ServerProvider } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as TestClock from "effect/testing/TestClock";
@@ -284,7 +284,9 @@ describe("Gateway Runtime Port", () => {
           threads: [],
           updatedAt: "2026-09-04T00:00:00.000Z",
         } as never,
-        events: Stream.fromIterable(events as never),
+        events: Stream.fromIterable(events as unknown as OrchestrationEvent[]).pipe(
+          Stream.rechunk(1),
+        ),
         loadSnapshot,
       }).pipe(Stream.runCollect);
 

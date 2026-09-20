@@ -17,6 +17,7 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
@@ -534,9 +535,12 @@ export function enrichGatewayRuntimeEventStream<E, R, E2, R2>(input: {
   return Stream.suspend(() => {
     let latestSnapshot = input.initialSnapshot;
     let retrySnapshotAfter = 0;
+    // Keep replay chunks intact: merging singleton events yields once per event,
+    // which Chromium can throttle long enough to block the RPC reader and Pongs.
     return input.events.pipe(
-      Stream.mapEffect((event) =>
+      Stream.mapArrayEffect((events) =>
         Effect.gen(function* () {
+          const event = Arr.lastNonEmpty(events);
           if (latestSnapshot.snapshotSequence < event.sequence) {
             const now = yield* Clock.currentTimeMillis;
             if (now >= retrySnapshotAfter) {
@@ -549,10 +553,12 @@ export function enrichGatewayRuntimeEventStream<E, R, E2, R2>(input: {
               }
             }
           }
-          return gatewayEventFromOrchestration(
-            input.environmentId,
-            event,
-            gatewayEventContext(input.machine, latestSnapshot, event),
+          return Arr.map(events, (event) =>
+            gatewayEventFromOrchestration(
+              input.environmentId,
+              event,
+              gatewayEventContext(input.machine, latestSnapshot, event),
+            ),
           );
         }),
       ),
@@ -569,10 +575,8 @@ export function createGatewayRuntimeEventSourceFromContext(
       const stream = Stream.unwrap(
         Effect.gen(function* () {
           const registry = yield* EnvironmentRegistry;
-          return Stream.concat(
-            Stream.fromEffect(SubscriptionRef.get(registry.entries)),
-            SubscriptionRef.changes(registry.entries),
-          ).pipe(
+          // changes already includes the current entries; do not start a second replay.
+          return SubscriptionRef.changes(registry.entries).pipe(
             Stream.switchMap((entries) =>
               Stream.mergeAll(
                 [...entries.values()]
@@ -588,10 +592,15 @@ export function createGatewayRuntimeEventSourceFromContext(
                             initialSnapshot: snapshot,
                             events: registry.runStream(
                               environmentId,
-                              subscribe(ORCHESTRATION_WS_METHODS.subscribeEvents, {
-                                afterSequence:
-                                  subscription.afterSequenceByEnvironment[environmentId] ?? 0,
-                              }),
+                              subscribe(
+                                ORCHESTRATION_WS_METHODS.subscribeEvents,
+                                {
+                                  afterSequence:
+                                    subscription.afterSequenceByEnvironment[environmentId] ?? 0,
+                                },
+                                // Fit one event-store replay page without waiting on a throttled consumer.
+                                { streamBufferSize: 500 },
+                              ),
                             ),
                             loadSnapshot: () =>
                               registry.run(environmentId, loadGatewayEventSnapshot),
