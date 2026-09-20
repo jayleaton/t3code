@@ -440,6 +440,55 @@ describe("ProviderRuntimeIngestion", () => {
     };
   }
 
+  it("persists the latest model TPS sample while a turn is still running", async () => {
+    const harness = await createHarness();
+    const base = {
+      provider: ProviderDriverKind.make("commandcode"),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("tps-turn"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+    await harness.emitAndDrain([
+      { ...base, type: "turn.started", eventId: asEventId("tps-start") },
+      {
+        ...base,
+        type: "turn.throughput.updated",
+        eventId: asEventId("tps-1"),
+        payload: {
+          outputTokens: 100,
+          durationMs: 1000,
+          scope: "response",
+          timingSource: "observed",
+        },
+      },
+      {
+        ...base,
+        type: "turn.throughput.updated",
+        eventId: asEventId("tps-2"),
+        payload: {
+          outputTokens: 400,
+          durationMs: 2000,
+          scope: "response",
+          timingSource: "observed",
+        },
+      },
+    ]);
+    const thread = (await harness.readModel()).threads.find(
+      (thread) => thread.id === base.threadId,
+    )!;
+    const samples = thread.activities.filter(
+      (activity) => activity.kind === "model-throughput.updated",
+    );
+    expect(samples).toHaveLength(1);
+    expect(samples[0]?.payload).toEqual({
+      outputTokens: 400,
+      durationMs: 2000,
+      scope: "response",
+      timingSource: "observed",
+    });
+    expect(thread.session?.status).toBe("running");
+  });
+
   it("maps turn started/completed events into thread session updates", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

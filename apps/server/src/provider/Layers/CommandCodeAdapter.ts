@@ -11,6 +11,7 @@ import {
   TurnId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -35,6 +36,7 @@ import type {
 } from "../Services/ProviderAdapter.ts";
 import {
   commandCodePermissionArgs,
+  createCommandCodeThroughputTracker,
   commandCodeTokenUsage,
   commandCodeToolData,
   decodeCommandCodeFrame,
@@ -224,6 +226,7 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
           updatedAt: yield* now,
         };
         let result: Extract<CommandCodeFrame, { type: "result" }> | undefined;
+        const trackThroughput = createCommandCodeThroughputTracker();
         let textStreamed = false;
         let hasSubagents = false;
         const pendingTools = new Map<string, string>();
@@ -284,6 +287,14 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
               return;
             }
             const event = frame.event;
+            if (event.type === "model_request_start" || event.type === "model_request_end") {
+              const sample = trackThroughput(
+                event,
+                Number(yield* Clock.currentTimeNanos) / 1_000_000,
+              );
+              if (sample)
+                yield* emit(context, { type: "turn.throughput.updated", turnId, payload: sample });
+            }
             if (event.type === "subagent_progress") hasSubagents = true;
             if (event.type === "run_start" && typeof event.sessionId === "string")
               yield* captureSession(event.sessionId);

@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./thread-activity-metrics": {
-      "types": "./src/threadActivityMetrics.ts",
-      "default": "./src/threadActivityMetrics.ts"
+    "./model-throughput": {
+      "types": "./src/modelThroughput.ts",
+      "default": "./src/modelThroughput.ts"
     },
     "./device/stream": {
       "types": "./src/device/stream.ts",

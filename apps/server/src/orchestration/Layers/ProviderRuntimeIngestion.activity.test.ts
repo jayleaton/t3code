@@ -144,51 +144,33 @@ describe("runtimeEventToActivities tool streaming persistence", () => {
   });
 });
 
-describe("runtimeEventToActivities turn usage", () => {
-  it("persists canonical reported usage rather than inferring counts from text", () => {
-    const tokenUsage = {
-      usageStatus: "complete",
-      usageScope: "main_agent",
-      inputTokens: 100,
-      outputTokens: 80,
-      reasoningTokens: 60,
-      hasSubagents: false,
+describe("runtimeEventToActivities throughput", () => {
+  it("keeps one latest measured rate per turn without mixing separate turns", () => {
+    const payload = {
+      outputTokens: 100,
+      durationMs: 2000,
+      scope: "response",
+      timingSource: "observed",
     } as const;
     const event = {
       ...base,
-      type: "turn.completed",
-      eventId: EventId.make("usage-event"),
-      turnId: TurnId.make("turn-usage"),
-      payload: { state: "completed", tokenUsage },
+      type: "turn.throughput.updated",
+      eventId: EventId.make("metrics-1"),
+      turnId: TurnId.make("turn-1"),
+      payload,
     } satisfies ProviderRuntimeEvent;
-    expect(runtimeEventToActivities(event)).toEqual([
-      {
-        id: event.eventId,
-        createdAt: event.createdAt,
-        tone: "info",
-        kind: "turn.usage",
-        summary: "Provider token usage",
-        payload: { tokenUsage },
-        turnId: event.turnId,
-      },
-    ]);
-    expect(runtimeEventToActivities({ ...event, payload: { state: "completed" } })).toEqual([]);
-  });
-  it("preserves partial usage on aborted turns", () => {
-    const tokenUsage = {
-      usageStatus: "partial",
-      usageScope: "main_agent",
-      outputTokens: 20,
-      hasSubagents: true,
-    } as const;
-    const event = {
-      ...base,
-      type: "turn.aborted",
-      eventId: EventId.make("abort-usage-event"),
-      turnId: TurnId.make("turn-usage"),
-      payload: { reason: "Stopped", tokenUsage },
-    } satisfies ProviderRuntimeEvent;
-    expect(runtimeEventToActivities(event)[0]?.payload).toEqual({ tokenUsage });
+    const first = runtimeEventToActivities(event)[0]!;
+    const second = runtimeEventToActivities({
+      ...event,
+      eventId: EventId.make("metrics-2"),
+      payload: { ...payload, outputTokens: 200 },
+    })[0]!;
+    expect(first.kind).toBe("model-throughput.updated");
+    expect(second.id).toBe(first.id);
+    expect(second.payload).toEqual({ ...payload, outputTokens: 200 });
+    expect(runtimeEventToActivities({ ...event, turnId: TurnId.make("turn-2") })[0]?.id).not.toBe(
+      first.id,
+    );
     expect(runtimeEventToActivities({ ...event, turnId: undefined })).toEqual([]);
   });
 });

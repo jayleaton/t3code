@@ -1,5 +1,6 @@
 import {
   type ModelCapabilities,
+  type ModelThroughputSample,
   type RuntimeMode,
   type TurnTokenUsage,
   type ServerProviderModel,
@@ -99,4 +100,28 @@ export function commandCodeToolData(value: unknown): unknown {
   if (value === undefined) return undefined;
   const encoded = encodeData(value);
   return encoded.length <= 16_384 ? value : `${encoded.slice(0, 16_384)}… (truncated)`;
+}
+
+/** CLI model-request boundaries exclude the tool loop between requests. */
+export function createCommandCodeThroughputTracker() {
+  let started: { at: number; model: unknown } | undefined;
+  return (event: Record<string, unknown>, nowMs: number): ModelThroughputSample | undefined => {
+    if (event.type === "model_request_start") {
+      started = { at: nowMs, model: event.model };
+      return;
+    }
+    if (event.type !== "model_request_end") return;
+    const request = started;
+    started = undefined;
+    if (!request || request.model !== event.model) return;
+    const usage = decodeUsage(event.usage);
+    const durationMs = Math.round(nowMs - request.at);
+    if (usage._tag === "None" || !Number.isSafeInteger(durationMs) || durationMs <= 0) return;
+    return {
+      outputTokens: usage.value.outputTokens,
+      durationMs,
+      scope: "response",
+      timingSource: "observed",
+    };
+  };
 }

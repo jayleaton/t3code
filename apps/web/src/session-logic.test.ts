@@ -480,7 +480,10 @@ describe("deriveWorkLogEntries", () => {
   it("keeps provider usage metadata out of the tool log", () => {
     expect(
       deriveWorkLogEntries([
-        makeActivity({ kind: "turn.usage", payload: { tokenUsage: { outputTokens: 50 } } }),
+        makeActivity({
+          kind: "model-throughput.updated",
+          payload: { tokenUsage: { outputTokens: 50 } },
+        }),
       ]),
     ).toEqual([]);
   });

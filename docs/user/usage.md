@@ -22,22 +22,22 @@ results appear as each one responds.
 If recent work is missing or a new model shows no cost, refresh to rescan session history and
 update model pricing.
 
-## Follow thread activity
+## Check tokens per second
 
-Open the activity indicator above the composer to see what a thread is doing,
-how long it has been in that phase, elapsed time, and tools finished or still
-running. Web, desktop, and mobile use the same recorded activity.
+The TPS indicator above the composer uses provider-reported output tokens divided
+by matching API request time. It includes reasoning and tool-call generation as
+counted by the provider, and excludes time spent executing tools. Open it to see
+the token count, duration, and measurement scope.
 
-The breakdown covers reported thinking, responses, tool activity (including
-scripts), waiting for your approval or answer, and other work. Parallel work
-counts once: waits take priority over tools, then reported thinking and responses.
-Providers do not expose every phase; unreported thinking, startup, and missing
-history stay in **Other work**. Tool activity measures the tool lifecycle, not
-CPU utilization. It can include queued or remote execution time.
+Command Code updates TPS after each model response using its request boundaries.
+Claude shows the completed turn's API average when complete counts and matching
+API duration are available; subagent runs are not currently measured. Other
+providers show **TPS unavailable** until they expose matching timing and usage.
+No token counts are estimated from text.
 
-Provider-reported output and reasoning token totals appear after the turn when
-available. Partial totals are labeled, and subagent tokens are excluded. There
-is no character-based token estimate or claimed inference-speed measurement.
+This is request throughput, including prompt processing and network latency,
+not a decode-only inference benchmark. While a response is streaming, the last
+completed measurement stays visible. New turns wait for their own measurement.
 
 ## Set custom model prices
 

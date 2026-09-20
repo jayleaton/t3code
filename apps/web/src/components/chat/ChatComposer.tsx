@@ -1,4 +1,4 @@
-import { ThreadActivityPanel } from "./ThreadActivityPanel";
+import { ThreadTpsPanel } from "./ThreadTpsPanel";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import { usePrimaryEnvironmentId } from "../../state/environments";
@@ -6314,10 +6314,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         ) : null}
       </ComposerBanner.Dock>
       {activeThread ? (
-        <ThreadActivityPanel
+        <ThreadTpsPanel
           key={`${activeThread.environmentId}:${activeThread.id}`}
-          turn={activeThread.latestTurn}
-          messages={activeThread.messages}
+          turnId={activeThread.latestTurn?.turnId}
+          provider={activeThread.session?.providerName ?? undefined}
+          running={activeThread.latestTurn?.state === "running"}
           activities={activeThread.activities}
           available={
             !isConnecting && environmentUnavailable === null && props.threadSyncPhase === null

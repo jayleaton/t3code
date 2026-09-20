@@ -2215,6 +2215,7 @@ describe("ClaudeAdapterLive", () => {
           cache_creation_input_tokens: 10,
           output_tokens: 20,
         },
+        duration_api_ms: 1000,
         session_id: "sdk-session-task",
         uuid: "result-task-1",
       } as unknown as SDKMessage);
@@ -2230,6 +2231,7 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(completed?.type, "turn.completed");
       if (completed?.type === "turn.completed") {
         assert.equal(completed.payload.tokenUsage?.hasSubagents, true);
+        assert.isFalse(runtimeEvents.some((event) => event.type === "turn.throughput.updated"));
       }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -3350,10 +3352,10 @@ describe("ClaudeAdapterLive", () => {
     });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 7).pipe(
-        Stream.runCollect,
-        Effect.forkChild,
-      );
+      const runtimeEventsFiber = yield* Stream.takeUntil(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runCollect, Effect.forkChild);
       yield* adapter.startSession({
         threadId: THREAD_ID,
         provider: ProviderDriverKind.make("claudeAgent"),
@@ -3433,6 +3435,14 @@ describe("ClaudeAdapterLive", () => {
 
       const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
       assert.equal(getContextUsageCalls, 0);
+      const throughput = runtimeEvents.find((event) => event.type === "turn.throughput.updated");
+      assert.deepEqual(throughput?.payload, {
+        outputTokens: 50,
+        reasoningTokens: 30,
+        durationMs: 1200,
+        scope: "turn",
+        timingSource: "provider",
+      });
       const usageEvent = runtimeEvents.find((event) => event.type === "thread.token-usage.updated");
       assert.equal(usageEvent?.type, "thread.token-usage.updated");
       if (usageEvent?.type === "thread.token-usage.updated") {
@@ -3654,10 +3664,10 @@ describe("ClaudeAdapterLive", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 11).pipe(
-        Stream.runCollect,
-        Effect.forkChild,
-      );
+      const runtimeEventsFiber = yield* Stream.takeUntil(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runCollect, Effect.forkChild);
 
       yield* adapter.startSession({
         threadId: THREAD_ID,

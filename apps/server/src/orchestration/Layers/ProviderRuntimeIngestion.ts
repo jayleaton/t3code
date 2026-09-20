@@ -477,17 +477,16 @@ export function runtimeEventToActivities(
       : {};
   })();
   switch (event.type) {
-    case "turn.completed":
-    case "turn.aborted": {
-      if (!event.turnId || !event.payload.tokenUsage) return [];
+    case "turn.throughput.updated": {
+      if (!event.turnId) return [];
       return [
         {
-          id: event.eventId,
+          id: EventId.make(`throughput:${event.threadId}:${event.turnId}`),
           createdAt: event.createdAt,
           tone: "info",
-          kind: "turn.usage",
-          summary: "Provider token usage",
-          payload: { tokenUsage: event.payload.tokenUsage },
+          kind: "model-throughput.updated",
+          summary: "Model throughput",
+          payload: event.payload,
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },

@@ -30,8 +30,10 @@ const sessionId = args.includes('--resume') ? args[args.indexOf('--resume') + 1]
 emit({type:'event',event:{type:'run_start',sessionId}});
 if (prompt.endsWith('hang')) { await new Promise(() => { setInterval(() => {}, 10000); }); }
 if (prompt.endsWith('bad-json')) { process.stdout.write('bad json\\n'); process.exit(1); }
+emit({type:'event',event:{type:'model_request_start',model:'model'}});
 emit({type:'event',event:{type:'thinking_delta',delta:'Thinking'}});
 emit({type:'event',event:{type:'text_delta',delta:'Hello'}});
+emit({type:'event',event:{type:'model_request_end',model:'model',usage:{inputTokens:10,outputTokens:2}}});
 emit({type:'event',event:{type:'tool_queued',toolCallId:'t1',toolName:'read_file',input:{path:'README.md'}}});
 emit({type:'event',event:{type:'tool_completed',toolCallId:'t1',toolName:'read_file',result:[{type:'text',text:'contents'}]}});
 emit({type:'event',event:{type:'text_delta',delta:'Done'}});

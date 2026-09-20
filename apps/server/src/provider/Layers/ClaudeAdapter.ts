@@ -2818,6 +2818,36 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       rawPayload: result ?? { status },
     });
 
+    const tokenUsage = normalizeClaudeTurnTokenUsage(result, turnState.hasSubagents, status);
+    const apiDurationMs = finiteNonNegativeInteger(result?.duration_api_ms);
+    // Child-agent timing is not guaranteed to match the main-agent usage scope.
+    if (
+      tokenUsage.usageStatus === "complete" &&
+      !turnState.hasSubagents &&
+      apiDurationMs &&
+      apiDurationMs > 0
+    ) {
+      const throughputStamp = yield* makeEventStamp();
+      yield* offerRuntimeEvent({
+        type: "turn.throughput.updated",
+        eventId: throughputStamp.eventId,
+        provider: PROVIDER,
+        createdAt: throughputStamp.createdAt,
+        threadId: context.session.threadId,
+        turnId: turnState.turnId,
+        payload: {
+          outputTokens: tokenUsage.outputTokens,
+          ...(tokenUsage.reasoningTokens !== undefined
+            ? { reasoningTokens: tokenUsage.reasoningTokens }
+            : {}),
+          durationMs: apiDurationMs,
+          scope: "turn",
+          timingSource: "provider",
+        },
+        providerRefs: nativeProviderRefs(context),
+      });
+    }
+
     const stamp = yield* makeEventStamp();
     yield* offerRuntimeEvent({
       type: "turn.completed",
@@ -2835,7 +2865,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           ? { totalCostUsd: result.total_cost_usd }
           : {}),
         ...(errorMessage ? { errorMessage } : {}),
-        tokenUsage: normalizeClaudeTurnTokenUsage(result, turnState.hasSubagents, status),
+        tokenUsage,
       },
       providerRefs: nativeProviderRefs(context),
     });

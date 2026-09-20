@@ -875,6 +875,21 @@ const ProviderRuntimeThreadTokenUsageUpdatedEvent = Schema.Struct({
 export type ProviderRuntimeThreadTokenUsageUpdatedEvent =
   typeof ProviderRuntimeThreadTokenUsageUpdatedEvent.Type;
 
+/** Provider output counts paired with the matching model/API request time. */
+export const ModelThroughputSample = Schema.Struct({
+  outputTokens: NonNegativeInt,
+  reasoningTokens: Schema.optional(NonNegativeInt),
+  durationMs: PositiveInt,
+  scope: Schema.Literals(["response", "turn"]),
+  timingSource: Schema.Literals(["observed", "provider"]),
+});
+export type ModelThroughputSample = typeof ModelThroughputSample.Type;
+const ProviderRuntimeThroughputUpdatedEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: Schema.Literal("turn.throughput.updated"),
+  payload: ModelThroughputSample,
+});
+
 const ProviderRuntimeThreadRealtimeStartedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: ThreadRealtimeStartedType,
@@ -1183,6 +1198,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeThreadStateChangedEvent,
   ProviderRuntimeThreadMetadataUpdatedEvent,
   ProviderRuntimeThreadTokenUsageUpdatedEvent,
+  ProviderRuntimeThroughputUpdatedEvent,
   ProviderRuntimeThreadRealtimeStartedEvent,
   ProviderRuntimeThreadRealtimeItemAddedEvent,
   ProviderRuntimeThreadRealtimeAudioDeltaEvent,
