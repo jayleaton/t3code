@@ -2,6 +2,7 @@ import { CommandCodeSettings, ProviderDriverKind, type ServerProvider } from "@t
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
@@ -80,6 +81,7 @@ export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeD
           config.customModels,
           COMMAND_CODE_MODEL_CAPABILITIES,
         );
+      let lastModelCatalog = "";
       const initialSnapshot = Effect.gen(function* () {
         return stamp(
           buildServerProvider({
@@ -130,17 +132,22 @@ export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeD
             }),
           );
         const [auth, catalog] = yield* Effect.all(
-          [probe(["status", "--json"]), probe(["--list-models"])],
+          [probe(["status", "--json"]), probe(["--list-models"]).pipe(Effect.option)],
           { concurrency: "unbounded" },
         );
         const { authenticated } = yield* decodeAuth(auth.stdout);
+        // Catalog discovery can time out while authenticated agent turns still work.
+        // Retain the last catalog without treating this optional probe as auth failure.
+        if (Option.isSome(catalog) && catalog.value.code === 0) {
+          lastModelCatalog = catalog.value.stdout;
+        }
         return stamp(
           buildServerProvider({
             driver: DRIVER,
             presentation,
             enabled: true,
             checkedAt,
-            models: models(catalog.code === 0 ? catalog.stdout : ""),
+            models: models(lastModelCatalog),
             probe: {
               installed: true,
               version: parseGenericCliVersion(version.stdout),
