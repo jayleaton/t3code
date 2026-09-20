@@ -477,6 +477,22 @@ export function runtimeEventToActivities(
       : {};
   })();
   switch (event.type) {
+    case "turn.completed":
+    case "turn.aborted": {
+      if (!event.turnId || !event.payload.tokenUsage) return [];
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "turn.usage",
+          summary: "Provider token usage",
+          payload: { tokenUsage: event.payload.tokenUsage },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
     case "request.opened": {
       if (event.payload.requestType === "tool_user_input") {
         return [];

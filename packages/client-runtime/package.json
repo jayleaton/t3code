@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./thread-speed": {
-      "types": "./src/threadSpeed.ts",
-      "default": "./src/threadSpeed.ts"
+    "./thread-activity-metrics": {
+      "types": "./src/threadActivityMetrics.ts",
+      "default": "./src/threadActivityMetrics.ts"
     },
     "./device/stream": {
       "types": "./src/device/stream.ts",

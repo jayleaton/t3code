@@ -477,6 +477,13 @@ describe("workEntryIndicatesToolNeutralStatus", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
+  it("keeps provider usage metadata out of the tool log", () => {
+    expect(
+      deriveWorkLogEntries([
+        makeActivity({ kind: "turn.usage", payload: { tokenUsage: { outputTokens: 50 } } }),
+      ]),
+    ).toEqual([]);
+  });
   it("keeps the latest task progress without emitting plan-update log entries", () => {
     const activities = [
       makeActivity({ id: "before", kind: "tool.completed", summary: "Read files", sequence: 0 }),

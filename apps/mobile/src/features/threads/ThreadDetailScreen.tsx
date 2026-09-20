@@ -1,4 +1,4 @@
-import { ThreadSpeedPanel } from "./ThreadSpeedPanel";
+import { ThreadActivityPanel } from "./ThreadActivityPanel";
 import type { WorktreeSetupCardProps } from "./worktree-setup-card";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
@@ -22,6 +22,7 @@ import type {
   ModelSelection,
   OrchestrationThreadShell,
   OrchestrationMessage,
+  OrchestrationThreadActivity,
   ProviderApprovalDecision,
   ProviderInteractionMode,
   RuntimeMode,
@@ -116,7 +117,8 @@ export interface ThreadDetailScreenProps {
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
   readonly setupWorkingStartedAt?: string | null;
   readonly selectedThread: OrchestrationThreadShell;
-  readonly speedMessages?: ReadonlyArray<OrchestrationMessage>;
+  readonly activityMessages?: ReadonlyArray<OrchestrationMessage>;
+  readonly activityEvents?: ReadonlyArray<OrchestrationThreadActivity>;
   readonly contentPresentation: ThreadContentPresentation;
   readonly screenTone: StatusTone;
   readonly connectionError: string | null;
@@ -1044,11 +1046,12 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 ) : null}
               </View>
 
-              {props.speedMessages ? (
-                <ThreadSpeedPanel
+              {props.activityMessages && props.activityEvents ? (
+                <ThreadActivityPanel
                   key={`${props.environmentId}:${props.selectedThread.id}`}
                   turn={props.selectedThread.latestTurn}
-                  messages={props.speedMessages}
+                  messages={props.activityMessages}
+                  activities={props.activityEvents}
                   available={
                     props.connectionStateLabel === "connected" && props.threadSyncStatus === "live"
                   }

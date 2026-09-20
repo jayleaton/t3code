@@ -22,19 +22,22 @@ results appear as each one responds.
 If recent work is missing or a new model shows no cost, refresh to rescan session history and
 update model pricing.
 
-## Check thread speed
+## Follow thread activity
 
-Select the speed indicator above the composer to see live output speed, time to
-first output, elapsed time, and estimated visible tokens. This is available on
-web, desktop, and mobile with every provider.
+Open the activity indicator above the composer to see what a thread is doing,
+how long it has been in that phase, elapsed time, and tools finished or still
+running. Web, desktop, and mobile use the same recorded activity.
 
-Live speed measures text received over the last five seconds. After a turn ends,
-the indicator averages the loaded visible output over the whole turn, including
-tool execution and waits.
-The `~` marks an estimate of one token per four characters; language, code, and
-model tokenization affect accuracy. Hidden reasoning and tool output are excluded.
-Use it to compare how responsive threads feel, rather than as an inference benchmark.
-Reconnecting or returning to the app starts a fresh live measurement.
+The breakdown covers reported thinking, responses, tool activity (including
+scripts), waiting for your approval or answer, and other work. Parallel work
+counts once: waits take priority over tools, then reported thinking and responses.
+Providers do not expose every phase; unreported thinking, startup, and missing
+history stay in **Other work**. Tool activity measures the tool lifecycle, not
+CPU utilization. It can include queued or remote execution time.
+
+Provider-reported output and reasoning token totals appear after the turn when
+available. Partial totals are labeled, and subagent tokens are excluded. There
+is no character-based token estimate or claimed inference-speed measurement.
 
 ## Set custom model prices
 

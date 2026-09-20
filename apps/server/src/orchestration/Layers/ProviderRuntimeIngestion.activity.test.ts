@@ -3,6 +3,7 @@ import {
   ProviderDriverKind,
   RuntimeTaskId,
   ThreadId,
+  TurnId,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -140,5 +141,54 @@ describe("runtimeEventToActivities tool streaming persistence", () => {
     expect(activities).toHaveLength(1);
     const payload = activities[0]?.payload as Record<string, unknown>;
     expect(payload.data).toEqual(streamingData);
+  });
+});
+
+describe("runtimeEventToActivities turn usage", () => {
+  it("persists canonical reported usage rather than inferring counts from text", () => {
+    const tokenUsage = {
+      usageStatus: "complete",
+      usageScope: "main_agent",
+      inputTokens: 100,
+      outputTokens: 80,
+      reasoningTokens: 60,
+      hasSubagents: false,
+    } as const;
+    const event = {
+      ...base,
+      type: "turn.completed",
+      eventId: EventId.make("usage-event"),
+      turnId: TurnId.make("turn-usage"),
+      payload: { state: "completed", tokenUsage },
+    } satisfies ProviderRuntimeEvent;
+    expect(runtimeEventToActivities(event)).toEqual([
+      {
+        id: event.eventId,
+        createdAt: event.createdAt,
+        tone: "info",
+        kind: "turn.usage",
+        summary: "Provider token usage",
+        payload: { tokenUsage },
+        turnId: event.turnId,
+      },
+    ]);
+    expect(runtimeEventToActivities({ ...event, payload: { state: "completed" } })).toEqual([]);
+  });
+  it("preserves partial usage on aborted turns", () => {
+    const tokenUsage = {
+      usageStatus: "partial",
+      usageScope: "main_agent",
+      outputTokens: 20,
+      hasSubagents: true,
+    } as const;
+    const event = {
+      ...base,
+      type: "turn.aborted",
+      eventId: EventId.make("abort-usage-event"),
+      turnId: TurnId.make("turn-usage"),
+      payload: { reason: "Stopped", tokenUsage },
+    } satisfies ProviderRuntimeEvent;
+    expect(runtimeEventToActivities(event)[0]?.payload).toEqual({ tokenUsage });
+    expect(runtimeEventToActivities({ ...event, turnId: undefined })).toEqual([]);
   });
 });
