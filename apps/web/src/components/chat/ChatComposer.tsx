@@ -1,3 +1,4 @@
+import { ThreadSpeedPanel } from "./ThreadSpeedPanel";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import { usePrimaryEnvironmentId } from "../../state/environments";
@@ -6312,6 +6313,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           />
         ) : null}
       </ComposerBanner.Dock>
+      {activeThread ? (
+        <ThreadSpeedPanel
+          key={`${activeThread.environmentId}:${activeThread.id}`}
+          turn={activeThread.latestTurn}
+          messages={activeThread.messages}
+          available={
+            !isConnecting && environmentUnavailable === null && props.threadSyncPhase === null
+          }
+        />
+      ) : null}
       <div className="relative">
         <ComposerSurface.Main
           ref={composerMainSurfaceRef}

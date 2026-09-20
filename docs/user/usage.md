@@ -22,6 +22,20 @@ results appear as each one responds.
 If recent work is missing or a new model shows no cost, refresh to rescan session history and
 update model pricing.
 
+## Check thread speed
+
+Select the speed indicator above the composer to see live output speed, time to
+first output, elapsed time, and estimated visible tokens. This is available on
+web, desktop, and mobile with every provider.
+
+Live speed measures text received over the last five seconds. After a turn ends,
+the indicator averages the loaded visible output over the whole turn, including
+tool execution and waits.
+The `~` marks an estimate of one token per four characters; language, code, and
+model tokenization affect accuracy. Hidden reasoning and tool output are excluded.
+Use it to compare how responsive threads feel, rather than as an inference benchmark.
+Reconnecting or returning to the app starts a fresh live measurement.
+
 ## Set custom model prices
 
 On web or desktop, open the environment dropdown on **Usage**, then choose **Model prices** to add,
