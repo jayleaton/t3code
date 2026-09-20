@@ -17,6 +17,7 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -27,6 +28,8 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import { hasQueuedTurnStart } from "../state/threadSettled.ts";
 import { EnvironmentRegistry } from "../connection/registry.ts";
+import { EnvironmentSupervisor } from "../connection/supervisor.ts";
+import { ShellSnapshotLoader } from "../state/shellSnapshotHttp.ts";
 import {
   controlThreadLifecycle,
   createThread,
@@ -510,6 +513,15 @@ function gatewayEventContext(
   };
 }
 
+// An event consumer must not await another RPC on its own socket: a replay
+// batch can fill the RPC queue and block both the response and heartbeat replies.
+export const loadGatewayEventSnapshot = Effect.gen(function* () {
+  const supervisor = yield* EnvironmentSupervisor;
+  const loader = yield* ShellSnapshotLoader;
+  const prepared = yield* SubscriptionRef.get(supervisor.prepared);
+  return Option.isSome(prepared) ? yield* loader.load(prepared.value) : Option.none();
+});
+
 export function enrichGatewayRuntimeEventStream<E, R, E2, R2>(input: {
   readonly environmentId: EnvironmentId;
   readonly machine: string;
@@ -517,32 +529,39 @@ export function enrichGatewayRuntimeEventStream<E, R, E2, R2>(input: {
   readonly events: Stream.Stream<OrchestrationEvent, E, R>;
   readonly loadSnapshot: (
     event: OrchestrationEvent,
-  ) => Effect.Effect<OrchestrationShellSnapshot, E2, R2>;
+  ) => Effect.Effect<Option.Option<OrchestrationShellSnapshot>, E2, R2>;
 }): Stream.Stream<GatewayRuntimeEvent, E | E2, R | R2> {
   return Stream.suspend(() => {
     let latestSnapshot = input.initialSnapshot;
+    let retrySnapshotAfter = 0;
     return input.events.pipe(
       Stream.mapEffect((event) =>
-        (latestSnapshot.snapshotSequence >= event.sequence
-          ? Effect.succeed(latestSnapshot)
-          : input.loadSnapshot(event)
-        ).pipe(
-          Effect.map((snapshot) => {
-            latestSnapshot = snapshot;
-            return gatewayEventFromOrchestration(
-              input.environmentId,
-              event,
-              gatewayEventContext(input.machine, snapshot, event),
-            );
-          }),
-        ),
+        Effect.gen(function* () {
+          if (latestSnapshot.snapshotSequence < event.sequence) {
+            const now = yield* Clock.currentTimeMillis;
+            if (now >= retrySnapshotAfter) {
+              const snapshot = yield* input.loadSnapshot(event);
+              if (Option.isSome(snapshot)) {
+                latestSnapshot = snapshot.value;
+              } else {
+                // A failed HTTP request must not be repeated for every queued event.
+                retrySnapshotAfter = (yield* Clock.currentTimeMillis) + 30_000;
+              }
+            }
+          }
+          return gatewayEventFromOrchestration(
+            input.environmentId,
+            event,
+            gatewayEventContext(input.machine, latestSnapshot, event),
+          );
+        }),
       ),
     );
   });
 }
 
 export function createGatewayRuntimeEventSourceFromContext(
-  context: Context.Context<EnvironmentRegistry | Crypto.Crypto>,
+  context: Context.Context<EnvironmentRegistry | Crypto.Crypto | ShellSnapshotLoader>,
 ): GatewayRuntimeEventSource {
   return {
     subscribe: (listener, subscription) => {
@@ -574,7 +593,8 @@ export function createGatewayRuntimeEventSourceFromContext(
                                   subscription.afterSequenceByEnvironment[environmentId] ?? 0,
                               }),
                             ),
-                            loadSnapshot: () => shellSnapshot(environmentId),
+                            loadSnapshot: () =>
+                              registry.run(environmentId, loadGatewayEventSnapshot),
                           }),
                         ),
                       ),

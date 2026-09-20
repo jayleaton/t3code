@@ -24,3 +24,5 @@ conversation rollback, and interactive question cards are not supported by this
 integration. Reference workspace file paths in your prompt instead of attaching
 files. Command Code reads its own configured skills and MCP servers; T3's
 per-thread MCP tools are not injected into it.
+
+Command Code’s headless CLI has a model-request limit per turn. If it reaches that limit, the thread retains its output and native session; send a follow-up to continue. If the agent was repeatedly attempting an unavailable tool, address that limitation before continuing. T3 does not inject its per-thread MCP tools into Command Code, so PR URLs can be returned in chat without automatic thread linking.

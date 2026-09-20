@@ -212,7 +212,12 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
           ...(effort ? ["--effort", effort] : []),
         ];
         const instructions = withAgentInstructions(
-          buildRuntimeInstructions({ harness: "Command Code", model, reasoningEffort: effort }),
+          buildRuntimeInstructions({
+            harness: "Command Code",
+            model,
+            reasoningEffort: effort,
+            threadMcpTools: false,
+          }),
           input.agentInstructions ?? context.instructions,
         );
         const prompt = `${instructions}\n\n${input.input}`;
@@ -368,7 +373,7 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
               detail:
                 result?.error ||
                 (result?.subtype === "max_turns"
-                  ? "Command Code reached its maximum turn limit."
+                  ? "Command Code reached its model-request limit. The session is saved; send a follow-up to continue. Resolve any repeatedly failing or unavailable tool before continuing."
                   : stderr.trim() ||
                     `Command Code exited with code ${code} without a successful result.`),
             });

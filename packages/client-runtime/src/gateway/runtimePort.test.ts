@@ -5,6 +5,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
@@ -271,7 +272,7 @@ describe("Gateway Runtime Port", () => {
         },
       ] as const;
       const loadSnapshot = vi.fn((event: { readonly sequence: number }) =>
-        Effect.succeed(snapshots[event.sequence - 1] as never),
+        Effect.succeed(Option.some(snapshots[event.sequence - 1] as never)),
       );
 
       const projected = yield* enrichGatewayRuntimeEventStream({
