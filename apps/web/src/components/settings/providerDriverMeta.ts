@@ -1,6 +1,8 @@
+import { TerminalIcon } from "lucide-react";
 import {
   AntigravitySettings,
   ClaudeSettings,
+  CommandCodeSettings,
   CodexSettings,
   CursorSettings,
   GrokSettings,
@@ -44,6 +46,13 @@ export interface ProviderClientDefinition {
 }
 
 const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
+  {
+    value: ProviderDriverKind.make("commandcode"),
+    label: "Command Code",
+    icon: TerminalIcon,
+    settingsSchema: CommandCodeSettings,
+    badgeLabel: "Early Access",
+  },
   {
     value: ProviderDriverKind.make("codex"),
     label: "Codex",

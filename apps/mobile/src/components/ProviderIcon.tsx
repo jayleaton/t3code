@@ -37,6 +37,20 @@ export function ProviderIcon(props: ProviderIconProps) {
     );
   }
 
+  if (props.provider === "commandcode") {
+    return (
+      <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+        <Path
+          d="m4 6 6 6-6 6m9 0h7"
+          stroke={mono}
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </Svg>
+    );
+  }
+
   if (props.provider === "grok") {
     const fill = isDarkMode ? "#F5F5F5" : "#0F0F0F";
     return (
