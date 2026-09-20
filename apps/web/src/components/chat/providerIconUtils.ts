@@ -1,3 +1,4 @@
+import { TerminalIcon } from "lucide-react";
 import { ProviderDriverKind } from "@t3tools/contracts";
 import {
   AntigravityIcon,
@@ -10,6 +11,7 @@ import {
 } from "../Icons";
 
 export const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>> = {
+  [ProviderDriverKind.make("commandcode")]: TerminalIcon,
   [ProviderDriverKind.make("codex")]: OpenAI,
   [ProviderDriverKind.make("claudeAgent")]: ClaudeAI,
   [ProviderDriverKind.make("opencode")]: OpenCodeIcon,
