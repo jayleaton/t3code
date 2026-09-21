@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   CommandCodeSettings,
+  EnvironmentId,
   ProviderInstanceId,
   ProviderRuntimeEvent,
   ThreadId,
@@ -14,18 +15,31 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { writeFakeCli } from "../../testUtils/fakeCli.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { makeCommandCodeAdapter } from "./CommandCodeAdapter.ts";
 
 const decodeSettings = Schema.decodeSync(CommandCodeSettings);
 const decodeEvent = Schema.decodeUnknownEffect(ProviderRuntimeEvent);
+const decodeCall = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      args: Schema.Array(Schema.String),
+      prompt: Schema.String,
+      mcpServers: Schema.String,
+      modSource: Schema.String,
+      deviceMarker: Schema.optional(Schema.String),
+    }),
+  ),
+);
 
 const fixture = `
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 let prompt = ''; for await (const chunk of process.stdin) prompt += chunk;
 const args = process.argv.slice(2);
-appendFileSync(process.env.CALL_LOG, JSON.stringify({ args, prompt, instance: process.env.INSTANCE }) + '\\n');
+appendFileSync(process.env.CALL_LOG, JSON.stringify({ args, prompt, instance: process.env.INSTANCE, mcpServers: process.env.T3_COMMANDCODE_MCP_SERVERS, modSource: args.includes("--mod") ? readFileSync(args[args.indexOf("--mod") + 1], "utf8") : "", deviceMarker: process.env.T3_TEST_DEVICE }) + '\\n');
 const emit = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
 if (prompt.endsWith('early-error')) { emit({type:'result',subtype:'error',finalText:'',error:'Not authenticated'}); process.exit(3); }
+if (args.includes('--mod') && !prompt.endsWith('missing-mod')) emit({type:'event',event:prompt.endsWith('mcp-failure')?{type:'t3_mcp_error',message:'MCP endpoint unavailable'}:{type:'t3_mcp_ready'}});
 const sessionId = args.includes('--resume') ? args[args.indexOf('--resume') + 1] : 'native-' + process.env.INSTANCE;
 emit({type:'event',event:{type:'run_start',sessionId}});
 if (prompt.endsWith('hang')) { await new Promise(() => { setInterval(() => {}, 10000); }); }
@@ -199,3 +213,85 @@ it.effect("isolates two provider instances and rejects invalid resume cursors", 
     assert.equal(invalid._tag, "ProviderAdapterValidationError");
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.effect(
+  "injects thread-scoped MCP tools on initial and resumed turns without persisting credentials",
+  () =>
+    Effect.gen(function* () {
+      const { fs, cwd, make } = yield* setup;
+      const config = {
+        environmentId: EnvironmentId.make("local"),
+        threadId,
+        providerSessionId: "provider-session",
+        providerInstanceId: ProviderInstanceId.make("one"),
+        endpoint: "http://localhost:9999/mcp",
+        gatewayEndpoint: "http://localhost:9999/mcp/gateway",
+        authorizationHeader: "Bearer first-thread-token",
+        capabilities: new Set(["gateway", "device"]),
+        agentDeviceEnvironment: { T3_TEST_DEVICE: "available" },
+      };
+      McpProviderSession.setMcpProviderSession(config);
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId)),
+      );
+      const adapter = yield* make();
+      const queue = yield* Stream.toQueue(adapter.streamEvents, { capacity: "unbounded" });
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      yield* adapter.sendTurn({ threadId, input: "List skills" });
+      yield* takeTurn(queue);
+      McpProviderSession.setMcpProviderSession({
+        ...config,
+        authorizationHeader: "Bearer renewed-thread-token",
+      });
+      yield* adapter.sendTurn({ threadId, input: "List skills again" });
+      yield* takeTurn(queue);
+      const calls = (yield* fs.readFileString(`${cwd}/calls.jsonl`))
+        .trim()
+        .split("\n")
+        .map((line) => decodeCall(line));
+      assert.lengthOf(calls, 2);
+      for (const call of calls) {
+        assert.include(call.args, "--mod");
+        assert.include(call.mcpServers, "t3-code");
+        assert.include(call.mcpServers, "t3-gateway");
+        assert.notInclude(call.prompt, "does not inject");
+        assert.include(call.prompt, "link_pull_request");
+        assert.notInclude(call.modSource, "thread-token");
+        assert.notInclude(call.prompt, "thread-token");
+        assert.equal(call.deviceMarker, "available");
+        assert.isFalse(yield* fs.exists(call.args[call.args.indexOf("--mod") + 1]!));
+      }
+      assert.include(calls[0]!.mcpServers, "first-thread-token");
+      assert.include(calls[1]!.mcpServers, "renewed-thread-token");
+      assert.include(calls[1]!.args, "--resume");
+      assert.isFalse(yield* fs.exists(`${cwd}/.mcp.json`));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+for (const prompt of ["mcp-failure", "missing-mod"]) {
+  it.effect(`fails clearly when T3 MCP cannot load (${prompt})`, () =>
+    Effect.gen(function* () {
+      const { make } = yield* setup;
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("local"),
+        threadId,
+        providerSessionId: "provider-session",
+        providerInstanceId: ProviderInstanceId.make("one"),
+        endpoint: "http://localhost:9999/mcp",
+        authorizationHeader: "Bearer test-token",
+        capabilities: new Set(),
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId)),
+      );
+      const adapter = yield* make();
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const failure = yield* adapter.sendTurn({ threadId, input: prompt }).pipe(Effect.flip);
+      assert.instanceOf(failure, Error);
+      assert.include(
+        String(failure),
+        prompt === "mcp-failure" ? "MCP endpoint unavailable" : "did not load the T3 MCP tools",
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+}

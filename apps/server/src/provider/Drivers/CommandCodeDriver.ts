@@ -2,6 +2,7 @@ import { CommandCodeSettings, ProviderDriverKind, type ServerProvider } from "@t
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import type * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
@@ -48,6 +49,7 @@ const maintenance = makeManualOnlyProviderMaintenanceCapabilities({
 export type CommandCodeDriverEnv =
   | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
+  | FileSystem.FileSystem
   | Crypto.Crypto
   | ServerConfig
   | ServerSettingsService;
