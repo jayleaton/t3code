@@ -56,6 +56,7 @@ const profileInput = z.object({
   icon: z
     .enum(["orb", "bot", "code", "pen", "search", "shield", "sparkles", "terminal"])
     .optional(),
+  skillIds: z.array(z.string().trim().min(1)).optional(),
   systemPrompt: z.string().max(32_000).optional(),
   reasoningEffort: z.string().trim().min(1).optional(),
   runtimeMode: z.enum([
@@ -68,6 +69,33 @@ const profileInput = z.object({
   interactionMode: z.enum(["default", "plan"]),
   environmentIds: z.array(z.string().trim().min(1)).optional(),
 });
+
+const skillInput = z.object({
+  name: z.string().trim().min(1).max(200),
+  description: z.string().max(1024),
+  content: z.string().trim().min(1).max(64000),
+});
+
+async function shareSkills(context: GatewayToolContext, sourceId: string) {
+  const failedEnvironmentIds: string[] = [];
+  const grants = currentGrants(context.grants);
+  for (const environment of await context.port.listEnvironments()) {
+    const id = environment.environmentId;
+    if (
+      id === sourceId ||
+      environment.connectionState !== "connected" ||
+      !grants[id]?.some((scope) => scope === "create" || scope === "admin")
+    )
+      continue;
+    try {
+      if (!context.port.syncAgentLibrary) throw new Error("Skill sharing unavailable.");
+      await context.port.syncAgentLibrary(id);
+    } catch {
+      failedEnvironmentIds.push(id);
+    }
+  }
+  return { failedEnvironmentIds };
+}
 
 async function shareProfiles(
   context: GatewayToolContext,
@@ -816,6 +844,50 @@ export async function callGatewayTool(
         throw new Error("Thread un-settlement is unavailable in this runtime.");
       return context.port.unsettleThread(environmentId, requiredString(input, "threadId"));
     }
+    case "t3_list_skills": {
+      const environmentId = environmentWithScope(context, input, "read");
+      if (!context.port.listSkills)
+        throw new Error("Shared skills are unavailable in this runtime. Update T3.");
+      return { items: await context.port.listSkills(environmentId) };
+    }
+    case "t3_create_skill":
+    case "t3_update_skill": {
+      const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);
+      const parsed = (
+        name === "t3_create_skill" ? skillInput : skillInput.partial().strict()
+      ).safeParse(name === "t3_create_skill" ? input : input.patch);
+      if (!parsed.success)
+        throw new GatewayError({
+          code: "invalid_input",
+          message: parsed.error.message,
+          retryable: false,
+        });
+      let skill;
+      if (name === "t3_create_skill") {
+        if (!context.port.createSkill)
+          throw new Error("Shared skills are unavailable in this runtime. Update T3.");
+        skill = await context.port.createSkill(environmentId, skillInput.parse(parsed.data));
+      } else {
+        if (!context.port.updateSkill)
+          throw new Error("Shared skills are unavailable in this runtime. Update T3.");
+        skill = await context.port.updateSkill(
+          environmentId,
+          requiredString(input, "skillId"),
+          parsed.data,
+        );
+      }
+      return { skill, sync: await shareSkills(context, environmentId) };
+    }
+    case "t3_delete_skill": {
+      const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);
+      if (!context.port.deleteSkill)
+        throw new Error("Shared skills are unavailable in this runtime. Update T3.");
+      const result = await context.port.deleteSkill(
+        environmentId,
+        requiredString(input, "skillId"),
+      );
+      return { ...result, sync: await shareSkills(context, environmentId) };
+    }
     case "t3_create_agent": {
       const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);
       if (!context.port.createProfile)
@@ -1435,6 +1507,7 @@ export async function callGatewayTool(
         requestId: scopedIdFor("thread", environmentId, currentThreadId, idempotencyKey),
       };
       const buildRequest = async (identity: typeof currentIdentity) => {
+        await context.port.syncAgentLibrary?.(environmentId);
         const profiles = await authoritativeProfiles(context, environmentId);
         const profile =
           profileIdInput !== ""

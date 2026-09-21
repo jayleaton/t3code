@@ -1,3 +1,5 @@
+import { AgentSkill, type ServerSettings, type ServerSettingsPatch } from "@t3tools/contracts";
+import { syncAgentLibraryBeforeUse } from "../operations/agentLibrary.ts";
 import { derivePendingRequests } from "../pendingRequests.ts";
 import { performAgentHandoff } from "./handoff.ts";
 import {
@@ -631,17 +633,18 @@ export function createGatewayRuntimePort(
   const run = <A, E>(effect: Effect.Effect<A, E, EnvironmentRegistry | Crypto.Crypto>) =>
     runtime.runPromise(effect);
 
-  // Serialize profile read/modify/write operations issued by this host.
+  // Serialize shared library read/modify/write operations issued by this host.
   let profileQueue: Promise<unknown> = Promise.resolve();
-  const mutateProfiles = (
+  const mutateLibrary = (
     rawEnvironmentId: string,
-    mutate: (profiles: ReadonlyArray<McpGatewayProfile>) => ReadonlyArray<McpGatewayProfile>,
+    mutate: (settings: ServerSettings) => ServerSettingsPatch,
   ) => {
     const operation = profileQueue.then(() =>
       run(
         Effect.gen(function* () {
           const registry = yield* EnvironmentRegistry;
           const environmentId = EnvironmentId.make(rawEnvironmentId);
+          yield* registry.run(environmentId, syncAgentLibraryBeforeUse());
           const settings = yield* registry.run(
             environmentId,
             request(WS_METHODS.serverGetSettings, {}),
@@ -649,7 +652,7 @@ export function createGatewayRuntimePort(
           return yield* registry.run(
             environmentId,
             request(WS_METHODS.serverUpdateSettings, {
-              patch: { mcpGatewayProfiles: mutate(settings.mcpGatewayProfiles) },
+              patch: mutate(settings),
             }),
           );
         }),
@@ -658,7 +661,66 @@ export function createGatewayRuntimePort(
     profileQueue = operation.catch(() => undefined);
     return operation;
   };
+  const mutateProfiles = (
+    environmentId: string,
+    mutate: (profiles: ReadonlyArray<McpGatewayProfile>) => ReadonlyArray<McpGatewayProfile>,
+  ) =>
+    mutateLibrary(environmentId, (settings) => ({
+      mcpGatewayProfiles: mutate(settings.mcpGatewayProfiles),
+    }));
+  const decodeSkill = Schema.decodeUnknownSync(AgentSkill);
   const port: GatewayRuntimePort = {
+    listSkills: async (environmentId) => {
+      await port.syncAgentLibrary!(environmentId);
+      return run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          const settings = yield* registry.run(
+            EnvironmentId.make(environmentId),
+            request(WS_METHODS.serverGetSettings, {}),
+          );
+          return settings.agentSkills;
+        }),
+      );
+    },
+    createSkill: async (environmentId, input) => {
+      const skillId = await run(
+        Effect.gen(function* () {
+          return yield* (yield* Crypto.Crypto).randomUUIDv4;
+        }),
+      );
+      const now = await run(DateTime.now.pipe(Effect.map(DateTime.formatIso)));
+      const skill = decodeSkill({ ...input, skillId, revision: 1, createdAt: now, updatedAt: now });
+      const settings = await mutateLibrary(environmentId, (current) => ({
+        agentSkills: [...current.agentSkills, skill],
+      }));
+      return settings.agentSkills.find((item) => item.skillId === skillId)!;
+    },
+    updateSkill: async (environmentId, skillId, patch) => {
+      const settings = await mutateLibrary(environmentId, (current) => {
+        if (!current.agentSkills.some((skill) => skill.skillId === skillId))
+          throw new Error(`Skill ${skillId} was not found.`);
+        return {
+          agentSkills: current.agentSkills.map((skill) =>
+            skill.skillId === skillId ? decodeSkill({ ...skill, ...patch }) : skill,
+          ),
+        };
+      });
+      return settings.agentSkills.find((skill) => skill.skillId === skillId)!;
+    },
+    deleteSkill: async (environmentId, skillId) => {
+      await mutateLibrary(environmentId, (current) => ({
+        agentSkills: current.agentSkills.filter((skill) => skill.skillId !== skillId),
+      }));
+      return { skillId, status: "succeeded" };
+    },
+    syncAgentLibrary: (environmentId) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          yield* registry.run(EnvironmentId.make(environmentId), syncAgentLibraryBeforeUse());
+        }),
+      ),
     unsettleThread: (environmentId, threadId) =>
       run(
         Effect.gen(function* () {
@@ -691,6 +753,7 @@ export function createGatewayRuntimePort(
         }),
       ),
     handoffThread: async (input) => {
+      await port.syncAgentLibrary!(input.environmentId);
       const source = await run(shellSnapshot(EnvironmentId.make(input.sourceEnvironmentId)));
       const thread = source.threads.find((t) => t.id === input.sourceThreadId);
       const project = source.projects.find((p) => p.id === thread?.projectId);

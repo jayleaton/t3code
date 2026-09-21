@@ -1657,3 +1657,34 @@ it.effect("encodes compatible icons inside snapshots and client commands", () =>
     assert.deepEqual(yield* decodeNightlyIcon(command.projectIcon), fallback);
   }),
 );
+
+const encodeShellProfile = Schema.encodeSync(OrchestrationThreadShell.fields.profileSnapshot);
+
+it("keeps saved skill bodies out of shell payloads", () => {
+  const profileSnapshot = {
+    profileId: "reviewer",
+    profileName: "Reviewer",
+    revision: 1,
+    systemPrompt: "Saved prompt",
+    skills: [
+      {
+        skillId: "review",
+        name: "Review",
+        description: "Review changes",
+        content: "Large saved skill body",
+        revision: 1,
+        createdAt: "2026-01-01",
+        updatedAt: "2026-01-01",
+      },
+    ],
+    effectiveSource: {
+      modelSelection: "profile",
+      runtimeMode: "profile",
+      interactionMode: "profile",
+      reasoningEffort: "profile",
+    },
+  } as const;
+  const encoded = encodeShellProfile(profileSnapshot);
+  assert.notProperty(encoded, "skills");
+  assert.equal(encoded?.systemPrompt, "Saved prompt");
+});

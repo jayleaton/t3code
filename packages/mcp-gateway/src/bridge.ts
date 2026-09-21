@@ -374,13 +374,19 @@ export function createBridgeRuntimePort(input: {
       settleThread: (environmentId, threadId) => invoke("settleThread", [environmentId, threadId]),
       unsettleThread: (environmentId, threadId) =>
         invoke("unsettleThread", [environmentId, threadId]),
+      listSkills: (environmentId) => invoke("listSkills", [environmentId]),
+      createSkill: (environmentId, input) => invoke("createSkill", [environmentId, input]),
+      updateSkill: (environmentId, skillId, patch) =>
+        invoke("updateSkill", [environmentId, skillId, patch]),
+      deleteSkill: (environmentId, skillId) => invoke("deleteSkill", [environmentId, skillId]),
       createProfile: (environmentId, profile) => invoke("createProfile", [environmentId, profile]),
       updateProfile: (environmentId, profileId, patch) =>
         invoke("updateProfile", [environmentId, profileId, patch]),
       deleteProfile: (environmentId, profileId) =>
         invoke("deleteProfile", [environmentId, profileId]),
-      replicateProfiles: (environmentId, profiles) =>
-        invoke("replicateProfiles", [environmentId, profiles]),
+      syncAgentLibrary: (environmentId) => invoke("syncAgentLibrary", [environmentId]),
+      replicateProfiles: (environmentId, profiles, deletedAt) =>
+        invoke("replicateProfiles", [environmentId, profiles, deletedAt]),
       openThread: (environmentId, threadId) => invoke("openThread", [environmentId, threadId]),
       listEnvironments: () => invoke("listEnvironments", []),
       getEnvironmentStatus: (environmentId) => invoke("getEnvironmentStatus", [environmentId]),

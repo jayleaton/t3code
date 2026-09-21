@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import type {
+  ServerSettingsError,
   ProviderApprovalDecision,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
@@ -416,21 +417,27 @@ const hasMetricSnapshot = (
 
 function makeProviderServiceLayer(
   input: {
+    readonly driver?: ProviderDriverKind;
+    readonly settingsLayer?: Layer.Layer<ServerSettings.ServerSettingsService, ServerSettingsError>;
+    readonly projectionLayer?: Layer.Layer<ProjectionSnapshotQuery.ProjectionSnapshotQuery>;
     readonly directory?: ProviderSessionDirectory.ProviderSessionDirectory["Service"];
     readonly supportsConversationRollback?: boolean;
     readonly analyticsLayer?: Layer.Layer<AnalyticsService.AnalyticsService>;
     readonly registry?: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"];
   } = {},
 ) {
-  const codex = makeFakeCodexAdapter(CODEX_DRIVER, input.supportsConversationRollback);
+  const codex = makeFakeCodexAdapter(
+    input.driver ?? CODEX_DRIVER,
+    input.supportsConversationRollback,
+  );
   const claude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
   const cursor = makeFakeCodexAdapter(CURSOR_DRIVER);
   const registry =
     input.registry ??
     makeAdapterRegistryMock({
-      [ProviderDriverKind.make("codex")]: codex.adapter,
       [ProviderDriverKind.make("claudeAgent")]: claude.adapter,
       [ProviderDriverKind.make("cursor")]: cursor.adapter,
+      [input.driver ?? CODEX_DRIVER]: codex.adapter,
     });
 
   const providerAdapterLayer = Layer.succeed(
@@ -451,7 +458,8 @@ function makeProviderServiceLayer(
         Layer.provide(NodeServices.layer),
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
-        Layer.provide(defaultServerSettingsLayer),
+        Layer.provideMerge(input.settingsLayer ?? defaultServerSettingsLayer),
+        Layer.provide(input.projectionLayer ?? Layer.empty),
         Layer.provide(serverConfigTestLayer),
         Layer.provideMerge(input.analyticsLayer ?? AnalyticsService.layerTest),
         Layer.provide(
@@ -5176,3 +5184,162 @@ describe("agent browser access", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
+
+for (const driverName of [
+  "codex",
+  "claudeAgent",
+  "cursor",
+  "grok",
+  "opencode",
+  "antigravity",
+  "commandcode",
+]) {
+  const driver = ProviderDriverKind.make(driverName);
+  const instanceId = ProviderInstanceId.make(driverName);
+  const threadId = ThreadId.make(`agent-refresh-${driverName}`);
+  const cwd = fixtureCwd(`agent-refresh-${driverName}`);
+  const profile = {
+    profileId: "randy",
+    name: "Randy",
+    revision: 1,
+    systemPrompt: "Old review rules",
+    skillIds: ["review"],
+    runtimeMode: "full-access" as const,
+    interactionMode: "default" as const,
+    createdAt: "2026-01-01",
+    updatedAt: "2026-01-01",
+  };
+  const skill = {
+    skillId: "review",
+    name: "Review",
+    description: "Review changes",
+    content: "Original skill",
+    revision: 1,
+    createdAt: "2026-01-01",
+    updatedAt: "2026-01-01",
+  };
+  const thread = Schema.decodeUnknownSync(OrchestrationThreadShell)({
+    id: threadId,
+    projectId: "agent-refresh-project",
+    title: "Review",
+    worktreePath: cwd,
+    modelSelection: createModelSelection(instanceId, "test-model"),
+    runtimeMode: "full-access",
+    branch: null,
+    latestTurn: null,
+    session: null,
+    latestUserMessageAt: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+    createdAt: "2026-01-01",
+    updatedAt: "2026-01-01",
+    profileSnapshot: {
+      profileId: "randy",
+      profileName: "Randy",
+      revision: 1,
+      systemPrompt: "Frozen review rules",
+      skills: [skill],
+      effectiveSource: {
+        modelSelection: "profile",
+        runtimeMode: "profile",
+        interactionMode: "profile",
+        reasoningEffort: "profile",
+      },
+    },
+  });
+  const projectionLayer = Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
+    getTurnStartMessage: () => Effect.die("unused"),
+    getImportedAgentSessionSources: () => Effect.die("unused"),
+    getUserInputActivity: () => Effect.die("unused"),
+    listActivitiesByKind: () => Effect.die("unused"),
+    getCommandReadModel: () => Effect.die("unused"),
+    getSnapshot: () => Effect.die("unused"),
+    getShellSnapshot: () => Effect.die("unused"),
+    getDeletedWorktreeThreads: () => Effect.die("unused"),
+    getArchivedShellSnapshot: () => Effect.die("unused"),
+    getSnapshotSequence: () => Effect.die("unused"),
+    getCounts: () => Effect.die("unused"),
+    getEventReplayStats: () => Effect.die("unused"),
+    getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
+    getProjectShells: () => Effect.die("unused"),
+    getProjectShellById: () => Effect.die("unused"),
+    getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
+    getThreadCheckpointContext: () => Effect.die("unused"),
+    getFullThreadDiffContext: () => Effect.die("unused"),
+    getThreadRuntimeContext: () => Effect.die("unused"),
+    getThreadShellById: () =>
+      Effect.succeed(
+        Option.some({
+          ...thread,
+          profileSnapshot: { ...thread.profileSnapshot!, skills: [skill] },
+        }),
+      ),
+    getThreadDetailById: () => Effect.die("unused"),
+    getThreadDetailSnapshot: () => Effect.die("unused"),
+    searchThreads: () => Effect.die("unused"),
+  });
+
+  const refresh = makeProviderServiceLayer({
+    driver,
+    projectionLayer,
+    settingsLayer: ServerSettings.ServerSettingsService.layerTest({
+      mcpGatewayProfiles: [profile],
+      agentSkills: [skill],
+    }),
+  });
+  refresh.layer(`agent configuration refresh (${driverName})`, (it) => {
+    it.effect(
+      "keeps creation instructions and skills after edits, deletion, and session restart",
+      () =>
+        Effect.gen(function* () {
+          const service = yield* ProviderService.ProviderService;
+          const settings = yield* ServerSettings.ServerSettingsService;
+          const selection = createModelSelection(instanceId, "test-model");
+          const start = {
+            threadId,
+            providerInstanceId: instanceId,
+            runtimeMode: "full-access" as const,
+            cwd,
+            modelSelection: selection,
+          };
+          yield* service.startSession(threadId, start);
+          const instructions = refresh.codex.startSession.mock.calls.at(-1)![0].agentInstructions!;
+          assert.include(instructions, "Frozen review rules");
+          assert.notInclude(instructions, "Old review rules");
+          const relativePath = instructions.match(/file: ([^)]+)\)/)![1]!;
+          const skillPath = NodePath.join(cwd, relativePath);
+          assert.include(NodeFS.readFileSync(skillPath, "utf8"), "Original skill");
+          yield* settings.updateSettings({
+            mcpGatewayProfiles: [{ ...profile, systemPrompt: "New review rules", skillIds: [] }],
+            agentSkills: [{ ...skill, content: "Updated skill" }],
+          });
+          yield* service.sendTurn({ threadId, input: "Review again", modelSelection: selection });
+          assert.equal(refresh.codex.startSession.mock.calls.length, 1);
+          assert.equal(
+            refresh.codex.sendTurn.mock.calls.at(-1)![0].agentInstructions,
+            instructions,
+          );
+          assert.include(NodeFS.readFileSync(skillPath, "utf8"), "Original skill");
+          yield* settings.updateSettings({ agentSkills: [], mcpGatewayProfiles: [] });
+          yield* service.sendTurn({ threadId, input: "Continue", modelSelection: selection });
+          assert.equal(
+            refresh.codex.sendTurn.mock.calls.at(-1)![0].agentInstructions,
+            instructions,
+          );
+          // Settlement removes generated files. Resume must recreate the saved versions.
+          yield* service.stopSession({ threadId });
+          NodeFS.unlinkSync(skillPath);
+          yield* service.startSession(threadId, {
+            ...start,
+            resumeCursor: { opaque: `resume-${threadId}` },
+          });
+          assert.equal(
+            refresh.codex.startSession.mock.calls.at(-1)![0].agentInstructions,
+            instructions,
+          );
+          assert.include(NodeFS.readFileSync(skillPath, "utf8"), "Original skill");
+        }),
+    );
+  });
+}

@@ -31,3 +31,19 @@ it.effect(
       assert.include(yield* fs.readFileString(firstPath), "Plan carefully.");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.effect("refreshes a managed prompt and clears removed instructions on next use", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const cwd = yield* fs.makeTempDirectoryScoped();
+    const input = { cwd, threadId: "randy", instructions: "Old review rules", settled: false };
+    yield* syncAgentInstructionFile(input);
+    yield* syncAgentInstructionFile({ ...input, instructions: "New review rules" });
+    const file = path.join(cwd, agentInstructionRelativePath(input.threadId));
+    assert.include(yield* fs.readFileString(file), "New review rules");
+    assert.notInclude(yield* fs.readFileString(file), "Old review rules");
+    yield* syncAgentInstructionFile({ ...input, instructions: "" });
+    assert.isFalse(yield* fs.exists(file));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

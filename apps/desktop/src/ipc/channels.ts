@@ -122,3 +122,4 @@ export const SEND_MANAGED_MCP_GATEWAY_MESSAGE_CHANNEL = "desktop:send-managed-mc
 export const CLOSE_MANAGED_MCP_GATEWAY_SESSION_CHANNEL =
   "desktop:close-managed-mcp-gateway-session";
 export const MANAGED_MCP_GATEWAY_EVENT_CHANNEL = "desktop:managed-mcp-gateway-event";
+export const PREVIEW_RECORDING_INPUT_CHANNEL = "desktop:preview-recording-input";

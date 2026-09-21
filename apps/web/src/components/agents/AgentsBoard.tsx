@@ -27,6 +27,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import { useAgentLibrary } from "../../hooks/useAgentLibrary";
 import { useEnvironments } from "../../state/environments";
 import { useThreadShells, useAllEnvironmentShellsBootstrapped } from "../../state/entities";
+import { AgentSkillsEditor } from "./AgentSkillsEditor";
 import { AgentEditor } from "./AgentEditor";
 import { AgentTaskDialog } from "./AgentTaskDialog";
 import { AgentsLoadingNotice } from "./AgentsLoadingNotice";
@@ -97,7 +98,8 @@ function AgentThreadList({
 }
 
 export function AgentsBoard() {
-  const { profiles, available, updateSettings } = useAgentLibrary();
+  const { profiles, skills, skillsAvailable, available, updateSettings } = useAgentLibrary();
+  const [skillsOpen, setSkillsOpen] = useState(false);
   const [order, setOrder] = useLocalStorage(
     "t3code:agents:column-order",
     emptyAgentOrder,
@@ -181,6 +183,13 @@ export function AgentsBoard() {
         </div>
         <AgentGatewayStatus />
         <div className="agents-topbar-actions">
+          <button
+            className="agent-icon-button"
+            disabled={!skillsAvailable}
+            onClick={() => setSkillsOpen(true)}
+          >
+            Skills
+          </button>
           <DesktopUpdateButton className="agent-icon-button agent-update-button" />
           <button
             className="agent-icon-button"
@@ -371,10 +380,18 @@ export function AgentsBoard() {
           <Outlet />
         </section>
       </main>
+      {skillsOpen && (
+        <AgentSkillsEditor
+          skills={skills}
+          onClose={() => setSkillsOpen(false)}
+          onSave={(agentSkills) => updateSettings({ agentSkills })}
+        />
+      )}
       {editor !== null && (
         <AgentEditor
           profile={editor === "new" ? null : editor}
           profiles={profiles}
+          skills={skills}
           providers={online.flatMap((env) =>
             env.serverConfig
               ? visibleAgentProviders(env.environmentId, env.serverConfig.providers, {

@@ -3094,3 +3094,98 @@ describe("gateway coordinator operations", () => {
     ).rejects.toMatchObject({ code: "invalid_input" });
   });
 });
+
+describe("shared skill tools", () => {
+  const input = {
+    environmentId: "local",
+    name: "Review",
+    description: "Review PRs",
+    content: "# Review\nCheck correctness",
+  };
+  function skillPort() {
+    const skill = {
+      ...input,
+      skillId: "review",
+      revision: 1,
+      createdAt: "2026-09-21T00:00:00Z",
+      updatedAt: "2026-09-21T00:00:00Z",
+    };
+    return {
+      ...makePort(),
+      listSkills: vi.fn(async () => [skill]),
+      createSkill: vi.fn(async () => skill),
+      updateSkill: vi.fn(async (_env, _id, patch) => ({ ...skill, ...patch, revision: 2 })),
+      deleteSkill: vi.fn(async (_env, skillId) => ({ skillId, status: "succeeded" as const })),
+      syncAgentLibrary: vi.fn(async () => {}),
+    } satisfies GatewayRuntimePort;
+  }
+  it("lists content and saves edits through the runtime, synchronizing permitted machines", async () => {
+    const port = skillPort();
+    const context = { port, grants: { local: ["read", "create"], remote: ["create"] } as const };
+    expect(
+      await callGatewayTool(context, "t3_list_skills", { environmentId: "local" }),
+    ).toMatchObject({ items: [{ skillId: "review", content: input.content }] });
+    expect(await callGatewayTool(context, "t3_create_skill", input)).toMatchObject({
+      skill: { skillId: "review" },
+      sync: { failedEnvironmentIds: [] },
+    });
+    expect(port.createSkill).toHaveBeenCalledWith("local", {
+      name: input.name,
+      description: input.description,
+      content: input.content,
+    });
+    expect(port.syncAgentLibrary).toHaveBeenCalledWith("remote");
+    expect(
+      await callGatewayTool(context, "t3_update_skill", {
+        environmentId: "local",
+        skillId: "review",
+        patch: { content: "New instructions" },
+      }),
+    ).toMatchObject({ skill: { revision: 2, content: "New instructions" } });
+    expect(
+      await callGatewayTool(context, "t3_delete_skill", {
+        environmentId: "local",
+        skillId: "review",
+      }),
+    ).toMatchObject({ skillId: "review", status: "succeeded" });
+    expect(port.deleteSkill).toHaveBeenCalledWith("local", "review");
+  });
+  it("rejects read-only mutations and invalid content without writing", async () => {
+    const port = skillPort();
+    await expect(
+      callGatewayTool({ port, grants: { local: ["read"] } }, "t3_create_skill", input),
+    ).rejects.toMatchObject({ code: "scope_required" });
+    await expect(
+      callGatewayTool({ port, grants: { local: ["create"] } }, "t3_create_skill", {
+        ...input,
+        content: " ",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    await expect(
+      callGatewayTool({ port, grants: { local: ["create"] } }, "t3_update_skill", {
+        environmentId: "local",
+        skillId: "review",
+        patch: { revision: 999 },
+      }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(port.createSkill).not.toHaveBeenCalled();
+    expect(port.updateSkill).not.toHaveBeenCalled();
+  });
+  it("does not share without a destination write grant and reports sync failures after saving", async () => {
+    const port = skillPort();
+    await callGatewayTool(
+      { port, grants: { local: ["create"], remote: ["read"] } },
+      "t3_create_skill",
+      input,
+    );
+    expect(port.syncAgentLibrary).not.toHaveBeenCalled();
+    port.syncAgentLibrary.mockRejectedValue(new Error("Disconnected"));
+    expect(
+      await callGatewayTool(
+        { port, grants: { local: ["create"], remote: ["admin"] } },
+        "t3_create_skill",
+        input,
+      ),
+    ).toMatchObject({ skill: { skillId: "review" }, sync: { failedEnvironmentIds: ["remote"] } });
+  });
+});

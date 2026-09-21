@@ -108,6 +108,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server evaluates merge and inactivity settlement without a client. */
   threadAutoSettlement: Schema.optionalKey(Schema.Boolean),
   agentLibrarySync: Schema.optionalKey(Schema.Boolean),
+  /** Shared skill content and live agent instruction refresh. */
+  agentSkillsSync: Schema.optionalKey(Schema.Boolean),
   /** First-turn bootstrap retains the selected agent profile. Missing means update before sending agent drafts. */
   agentThreadBootstrap: Schema.optionalKey(Schema.Boolean),
   storageCleanup: Schema.optionalKey(Schema.Boolean),

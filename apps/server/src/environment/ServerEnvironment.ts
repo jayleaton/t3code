@@ -226,6 +226,7 @@ export const make = Effect.gen(function* () {
       threadSettlement: true,
       threadAutoSettlement: true,
       agentLibrarySync: true,
+      agentSkillsSync: true,
       agentThreadBootstrap: true,
       storageCleanup: true,
       projectWorktreeCleanup: true,

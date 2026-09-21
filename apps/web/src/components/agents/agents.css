@@ -364,12 +364,14 @@
 .agent-form footer > button {
   padding: 8px 12px;
 }
+.agent-skills,
 .agent-machines {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
   margin-top: 10px;
 }
+.agent-skills label,
 .agent-machines label {
   flex-direction: row;
   align-items: center;
