@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { supportsProviderTurnSteering } from "./providerTurnSteering";
+import { supportsProviderTurnSteering } from "./providerTurnSteering.ts";
 
 describe("provider turn steering", () => {
   it("waits for Command Code headless to exit before sending another prompt", () => {
