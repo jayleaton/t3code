@@ -306,6 +306,25 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
               return;
             }
             const event = frame.event;
+            if (event.type === "compaction_done") {
+              const tokensSaved = event.tokensSaved;
+              const totalTokensSaved = event.totalTokensSaved;
+              // Fast-mode trimming can finish without a start event; zero-yield
+              // summarization can start without a finish. Only report real savings.
+              if (
+                typeof tokensSaved === "number" &&
+                Number.isFinite(tokensSaved) &&
+                tokensSaved > 0
+              )
+                yield* emit(context, {
+                  type: "thread.state.changed",
+                  turnId,
+                  payload: {
+                    state: "compacted",
+                    detail: `Saved ${tokensSaved} tokens${typeof totalTokensSaved === "number" && Number.isFinite(totalTokensSaved) && totalTokensSaved >= tokensSaved ? ` (${totalTokensSaved} total this session)` : ""}.`,
+                  },
+                });
+            }
             if (event.type === "subagent_progress") hasSubagents = true;
             if (event.type === "t3_mcp_ready") mcpReady = true;
             if (event.type === "t3_mcp_error" || (event.type === "run_start" && !mcpReady))

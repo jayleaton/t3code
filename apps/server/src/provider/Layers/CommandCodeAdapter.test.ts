@@ -44,6 +44,14 @@ const sessionId = args.includes('--resume') ? args[args.indexOf('--resume') + 1]
 emit({type:'event',event:{type:'run_start',sessionId}});
 if (prompt.endsWith('hang')) { await new Promise(() => { setInterval(() => {}, 10000); }); }
 if (prompt.endsWith('bad-json')) { process.stdout.write('bad json\\n'); process.exit(1); }
+if (prompt.endsWith('compact')) {
+ emit({type:'event',event:{type:'compaction_start'}});
+ emit({type:'event',event:{type:'compaction_done',tokensSaved:41300,totalTokensSaved:112000}});
+ emit({type:'event',event:{type:'compaction_done',tokensSaved:200}});
+ emit({type:'event',event:{type:'compaction_done',tokensSaved:0}});
+ emit({type:'event',event:{type:'compaction_done',tokensSaved:-1}});
+ emit({type:'event',event:{type:'compaction_done',tokensSaved:'invalid'}});
+}
 emit({type:'event',event:{type:'thinking_delta',delta:'Thinking'}});
 emit({type:'event',event:{type:'text_delta',delta:'Hello'}});
 emit({type:'event',event:{type:'tool_queued',toolCallId:'t1',toolName:'read_file',input:{path:'README.md'}}});
@@ -295,3 +303,27 @@ for (const prompt of ["mcp-failure", "missing-mod"]) {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 }
+
+it.effect("reports automatic compaction savings and continues the same turn", () =>
+  Effect.gen(function* () {
+    const { make } = yield* setup;
+    const adapter = yield* make();
+    const queue = yield* Stream.toQueue(adapter.streamEvents, { capacity: "unbounded" });
+    yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+    yield* adapter.sendTurn({ threadId, input: "compact" });
+    const events = yield* takeTurn(queue);
+    const compacted = events.filter((event) => event.type === "thread.state.changed");
+    assert.deepEqual(
+      compacted.map((event) => event.payload),
+      [
+        { state: "compacted", detail: "Saved 41300 tokens (112000 total this session)." },
+        { state: "compacted", detail: "Saved 200 tokens." },
+      ],
+    );
+    assert.isTrue(compacted.every((event) => event.turnId === events.at(-1)?.turnId));
+    assert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+    assert.isTrue(
+      events.some((event) => event.type === "content.delta" && event.payload.delta === "Done"),
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
