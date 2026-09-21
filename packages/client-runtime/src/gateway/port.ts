@@ -1,3 +1,4 @@
+import type { AgentSkill } from "@t3tools/contracts";
 import type { AgentHandoffInput, AgentHandoffResult } from "./handoff.ts";
 export const GATEWAY_SCOPE_VALUES = [
   "read",
@@ -318,7 +319,20 @@ export function parseGatewayStatusSnapshot(value: unknown): GatewayStatusSnapsho
   return value as GatewayStatusSnapshot;
 }
 
+export type GatewaySkillInput = Pick<AgentSkill, "name" | "description" | "content">;
+
 export interface GatewayRuntimePort {
+  listSkills?(environmentId: string): Promise<ReadonlyArray<AgentSkill>>;
+  createSkill?(environmentId: string, input: GatewaySkillInput): Promise<AgentSkill>;
+  updateSkill?(
+    environmentId: string,
+    skillId: string,
+    patch: { readonly [K in keyof GatewaySkillInput]?: GatewaySkillInput[K] | undefined },
+  ): Promise<AgentSkill>;
+  deleteSkill?(
+    environmentId: string,
+    skillId: string,
+  ): Promise<{ skillId: string; status: "succeeded" }>;
   handoffThread?(input: AgentHandoffInput): Promise<AgentHandoffResult>;
   unsettleThread?(environmentId: string, threadId: string): Promise<{ status: "succeeded" }>;
   settleThread?(environmentId: string, threadId: string): Promise<{ status: "succeeded" }>;

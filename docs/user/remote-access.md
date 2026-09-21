@@ -274,10 +274,14 @@ then `t3_send_message` to start work, or `t3_create_and_start_thread` to create 
 with lifecycle access to return a settled chat to the active list. `t3_open_agents` opens the
 board in the connected desktop window with read access.
 
-Use **Skills** on the Agents board to create or edit reusable Markdown skills. Assign them in
-the agent editor. One shared library supplies every assigned agent, regardless of provider.
-Paste the skill’s `SKILL.md` content; this library currently stores Markdown instructions, not
-bundled scripts or binary assets. Deleting a skill removes it from all agents on their next use.
+Ask an assistant connected to the **T3 Agents MCP** to create a shared skill and assign it to
+an agent. For example: “Create a shared skill for reviewing pull requests and assign it to Randy.”
+The MCP can list skills with read access and create, update, or delete them with create or admin
+access. One shared library supplies every assigned agent, regardless of provider.
+
+For manual editing, open **Skills** on the Agents board and expand **Create or edit manually**.
+Assign skills in the agent editor. Skills currently store `SKILL.md` instructions, not bundled
+scripts or binary assets. Deleting a skill removes it from agents on their next use.
 
 Before using an agent, T3 synchronizes its library from environments available to the client.
 Keep both machines connected to a client at least once after an edit so the destination can

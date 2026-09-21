@@ -113,6 +113,20 @@ describe("MCP gateway server", () => {
     const gateway = createMcpGateway({
       port: {
         ...port,
+        createSkill: async (_environmentId, input) => ({
+          ...input,
+          skillId: "review",
+          revision: 1,
+          createdAt: "2026-09-21T00:00:00Z",
+          updatedAt: "2026-09-21T00:00:00Z",
+        }),
+        updateProfile: async (_environmentId, profileId, patch) => ({
+          profileId,
+          name: "Code",
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          skillIds: patch.skillIds ?? [],
+        }),
         listProfiles: async () => [
           {
             profileId: "code",
@@ -144,7 +158,32 @@ describe("MCP gateway server", () => {
 
     const listedTools = await client.listTools();
     const toolNames = listedTools.tools.map((tool) => tool.name);
-    expect(toolNames).toHaveLength(61);
+    expect(toolNames).toHaveLength(65);
+    expect(
+      listedTools.tools.find((tool) => tool.name === "t3_update_agent")?.inputSchema.properties
+        ?.patch,
+    ).toMatchObject({ properties: { skillIds: { type: "array" } } });
+    const createdSkill = await client.callTool({
+      name: "t3_create_skill",
+      arguments: {
+        environmentId: "local",
+        name: "Review",
+        description: "Review PRs",
+        content: "# Review\nCheck correctness",
+      },
+    });
+    expect(createdSkill.isError).not.toBe(true);
+    expect(createdSkill.structuredContent).toMatchObject({
+      data: { skill: { skillId: "review", content: "# Review\nCheck correctness" } },
+    });
+    const assigned = await client.callTool({
+      name: "t3_update_agent",
+      arguments: { environmentId: "local", profileId: "code", patch: { skillIds: ["review"] } },
+    });
+    expect(assigned.isError).not.toBe(true);
+    expect(assigned.structuredContent).toMatchObject({
+      data: { profile: { skillIds: ["review"] } },
+    });
     const agents = await client.callTool({
       name: "t3_list_agents",
       arguments: { environmentId: "local" },
@@ -176,6 +215,10 @@ describe("MCP gateway server", () => {
     expect(toolNames).toEqual(
       expect.arrayContaining([
         "t3_summarize_thread",
+        "t3_list_skills",
+        "t3_create_skill",
+        "t3_update_skill",
+        "t3_delete_skill",
         "t3_create_agent",
         "t3_update_agent",
         "t3_delete_agent",

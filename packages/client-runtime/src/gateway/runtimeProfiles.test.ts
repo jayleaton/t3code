@@ -102,6 +102,32 @@ describe("runtime profile persistence", () => {
           replicateProfiles: true,
           patch: { mcpGatewayProfiles: [{ revision: 2 }] },
         });
+        const skillInput = {
+          name: "Review",
+          description: "Review PRs",
+          content: "# Review\nCheck correctness",
+        };
+        const skills = yield* Effect.promise(() =>
+          Promise.all([
+            port.createSkill!("local", skillInput),
+            port.createSkill!("local", { ...skillInput, name: "Tests" }),
+          ]),
+        );
+        expect(settings.agentSkills).toHaveLength(2);
+        const skillId = skills[0]!.skillId;
+        const revised = yield* Effect.promise(() =>
+          port.updateSkill!("local", skillId, { content: "# Review\nCheck regressions" }),
+        );
+        expect(revised.content).toContain("regressions");
+        expect(revised.skillId).toBe(skillId);
+        expect(
+          (yield* Effect.promise(() => port.listSkills!("local"))).map((skill) => skill.name),
+        ).toEqual(["Review", "Tests"]);
+        yield* Effect.promise(() => port.updateProfile!("local", id, { skillIds: [skillId] }));
+        expect(settings.mcpGatewayProfiles[0]?.skillIds).toEqual([skillId]);
+        yield* Effect.promise(() => port.deleteSkill!("local", skillId));
+        expect(settings.agentSkills.map((skill) => skill.name)).toEqual(["Tests"]);
+        expect(writes.at(-1)).toMatchObject({ patch: { agentSkills: [{ name: "Tests" }] } });
         yield* Effect.promise(() => port.deleteProfile!("local", id));
         expect(settings.mcpGatewayProfiles).toEqual([]);
       }),
