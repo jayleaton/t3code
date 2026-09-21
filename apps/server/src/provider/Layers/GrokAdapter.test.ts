@@ -453,6 +453,51 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       }),
   );
 
+  it.effect("resumes with changed agent rules without reporting the replacement as an exit", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("grok-agent-refresh");
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "grok-agent-refresh-")),
+      );
+      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockGrokWrapper({ T3_ACP_REQUEST_LOG_PATH: requestLogPath }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      const events: ProviderRuntimeEvent[] = [];
+      const replaced = yield* Deferred.make<void>();
+      let starts = 0;
+      const listener = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.gen(function* () {
+          events.push(event);
+          if (event.type === "session.started" && ++starts === 2)
+            yield* Deferred.succeed(replaced, undefined);
+        }),
+      ).pipe(Effect.forkChild);
+      const input = { threadId, cwd: process.cwd(), runtimeMode: "full-access" as const };
+      const first = yield* adapter.startSession({
+        ...input,
+        agentInstructions: "Old review rules",
+      });
+      yield* adapter.startSession({
+        ...input,
+        resumeCursor: first.resumeCursor,
+        agentInstructions: "New review rules",
+      });
+      yield* Deferred.await(replaced);
+      yield* Fiber.interrupt(listener);
+      assert.isFalse(events.some((event) => event.type === "session.exited"));
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      assert.deepEqual(
+        requests
+          .filter((request) => request.method === "initialize")
+          .map((request) => (request.params as { _meta: unknown })._meta),
+        [{ rules: "Old review rules" }, { rules: "New review rules" }],
+      );
+      assert.isTrue(requests.some((request) => request.method === "session/load"));
+    }),
+  );
+
   it.effect("starts a session and maps mock ACP prompt flow to runtime events", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("grok-mock-thread");

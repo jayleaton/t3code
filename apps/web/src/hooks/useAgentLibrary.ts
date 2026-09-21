@@ -1,5 +1,9 @@
-import { useEffect, useMemo, useRef } from "react";
-import { mergeAgentLibraries } from "@t3tools/contracts";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import {
+  agentLibraryForSync,
+  mergeAgentLibraries,
+  type ServerSettingsPatch,
+} from "@t3tools/contracts";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import { serverEnvironment } from "../state/server";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -21,9 +25,43 @@ export function useAgentLibrary() {
     [environments],
   );
   const target =
-    connected.find((env) => env.environmentId === primary?.environmentId) ?? connected[0];
-  const updateSettings = useUpdateEnvironmentSettings(target?.environmentId ?? null);
-  return { profiles: library.mcpGatewayProfiles, available: !!target, updateSettings };
+    connected.find(
+      (env) =>
+        env.environmentId === primary?.environmentId &&
+        env.serverConfig?.environment.capabilities.agentSkillsSync,
+    ) ??
+    connected.find((env) => env.serverConfig?.environment.capabilities.agentSkillsSync) ??
+    connected[0];
+  const persistSettings = useUpdateEnvironmentSettings(target?.environmentId ?? null);
+  const replicate = useAtomCommand(
+    serverEnvironment.updateSettings,
+    "agent library sync before edit",
+  );
+  const updateSettings = useCallback(
+    async (patch: ServerSettingsPatch) => {
+      if (!target) return false;
+      const synced = await replicate({
+        environmentId: target.environmentId,
+        input: {
+          patch: agentLibraryForSync(
+            library,
+            target.serverConfig?.environment.capabilities.agentSkillsSync === true,
+          ),
+          replicateProfiles: true,
+        },
+      });
+      if (synced._tag !== "Success") return false;
+      return persistSettings(patch);
+    },
+    [target, replicate, library, persistSettings],
+  );
+  return {
+    skillsAvailable: target?.serverConfig?.environment.capabilities.agentSkillsSync === true,
+    skills: library.agentSkills,
+    profiles: library.mcpGatewayProfiles,
+    available: !!target,
+    updateSettings,
+  };
 }
 
 /** A connected client bridges its machines, including peers reached through T3 Connect. */
@@ -37,19 +75,29 @@ export function AgentLibrarySync() {
         env.connection.phase === "connected" &&
         env.serverConfig?.environment.capabilities.agentLibrarySync === true,
     );
-    const library = mergeAgentLibraries(connected.map((env) => env.serverConfig!.settings));
-    const serialized = JSON.stringify(library);
-    const targets = connected
-      .filter(
-        (env) => JSON.stringify(mergeAgentLibraries([env.serverConfig!.settings])) !== serialized,
+    const library = mergeAgentLibraries(
+      environments.flatMap((env) =>
+        env.serverConfig?.environment.capabilities.agentLibrarySync
+          ? [env.serverConfig.settings]
+          : [],
+      ),
+    );
+    for (const env of connected) {
+      const supportsSkills = env.serverConfig!.environment.capabilities.agentSkillsSync === true;
+      const patch = agentLibraryForSync(library, supportsSkills);
+      const serialized = JSON.stringify(patch);
+      if (
+        JSON.stringify(
+          agentLibraryForSync(mergeAgentLibraries([env.serverConfig!.settings]), supportsSkills),
+        ) === serialized
       )
-      .map((env) => env.environmentId);
-    for (const environmentId of targets) {
+        continue;
+      const environmentId = env.environmentId;
       const key = `${environmentId}:${serialized}`;
       if (pending.current.has(key)) continue;
       pending.current.add(key);
-      void update({ environmentId, input: { patch: library, replicateProfiles: true } }).finally(
-        () => pending.current.delete(key),
+      void update({ environmentId, input: { patch, replicateProfiles: true } }).finally(() =>
+        pending.current.delete(key),
       );
     }
   }, [environments, update]);

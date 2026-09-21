@@ -45,6 +45,7 @@ const profileFields = {
   icon: z
     .enum(["orb", "bot", "code", "pen", "search", "shield", "sparkles", "terminal"])
     .optional(),
+  skillIds: z.array(z.string().trim().min(1)).optional(),
   systemPrompt: z.string().max(32_000).optional(),
   reasoningEffort: z.string().trim().min(1).optional(),
   runtimeMode: z.enum([
@@ -79,7 +80,33 @@ const createThreadFields = {
 
 type ToolSpec = readonly [description: string, inputSchema: z.ZodRawShape];
 
+const skillFields = {
+  name: z.string().trim().min(1).max(200),
+  description: z.string().max(1024),
+  content: z.string().trim().min(1).max(64000),
+};
+
 const TOOL_SPECS = {
+  t3_list_skills: [
+    "List the shared T3 skills library, including SKILL.md contents and revisions. Use skillId with t3_update_skill or assign skillIds using t3_update_agent.",
+    { environmentId },
+  ],
+  t3_create_skill: [
+    "Create a reusable skill in the shared T3 Agents library. Supply a name, when-to-use description, and full SKILL.md Markdown content. Requires create or admin access. Assign the returned skillId to agents with t3_update_agent. Changes sync across connected machines and apply to newly created threads. Existing threads keep their starting skills.",
+    { environmentId, ...skillFields },
+  ],
+  t3_update_skill: [
+    "Update shared skill instructions by skillId. New threads for assigned agents receive the change. Existing threads keep their starting skills. Requires create or admin access.",
+    {
+      environmentId,
+      skillId: z.string().trim().min(1),
+      patch: z.object(skillFields).partial().strict(),
+    },
+  ],
+  t3_delete_skill: [
+    "Delete a shared skill from the library. New threads will no longer include it. Existing threads keep their starting skills. Requires create or admin access.",
+    { environmentId, skillId: z.string().trim().min(1) },
+  ],
   t3_list_agents: [
     "List agents from the shared Agents library available on this environment, including specialization descriptions, instructions and model settings. Use t3_get_agents_view to find their chats/runs. Use profileId to create chats or hand work to an agent.",
     { environmentId, ...optionalRequestContext },
@@ -99,7 +126,7 @@ const TOOL_SPECS = {
     { environmentId, ...profileFields },
   ],
   t3_update_agent: [
-    "Update an agent by profileId. New threads use the new revision; existing threads stay unchanged.",
+    "Update an agent by profileId. Updated configuration and assigned skillIds apply to newly created threads. Existing threads keep their starting configuration and skill contents.",
     {
       environmentId,
       profileId: z.string().trim().min(1),

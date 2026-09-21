@@ -1,15 +1,29 @@
+import { CheckIcon, ChevronDownIcon } from "lucide-react";
+import {
+  Combobox,
+  ComboboxTrigger,
+  ComboboxPopup,
+  ComboboxSearchInput,
+  ComboboxList,
+  ComboboxItem,
+  ComboboxEmpty,
+} from "../ui/combobox";
+import { selectTriggerVariants } from "../ui/select";
 import { agentModelOptions } from "./agentModelCatalog";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
-import type { McpGatewayProfile, ServerProvider } from "@t3tools/contracts";
+import type { AgentSkill, McpGatewayProfile, ServerProvider } from "@t3tools/contracts";
 import { MCP_GATEWAY_RUNTIME_MODE_LABELS } from "@t3tools/contracts";
 import { AgentIcon, agentColors, agentIcons } from "./AgentIcon";
-import { useState, type CSSProperties } from "react";
+import { useRef, useState, type CSSProperties } from "react";
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialog";
 import { randomUUID } from "../../lib/utils";
+
+const emptySkills: ReadonlyArray<AgentSkill> = [];
 
 export function AgentEditor({
   profile,
   profiles,
+  skills = emptySkills,
   providers,
   machines,
   onSave,
@@ -17,11 +31,14 @@ export function AgentEditor({
 }: {
   profile: McpGatewayProfile | null;
   profiles: ReadonlyArray<McpGatewayProfile>;
+  skills?: ReadonlyArray<AgentSkill>;
   providers: ReadonlyArray<ServerProvider & { readonly environmentId: string }>;
   machines: ReadonlyArray<{ environmentId: string; label: string }>;
   onSave: (profile: McpGatewayProfile) => Promise<boolean | undefined>;
   onClose: () => void;
 }) {
+  const skillsTriggerRef = useRef<HTMLButtonElement>(null);
+  const [skillIds, setSkillIds] = useState<ReadonlyArray<string>>(profile?.skillIds ?? []);
   const [systemPrompt, setSystemPrompt] = useState(profile?.systemPrompt ?? "");
   const [color, setColor] = useState(
     profile?.color ??
@@ -97,6 +114,7 @@ export function AgentEditor({
                 name: name.trim(),
                 description: description.trim(),
                 systemPrompt,
+                skillIds,
                 color,
                 icon,
                 revision: profile?.revision ?? 1,
@@ -196,9 +214,70 @@ export function AgentEditor({
               placeholder="Describe this agent’s role, workflow, and expected output…"
             />
             <span className="text-xs text-muted-foreground">
-              Applied to new chats. Existing chats keep the instructions they started with.
+              Agent configuration and skill changes apply to new chats. Existing chats keep their
+              starting configuration.
             </span>
           </label>
+          <fieldset>
+            <legend>Skills</legend>
+            {skills.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                Add reusable skills from the Agents board.
+              </p>
+            )}
+            {skills.length > 0 && (
+              <Combobox
+                multiple
+                items={skills.map((skill) => skill.skillId)}
+                value={[...skillIds]}
+                onValueChange={setSkillIds}
+                itemToStringLabel={(id) => skills.find((skill) => skill.skillId === id)?.name ?? id}
+              >
+                <ComboboxTrigger
+                  ref={skillsTriggerRef}
+                  aria-label="Select skills"
+                  className={selectTriggerVariants({ className: "w-full" })}
+                >
+                  <span className="min-w-0 truncate">
+                    {skillIds.length === 0
+                      ? "Select skills…"
+                      : skillIds.length === 1
+                        ? (skills.find((skill) => skill.skillId === skillIds[0])?.name ??
+                          "1 skill selected")
+                        : `${skillIds.length} skills selected`}
+                  </span>
+                  <ChevronDownIcon className="size-4 shrink-0 opacity-50" />
+                </ComboboxTrigger>
+                <ComboboxPopup anchor={skillsTriggerRef} className="w-(--anchor-width)">
+                  <ComboboxSearchInput placeholder="Search skills…" aria-label="Search skills" />
+                  <ComboboxEmpty>No skills found.</ComboboxEmpty>
+                  <ComboboxList>
+                    {(id: string) => {
+                      const skill = skills.find((item) => item.skillId === id);
+                      return (
+                        <ComboboxItem key={id} value={id}>
+                          <div className="flex items-start gap-2">
+                            <CheckIcon
+                              aria-hidden
+                              className={`mt-0.5 size-4 shrink-0 ${skillIds.includes(id) ? "" : "invisible"}`}
+                            />
+                            <div className="min-w-0">
+                              <div className="break-words">{skill?.name ?? id}</div>
+                              {skill?.description && (
+                                <div className="text-xs text-muted-foreground line-clamp-2">
+                                  {skill.description}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </ComboboxItem>
+                      );
+                    }}
+                  </ComboboxList>
+                </ComboboxPopup>
+              </Combobox>
+            )}
+          </fieldset>
           <div className="agent-form-grid">
             <label>
               Provider
@@ -301,12 +380,6 @@ export function AgentEditor({
               ))}
             </div>
           </fieldset>
-          {profile && (
-            <p className="text-xs text-muted-foreground">
-              Changes apply to new threads. Existing threads keep their original model and
-              permissions.
-            </p>
-          )}
           {error && (
             <p role="alert" className="text-sm text-destructive">
               {error}

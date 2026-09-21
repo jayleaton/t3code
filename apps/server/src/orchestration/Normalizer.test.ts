@@ -127,6 +127,61 @@ describe("canonicalizeClientCommandTimestamps", () => {
     });
   });
 
+  it("snapshots only assigned skill contents and resolves edits only for new threads", () => {
+    const command = {
+      profileSelection: { profileId: "reviewer", revision: 1, overrideFields: [] },
+    } as const;
+    const profile = {
+      profileId: "reviewer",
+      name: "Reviewer",
+      revision: 1,
+      systemPrompt: "Original prompt",
+      skillIds: ["review"],
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdAt: serverReceivedAt,
+      updatedAt: serverReceivedAt,
+    } as const;
+    const skill = {
+      skillId: "review",
+      name: "Review",
+      description: "Review changes",
+      content: "Original skill",
+      revision: 1,
+      createdAt: serverReceivedAt,
+      updatedAt: serverReceivedAt,
+    };
+    const first = resolveThreadCreateProfile(
+      command,
+      [profile],
+      [],
+      [skill, { ...skill, skillId: "unassigned" }],
+    );
+    const updatedSkill = { ...skill, revision: 2, content: "Updated skill" };
+    const second = resolveThreadCreateProfile(
+      { profileSelection: { ...command.profileSelection, revision: 2 } },
+      [{ ...profile, revision: 2, systemPrompt: "Updated prompt" }],
+      [],
+      [updatedSkill],
+    );
+    expect(first.profileSnapshot).toMatchObject({
+      systemPrompt: "Original prompt",
+      skills: [skill],
+    });
+    expect(second.profileSnapshot).toMatchObject({
+      systemPrompt: "Updated prompt",
+      skills: [updatedSkill],
+    });
+    const unassigned = resolveThreadCreateProfile(
+      command,
+      [{ ...profile, skillIds: [] }],
+      [],
+      [skill],
+    );
+    expect(unassigned.profileSnapshot).toMatchObject({ skills: [] });
+  });
+
   it("resolves a readable Settings profile against the live provider catalog", () => {
     const command = {
       type: "thread.create",

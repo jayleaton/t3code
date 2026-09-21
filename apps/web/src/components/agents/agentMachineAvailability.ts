@@ -16,6 +16,12 @@ export function agentMachineUnavailableReason(
     return "Not connected — check Settings → Connections";
   }
   if (!environment.serverConfig) return "Loading provider status";
+  if (
+    profile.skillIds?.length &&
+    !environment.serverConfig.environment.capabilities.agentSkillsSync
+  ) {
+    return "Update T3 on this machine to use shared agent skills";
+  }
   const providers = environment.serverConfig.providers;
   if (resolveGatewayProfileModelSelection(profile, providers)) return undefined;
   const hasLabels = profile.providerLabel !== undefined && profile.modelLabel !== undefined;

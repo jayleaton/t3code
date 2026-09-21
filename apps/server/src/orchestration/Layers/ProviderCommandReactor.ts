@@ -1,4 +1,7 @@
-import { syncAgentInstructionFile } from "../../provider/AgentInstructionFiles.ts";
+import {
+  syncAgentInstructionFile,
+  syncAgentSkillFiles,
+} from "../../provider/AgentInstructionFiles.ts";
 import { withWorkspaceLease } from "../../workspace/workspaceLease.ts";
 import {
   type ChatAttachment,
@@ -1957,15 +1960,22 @@ const make = Effect.gen(function* () {
         if (
           Option.isSome(thread) &&
           thread.value.settledAt !== null &&
-          thread.value.profileSnapshot?.systemPrompt
+          thread.value.profileSnapshot?.profileId
         ) {
           const project = yield* resolveProject(thread.value.projectId);
           const cwd = thread.value.worktreePath ?? project?.workspaceRoot;
-          if (cwd)
+          if (cwd) {
+            yield* syncAgentSkillFiles({ cwd, threadId: thread.value.id, skills: [] }).pipe(
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, path),
+              Effect.catchCause((cause) =>
+                Effect.logWarning("Agent skill cleanup failed", { cause }),
+              ),
+            );
             yield* syncAgentInstructionFile({
               cwd,
               threadId: thread.value.id,
-              instructions: thread.value.profileSnapshot.systemPrompt,
+              instructions: "",
               settled: true,
             }).pipe(
               Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -1977,6 +1987,7 @@ const make = Effect.gen(function* () {
                 }),
               ),
             );
+          }
         }
         if (
           Option.isNone(thread) ||

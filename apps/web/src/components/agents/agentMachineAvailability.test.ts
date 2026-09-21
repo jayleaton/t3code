@@ -100,3 +100,20 @@ describe("agent machine availability", () => {
     ).toBeUndefined();
   });
 });
+
+it("requires a skills-capable environment for assigned skills", () => {
+  const env = environment();
+  const withSkills = { ...profile, skillIds: ["review"] };
+  expect(
+    agentMachineUnavailableReason(withSkills, {
+      ...env,
+      serverConfig: {
+        ...env.serverConfig!,
+        environment: {
+          ...env.serverConfig!.environment,
+          capabilities: { ...env.serverConfig!.environment?.capabilities, agentSkillsSync: false },
+        },
+      },
+    }),
+  ).toContain("Update T3");
+});

@@ -430,11 +430,11 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
     async (patch: UnifiedSettingsPatch) => {
       const { serverPatch, clientPatch } = splitPatch(patch);
 
-      if (serverPatch.mcpGatewayProfiles !== undefined) {
+      if (serverPatch.mcpGatewayProfiles !== undefined || serverPatch.agentSkills !== undefined) {
         if (!environmentId) {
           toastManager.add({
             type: "warning",
-            title: "Agent not saved",
+            title: serverPatch.agentSkills !== undefined ? "Skills not saved" : "Agent not saved",
             description: PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE,
           });
           return false;
@@ -455,6 +455,8 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
                   patch: filterSharedServerPatch(
                     {
                       ...sharedPatch,
+                      agentSkills: saved.value.agentSkills,
+                      agentSkillDeletedAt: saved.value.agentSkillDeletedAt,
                       mcpGatewayProfiles: saved.value.mcpGatewayProfiles,
                       mcpGatewayProfileDeletedAt: saved.value.mcpGatewayProfileDeletedAt,
                     },
@@ -468,7 +470,10 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
         if (results.some((result) => result._tag !== "Success")) {
           toastManager.add({
             type: "warning",
-            title: "Agent saved on this machine",
+            title:
+              serverPatch.agentSkills !== undefined
+                ? "Skills saved on this machine"
+                : "Agent saved on this machine",
             description: "Some machines could not sync. Use Apply to all in Settings to retry.",
           });
         }

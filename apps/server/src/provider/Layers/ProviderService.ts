@@ -1,5 +1,5 @@
 import { activeGatewayAvailable } from "../../mcp/McpGatewayBroker.ts";
-import { syncAgentInstructionFile } from "../AgentInstructionFiles.ts";
+import { syncAgentInstructionFile, syncAgentSkillFiles } from "../AgentInstructionFiles.ts";
 /**
  * ProviderServiceLive - Cross-provider orchestration layer.
  *
@@ -489,7 +489,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       if (Option.isNone(projectionQuery)) return undefined;
       const thread = yield* projectionQuery.value.getThreadShellById(threadId);
       if (Option.isNone(thread)) return undefined;
-      const instructions = thread.value.profileSnapshot?.systemPrompt;
+      let instructions = thread.value.profileSnapshot?.systemPrompt;
       if (thread.value.profileSnapshot?.profileId && thread.value.settledAt === null) {
         const project = thread.value.worktreePath
           ? Option.none()
@@ -497,7 +497,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const cwd =
           thread.value.worktreePath ??
           (Option.isSome(project) ? project.value.workspaceRoot : undefined);
-        if (cwd)
+        if (cwd) {
+          const skills = thread.value.profileSnapshot.skills ?? [];
+          const skillInstructions = yield* syncAgentSkillFiles({ cwd, threadId, skills }).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+          );
+          instructions = [instructions, skillInstructions].filter(Boolean).join("\n\n");
           yield* syncAgentInstructionFile({
             cwd,
             threadId,
@@ -507,6 +513,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             Effect.provideService(FileSystem.FileSystem, fileSystem),
             Effect.provideService(Path.Path, path),
           );
+        }
       }
       return instructions;
     },
@@ -990,7 +997,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     });
   const clearMcpSession = (threadId: ThreadId) =>
     McpSessionRegistry.revokeActiveMcpThread(threadId).pipe(
-      Effect.tap(() => Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
+      Effect.tap(() =>
+        Effect.sync(() => {
+          McpProviderSession.clearMcpProviderSession(threadId);
+        }),
+      ),
     );
 
   const publishRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
@@ -1301,10 +1312,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
 
       yield* prepareMcpSession(input.binding.threadId, bindingInstanceId);
+      const agentInstructions = yield* resolveAgentInstructions(input.binding.threadId);
       const resumed = yield* adapter
         .startSession({
           threadId: input.binding.threadId,
-          agentInstructions: yield* resolveAgentInstructions(input.binding.threadId),
+          agentInstructions,
           provider: input.binding.provider,
           providerInstanceId: bindingInstanceId,
           ...(persistedCwd ? { cwd: persistedCwd } : {}),
@@ -1533,10 +1545,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
         yield* clearTurnAnalyticsSession(resolvedInstanceId, threadId);
         yield* prepareMcpSession(threadId, resolvedInstanceId);
+        const agentInstructions = yield* resolveAgentInstructions(threadId);
         const session = yield* adapter
           .startSession({
             ...input,
-            agentInstructions: yield* resolveAgentInstructions(threadId),
+            agentInstructions,
             providerInstanceId: resolvedInstanceId,
             ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
             ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
