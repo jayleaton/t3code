@@ -263,7 +263,7 @@ switch away; settled chats remain on the board under **Settled**.
 
 Agents are shared across clients connected to the same server. Updated clients also synchronize
 the agent library between connected environments that support agent sync, including after reconnecting. Each target resolves the provider and model locally; an unavailable or
-ambiguous selection must be re-selected before starting a thread. Prompt and skill changes apply on the next turn, including in existing chats. Model and permission changes apply to new chats.
+ambiguous selection must be re-selected before starting a thread. Agent configuration and skill changes apply when a new chat is created. Existing chats keep the configuration and skill contents they started with.
 
 Add a short **Specialization** when creating or editing an agent to show what it does beneath its name and in MCP. This description does not replace its instructions.
 
@@ -281,18 +281,18 @@ access. One shared library supplies every assigned agent, regardless of provider
 
 For manual editing, open **Skills** on the Agents board and expand **Create or edit manually**.
 Assign skills in the agent editor. Skills currently store `SKILL.md` instructions, not bundled
-scripts or binary assets. Deleting a skill removes it from agents on their next use.
+scripts or binary assets. Deleting a skill excludes it from new chats; existing chats retain their saved copy.
 
-Before using an agent, T3 synchronizes its library from environments available to the client.
+Before creating an agent chat, T3 synchronizes its library from environments available to the client.
 Keep both machines connected to a client at least once after an edit so the destination can
 receive it. Offline machines catch up when they reconnect; a disconnected source that this
 client has never seen cannot supply updates.
 
 Each chat has generated instructions and assigned skill files under `.agents/t3/` in its workspace.
-T3 refreshes these before use and clears them when the chat is settled. Continuing uses the
-current agent configuration. A running turn finishes with its existing startup instructions;
-providers that load instructions at startup resume with the updated configuration on the next
-turn. Deleting an agent keeps its chats but removes its managed instructions and skills on next use.
+T3 creates these from the configuration saved when the chat was created and clears them when
+the chat is settled. Continuing or resuming restores that same configuration, even if the agent
+or shared skills have since been edited or deleted. Deleting an agent keeps its existing chats
+and their saved instructions and skills.
 
 Use the speed control on a chat card to choose a model-supported speed tier. The setting applies
 to the next provider request, including when changed during a running turn; it does not restart

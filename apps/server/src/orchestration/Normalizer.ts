@@ -4,6 +4,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Option from "effect/Option";
 import {
+  type AgentSkill,
   type ClientOrchestrationCommand,
   type UserInputAttachments,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -50,6 +51,7 @@ export function resolveThreadCreateProfile<
   command: T,
   profiles: ReadonlyArray<McpGatewayProfile>,
   providers: ReadonlyArray<ServerProvider> = [],
+  skills: ReadonlyArray<AgentSkill> = [],
 ): T & { readonly profileSnapshot?: unknown } {
   const selection = command.profileSelection;
   if (selection === undefined) return command;
@@ -134,6 +136,7 @@ export function resolveThreadCreateProfile<
     runtimeMode,
     interactionMode,
     profileSnapshot: {
+      skills: skills.filter((skill) => profile.skillIds?.includes(skill.skillId)),
       profileId: profile.profileId,
       profileName: profile.name,
       ...(profile.systemPrompt === undefined ? {} : { systemPrompt: profile.systemPrompt }),
@@ -353,6 +356,7 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
             },
             settings.mcpGatewayProfiles,
             providers,
+            settings.agentSkills,
           ) as OrchestrationCommand,
         catch: (cause) =>
           new OrchestrationDispatchCommandError({

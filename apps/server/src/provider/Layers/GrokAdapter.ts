@@ -2188,7 +2188,6 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
     return {
       provider: PROVIDER,
       capabilities: {
-        agentInstructionsAtSessionStart: true,
         sessionModelSwitch: "in-session",
         supportsConversationRollback: false,
       },

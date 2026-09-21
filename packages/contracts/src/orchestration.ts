@@ -1,3 +1,4 @@
+import { AgentSkill } from "./agentSkills.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
@@ -716,6 +717,8 @@ export const ThreadLinkedPullRequest = Schema.Struct({
 });
 export type ThreadLinkedPullRequest = typeof ThreadLinkedPullRequest.Type;
 export const ThreadProfileSnapshot = Schema.Struct({
+  // Persist contents so library edits and deletions cannot change an existing thread.
+  skills: Schema.optional(Schema.Array(AgentSkill)),
   systemPrompt: Schema.optional(Schema.String.check(Schema.isMaxLength(32_000))),
   profileId: Schema.NullOr(TrimmedNonEmptyString),
   profileName: Schema.NullOr(TrimmedNonEmptyString),
@@ -902,7 +905,8 @@ export const OrchestrationThreadShell = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
-  profileSnapshot: Schema.optional(ThreadProfileSnapshot),
+  // Skill bodies belong to thread detail, not every sidebar snapshot/update.
+  profileSnapshot: Schema.optional(ThreadProfileSnapshot.mapFields(Struct.omit(["skills"]))),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),

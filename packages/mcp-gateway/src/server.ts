@@ -92,11 +92,11 @@ const TOOL_SPECS = {
     { environmentId },
   ],
   t3_create_skill: [
-    "Create a reusable skill in the shared T3 Agents library. Supply a name, when-to-use description, and full SKILL.md Markdown content. Requires create or admin access. Assign the returned skillId to agents with t3_update_agent. Changes sync across connected machines and apply on next use.",
+    "Create a reusable skill in the shared T3 Agents library. Supply a name, when-to-use description, and full SKILL.md Markdown content. Requires create or admin access. Assign the returned skillId to agents with t3_update_agent. Changes sync across connected machines and apply to newly created threads. Existing threads keep their starting skills.",
     { environmentId, ...skillFields },
   ],
   t3_update_skill: [
-    "Update shared skill instructions by skillId. All assigned agents receive the change on next use. Requires create or admin access.",
+    "Update shared skill instructions by skillId. New threads for assigned agents receive the change. Existing threads keep their starting skills. Requires create or admin access.",
     {
       environmentId,
       skillId: z.string().trim().min(1),
@@ -104,7 +104,7 @@ const TOOL_SPECS = {
     },
   ],
   t3_delete_skill: [
-    "Delete a shared skill from the library. It is removed from agents' available skills on next use. Requires create or admin access.",
+    "Delete a shared skill from the library. New threads will no longer include it. Existing threads keep their starting skills. Requires create or admin access.",
     { environmentId, skillId: z.string().trim().min(1) },
   ],
   t3_list_agents: [
@@ -126,7 +126,7 @@ const TOOL_SPECS = {
     { environmentId, ...profileFields },
   ],
   t3_update_agent: [
-    "Update an agent by profileId. Updated instructions and assigned skillIds apply when the agent is next used, including existing chats.",
+    "Update an agent by profileId. Updated configuration and assigned skillIds apply to newly created threads. Existing threads keep their starting configuration and skill contents.",
     {
       environmentId,
       profileId: z.string().trim().min(1),

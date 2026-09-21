@@ -48,7 +48,7 @@ export function AgentSkillsEditor({
         <DialogTitle>Shared skills</DialogTitle>
         <DialogDescription className="mt-2 text-sm text-muted-foreground">
           Edit a skill once, then assign it to agents. Changes sync across connected machines and
-          apply on the next use.
+          apply to new chats. Existing chats keep their starting skills.
         </DialogDescription>
         <div className="mt-5 space-y-3 text-sm">
           <p>

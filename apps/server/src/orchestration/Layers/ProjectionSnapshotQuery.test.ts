@@ -20,6 +20,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Struct from "effect/Struct";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -652,6 +653,18 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       }
 
       const profileSnapshot = {
+        systemPrompt: "Saved prompt",
+        skills: [
+          {
+            skillId: "saved-skill",
+            name: "Saved skill",
+            description: "Use for reviews",
+            content: "Saved instructions",
+            revision: 3,
+            createdAt: "2026-01-01",
+            updatedAt: "2026-01-01",
+          },
+        ],
         profileId: "write",
         profileName: "Write",
         revision: 2,
@@ -670,7 +683,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.deepEqual(Option.getOrThrow(agentDetail).profileSnapshot, profileSnapshot);
       assert.deepEqual(
         (yield* snapshotQuery.getShellSnapshot()).threads[0]?.profileSnapshot,
-        profileSnapshot,
+        Struct.omit(profileSnapshot, ["skills"]),
       );
       assert.deepEqual(
         (yield* snapshotQuery.getSnapshot()).threads[0]?.profileSnapshot,

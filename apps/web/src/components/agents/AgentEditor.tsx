@@ -214,7 +214,8 @@ export function AgentEditor({
               placeholder="Describe this agent’s role, workflow, and expected output…"
             />
             <span className="text-xs text-muted-foreground">
-              Prompt and skill changes apply when this agent is next used, including existing chats.
+              Agent configuration and skill changes apply to new chats. Existing chats keep their
+              starting configuration.
             </span>
           </label>
           <fieldset>
@@ -379,12 +380,6 @@ export function AgentEditor({
               ))}
             </div>
           </fieldset>
-          {profile && (
-            <p className="text-xs text-muted-foreground">
-              Existing threads receive updated prompts and skills but keep their original model and
-              permissions.
-            </p>
-          )}
           {error && (
             <p role="alert" className="text-sm text-destructive">
               {error}

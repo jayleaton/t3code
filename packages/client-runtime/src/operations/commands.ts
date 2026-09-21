@@ -95,9 +95,7 @@ function dispatch(command: ClientOrchestrationCommand) {
   return Effect.gen(function* () {
     if (
       (command.type === "thread.create" && command.profileSelection) ||
-      command.type === "thread.turn.start" ||
-      (command.type === "thread.lifecycle.control" &&
-        (command.action === "resume" || command.action === "retry" || command.action === "restart"))
+      (command.type === "thread.turn.start" && command.bootstrap?.createThread?.profileSelection)
     ) {
       const selection =
         command.type === "thread.create"

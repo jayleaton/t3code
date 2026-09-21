@@ -1,3 +1,5 @@
+import { AgentSkill } from "./agentSkills.ts";
+export { AgentSkill } from "./agentSkills.ts";
 import { SshDeviceHostConfigs } from "./device.ts";
 import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
@@ -984,17 +986,6 @@ export const BackgroundActivitySettings = Schema.Struct({
 }).pipe(Schema.withDecodingDefault(Effect.succeed({})));
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
-/** Portable SKILL.md content, shared independently of an agent's assignments. */
-export const AgentSkill = Schema.Struct({
-  skillId: TrimmedNonEmptyString,
-  name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
-  description: Schema.String.check(Schema.isMaxLength(1024)),
-  content: TrimmedNonEmptyString.check(Schema.isMaxLength(64_000)),
-  revision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
-  createdAt: TrimmedNonEmptyString,
-  updatedAt: TrimmedNonEmptyString,
-});
-export type AgentSkill = typeof AgentSkill.Type;
 const AgentSkills = Schema.Array(AgentSkill).check(Schema.isMaxLength(200));
 
 export const McpGatewayProfile = Schema.Struct({

@@ -275,7 +275,6 @@ function makeFakeCodexAdapter(
   const adapter: ProviderAdapterShape<ProviderAdapterError> = {
     provider,
     capabilities: {
-      agentInstructionsAtSessionStart: provider === "claudeAgent" || provider === "grok",
       sessionModelSwitch: "in-session",
       ...(supportsConversationRollback !== undefined ? { supportsConversationRollback } : {}),
       ...(provider === CODEX_DRIVER ? { promptlessTurnContinuation: true } : {}),
@@ -5195,7 +5194,6 @@ for (const driverName of [
   "antigravity",
   "commandcode",
 ]) {
-  const startupOnly = driverName === "claudeAgent" || driverName === "grok";
   const driver = ProviderDriverKind.make(driverName);
   const instanceId = ProviderInstanceId.make(driverName);
   const threadId = ThreadId.make(`agent-refresh-${driverName}`);
@@ -5241,6 +5239,7 @@ for (const driverName of [
       profileName: "Randy",
       revision: 1,
       systemPrompt: "Frozen review rules",
+      skills: [skill],
       effectiveSource: {
         modelSelection: "profile",
         runtimeMode: "profile",
@@ -5269,7 +5268,13 @@ for (const driverName of [
     getThreadCheckpointContext: () => Effect.die("unused"),
     getFullThreadDiffContext: () => Effect.die("unused"),
     getThreadRuntimeContext: () => Effect.die("unused"),
-    getThreadShellById: () => Effect.succeed(Option.some(thread)),
+    getThreadShellById: () =>
+      Effect.succeed(
+        Option.some({
+          ...thread,
+          profileSnapshot: { ...thread.profileSnapshot!, skills: [skill] },
+        }),
+      ),
     getThreadDetailById: () => Effect.die("unused"),
     getThreadDetailSnapshot: () => Effect.die("unused"),
     searchThreads: () => Effect.die("unused"),
@@ -5285,75 +5290,55 @@ for (const driverName of [
   });
   refresh.layer(`agent configuration refresh (${driverName})`, (it) => {
     it.effect(
-      "uses live revisions, resumes with updated startup rules, and removes assignments",
+      "keeps creation instructions and skills after edits, deletion, and session restart",
       () =>
         Effect.gen(function* () {
           const service = yield* ProviderService.ProviderService;
           const settings = yield* ServerSettings.ServerSettingsService;
           const selection = createModelSelection(instanceId, "test-model");
-          yield* service.startSession(threadId, {
+          const start = {
             threadId,
             providerInstanceId: instanceId,
-            runtimeMode: "full-access",
+            runtimeMode: "full-access" as const,
             cwd,
             modelSelection: selection,
-          });
-          assert.include(
-            refresh.codex.startSession.mock.calls.at(-1)![0].agentInstructions!,
-            "Old review rules",
-          );
-          assert.notInclude(
-            refresh.codex.startSession.mock.calls.at(-1)![0].agentInstructions!,
-            "Frozen review rules",
-          );
-          yield* service.sendTurn({ threadId, input: "Review", modelSelection: selection });
-          assert.equal(refresh.codex.startSession.mock.calls.length, 1);
+          };
+          yield* service.startSession(threadId, start);
+          const instructions = refresh.codex.startSession.mock.calls.at(-1)![0].agentInstructions!;
+          assert.include(instructions, "Frozen review rules");
+          assert.notInclude(instructions, "Old review rules");
+          const relativePath = instructions.match(/file: ([^)]+)\)/)![1]!;
+          const skillPath = NodePath.join(cwd, relativePath);
+          assert.include(NodeFS.readFileSync(skillPath, "utf8"), "Original skill");
           yield* settings.updateSettings({
-            mcpGatewayProfiles: [{ ...profile, systemPrompt: "New review rules" }],
+            mcpGatewayProfiles: [{ ...profile, systemPrompt: "New review rules", skillIds: [] }],
+            agentSkills: [{ ...skill, content: "Updated skill" }],
           });
-          if (startupOnly) {
-            refresh.codex.updateSession(threadId, (session) => ({ ...session, status: "running" }));
-            yield* service.sendTurn({
-              threadId,
-              input: "Steer ongoing review",
-              modelSelection: selection,
-            });
-            assert.equal(refresh.codex.startSession.mock.calls.length, 1);
-            refresh.codex.updateSession(threadId, (session) => ({ ...session, status: "ready" }));
-          }
           yield* service.sendTurn({ threadId, input: "Review again", modelSelection: selection });
-          assert.equal(refresh.codex.startSession.mock.calls.length, startupOnly ? 2 : 1);
-          const resumed = refresh.codex.startSession.mock.calls.at(-1)![0];
-          assert.include(
-            refresh.codex.sendTurn.mock.calls.at(-1)![0].agentInstructions!,
-            "New review rules",
+          assert.equal(refresh.codex.startSession.mock.calls.length, 1);
+          assert.equal(
+            refresh.codex.sendTurn.mock.calls.at(-1)![0].agentInstructions,
+            instructions,
           );
-          assert.include(
-            refresh.codex.sendTurn.mock.calls.at(-1)![0].agentInstructions!,
-            "Review changes",
-          );
-          if (startupOnly) assert.deepEqual(resumed.resumeCursor, { opaque: `resume-${threadId}` });
-          assert.deepEqual(resumed.modelSelection, selection);
-          yield* settings.updateSettings({ agentSkills: [{ ...skill, content: "Updated skill" }] });
-          yield* service.sendTurn({
-            threadId,
-            input: "Use updated skill",
-            modelSelection: selection,
-          });
-          assert.equal(refresh.codex.startSession.mock.calls.length, startupOnly ? 3 : 1);
-          const instruction = refresh.codex.sendTurn.mock.calls.at(-1)![0].agentInstructions!;
-          const relativePath = instruction.match(/file: ([^)]+)\)/)![1]!;
-          assert.include(
-            NodeFS.readFileSync(NodePath.join(cwd, relativePath), "utf8"),
-            "Updated skill",
-          );
-          yield* settings.updateSettings({
-            agentSkills: [],
-            mcpGatewayProfiles: [{ ...profile, systemPrompt: "" }],
-          });
+          assert.include(NodeFS.readFileSync(skillPath, "utf8"), "Original skill");
+          yield* settings.updateSettings({ agentSkills: [], mcpGatewayProfiles: [] });
           yield* service.sendTurn({ threadId, input: "Continue", modelSelection: selection });
-          assert.equal(refresh.codex.sendTurn.mock.calls.at(-1)![0].agentInstructions, "");
-          assert.isFalse(NodeFS.existsSync(NodePath.join(cwd, relativePath)));
+          assert.equal(
+            refresh.codex.sendTurn.mock.calls.at(-1)![0].agentInstructions,
+            instructions,
+          );
+          // Settlement removes generated files. Resume must recreate the saved versions.
+          yield* service.stopSession({ threadId });
+          NodeFS.unlinkSync(skillPath);
+          yield* service.startSession(threadId, {
+            ...start,
+            resumeCursor: { opaque: `resume-${threadId}` },
+          });
+          assert.equal(
+            refresh.codex.startSession.mock.calls.at(-1)![0].agentInstructions,
+            instructions,
+          );
+          assert.include(NodeFS.readFileSync(skillPath, "utf8"), "Original skill");
         }),
     );
   });
