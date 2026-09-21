@@ -1,3 +1,4 @@
+import { supportsProviderTurnSteering } from "@t3tools/client-runtime/provider-turn-steering";
 import { isComposerEventForSurface } from "./chat/composerEventScope";
 import { formatOutgoingPrompt } from "./chat/formatOutgoingPrompt";
 import { Link } from "@tanstack/react-router";
@@ -2908,7 +2909,11 @@ export default function ChatView(props: ChatViewProps) {
   const supportsConversationRollback =
     conversationProviderStatus !== null &&
     conversationProviderStatus.supportsConversationRollback !== false;
+  const supportsTurnSteering = supportsProviderTurnSteering(
+    conversationProviderStatus?.driver ?? activeThread?.session?.providerName ?? selectedProvider,
+  );
   const phase = derivePhase(activeThread?.session ?? null);
+  const queuedMessagesWaitForTurnEnd = phase === "running" && !supportsTurnSteering;
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const latestCheckpointCompletedAt = activeThread?.checkpoints.at(-1)?.completedAt ?? null;
   const workspaceMutationId = useMemo(() => {
@@ -7360,6 +7365,7 @@ export default function ChatView(props: ChatViewProps) {
     };
     if (
       !activeThread ||
+      ((queuedMessage || directAnnotation) && queuedMessagesWaitForTurnEnd) ||
       isSendBusy ||
       isConnecting ||
       isRevertingCheckpoint ||
@@ -7681,7 +7687,8 @@ export default function ChatView(props: ChatViewProps) {
       !directAnnotation &&
       phase === "running" &&
       activeThreadKey &&
-      (settings.followUpBehavior === "queue") !== (submissionIntent === "alternate")
+      (!supportsTurnSteering ||
+        (settings.followUpBehavior === "queue") !== (submissionIntent === "alternate"))
     ) {
       if (composerRef.current?.validateProviderInput(promptForSend) === false) {
         return;
@@ -8684,7 +8691,15 @@ export default function ChatView(props: ChatViewProps) {
   useEffect(() => {
     if (!nextQueuedMessage || isSendBusy || queueBlockedByPendingRequest || queueSendGate) return;
     if (sendInFlightRef.current) return;
-    if (!isQueuedMessageDue({ message: nextQueuedMessage, phase, latestToolActivityId })) return;
+    if (
+      !isQueuedMessageDue({
+        message: nextQueuedMessage,
+        phase,
+        latestToolActivityId,
+        supportsTurnSteering,
+      })
+    )
+      return;
     sendQueuedMessage(nextQueuedMessage);
   }, [
     isSendBusy,
@@ -8693,6 +8708,7 @@ export default function ChatView(props: ChatViewProps) {
     phase,
     queueBlockedByPendingRequest,
     queueSendGate,
+    supportsTurnSteering,
   ]);
 
   // The row handlers are read from refs at call-time so their identity stays
@@ -8704,7 +8720,13 @@ export default function ChatView(props: ChatViewProps) {
   queuedMessageActionsRef.current = {
     steer: (id) => {
       const message = queuedMessages.find((entry) => entry.id === id);
-      if (!message || sendInFlightRef.current || queueBlockedByPendingRequest) return;
+      if (
+        !message ||
+        sendInFlightRef.current ||
+        queueBlockedByPendingRequest ||
+        queuedMessagesWaitForTurnEnd
+      )
+        return;
       void onSend(undefined, message.submissionIntent, undefined, message);
     },
     remove: (id) => {
@@ -10221,6 +10243,7 @@ export default function ChatView(props: ChatViewProps) {
                 topFadeEnabled={!hasTimelineTopBanner}
                 loadEarlier={paintOnlyDisplayedTimeline ? null : loadEarlierTurns}
                 queuedMessages={paintOnlyDisplayedTimeline ? EMPTY_QUEUED_MESSAGES : queuedMessages}
+                queuedMessagesWaitForTurnEnd={queuedMessagesWaitForTurnEnd}
                 onSteerQueuedMessage={onSteerQueuedMessage}
                 steerQueuedMessageShortcutLabel={shortcutLabelForCommand(
                   keybindings,
