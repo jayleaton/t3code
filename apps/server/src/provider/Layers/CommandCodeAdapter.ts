@@ -17,6 +17,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -43,11 +44,13 @@ import {
 import { spawnCommandCode } from "../commandCodeProcess.ts";
 import { collectStreamAsString } from "../providerSnapshot.ts";
 import { buildRuntimeInstructions, withAgentInstructions } from "../RuntimeInstructions.ts";
+import { resolveAttachmentPath } from "../../attachmentStore.ts";
 
 const PROVIDER = ProviderDriverKind.make("commandcode");
 const ResumeCursor = Schema.Struct({ sessionId: Schema.NonEmptyString });
 const decodeResume = Schema.decodeUnknownOption(ResumeCursor);
 const isRequestError = Schema.is(ProviderAdapterRequestError);
+const encodeAttachmentPaths = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 type EventInput = ProviderRuntimeEvent extends infer E
   ? E extends ProviderRuntimeEvent
     ? Omit<E, "eventId" | "provider" | "providerInstanceId" | "createdAt" | "threadId">
@@ -63,9 +66,15 @@ interface SessionContext {
 
 export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(function* (
   settings: CommandCodeSettings,
-  options: { instanceId: ProviderInstanceId; environment: NodeJS.ProcessEnv; cwd: string },
+  options: {
+    instanceId: ProviderInstanceId;
+    environment: NodeJS.ProcessEnv;
+    cwd: string;
+    attachmentsDir: string;
+  },
 ) {
   const crypto = yield* Crypto.Crypto;
+  const fileSystem = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const scope = yield* Effect.scope;
   const sessions = new Map<ThreadId, SessionContext>();
@@ -178,19 +187,38 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
             operation: "sendTurn",
             issue: "A Command Code turn is already running.",
           });
-        if (!input.input?.trim())
+        if (!input.input?.trim() && !input.attachments?.length)
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "sendTurn",
-            issue: "Command Code requires a prompt.",
+            issue: "Command Code requires a prompt or attachments.",
           });
-        if (input.attachments?.length)
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "sendTurn",
-            issue:
-              "Command Code headless mode does not accept attachments. Reference files in your prompt instead.",
-          });
+        const attachmentPaths = yield* Effect.forEach(input.attachments ?? [], (attachment) =>
+          Effect.gen(function* () {
+            const path = resolveAttachmentPath({
+              attachmentsDir: options.attachmentsDir,
+              attachment,
+            });
+            if (!path)
+              return yield* new ProviderAdapterValidationError({
+                provider: PROVIDER,
+                operation: "sendTurn",
+                issue: `Invalid attachment id '${attachment.id}'.`,
+              });
+            yield* fileSystem.access(path).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapterRequestError({
+                    provider: PROVIDER,
+                    method: "sendTurn",
+                    detail: `Cannot access attachment '${attachment.name}'.`,
+                    cause,
+                  }),
+              ),
+            );
+            return path;
+          }),
+        );
         const turnId = TurnId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie));
         const ready = yield* Deferred.make<string, ProviderAdapterRequestError>();
         const model = input.modelSelection?.model ?? context.session.model ?? "default";
@@ -203,6 +231,9 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
           "json",
           "--no-auto-update",
           "--skip-onboarding",
+          // Keep stored attachments readable on resumed turns as well.
+          "--add-dir",
+          options.attachmentsDir,
           ...commandCodePermissionArgs(
             context.session.runtimeMode,
             input.interactionMode === "plan",
@@ -220,7 +251,12 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
           }),
           input.agentInstructions ?? context.instructions,
         );
-        const prompt = `${instructions}\n\n${input.input}`;
+        // Headless stdin is text-only. read_file delivers local images as image
+        // blocks, using the same environment-local store as the other adapters.
+        const attachmentPrompt = attachmentPaths.length
+          ? `\n\nAttached files on this environment (use read_file to inspect the images and other files):\n${encodeAttachmentPaths(attachmentPaths)}`
+          : "";
+        const prompt = `${instructions}\n\n${input.input ?? ""}${attachmentPrompt}`;
         context.session = {
           ...context.session,
           status: "running",

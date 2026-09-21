@@ -18,12 +18,26 @@ import { makeCommandCodeAdapter } from "./CommandCodeAdapter.ts";
 
 const decodeSettings = Schema.decodeSync(CommandCodeSettings);
 const decodeEvent = Schema.decodeUnknownEffect(ProviderRuntimeEvent);
+const decodeCall = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      args: Schema.Array(Schema.String),
+      prompt: Schema.String,
+      cwd: Schema.String,
+      attachments: Schema.Array(
+        Schema.Struct({ path: Schema.String, bytes: Schema.Array(Schema.Int) }),
+      ),
+    }),
+  ),
+);
 
 const fixture = `
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 let prompt = ''; for await (const chunk of process.stdin) prompt += chunk;
 const args = process.argv.slice(2);
-appendFileSync(process.env.CALL_LOG, JSON.stringify({ args, prompt, instance: process.env.INSTANCE }) + '\\n');
+const attachmentPaths = prompt.includes('Attached files on this environment') ? JSON.parse(prompt.split('\\n').at(-1)) : [];
+const attachments = attachmentPaths.map(path => ({path, bytes: [...readFileSync(path)]}));
+appendFileSync(process.env.CALL_LOG, JSON.stringify({ args, prompt, attachments, cwd: process.cwd(), instance: process.env.INSTANCE }) + '\\n');
 const emit = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
 if (prompt.endsWith('early-error')) { emit({type:'result',subtype:'error',finalText:'',error:'Not authenticated'}); process.exit(3); }
 const sessionId = args.includes('--resume') ? args[args.indexOf('--resume') + 1] : 'native-' + process.env.INSTANCE;
@@ -41,6 +55,7 @@ const threadId = ThreadId.make("thread-commandcode");
 const setup = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-commandcode-" });
+  yield* fs.makeDirectory(`${cwd}/attachments`);
   const binaryPath = yield* Effect.sync(() =>
     writeFakeCli({ directory: cwd, name: "commandcode", source: fixture }),
   );
@@ -48,6 +63,7 @@ const setup = Effect.gen(function* () {
     makeCommandCodeAdapter(decodeSettings({ binaryPath }), {
       instanceId: ProviderInstanceId.make(name),
       cwd,
+      attachmentsDir: `${cwd}/attachments`,
       environment: { ...process.env, CALL_LOG: `${cwd}/calls.jsonl`, INSTANCE: name },
     });
   return { fs, cwd, make };
@@ -62,6 +78,91 @@ const takeTurn = (queue: Queue.Dequeue<ProviderRuntimeEvent, Cause.Done>) =>
       if (event.type === "turn.completed") return events;
     }
   });
+
+it.effect("passes stored images and files to headless turns through environment-local paths", () =>
+  Effect.gen(function* () {
+    const { fs, cwd, make } = yield* setup;
+    const image = {
+      type: "image" as const,
+      id: "thread-commandcode-12345678-1234-1234-1234-123456789abc",
+      name: "screenshot.png",
+      mimeType: "image/png",
+      sizeBytes: 4,
+    };
+    const file = {
+      type: "file" as const,
+      id: "thread-commandcode-12345678-1234-1234-1234-123456789abc-txt",
+      name: "notes.txt",
+      mimeType: "text/plain",
+      sizeBytes: 5,
+    };
+    const imagePath = `${cwd}/attachments/${image.id}.png`;
+    const filePath = `${cwd}/attachments/${file.id}.txt`;
+    const bytes = [137, 80, 78, 71];
+    yield* fs.writeFile(imagePath, new Uint8Array(bytes));
+    yield* fs.writeFileString(filePath, "notes");
+    yield* fs.makeDirectory(`${cwd}/project`);
+    const adapter = yield* make();
+    const queue = yield* Stream.toQueue(adapter.streamEvents, { capacity: "unbounded" });
+    yield* adapter.startSession({
+      threadId,
+      cwd: `${cwd}/project`,
+      runtimeMode: "approval-required",
+    });
+    yield* adapter.sendTurn({ threadId, attachments: [image] });
+    yield* takeTurn(queue);
+    yield* adapter.sendTurn({ threadId, input: "Compare these", attachments: [image, file] });
+    yield* takeTurn(queue);
+    yield* adapter.sendTurn({ threadId, input: "Use the earlier image again" });
+    yield* takeTurn(queue);
+    const calls = (yield* fs.readFileString(`${cwd}/calls.jsonl`))
+      .trim()
+      .split("\n")
+      .map((line) => decodeCall(line));
+    assert.lengthOf(calls, 3);
+    assert.deepEqual(calls[0]!.attachments, [{ path: imagePath, bytes }]);
+    assert.deepEqual(calls[1]!.attachments, [
+      { path: imagePath, bytes },
+      { path: filePath, bytes: [...new TextEncoder().encode("notes")] },
+    ]);
+    assert.include(calls[1]!.prompt, "Compare these");
+    assert.include(calls[0]!.prompt, "use read_file");
+    assert.notInclude(calls[0]!.prompt, "undefined");
+    const projectPath = yield* fs.realPath(`${cwd}/project`);
+    for (const call of calls) {
+      assert.equal(call.cwd, projectPath);
+      assert.equal(call.args[call.args.indexOf("--add-dir") + 1], `${cwd}/attachments`);
+      assert.include(call.args, "dont-ask");
+      assert.notInclude(call.args, "--yolo");
+    }
+    assert.include(calls[2]!.args, "--resume");
+    assert.isTrue(yield* fs.exists(imagePath));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+for (const id of ["../outside", "thread-commandcode-12345678-1234-1234-1234-123456789abc"]) {
+  it.effect(`rejects an unavailable attachment before spawning: ${id}`, () =>
+    Effect.gen(function* () {
+      const { fs, cwd, make } = yield* setup;
+      const adapter = yield* make();
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const error = yield* adapter
+        .sendTurn({
+          threadId,
+          attachments: [
+            { type: "image", id, name: "missing.png", mimeType: "image/png", sizeBytes: 1 },
+          ],
+        })
+        .pipe(Effect.flip);
+      assert.equal(
+        error._tag,
+        id.startsWith("..") ? "ProviderAdapterValidationError" : "ProviderAdapterRequestError",
+      );
+      assert.isFalse(yield* fs.exists(`${cwd}/calls.jsonl`));
+      assert.equal((yield* adapter.listSessions())[0]?.status, "ready");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+}
 
 it.effect(
   "streams canonical events, resumes the exact session, and preserves agent instructions",

@@ -19,10 +19,14 @@ allows those actions without prompting. **Plan** mode remains read-only even
 with Full Access selected. Auto-accept edits follows the CLI's own headless
 permission rules; it does not enable interactive approvals.
 
-Follow-ups resume the exact Command Code session. Attachments, manual compaction,
+Attach images and files through the normal chat controls. T3 saves them on the
+environment running Command Code and gives the agent local paths to read. Image
+understanding depends on the selected model's vision support or Command Code's
+configured vision tool. Stored attachments remain available to follow-up turns.
+
+Follow-ups resume the exact Command Code session. Manual compaction,
 conversation rollback, and interactive question cards are not supported by this
-integration. Reference workspace file paths in your prompt instead of attaching
-files. Command Code reads its own configured skills and MCP servers; T3's
+integration. Command Code reads its own configured skills and MCP servers; T3's
 per-thread MCP tools are not injected into it.
 
 Command Code’s headless CLI has a model-request limit per turn. If it reaches that limit, the thread retains its output and native session; send a follow-up to continue. If the agent was repeatedly attempting an unavailable tool, address that limitation before continuing. T3 does not inject its per-thread MCP tools into Command Code, so PR URLs can be returned in chat without automatic thread linking.

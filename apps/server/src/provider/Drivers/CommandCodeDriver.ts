@@ -2,6 +2,7 @@ import { CommandCodeSettings, ProviderDriverKind, type ServerProvider } from "@t
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
@@ -49,6 +50,7 @@ export type CommandCodeDriverEnv =
   | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
+  | FileSystem.FileSystem
   | ServerConfig
   | ServerSettingsService;
 
@@ -190,6 +192,7 @@ export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeD
         instanceId: input.instanceId,
         environment,
         cwd: serverConfig.cwd,
+        attachmentsDir: serverConfig.attachmentsDir,
       });
       const textGeneration = yield* makeCommandCodeTextGeneration(config, environment);
       return {
