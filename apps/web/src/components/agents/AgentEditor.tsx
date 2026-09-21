@@ -1,9 +1,20 @@
+import { CheckIcon, ChevronDownIcon } from "lucide-react";
+import {
+  Combobox,
+  ComboboxTrigger,
+  ComboboxPopup,
+  ComboboxSearchInput,
+  ComboboxList,
+  ComboboxItem,
+  ComboboxEmpty,
+} from "../ui/combobox";
+import { selectTriggerVariants } from "../ui/select";
 import { agentModelOptions } from "./agentModelCatalog";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import type { AgentSkill, McpGatewayProfile, ServerProvider } from "@t3tools/contracts";
 import { MCP_GATEWAY_RUNTIME_MODE_LABELS } from "@t3tools/contracts";
 import { AgentIcon, agentColors, agentIcons } from "./AgentIcon";
-import { useState, type CSSProperties } from "react";
+import { useRef, useState, type CSSProperties } from "react";
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialog";
 import { randomUUID } from "../../lib/utils";
 
@@ -26,6 +37,7 @@ export function AgentEditor({
   onSave: (profile: McpGatewayProfile) => Promise<boolean | undefined>;
   onClose: () => void;
 }) {
+  const skillsTriggerRef = useRef<HTMLButtonElement>(null);
   const [skillIds, setSkillIds] = useState<ReadonlyArray<string>>(profile?.skillIds ?? []);
   const [systemPrompt, setSystemPrompt] = useState(profile?.systemPrompt ?? "");
   const [color, setColor] = useState(
@@ -212,24 +224,58 @@ export function AgentEditor({
                 Add reusable skills from the Agents board.
               </p>
             )}
-            <div className="agent-skills">
-              {skills.map((skill) => (
-                <label key={skill.skillId}>
-                  <input
-                    type="checkbox"
-                    checked={skillIds.includes(skill.skillId)}
-                    onChange={(event) =>
-                      setSkillIds(
-                        event.target.checked
-                          ? [...skillIds, skill.skillId]
-                          : skillIds.filter((id) => id !== skill.skillId),
-                      )
-                    }
-                  />
-                  {skill.name}
-                </label>
-              ))}
-            </div>
+            {skills.length > 0 && (
+              <Combobox
+                multiple
+                items={skills.map((skill) => skill.skillId)}
+                value={[...skillIds]}
+                onValueChange={setSkillIds}
+                itemToStringLabel={(id) => skills.find((skill) => skill.skillId === id)?.name ?? id}
+              >
+                <ComboboxTrigger
+                  ref={skillsTriggerRef}
+                  aria-label="Select skills"
+                  className={selectTriggerVariants({ className: "w-full" })}
+                >
+                  <span className="min-w-0 truncate">
+                    {skillIds.length === 0
+                      ? "Select skills…"
+                      : skillIds.length === 1
+                        ? (skills.find((skill) => skill.skillId === skillIds[0])?.name ??
+                          "1 skill selected")
+                        : `${skillIds.length} skills selected`}
+                  </span>
+                  <ChevronDownIcon className="size-4 shrink-0 opacity-50" />
+                </ComboboxTrigger>
+                <ComboboxPopup anchor={skillsTriggerRef} className="w-(--anchor-width)">
+                  <ComboboxSearchInput placeholder="Search skills…" aria-label="Search skills" />
+                  <ComboboxEmpty>No skills found.</ComboboxEmpty>
+                  <ComboboxList>
+                    {(id: string) => {
+                      const skill = skills.find((item) => item.skillId === id);
+                      return (
+                        <ComboboxItem key={id} value={id}>
+                          <div className="flex items-start gap-2">
+                            <CheckIcon
+                              aria-hidden
+                              className={`mt-0.5 size-4 shrink-0 ${skillIds.includes(id) ? "" : "invisible"}`}
+                            />
+                            <div className="min-w-0">
+                              <div className="break-words">{skill?.name ?? id}</div>
+                              {skill?.description && (
+                                <div className="text-xs text-muted-foreground line-clamp-2">
+                                  {skill.description}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </ComboboxItem>
+                      );
+                    }}
+                  </ComboboxList>
+                </ComboboxPopup>
+              </Combobox>
+            )}
           </fieldset>
           <div className="agent-form-grid">
             <label>
