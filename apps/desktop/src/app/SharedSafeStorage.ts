@@ -30,6 +30,34 @@ export const usesAgentsStorageCompatibility = () =>
 export const usesSharedEncryptionIdentity = () =>
   usesAgentsStorageCompatibility() && process.platform !== "win32";
 
+/** Detect UTF-8 loss after Linux's unauthenticated v11 CBC decryption.
+ * A wrong key can pass its padding check. Electron then replaces invalid UTF-8
+ * with U+FFFD instead of throwing, so the legacy identity never gets tried.
+ * v11 encryption is deterministic; genuine U+FFFD text round-trips unchanged.
+ */
+export function validateNativeDecryption(
+  ciphertext: Uint8Array,
+  plaintext: string,
+  platform: string,
+  encryptString: (value: string) => Uint8Array,
+): string {
+  const bytes = Buffer.from(ciphertext);
+  if (
+    platform === "linux" &&
+    bytes.subarray(0, 3).toString("ascii") === "v11" &&
+    plaintext.includes("\uFFFD") &&
+    !Buffer.from(encryptString(plaintext)).equals(bytes)
+  ) {
+    throw new Error("Native decryption returned invalid UTF-8");
+  }
+  return plaintext;
+}
+
+const validateDecryption = (bytes: Uint8Array, plaintext: string) =>
+  validateNativeDecryption(bytes, plaintext, process.platform, (text) =>
+    Electron.safeStorage.encryptString(text),
+  );
+
 /** Called synchronously from main, before Effect services can yield to Electron. */
 export function prepareSharedSafeStorage(): boolean {
   if (process.argv.includes(helperSwitch) && typeof process.send === "function") {
@@ -45,9 +73,12 @@ export function prepareSharedSafeStorage(): boolean {
         const bytes = Buffer.from(message, "base64");
         let value: string;
         try {
-          value = Electron.safeStorage.decryptString(bytes);
+          value = validateDecryption(bytes, Electron.safeStorage.decryptString(bytes));
         } catch {
-          value = (await Electron.safeStorage.decryptStringAsync(bytes)).result;
+          value = validateDecryption(
+            bytes,
+            (await Electron.safeStorage.decryptStringAsync(bytes)).result,
+          );
         }
         process.send?.({ value }, () => Electron.app.quit());
       } catch {
@@ -139,7 +170,7 @@ async function decryptLegacyAgentsStringUncached(value: Uint8Array): Promise<str
 
 export async function decryptSharedString(value: Uint8Array): Promise<string> {
   try {
-    return Electron.safeStorage.decryptString(Buffer.from(value));
+    return validateDecryption(value, Electron.safeStorage.decryptString(Buffer.from(value)));
   } catch (cause) {
     if (!usesAgentsStorageCompatibility()) throw cause;
     return decryptLegacyAgentsString(value);
