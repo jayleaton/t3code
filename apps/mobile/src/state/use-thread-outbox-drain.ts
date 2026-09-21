@@ -1,3 +1,4 @@
+import { supportsProviderTurnSteering } from "@t3tools/client-runtime/provider-turn-steering";
 import { useAtomValue } from "@effect/atom-react";
 import type {
   EnvironmentProject,
@@ -1084,18 +1085,27 @@ export function useThreadOutboxDrain(): void {
         (candidate) => candidate.environmentId === nextQueuedMessage.environmentId,
       );
       const shellStatus = shellStatuses.get(nextQueuedMessage.environmentId) ?? "empty";
+      const serverConfig = serverConfigs.get(nextQueuedMessage.environmentId);
+      const supportsSteering = (target: EnvironmentThreadShell | undefined) =>
+        supportsProviderTurnSteering(
+          serverConfig?.providers.find(
+            (provider) =>
+              provider.instanceId ===
+              (target?.session?.providerInstanceId ?? target?.modelSelection.instanceId),
+          )?.driver ?? target?.session?.providerName,
+        );
       const deliveryAction = resolveThreadOutboxDeliveryAction({
         isCreation: creation !== undefined,
         threadExists: thread !== undefined,
         shellStatus,
         environmentConnected: environment?.connectionState === "connected",
         threadBusy: thread?.session?.status === "running" || thread?.session?.status === "starting",
+        supportsTurnSteering: supportsSteering(thread),
       });
       // The delivery action resolves first; capability checks apply only to
       // a message that will send. Checking earlier would restore a
       // creation whose startTurn already made the thread as a duplicate draft
       // instead of removing it.
-      const serverConfig = serverConfigs.get(nextQueuedMessage.environmentId);
       const dispatchStep = resolveThreadOutboxDispatchStep({
         deliveryAction,
         fileAttachments: nextQueuedMessage.attachments.filter(
@@ -1203,6 +1213,7 @@ export function useThreadOutboxDrain(): void {
             shellStatus,
             environmentConnected: environment?.connectionState === "connected",
             threadBusy: liveThreadBusy,
+            supportsTurnSteering: supportsSteering(liveThread),
           });
           if (liveDeliveryAction !== "send") {
             return true;

@@ -7,6 +7,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildDocJson,
   collapsedToFlat,
+  ComposerCodeFormattingExtension,
   ComposerTaskItemExtension,
   flatToCollapsed,
   flatToMarkdown,
@@ -31,6 +32,7 @@ const schema = getSchemaByResolvedExtensions(
       blockquote: false,
       bulletList: false,
       codeBlock: false,
+      code: false,
       heading: false,
       horizontalRule: false,
       listItem: false,
@@ -57,6 +59,7 @@ const schema = getSchemaByResolvedExtensions(
       source: { default: "" },
     }),
     TaskList,
+    ComposerCodeFormattingExtension,
     ComposerTaskItemExtension,
   ]),
 );
@@ -64,6 +67,7 @@ const schema = getSchemaByResolvedExtensions(
 function roundTrip(value: string) {
   const json = buildDocJson(value, (name) => ({ label: name, description: null }));
   const doc = ProseMirrorNode.fromJSON(schema, json);
+  doc.check();
   return serializeEditorDoc(doc);
 }
 
@@ -118,6 +122,14 @@ function roundTripPlain(value: string) {
 }
 
 describe("composer rich text document model", () => {
+  it.each([
+    "**Keep `maxOutput` / `limit.output` at 8192 minimum.**",
+    "*Use `max_tokens` here.*",
+    "~~Remove `old_setting`.~~",
+    "***`nested`***",
+  ])("accepts pasted inline code nested inside formatting: %s", (value) => {
+    expect(roundTrip(value).value).toBe(value);
+  });
   it.each(["€", "£", "¥", "₹", "₩", "₿", "𑿝"])(
     "canonicalizes %s skill aliases while preserving amounts",
     (prefix) => {

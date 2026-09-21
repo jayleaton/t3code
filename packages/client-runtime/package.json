@@ -167,6 +167,10 @@
       "types": "./src/state/projects.ts",
       "default": "./src/state/projects.ts"
     },
+    "./provider-turn-steering": {
+      "types": "./src/providerTurnSteering.ts",
+      "default": "./src/providerTurnSteering.ts"
+    },
     "./state/provider-instance-display": {
       "types": "./src/state/providerInstanceDisplay.ts",
       "default": "./src/state/providerInstanceDisplay.ts"

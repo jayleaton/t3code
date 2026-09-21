@@ -128,6 +128,17 @@ describe("queued message dispatch timing", () => {
     );
   });
 
+  it("keeps a non-steerable provider queued across tool completions until the turn ends", () => {
+    const input = {
+      message: { queuedAfterToolActivityId: "a2" },
+      latestToolActivityId: "a4",
+      supportsTurnSteering: false,
+    };
+    expect(isQueuedMessageDue({ ...input, phase: "running" })).toBe(false);
+    expect(isQueuedMessageDue({ ...input, phase: "connecting" })).toBe(false);
+    expect(isQueuedMessageDue({ ...input, phase: "ready" })).toBe(true);
+  });
+
   it("never auto-sends a message held for user action", () => {
     const message = { queuedAfterToolActivityId: null, holdUntilUserAction: true };
     expect(isQueuedMessageDue({ message, phase: "ready", latestToolActivityId: "a4" })).toBe(false);

@@ -46,6 +46,7 @@ import {
   buildDocJson,
   buildTiptapContent,
   collapsedToFlat,
+  ComposerCodeFormattingExtension,
   ComposerTaskItemExtension,
   flatToCollapsed,
   flatToMarkdown,
@@ -745,6 +746,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
           blockquote: false,
           bulletList: false,
           codeBlock: false,
+          code: false,
           heading: false,
           horizontalRule: false,
           listItem: false,
@@ -755,7 +757,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
           gapcursor: false,
           trailingNode: false,
           // Plain mode has no marks: typed markers stay literal characters.
-          ...(richText ? {} : { bold: false, italic: false, strike: false, code: false }),
+          ...(richText ? {} : { bold: false, italic: false, strike: false }),
         }),
         ComposerMentionExtension,
         ComposerSkillExtension,
@@ -764,6 +766,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
         ComposerMarkersExtension,
         ...(richText
           ? [
+              ComposerCodeFormattingExtension,
               TaskList,
               ComposerTaskItemExtension.extend({
                 addInputRules() {

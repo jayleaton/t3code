@@ -1,4 +1,5 @@
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
+import { Code } from "@tiptap/extension-code";
 import { TaskItem } from "@tiptap/extension-task-item";
 
 import { splitPromptIntoComposerSegments } from "~/composer-editor-mentions";
@@ -23,6 +24,12 @@ import { collectInlineContextIds } from "~/lib/composerContextReferences";
  */
 
 export type SkillMeta = { label: string; description: string | null };
+
+// Markdown allows emphasis around inline code. StarterKit's code mark excludes
+// every other mark by default, so inserting these parsed spans would throw.
+export const ComposerCodeFormattingExtension = Code.extend({
+  excludes: "",
+});
 
 /** Outermost mark first, so closers mirror openers when nested. */
 const MARK_NESTING_ORDER: RichTextMark[] = ["strike", "bold", "italic", "code"];
