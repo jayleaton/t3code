@@ -17,6 +17,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -40,6 +41,8 @@ import {
   decodeCommandCodeFrame,
   type CommandCodeFrame,
 } from "../commandCodeProtocol.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { COMMAND_CODE_MCP_MOD } from "../commandCodeMcp.ts";
 import { spawnCommandCode } from "../commandCodeProcess.ts";
 import { collectStreamAsString } from "../providerSnapshot.ts";
 import { buildRuntimeInstructions, withAgentInstructions } from "../RuntimeInstructions.ts";
@@ -48,6 +51,17 @@ const PROVIDER = ProviderDriverKind.make("commandcode");
 const ResumeCursor = Schema.Struct({ sessionId: Schema.NonEmptyString });
 const decodeResume = Schema.decodeUnknownOption(ResumeCursor);
 const isRequestError = Schema.is(ProviderAdapterRequestError);
+const encodeMcpServers = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        url: Schema.String,
+        authorizationHeader: Schema.String,
+      }),
+    ),
+  ),
+);
 type EventInput = ProviderRuntimeEvent extends infer E
   ? E extends ProviderRuntimeEvent
     ? Omit<E, "eventId" | "provider" | "providerInstanceId" | "createdAt" | "threadId">
@@ -66,6 +80,7 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
   options: { instanceId: ProviderInstanceId; environment: NodeJS.ProcessEnv; cwd: string },
 ) {
   const crypto = yield* Crypto.Crypto;
+  const fileSystem = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const scope = yield* Effect.scope;
   const sessions = new Map<ThreadId, SessionContext>();
@@ -211,12 +226,13 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
           ...(model !== "default" ? ["--model", model] : []),
           ...(effort ? ["--effort", effort] : []),
         ];
+        const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
         const instructions = withAgentInstructions(
           buildRuntimeInstructions({
             harness: "Command Code",
             model,
             reasoningEffort: effort,
-            threadMcpTools: false,
+            threadMcpTools: mcpSession !== undefined,
           }),
           input.agentInstructions ?? context.instructions,
         );
@@ -229,6 +245,7 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
           updatedAt: yield* now,
         };
         let result: Extract<CommandCodeFrame, { type: "result" }> | undefined;
+        let mcpReady = mcpSession === undefined;
         let textStreamed = false;
         let hasSubagents = false;
         const pendingTools = new Map<string, string>();
@@ -289,7 +306,36 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
               return;
             }
             const event = frame.event;
+            if (event.type === "compaction_done") {
+              const tokensSaved = event.tokensSaved;
+              const totalTokensSaved = event.totalTokensSaved;
+              // Fast-mode trimming can finish without a start event; zero-yield
+              // summarization can start without a finish. Only report real savings.
+              if (
+                typeof tokensSaved === "number" &&
+                Number.isFinite(tokensSaved) &&
+                tokensSaved > 0
+              )
+                yield* emit(context, {
+                  type: "thread.state.changed",
+                  turnId,
+                  payload: {
+                    state: "compacted",
+                    detail: `Saved ${tokensSaved} tokens${typeof totalTokensSaved === "number" && Number.isFinite(totalTokensSaved) && totalTokensSaved >= tokensSaved ? ` (${totalTokensSaved} total this session)` : ""}.`,
+                  },
+                });
+            }
             if (event.type === "subagent_progress") hasSubagents = true;
+            if (event.type === "t3_mcp_ready") mcpReady = true;
+            if (event.type === "t3_mcp_error" || (event.type === "run_start" && !mcpReady))
+              return yield* new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "mcp",
+                detail:
+                  typeof event.message === "string"
+                    ? event.message
+                    : "Command Code did not load the T3 MCP tools. Update the CLI to a version supporting session mods (--mod).",
+              });
             if (event.type === "run_start" && typeof event.sessionId === "string")
               yield* captureSession(event.sessionId);
             if (
@@ -350,11 +396,25 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
             }
           });
         const run = Effect.gen(function* () {
+          let modArgs: string[] = [];
+          if (mcpSession) {
+            const directory = yield* fileSystem.makeTempDirectoryScoped({
+              prefix: "t3-commandcode-mcp-",
+            });
+            const modPath = `${directory}/t3-mcp.mjs`;
+            yield* fileSystem.writeFileString(modPath, COMMAND_CODE_MCP_MOD);
+            modArgs = ["--mod", modPath];
+          }
           const child = yield* spawnCommandCode({
             binaryPath: settings.binaryPath,
-            args,
+            args: [...args, ...modArgs],
             cwd: context.session.cwd ?? options.cwd,
-            environment: options.environment,
+            environment: {
+              ...McpProviderSession.withAgentDeviceEnvironment(options.environment, mcpSession),
+              T3_COMMANDCODE_MCP_SERVERS: encodeMcpServers(
+                McpProviderSession.mcpHttpServers(mcpSession),
+              ),
+            },
             prompt,
           });
           yield* emit(context, { type: "turn.started", turnId, payload: { model } });
