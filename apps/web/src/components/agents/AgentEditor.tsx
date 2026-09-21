@@ -1,15 +1,18 @@
 import { agentModelOptions } from "./agentModelCatalog";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
-import type { McpGatewayProfile, ServerProvider } from "@t3tools/contracts";
+import type { AgentSkill, McpGatewayProfile, ServerProvider } from "@t3tools/contracts";
 import { MCP_GATEWAY_RUNTIME_MODE_LABELS } from "@t3tools/contracts";
 import { AgentIcon, agentColors, agentIcons } from "./AgentIcon";
 import { useState, type CSSProperties } from "react";
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialog";
 import { randomUUID } from "../../lib/utils";
 
+const emptySkills: ReadonlyArray<AgentSkill> = [];
+
 export function AgentEditor({
   profile,
   profiles,
+  skills = emptySkills,
   providers,
   machines,
   onSave,
@@ -17,11 +20,13 @@ export function AgentEditor({
 }: {
   profile: McpGatewayProfile | null;
   profiles: ReadonlyArray<McpGatewayProfile>;
+  skills?: ReadonlyArray<AgentSkill>;
   providers: ReadonlyArray<ServerProvider & { readonly environmentId: string }>;
   machines: ReadonlyArray<{ environmentId: string; label: string }>;
   onSave: (profile: McpGatewayProfile) => Promise<boolean | undefined>;
   onClose: () => void;
 }) {
+  const [skillIds, setSkillIds] = useState<ReadonlyArray<string>>(profile?.skillIds ?? []);
   const [systemPrompt, setSystemPrompt] = useState(profile?.systemPrompt ?? "");
   const [color, setColor] = useState(
     profile?.color ??
@@ -97,6 +102,7 @@ export function AgentEditor({
                 name: name.trim(),
                 description: description.trim(),
                 systemPrompt,
+                skillIds,
                 color,
                 icon,
                 revision: profile?.revision ?? 1,
@@ -196,9 +202,35 @@ export function AgentEditor({
               placeholder="Describe this agent’s role, workflow, and expected output…"
             />
             <span className="text-xs text-muted-foreground">
-              Applied to new chats. Existing chats keep the instructions they started with.
+              Prompt and skill changes apply when this agent is next used, including existing chats.
             </span>
           </label>
+          <fieldset>
+            <legend>Skills</legend>
+            {skills.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                Add reusable skills from the Agents board.
+              </p>
+            )}
+            <div className="agent-skills">
+              {skills.map((skill) => (
+                <label key={skill.skillId}>
+                  <input
+                    type="checkbox"
+                    checked={skillIds.includes(skill.skillId)}
+                    onChange={(event) =>
+                      setSkillIds(
+                        event.target.checked
+                          ? [...skillIds, skill.skillId]
+                          : skillIds.filter((id) => id !== skill.skillId),
+                      )
+                    }
+                  />
+                  {skill.name}
+                </label>
+              ))}
+            </div>
+          </fieldset>
           <div className="agent-form-grid">
             <label>
               Provider
@@ -303,7 +335,7 @@ export function AgentEditor({
           </fieldset>
           {profile && (
             <p className="text-xs text-muted-foreground">
-              Changes apply to new threads. Existing threads keep their original model and
+              Existing threads receive updated prompts and skills but keep their original model and
               permissions.
             </p>
           )}

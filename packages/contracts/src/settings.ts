@@ -984,12 +984,26 @@ export const BackgroundActivitySettings = Schema.Struct({
 }).pipe(Schema.withDecodingDefault(Effect.succeed({})));
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
+/** Portable SKILL.md content, shared independently of an agent's assignments. */
+export const AgentSkill = Schema.Struct({
+  skillId: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+  description: Schema.String.check(Schema.isMaxLength(1024)),
+  content: TrimmedNonEmptyString.check(Schema.isMaxLength(64_000)),
+  revision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  createdAt: TrimmedNonEmptyString,
+  updatedAt: TrimmedNonEmptyString,
+});
+export type AgentSkill = typeof AgentSkill.Type;
+const AgentSkills = Schema.Array(AgentSkill).check(Schema.isMaxLength(200));
+
 export const McpGatewayProfile = Schema.Struct({
   description: Schema.optional(Schema.String.check(Schema.isMaxLength(280))),
   color: Schema.optional(Schema.String.check(Schema.isPattern(/^#[0-9a-fA-F]{6}$/))),
   icon: Schema.optional(
     Schema.Literals(["orb", "bot", "code", "pen", "search", "shield", "sparkles", "terminal"]),
   ),
+  skillIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   systemPrompt: Schema.optional(Schema.String.check(Schema.isMaxLength(32_000))),
   profileId: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
@@ -1288,6 +1302,10 @@ export const ServerSettings = Schema.Struct({
   ),
   addProjectBaseDirectory: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   mcpGatewayProfileDeletedAt: Schema.Record(Schema.String, Schema.String).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  agentSkills: AgentSkills.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  agentSkillDeletedAt: Schema.Record(Schema.String, Schema.String).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   mcpGatewayProfiles: McpGatewayProfiles.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
@@ -1593,6 +1611,8 @@ export const ServerSettingsPatch = Schema.Struct({
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   mcpGatewayProfileDeletedAt: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  agentSkills: Schema.optionalKey(AgentSkills),
+  agentSkillDeletedAt: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   mcpGatewayProfiles: Schema.optionalKey(McpGatewayProfiles),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   sourceControlWritingStyle: Schema.optionalKey(
@@ -1732,10 +1752,29 @@ export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;
 /** Reconcile portable agents by identity; deletion wins an equal timestamp. */
 export function mergeAgentLibraries(
   libraries: ReadonlyArray<{
+    readonly agentSkills?: ReadonlyArray<AgentSkill>;
+    readonly agentSkillDeletedAt?: Readonly<Record<string, string>>;
     readonly mcpGatewayProfiles: ReadonlyArray<McpGatewayProfile>;
     readonly mcpGatewayProfileDeletedAt?: Readonly<Record<string, string>>;
   }>,
 ) {
+  const skillDeleted: Record<string, string> = {};
+  const skills = new Map<string, AgentSkill>();
+  for (const library of libraries) {
+    for (const [id, at] of Object.entries(library.agentSkillDeletedAt ?? {})) {
+      if (at > (skillDeleted[id] ?? "")) skillDeleted[id] = at;
+    }
+    for (const skill of library.agentSkills ?? []) {
+      const previous = skills.get(skill.skillId);
+      if (
+        !previous ||
+        skill.updatedAt > previous.updatedAt ||
+        (skill.updatedAt === previous.updatedAt && JSON.stringify(skill) > JSON.stringify(previous))
+      ) {
+        skills.set(skill.skillId, skill);
+      }
+    }
+  }
   const deleted: Record<string, string> = {};
   const profiles = new Map<string, McpGatewayProfile>();
   for (const library of libraries) {
@@ -1748,7 +1787,9 @@ export function mergeAgentLibraries(
         !previous ||
         candidate.updatedAt > previous.updatedAt ||
         (candidate.updatedAt === previous.updatedAt &&
-          JSON.stringify(candidate) > JSON.stringify(previous))
+          ((candidate.skillIds !== undefined && previous.skillIds === undefined) ||
+            ((candidate.skillIds === undefined) === (previous.skillIds === undefined) &&
+              JSON.stringify(candidate) > JSON.stringify(previous))))
       )
         profiles.set(candidate.profileId, candidate);
     }
@@ -1768,9 +1809,29 @@ export function mergeAgentLibraries(
       (a, b) => a.createdAt.localeCompare(b.createdAt) || a.profileId.localeCompare(b.profileId),
     );
   return {
+    agentSkills: [...skills.values()]
+      .filter((skill) => skill.updatedAt > (skillDeleted[skill.skillId] ?? ""))
+      .sort((a, b) => a.skillId.localeCompare(b.skillId)),
+    agentSkillDeletedAt: Object.fromEntries(
+      Object.entries(skillDeleted).sort(([a], [b]) => a.localeCompare(b)),
+    ),
     mcpGatewayProfiles: result,
     mcpGatewayProfileDeletedAt: Object.fromEntries(
       Object.entries(deleted).sort(([a], [b]) => a.localeCompare(b)),
     ),
+  };
+}
+
+/** Older servers cannot retain skill content or assignments; compare only their supported fields. */
+export function agentLibraryForSync(
+  library: ReturnType<typeof mergeAgentLibraries>,
+  supportsSkills: boolean,
+) {
+  if (supportsSkills) return library;
+  return {
+    mcpGatewayProfiles: library.mcpGatewayProfiles.map(
+      ({ skillIds: _skillIds, ...profile }) => profile,
+    ),
+    mcpGatewayProfileDeletedAt: library.mcpGatewayProfileDeletedAt,
   };
 }

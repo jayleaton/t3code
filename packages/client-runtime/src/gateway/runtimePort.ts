@@ -1,3 +1,4 @@
+import { syncAgentLibraryBeforeUse } from "../operations/agentLibrary.ts";
 import { derivePendingRequests } from "../pendingRequests.ts";
 import { performAgentHandoff } from "./handoff.ts";
 import {
@@ -642,6 +643,7 @@ export function createGatewayRuntimePort(
         Effect.gen(function* () {
           const registry = yield* EnvironmentRegistry;
           const environmentId = EnvironmentId.make(rawEnvironmentId);
+          yield* registry.run(environmentId, syncAgentLibraryBeforeUse());
           const settings = yield* registry.run(
             environmentId,
             request(WS_METHODS.serverGetSettings, {}),
@@ -659,6 +661,13 @@ export function createGatewayRuntimePort(
     return operation;
   };
   const port: GatewayRuntimePort = {
+    syncAgentLibrary: (environmentId) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          yield* registry.run(EnvironmentId.make(environmentId), syncAgentLibraryBeforeUse());
+        }),
+      ),
     unsettleThread: (environmentId, threadId) =>
       run(
         Effect.gen(function* () {
@@ -691,6 +700,7 @@ export function createGatewayRuntimePort(
         }),
       ),
     handoffThread: async (input) => {
+      await port.syncAgentLibrary!(input.environmentId);
       const source = await run(shellSnapshot(EnvironmentId.make(input.sourceEnvironmentId)));
       const thread = source.threads.find((t) => t.id === input.sourceThreadId);
       const project = source.projects.find((p) => p.id === thread?.projectId);

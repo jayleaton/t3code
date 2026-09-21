@@ -56,6 +56,7 @@ const profileInput = z.object({
   icon: z
     .enum(["orb", "bot", "code", "pen", "search", "shield", "sparkles", "terminal"])
     .optional(),
+  skillIds: z.array(z.string().trim().min(1)).optional(),
   systemPrompt: z.string().max(32_000).optional(),
   reasoningEffort: z.string().trim().min(1).optional(),
   runtimeMode: z.enum([
@@ -1435,6 +1436,7 @@ export async function callGatewayTool(
         requestId: scopedIdFor("thread", environmentId, currentThreadId, idempotencyKey),
       };
       const buildRequest = async (identity: typeof currentIdentity) => {
+        await context.port.syncAgentLibrary?.(environmentId);
         const profiles = await authoritativeProfiles(context, environmentId);
         const profile =
           profileIdInput !== ""

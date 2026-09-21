@@ -391,6 +391,7 @@ export function applyServerSettingsPatch(
           ),
         }
       : {}),
+    ...(patch.agentSkills !== undefined ? { agentSkills: patch.agentSkills } : {}),
     ...(patch.mcpGatewayProfiles !== undefined
       ? { mcpGatewayProfiles: patch.mcpGatewayProfiles }
       : {}),

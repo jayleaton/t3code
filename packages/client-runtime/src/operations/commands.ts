@@ -1,3 +1,4 @@
+import { syncAgentLibraryBeforeUse } from "./agentLibrary.ts";
 import {
   CommandId,
   ORCHESTRATION_WS_METHODS,
@@ -91,7 +92,42 @@ function timestampedCommandMetadata(input: {
 }
 
 function dispatch(command: ClientOrchestrationCommand) {
-  return request(ORCHESTRATION_WS_METHODS.dispatchCommand, command);
+  return Effect.gen(function* () {
+    if (
+      (command.type === "thread.create" && command.profileSelection) ||
+      command.type === "thread.turn.start" ||
+      (command.type === "thread.lifecycle.control" &&
+        (command.action === "resume" || command.action === "retry" || command.action === "restart"))
+    ) {
+      const selection =
+        command.type === "thread.create"
+          ? command.profileSelection
+          : command.type === "thread.turn.start"
+            ? command.bootstrap?.createThread?.profileSelection
+            : undefined;
+      const library = yield* syncAgentLibraryBeforeUse(selection?.profileId);
+      const profile = library?.mcpGatewayProfiles.find(
+        (item) => item.profileId === selection?.profileId,
+      );
+      if (profile && selection) {
+        const profileSelection = { ...selection, revision: profile.revision };
+        if (command.type === "thread.create") command = { ...command, profileSelection };
+        else if (command.type === "thread.turn.start" && command.bootstrap?.createThread) {
+          command = {
+            ...command,
+            bootstrap: {
+              ...command.bootstrap,
+              createThread: {
+                ...command.bootstrap.createThread,
+                profileSelection,
+              },
+            },
+          };
+        }
+      }
+    }
+    return yield* request(ORCHESTRATION_WS_METHODS.dispatchCommand, command);
+  });
 }
 
 export const createProject: (input: CreateProjectInput) => CommandEffect = Effect.fn(

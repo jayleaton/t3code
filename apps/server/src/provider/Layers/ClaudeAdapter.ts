@@ -5572,6 +5572,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   return {
     provider: PROVIDER,
     capabilities: {
+      agentInstructionsAtSessionStart: true,
       sessionModelSwitch: "in-session",
     },
     compaction: { type: "slash-command", command: "/compact" },

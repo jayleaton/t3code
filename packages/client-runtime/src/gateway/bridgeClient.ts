@@ -38,6 +38,7 @@ const METHODS = new Set<keyof GatewayRuntimePort>([
   "updateProfile",
   "deleteProfile",
   "replicateProfiles",
+  "syncAgentLibrary",
   "listEnvironments",
   "getEnvironmentStatus",
   "listProfiles",

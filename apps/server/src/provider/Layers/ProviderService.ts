@@ -1,5 +1,5 @@
 import { activeGatewayAvailable } from "../../mcp/McpGatewayBroker.ts";
-import { syncAgentInstructionFile } from "../AgentInstructionFiles.ts";
+import { syncAgentInstructionFile, syncAgentSkillFiles } from "../AgentInstructionFiles.ts";
 /**
  * ProviderServiceLive - Cross-provider orchestration layer.
  *
@@ -489,7 +489,17 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       if (Option.isNone(projectionQuery)) return undefined;
       const thread = yield* projectionQuery.value.getThreadShellById(threadId);
       if (Option.isNone(thread)) return undefined;
-      const instructions = thread.value.profileSnapshot?.systemPrompt;
+      const settings = yield* serverSettings.getSettings;
+      const profileId = thread.value.profileSnapshot?.profileId;
+      const profile = settings.mcpGatewayProfiles.find(
+        (candidate) => candidate.profileId === profileId,
+      );
+      // Snapshots preserve creation choices; prompts and skills follow the live library.
+      let instructions = profile
+        ? (profile.systemPrompt ?? "")
+        : profileId && settings.mcpGatewayProfileDeletedAt[profileId]
+          ? ""
+          : thread.value.profileSnapshot?.systemPrompt;
       if (thread.value.profileSnapshot?.profileId && thread.value.settledAt === null) {
         const project = thread.value.worktreePath
           ? Option.none()
@@ -497,7 +507,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const cwd =
           thread.value.worktreePath ??
           (Option.isSome(project) ? project.value.workspaceRoot : undefined);
-        if (cwd)
+        if (cwd) {
+          const skills = settings.agentSkills.filter((skill) =>
+            profile?.skillIds?.includes(skill.skillId),
+          );
+          const skillInstructions = yield* syncAgentSkillFiles({ cwd, threadId, skills }).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+          );
+          instructions = [instructions, skillInstructions].filter(Boolean).join("\n\n");
           yield* syncAgentInstructionFile({
             cwd,
             threadId,
@@ -507,11 +525,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             Effect.provideService(FileSystem.FileSystem, fileSystem),
             Effect.provideService(Path.Path, path),
           );
+        }
       }
       return instructions;
     },
     Effect.catch((cause) => toValidationError("ProviderService.agentInstructions", String(cause))),
   );
+  const sessionInstructions = new Map<ThreadId, string | undefined>();
   const issueMcpCredential =
     options?.issueMcpCredential ?? McpSessionRegistry.issueActiveMcpCredential;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -990,7 +1010,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     });
   const clearMcpSession = (threadId: ThreadId) =>
     McpSessionRegistry.revokeActiveMcpThread(threadId).pipe(
-      Effect.tap(() => Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
+      Effect.tap(() =>
+        Effect.sync(() => {
+          sessionInstructions.delete(threadId);
+          McpProviderSession.clearMcpProviderSession(threadId);
+        }),
+      ),
     );
 
   const publishRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
@@ -1301,10 +1326,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
 
       yield* prepareMcpSession(input.binding.threadId, bindingInstanceId);
+      const agentInstructions = yield* resolveAgentInstructions(input.binding.threadId);
       const resumed = yield* adapter
         .startSession({
           threadId: input.binding.threadId,
-          agentInstructions: yield* resolveAgentInstructions(input.binding.threadId),
+          agentInstructions,
           provider: input.binding.provider,
           providerInstanceId: bindingInstanceId,
           ...(persistedCwd ? { cwd: persistedCwd } : {}),
@@ -1313,6 +1339,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           runtimeMode: input.binding.runtimeMode ?? "full-access",
         })
         .pipe(Effect.onError(() => clearMcpSession(input.binding.threadId)));
+      sessionInstructions.set(input.binding.threadId, agentInstructions);
       if (resumed.provider !== adapter.provider) {
         yield* clearMcpSession(input.binding.threadId);
         return yield* toValidationError(
@@ -1533,16 +1560,18 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
         yield* clearTurnAnalyticsSession(resolvedInstanceId, threadId);
         yield* prepareMcpSession(threadId, resolvedInstanceId);
+        const agentInstructions = yield* resolveAgentInstructions(threadId);
         const session = yield* adapter
           .startSession({
             ...input,
-            agentInstructions: yield* resolveAgentInstructions(threadId),
+            agentInstructions,
             providerInstanceId: resolvedInstanceId,
             ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
             ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
           })
           .pipe(Effect.onError(() => clearMcpSession(threadId)));
 
+        sessionInstructions.set(threadId, agentInstructions);
         if (session.provider !== adapter.provider) {
           yield* clearMcpSession(threadId);
           return yield* toValidationError(
@@ -1741,6 +1770,30 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           operation: "ProviderService.sendTurn",
           allowRecovery: true,
         });
+      }
+      if (
+        routed.adapter.capabilities.agentInstructionsAtSessionStart === true &&
+        sessionInstructions.get(input.threadId) !== agentInstructions
+      ) {
+        const sessions = yield* routed.adapter.listSessions();
+        const session = sessions.find((candidate) => candidate.threadId === input.threadId);
+        // A steer belongs to the running turn. Refresh startup-only providers between turns.
+        if (session && session.status !== "running") {
+          const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
+          const modelSelection =
+            input.modelSelection ?? readPersistedModelSelection(binding?.runtimePayload);
+          yield* startSession(input.threadId, {
+            threadId: input.threadId,
+            providerInstanceId: routed.instanceId,
+            runtimeMode: session.runtimeMode,
+            cwd: session.cwd,
+            ...(session.resumeCursor === undefined ? {} : { resumeCursor: session.resumeCursor }),
+            ...(modelSelection === undefined ? {} : { modelSelection }),
+            ...(input.interactionMode === undefined
+              ? {}
+              : { interactionMode: input.interactionMode }),
+          });
+        }
       }
       metricProvider = routed.adapter.provider;
       metricModel = input.modelSelection?.model;

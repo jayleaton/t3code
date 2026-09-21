@@ -261,6 +261,34 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("owns skill revisions and retains deletion tombstones across stale replicas", () =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      const skill = {
+        skillId: "review",
+        name: "Review",
+        description: "Review code",
+        content: "First",
+        revision: 4,
+        createdAt: "2026-01-01",
+        updatedAt: "2026-01-01",
+      };
+      const replicated = yield* settings.updateSettings({ agentSkills: [skill] }, true);
+      assert.deepEqual(replicated.agentSkills, [skill]);
+      const edited = yield* settings.updateSettings({
+        agentSkills: [{ ...skill, content: "Second" }],
+      });
+      assert.equal(edited.agentSkills[0]?.revision, 5);
+      assert.equal(edited.agentSkills[0]?.content, "Second");
+      const same = yield* settings.updateSettings({ agentSkills: edited.agentSkills });
+      assert.deepEqual(same.agentSkills, edited.agentSkills);
+      const deleted = yield* settings.updateSettings({ agentSkills: [] });
+      assert.isString(deleted.agentSkillDeletedAt.review);
+      const stale = yield* settings.updateSettings({ agentSkills: [skill] }, true);
+      assert.deepEqual(stale.agentSkills, []);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("rejects duplicate gateway profile names at the server boundary", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;

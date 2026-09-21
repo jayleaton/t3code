@@ -56,6 +56,7 @@ describe("runtime profile persistence", () => {
           session,
         } as unknown as EnvironmentSupervisor["Service"];
         const registry = {
+          entries: yield* SubscriptionRef.make(new Map()),
           run: <A, E>(_id: EnvironmentId, effect: Effect.Effect<A, E, EnvironmentSupervisor>) =>
             effect.pipe(Effect.provideService(EnvironmentSupervisor, supervisor)),
         } as unknown as EnvironmentRegistry["Service"];

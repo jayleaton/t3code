@@ -43,6 +43,8 @@ export type ProviderCompaction<TError> =
   | { readonly type: "slash-command"; readonly command: `/${string}` };
 
 export interface ProviderAdapterCapabilities {
+  /** Instructions are fixed at startup, so edits require resuming an idle session. */
+  readonly agentInstructionsAtSessionStart?: boolean;
   /**
    * Declares whether changing the model on an existing session is supported.
    */

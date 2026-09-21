@@ -931,7 +931,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
       return Effect.succeed(ctx);
     };
 
-    const stopSessionInternal = (ctx: GrokSessionContext) =>
+    const stopSessionInternal = (ctx: GrokSessionContext, emitExitEvent = true) =>
       Effect.gen(function* () {
         if (ctx.stopped) return;
         ctx.stopped = true;
@@ -942,6 +942,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         }
         yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
         sessions.delete(ctx.threadId);
+        if (!emitExitEvent) return;
         yield* offerRuntimeEvent({
           type: "session.exited",
           ...(yield* makeEventStamp()),
@@ -975,7 +976,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
           const existing = sessions.get(input.threadId);
           if (existing && !existing.stopped) {
-            yield* stopSessionInternal(existing);
+            yield* stopSessionInternal(existing, false);
           }
 
           const pendingApprovals = new Map<ApprovalRequestId, PendingApproval>();
@@ -2171,7 +2172,9 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
       });
 
     const stopAll: GrokAdapterShape["stopAll"] = () =>
-      Effect.forEach(Array.from(sessions.values()), stopSessionInternal, { discard: true });
+      Effect.forEach(Array.from(sessions.values()), (session) => stopSessionInternal(session), {
+        discard: true,
+      });
 
     yield* Effect.addFinalizer(() =>
       Effect.ignore(stopAll()).pipe(
@@ -2184,7 +2187,11 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
 
     return {
       provider: PROVIDER,
-      capabilities: { sessionModelSwitch: "in-session", supportsConversationRollback: false },
+      capabilities: {
+        agentInstructionsAtSessionStart: true,
+        sessionModelSwitch: "in-session",
+        supportsConversationRollback: false,
+      },
       compaction: { type: "slash-command", command: "/compact" },
       startSession,
       sendTurn,

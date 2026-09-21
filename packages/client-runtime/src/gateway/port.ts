@@ -65,6 +65,7 @@ export interface GatewayProfile {
     | "sparkles"
     | "terminal"
     | undefined;
+  readonly skillIds?: ReadonlyArray<string> | undefined;
   readonly systemPrompt?: string | undefined;
   readonly profileId?: string | undefined;
   readonly name: string;
@@ -98,6 +99,7 @@ export type GatewayProfileInput = Pick<
   | "providerLabel"
   | "modelLabel"
   | "reasoningEffort"
+  | "skillIds"
   | "systemPrompt"
   | "color"
   | "icon"
@@ -331,6 +333,7 @@ export interface GatewayRuntimePort {
     environmentId: string,
     profileId: string,
   ): Promise<{ profileId: string; status: "succeeded"; deletedAt?: string | undefined }>;
+  syncAgentLibrary?(environmentId: string): Promise<void>;
   replicateProfiles?(
     environmentId: string,
     profiles: ReadonlyArray<GatewayProfile>,

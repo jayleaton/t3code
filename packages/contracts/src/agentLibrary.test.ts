@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { mergeAgentLibraries, type McpGatewayProfile } from "./settings.ts";
+import { agentLibraryForSync, mergeAgentLibraries, type McpGatewayProfile } from "./settings.ts";
 const profile = (id: string, updatedAt: string, name = id): McpGatewayProfile => ({
   profileId: id,
   name,
@@ -43,4 +43,44 @@ describe("agent library convergence", () => {
     ]);
     expect(merged.mcpGatewayProfiles).toHaveLength(2);
   });
+});
+
+it("propagates reusable skill edits and deletions without changing agent assignments", () => {
+  const skill = {
+    skillId: "review",
+    name: "Review",
+    description: "Review code",
+    content: "Old rules",
+    revision: 1,
+    createdAt: "2026-01-01",
+    updatedAt: "2026-01-01",
+  };
+  const original = {
+    mcpGatewayProfiles: [{ ...profile("randy", "2026-01-01"), skillIds: ["review"] }],
+    agentSkills: [skill],
+  };
+  const edited = {
+    mcpGatewayProfiles: [],
+    agentSkills: [{ ...skill, revision: 2, content: "New rules", updatedAt: "2026-01-02" }],
+  };
+  const merged = mergeAgentLibraries([original, edited]);
+  expect(merged.agentSkills[0]?.content).toBe("New rules");
+  expect(merged.mcpGatewayProfiles[0]?.skillIds).toEqual(["review"]);
+  expect(mergeAgentLibraries([edited, original])).toEqual(merged);
+  const deleted = { mcpGatewayProfiles: [], agentSkillDeletedAt: { review: "2026-01-03" } };
+  expect(mergeAgentLibraries([merged, deleted, original]).agentSkills).toEqual([]);
+  expect(mergeAgentLibraries([deleted, merged, original]).agentSkills).toEqual([]);
+});
+
+it("keeps assignments when an older server echoes the same revision without skill support", () => {
+  const assigned = { ...profile("randy", "2026-01-01"), skillIds: ["review"] };
+  const library = mergeAgentLibraries([{ mcpGatewayProfiles: [assigned] }]);
+  const legacy = agentLibraryForSync(library, false);
+  expect(legacy.mcpGatewayProfiles[0]).not.toHaveProperty("skillIds");
+  expect(mergeAgentLibraries([legacy, library]).mcpGatewayProfiles[0]?.skillIds).toEqual([
+    "review",
+  ]);
+  expect(mergeAgentLibraries([library, legacy]).mcpGatewayProfiles[0]?.skillIds).toEqual([
+    "review",
+  ]);
 });

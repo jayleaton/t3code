@@ -27,6 +27,8 @@ const SHARED_SERVER_SETTING_KEYS = [
   "sidebarAutoSettleOnMerge",
   "newWorktreesStartFromOrigin",
   "sourceControlWritingStyle",
+  "agentSkills",
+  "agentSkillDeletedAt",
   "mcpGatewayProfiles",
   "mcpGatewayProfileDeletedAt",
   "textGenerationModelSelection",
@@ -59,11 +61,23 @@ export function splitSharedServerPatch(patch: ServerSettingsPatch): {
 /** Filter unsupported preferences; direct model writes retain the server's fallback behavior. */
 export function filterSharedServerPatch(
   patch: ServerSettingsPatch,
-  capabilities: Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation"> | undefined,
+  capabilities:
+    | Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation" | "agentSkillsSync">
+    | undefined,
   settings?: ServerSettings,
   sourceSettings = settings,
   targetIsSource = false,
 ): ServerSettingsPatch {
+  if (capabilities?.agentSkillsSync !== true) {
+    patch = Struct.omit(patch, ["agentSkills", "agentSkillDeletedAt"]);
+    if (patch.mcpGatewayProfiles)
+      patch = {
+        ...patch,
+        mcpGatewayProfiles: patch.mcpGatewayProfiles.map(
+          ({ skillIds: _skillIds, ...profile }) => profile,
+        ),
+      };
+  }
   const instanceId =
     patch.textGenerationModelSelection?.instanceId ??
     sourceSettings?.textGenerationModelSelection.instanceId;
@@ -89,7 +103,10 @@ export function filterSharedServerPatch(
 /** The shared subset supported by one environment. */
 export function pickSharedServerSettings(
   settings: ServerSettings,
-  capabilities?: Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation">,
+  capabilities?: Pick<
+    ExecutionEnvironmentCapabilities,
+    "threadRestartContinuation" | "agentSkillsSync"
+  >,
 ): ServerSettingsPatch {
   return filterSharedServerPatch(
     Struct.pick(settings, SHARED_SERVER_SETTING_KEYS),
@@ -122,7 +139,7 @@ export interface SharedSettingsEnvironment {
   readonly syncEligible: boolean;
   readonly settings: ServerSettings | null;
   readonly capabilities?:
-    | Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation">
+    | Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation" | "agentSkillsSync">
     | undefined;
 }
 
@@ -138,7 +155,7 @@ export function findSharedSettingsMismatches(input: {
   readonly primaryEnvironmentId: EnvironmentId | null;
   readonly primarySettings: ServerSettings | null;
   readonly primaryCapabilities?:
-    | Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation">
+    | Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation" | "agentSkillsSync">
     | undefined;
   readonly environments: ReadonlyArray<SharedSettingsEnvironment>;
 }): ReadonlyArray<{ readonly environmentId: EnvironmentId; readonly label: string }> {

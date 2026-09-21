@@ -379,8 +379,9 @@ export function createBridgeRuntimePort(input: {
         invoke("updateProfile", [environmentId, profileId, patch]),
       deleteProfile: (environmentId, profileId) =>
         invoke("deleteProfile", [environmentId, profileId]),
-      replicateProfiles: (environmentId, profiles) =>
-        invoke("replicateProfiles", [environmentId, profiles]),
+      syncAgentLibrary: (environmentId) => invoke("syncAgentLibrary", [environmentId]),
+      replicateProfiles: (environmentId, profiles, deletedAt) =>
+        invoke("replicateProfiles", [environmentId, profiles, deletedAt]),
       openThread: (environmentId, threadId) => invoke("openThread", [environmentId, threadId]),
       listEnvironments: () => invoke("listEnvironments", []),
       getEnvironmentStatus: (environmentId) => invoke("getEnvironmentStatus", [environmentId]),

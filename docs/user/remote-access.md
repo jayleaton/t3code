@@ -263,24 +263,32 @@ switch away; settled chats remain on the board under **Settled**.
 
 Agents are shared across clients connected to the same server. Updated clients also synchronize
 the agent library between connected environments that support agent sync, including after reconnecting. Each target resolves the provider and model locally; an unavailable or
-ambiguous selection must be re-selected before starting a thread. Agent changes apply only to
-new chats.
+ambiguous selection must be re-selected before starting a thread. Prompt and skill changes apply on the next turn, including in existing chats. Model and permission changes apply to new chats.
 
 Add a short **Specialization** when creating or editing an agent to show what it does beneath its name and in MCP. This description does not replace its instructions.
 
 MCP assistants can discover agents with read access using `t3_list_agents`, or manage them using `t3_create_agent`, `t3_update_agent`, and `t3_delete_agent` with create
 or admin access. Agent writes share only to connected environments with one of those grants;
-check the returned sync failures. Use `profileId` with `t3_create_thread` to snapshot an agent’s instructions and settings,
+check the returned sync failures. Use `profileId` with `t3_create_thread` to select an agent and its initial settings,
 then `t3_send_message` to start work, or `t3_create_and_start_thread` to create the chat and send its opening task in one idempotent call. The environment-local `/mcp/workspace` endpoint exposes `list_agents` and `get_agents_view` with the same profile and state filters, using runs from its hosting machine. Agent listings include specializations without exposing system prompts. Use `t3_get_agents_view` with an `environmentId` to list agents alongside their chats and run status. Filter by `profileId`, `state` (`active`, `settled`, or `all`; active is the default and includes completed chats that have not been settled), and `executionState` (`running`, `queued`, `waiting-approval`, `waiting-input`, `completed`, `failed`, `interrupted`, `stopped`, or `idle`). Chats belonging to deleted agents appear under `orphanedRuns`. To follow one chat without polling, use `t3_wait_for_thread_status`, which returns the new status and a resume cursor when it changes or the bounded timeout elapses. Use `t3_unsettle_thread`
 with lifecycle access to return a settled chat to the active list. `t3_open_agents` opens the
 board in the connected desktop window with read access.
 
-Each chat keeps the agent instructions it started with, including after the agent is edited or
-deleted. When work starts, T3 places that chat’s generated `AGENT.md` in its own directory under
-`.agents/t3/` in the workspace. This runtime directory is ignored by Git. Settling removes that
-generated file; continuing the conversation
-restores its original instructions. Other chats and project-owned instruction files are left
-alone. Edit the agent in the app to change instructions for future chats.
+Use **Skills** on the Agents board to create or edit reusable Markdown skills. Assign them in
+the agent editor. One shared library supplies every assigned agent, regardless of provider.
+Paste the skill’s `SKILL.md` content; this library currently stores Markdown instructions, not
+bundled scripts or binary assets. Deleting a skill removes it from all agents on their next use.
+
+Before using an agent, T3 synchronizes its library from environments available to the client.
+Keep both machines connected to a client at least once after an edit so the destination can
+receive it. Offline machines catch up when they reconnect; a disconnected source that this
+client has never seen cannot supply updates.
+
+Each chat has generated instructions and assigned skill files under `.agents/t3/` in its workspace.
+T3 refreshes these before use and clears them when the chat is settled. Continuing uses the
+current agent configuration. A running turn finishes with its existing startup instructions;
+providers that load instructions at startup resume with the updated configuration on the next
+turn. Deleting an agent keeps its chats but removes its managed instructions and skills on next use.
 
 Use the speed control on a chat card to choose a model-supported speed tier. The setting applies
 to the next provider request, including when changed during a running turn; it does not restart

@@ -18,7 +18,7 @@ import {
 const primaryId = EnvironmentId.make("env-primary");
 const laptopId = EnvironmentId.make("env-laptop");
 const boxId = EnvironmentId.make("env-box");
-const restartCapabilities = { threadRestartContinuation: true };
+const restartCapabilities = { threadRestartContinuation: true, agentSkillsSync: true };
 
 describe("supportsSharedSettingsSync", () => {
   it("accepts only connected servers that advertise the shared-settings capability", () => {
@@ -123,6 +123,8 @@ describe("pickSharedServerSettings", () => {
     expect(
       Object.keys(pickSharedServerSettings(DEFAULT_SERVER_SETTINGS, restartCapabilities)).sort(),
     ).toEqual([
+      "agentSkillDeletedAt",
+      "agentSkills",
       "continueThreadsAfterServerUpdate",
       "mcpGatewayProfileDeletedAt",
       "mcpGatewayProfiles",
