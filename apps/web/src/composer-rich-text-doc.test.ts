@@ -7,6 +7,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildDocJson,
   collapsedToFlat,
+  ComposerCodeExtension,
   ComposerTaskItemExtension,
   flatToCollapsed,
   flatToMarkdown,

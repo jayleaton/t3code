@@ -1,4 +1,4 @@
-import type { AgentSkill } from "@t3tools/contracts";
+import { AgentSkill, AgentSkillResources } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 // @effect-diagnostics nodeBuiltinImport:off -- FileSystem.remove uses rm; native rmdir is needed to refuse deletion if a directory becomes nonempty.
 import * as NodeFSP from "node:fs/promises";
@@ -6,6 +6,11 @@ import * as NodeCrypto from "node:crypto";
 import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+
+const decodeSkills = Schema.decodeUnknownEffect(Schema.Array(AgentSkill));
+const encodeBundle = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Struct({ content: Schema.String, resources: AgentSkillResources })),
+);
 
 const quote = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 
@@ -112,17 +117,64 @@ export const syncAgentSkillFiles = Effect.fn("syncAgentSkillFiles")(function* (i
   const root = agentInstructionRelativePath(input.threadId).replace(/AGENT\.md$/, "skills");
   const assigned = new Set<string>();
   const entries: string[] = [];
-  for (const skill of input.skills) {
+  const skills = yield* decodeSkills(input.skills);
+  for (const skill of skills) {
     const key = NodeCrypto.createHash("sha256").update(skill.skillId).digest("hex");
     assigned.add(key);
-    const relativePath = `${root}/${key}/SKILL.md`;
+    // Content-addressed directories keep old snapshots intact and prevent stale resources
+    // from appearing in a replacement bundle. Instructions remain a small lazy-load index.
+    const resources = [...(skill.resources ?? [])].sort((a, b) => a.path.localeCompare(b.path));
+    const digest = NodeCrypto.createHash("sha256")
+      .update(encodeBundle({ content: skill.content, resources }))
+      .digest("hex");
+    const bundlePath = `${root}/${key}/${digest}`;
+    const relativePath = `${bundlePath}/SKILL.md`;
     yield* syncManagedInstructionFile({
       ...input,
       instructions: skill.content,
       settled: false,
       relativePath,
     });
-    const digest = NodeCrypto.createHash("sha256").update(skill.content).digest("hex").slice(0, 16);
+    const realRoot = yield* fs.realPath(input.cwd);
+    for (const resource of resources) {
+      const segments = resource.path.split("/");
+      let directory = path.join(realRoot, bundlePath);
+      for (const segment of segments.slice(0, -1)) {
+        directory = path.join(directory, segment);
+        yield* fs.makeDirectory(directory, { recursive: true });
+        if ((yield* fs.realPath(directory)) !== directory)
+          return yield* new AgentInstructionFileError({
+            message: "Skill resource directories must not be symlinks.",
+          });
+      }
+      const file = path.join(directory, segments.at(-1)!);
+      const bytes = Buffer.from(resource.contentBase64, "base64");
+      // lstat also detects dangling symlinks, which exists/realPath alone cannot do.
+      const stat = yield* Effect.tryPromise(async () => {
+        try {
+          return await NodeFSP.lstat(file);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+          throw error;
+        }
+      });
+      if (stat && !stat.isFile())
+        return yield* new AgentInstructionFileError({
+          message: "Skill resources must be regular files, not symlinks or special files.",
+        });
+      if (stat) {
+        const previous = yield* fs.readFile(file);
+        if (!bytes.equals(previous))
+          return yield* new AgentInstructionFileError({
+            message:
+              "Refusing to replace a modified skill resource. Start a new thread or restore the file.",
+          });
+      } else {
+        yield* fs.writeFile(file, bytes, { flag: "wx", mode: resource.executable ? 0o700 : 0o600 });
+      }
+      const mode = resource.executable ? 0o700 : 0o600;
+      if (stat && (stat.mode & 0o777) !== mode) yield* fs.chmod(file, mode);
+    }
     entries.push(
       `- ${quote(skill.name)}: ${quote(skill.description)} (revision ${skill.revision}, updated ${skill.updatedAt}, content ${digest}, file: ${relativePath})`,
     );
@@ -145,5 +197,5 @@ export const syncAgentSkillFiles = Effect.fn("syncAgentSkillFiles")(function* (i
   }
   return entries.length === 0
     ? ""
-    : `# Assigned T3 skills\n\nRead the SKILL.md file for each relevant skill before using it. These are the current assignments; previous skill assignments are superseded.\n\n${entries.join("\n")}`;
+    : `# Assigned T3 skills\n\nRead the SKILL.md file for each relevant skill before using it. Resolve its relative references, scripts, and assets from that SKILL.md directory. These are the current assignments; previous skill assignments are superseded.\n\n${entries.join("\n")}`;
 });

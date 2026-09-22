@@ -1,3 +1,4 @@
+import { skillFields } from "./skillInput.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import * as NodeCrypto from "node:crypto";
@@ -80,23 +81,17 @@ const createThreadFields = {
 
 type ToolSpec = readonly [description: string, inputSchema: z.ZodRawShape];
 
-const skillFields = {
-  name: z.string().trim().min(1).max(200),
-  description: z.string().max(1024),
-  content: z.string().trim().min(1).max(64000),
-};
-
 const TOOL_SPECS = {
   t3_list_skills: [
-    "List the shared T3 skills library, including SKILL.md contents and revisions. Use skillId with t3_update_skill or assign skillIds using t3_update_agent.",
+    "List the shared T3 skills library, including SKILL.md contents, base64 resources, executable flags and revisions. Use skillId with t3_update_skill or assign skillIds using t3_update_agent.",
     { environmentId },
   ],
   t3_create_skill: [
-    "Create a reusable skill in the shared T3 Agents library. Supply a name, when-to-use description, and full SKILL.md Markdown content. Requires create or admin access. Assign the returned skillId to agents with t3_update_agent. Changes sync across connected machines and apply to newly created threads. Existing threads keep their starting skills.",
+    "Create a reusable skill in the shared T3 Agents library. Supply a name, when-to-use description, and full SKILL.md Markdown content. Optional resources contain relative path, contentBase64, and executable fields; include scripts, references and binary assets without inlining them. Limits: 256 files, 1 MiB per file, 2 MiB per skill. Requires create or admin access. Assign the returned skillId to agents with t3_update_agent. Changes sync across connected machines and apply to newly created threads. Existing threads keep their starting skills.",
     { environmentId, ...skillFields },
   ],
   t3_update_skill: [
-    "Update shared skill instructions by skillId. New threads for assigned agents receive the change. Existing threads keep their starting skills. Requires create or admin access.",
+    "Update a shared skill bundle by skillId. Omit resources to preserve files; supply resources to replace all files (an empty array removes them). New threads for assigned agents receive the change. Existing threads keep their starting skills. Requires create or admin access.",
     {
       environmentId,
       skillId: z.string().trim().min(1),

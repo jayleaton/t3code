@@ -756,7 +756,6 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
           dropcursor: false,
           gapcursor: false,
           trailingNode: false,
-          code: false,
           // Plain mode has no marks: typed markers stay literal characters.
           ...(richText ? {} : { bold: false, italic: false, strike: false }),
         }),

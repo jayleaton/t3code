@@ -25,6 +25,7 @@ export function useAgentLibrary() {
     [environments],
   );
   const target =
+    connected.find((env) => env.serverConfig?.environment.capabilities.agentSkillResources) ??
     connected.find(
       (env) =>
         env.environmentId === primary?.environmentId &&
@@ -40,6 +41,11 @@ export function useAgentLibrary() {
   const updateSettings = useCallback(
     async (patch: ServerSettingsPatch) => {
       if (!target) return false;
+      if (
+        library.agentSkills.some((skill) => skill.resources?.length) &&
+        target.serverConfig?.environment.capabilities.agentSkillResources !== true
+      )
+        throw new Error("Update T3 on this machine to edit skills with resources.");
       const synced = await replicate({
         environmentId: target.environmentId,
         input: {
@@ -83,6 +89,11 @@ export function AgentLibrarySync() {
       ),
     );
     for (const env of connected) {
+      if (
+        library.agentSkills.some((skill) => skill.resources?.length) &&
+        env.serverConfig!.environment.capabilities.agentSkillResources !== true
+      )
+        continue;
       const supportsSkills = env.serverConfig!.environment.capabilities.agentSkillsSync === true;
       const patch = agentLibraryForSync(library, supportsSkills);
       const serialized = JSON.stringify(patch);

@@ -71,6 +71,7 @@ export function AgentSkillsEditor({
               event.preventDefault();
               const now = new Date().toISOString();
               const skill: AgentSkill = {
+                ...selected,
                 skillId: selected?.skillId ?? randomUUID(),
                 name: name.trim(),
                 description: description.trim(),

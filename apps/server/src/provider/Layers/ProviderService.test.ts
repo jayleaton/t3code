@@ -5214,6 +5214,7 @@ for (const driverName of [
     name: "Review",
     description: "Review changes",
     content: "Original skill",
+    resources: [{ path: "scripts/check.sh", contentBase64: "IyEvYmluL3NoCg==", executable: true }],
     revision: 1,
     createdAt: "2026-01-01",
     updatedAt: "2026-01-01",
@@ -5310,6 +5311,13 @@ for (const driverName of [
           const relativePath = instructions.match(/file: ([^)]+)\)/)![1]!;
           const skillPath = NodePath.join(cwd, relativePath);
           assert.include(NodeFS.readFileSync(skillPath, "utf8"), "Original skill");
+          assert.equal(
+            NodeFS.readFileSync(
+              NodePath.join(NodePath.dirname(skillPath), "scripts/check.sh"),
+              "utf8",
+            ),
+            "#!/bin/sh\n",
+          );
           yield* settings.updateSettings({
             mcpGatewayProfiles: [{ ...profile, systemPrompt: "New review rules", skillIds: [] }],
             agentSkills: [{ ...skill, content: "Updated skill" }],
@@ -5321,6 +5329,13 @@ for (const driverName of [
             instructions,
           );
           assert.include(NodeFS.readFileSync(skillPath, "utf8"), "Original skill");
+          assert.equal(
+            NodeFS.readFileSync(
+              NodePath.join(NodePath.dirname(skillPath), "scripts/check.sh"),
+              "utf8",
+            ),
+            "#!/bin/sh\n",
+          );
           yield* settings.updateSettings({ agentSkills: [], mcpGatewayProfiles: [] });
           yield* service.sendTurn({ threadId, input: "Continue", modelSelection: selection });
           assert.equal(
@@ -5329,7 +5344,7 @@ for (const driverName of [
           );
           // Settlement removes generated files. Resume must recreate the saved versions.
           yield* service.stopSession({ threadId });
-          NodeFS.unlinkSync(skillPath);
+          NodeFS.rmSync(NodePath.dirname(skillPath), { recursive: true });
           yield* service.startSession(threadId, {
             ...start,
             resumeCursor: { opaque: `resume-${threadId}` },
@@ -5339,6 +5354,13 @@ for (const driverName of [
             instructions,
           );
           assert.include(NodeFS.readFileSync(skillPath, "utf8"), "Original skill");
+          assert.equal(
+            NodeFS.readFileSync(
+              NodePath.join(NodePath.dirname(skillPath), "scripts/check.sh"),
+              "utf8",
+            ),
+            "#!/bin/sh\n",
+          );
         }),
     );
   });

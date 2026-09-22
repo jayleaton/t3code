@@ -1,4 +1,4 @@
-import { AgentSkill } from "./agentSkills.ts";
+import { AgentSkill, MAX_SKILL_LIBRARY_BYTES, skillResourceBytes } from "./agentSkills.ts";
 export { AgentSkill } from "./agentSkills.ts";
 import { SshDeviceHostConfigs } from "./device.ts";
 import * as Effect from "effect/Effect";
@@ -988,7 +988,22 @@ export const BackgroundActivitySettings = Schema.Struct({
 }).pipe(Schema.withDecodingDefault(Effect.succeed({})));
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
-const AgentSkills = Schema.Array(AgentSkill).check(Schema.isMaxLength(200));
+const AgentSkills = Schema.Array(AgentSkill).check(
+  Schema.isMaxLength(200),
+  Schema.makeFilter(
+    (skills) =>
+      skills.reduce(
+        (total, skill) =>
+          total +
+          (skill.resources ?? []).reduce(
+            (size, file) => size + skillResourceBytes(file.contentBase64),
+            0,
+          ),
+        0,
+      ) <= MAX_SKILL_LIBRARY_BYTES,
+    { message: "Skill library resources exceed 8 MiB" },
+  ),
+);
 
 export const McpGatewayProfile = Schema.Struct({
   description: Schema.optional(Schema.String.check(Schema.isMaxLength(280))),

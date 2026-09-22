@@ -3101,6 +3101,7 @@ describe("shared skill tools", () => {
     name: "Review",
     description: "Review PRs",
     content: "# Review\nCheck correctness",
+    resources: [{ path: "assets/raw.bin", contentBase64: "AP+A/w==", executable: false }],
   };
   function skillPort() {
     const skill = {
@@ -3133,6 +3134,7 @@ describe("shared skill tools", () => {
       name: input.name,
       description: input.description,
       content: input.content,
+      resources: input.resources,
     });
     expect(port.syncAgentLibrary).toHaveBeenCalledWith("remote");
     expect(

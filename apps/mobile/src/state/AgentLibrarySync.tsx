@@ -23,6 +23,11 @@ export function AgentLibrarySync() {
       ),
     );
     for (const env of connected) {
+      if (
+        library.agentSkills.some((skill) => skill.resources?.length) &&
+        env.serverConfig!.environment.capabilities.agentSkillResources !== true
+      )
+        continue;
       const supportsSkills = env.serverConfig!.environment.capabilities.agentSkillsSync === true;
       const patch = agentLibraryForSync(library, supportsSkills);
       const serialized = JSON.stringify(patch);
