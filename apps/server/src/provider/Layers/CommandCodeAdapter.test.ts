@@ -9,6 +9,9 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import type * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import { ChildProcessSpawner } from "effect/unstable/process";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Queue from "effect/Queue";
@@ -230,27 +233,134 @@ it.effect(
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-it.effect("interrupts a running process, rejects overlapping turns, and allows the next turn", () =>
-  Effect.gen(function* () {
-    const { make } = yield* setup;
-    const adapter = yield* make();
-    const queue = yield* Stream.toQueue(adapter.streamEvents, { capacity: "unbounded" });
-    yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
-    const first = yield* adapter.sendTurn({ threadId, input: "hang" });
-    const overlapping = yield* adapter.sendTurn({ threadId, input: "overlap" }).pipe(Effect.flip);
-    assert.equal(overlapping._tag, "ProviderAdapterValidationError");
-    yield* adapter.interruptTurn(threadId, first.turnId);
-    const events = yield* takeTurn(queue);
-    assert.equal(events.at(-1)?.type, "turn.completed");
-    assert.include(
-      events.map((event) => (event.type === "turn.completed" ? event.payload.state : "")),
-      "interrupted",
-    );
-    yield* adapter.sendTurn({ threadId, input: "next" });
-    yield* takeTurn(queue);
-    yield* adapter.stopAll();
-    assert.deepEqual(yield* adapter.listSessions(), []);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+it.effect(
+  "queues concurrent follow-ups in order without blocking another Command Code thread",
+  () =>
+    Effect.gen(function* () {
+      const { fs, cwd, make } = yield* setup;
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const completing = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let calls = 0;
+      const adapter = yield* make().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, {
+          ...spawner,
+          spawn: (command) =>
+            spawner.spawn(command).pipe(
+              Effect.map((child) => {
+                if (++calls !== 1) return child;
+                return {
+                  ...child,
+                  stdout: child.stdout.pipe(
+                    Stream.decodeText(),
+                    Stream.splitLines,
+                    Stream.mapEffect((line) =>
+                      Effect.gen(function* () {
+                        if (line.includes('"type":"result"')) {
+                          yield* Deferred.succeed(completing, undefined);
+                          yield* Deferred.await(release);
+                        }
+                        return line + "\n";
+                      }),
+                    ),
+                    Stream.encodeText,
+                  ),
+                };
+              }),
+            ),
+        }),
+      );
+      const queue = yield* Stream.toQueue(adapter.streamEvents, { capacity: "unbounded" });
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const first = yield* adapter.sendTurn({ threadId, input: "first queued test" });
+      yield* Deferred.await(completing);
+      const second = yield* adapter
+        .sendTurn({ threadId, input: "second queued test" })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      const third = yield* adapter
+        .sendTurn({ threadId, input: "third queued test" })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      const otherId = ThreadId.make("other-commandcode-thread");
+      yield* adapter.startSession({ threadId: otherId, runtimeMode: "full-access" });
+      yield* adapter.sendTurn({ threadId: otherId, input: "independent" });
+      const otherEvents = yield* takeTurn(queue);
+      assert.equal(otherEvents.at(-1)?.threadId, otherId);
+      assert.equal(calls, 2);
+      yield* Deferred.succeed(release, undefined);
+      const secondTurn = yield* Fiber.join(second);
+      const thirdTurn = yield* Fiber.join(third);
+      assert.notEqual(secondTurn.turnId, first.turnId);
+      assert.notEqual(thirdTurn.turnId, secondTurn.turnId);
+      for (let i = 0; i < 3; i++) yield* takeTurn(queue);
+      const recorded = (yield* fs.readFileString(`${cwd}/calls.jsonl`))
+        .trim()
+        .split("\n")
+        .map((line) => decodeCall(line));
+      assert.deepEqual(
+        recorded.map((call) => call.prompt.split("\n").at(-1)),
+        ["first queued test", "independent", "second queued test", "third queued test"],
+      );
+      for (const call of recorded.slice(2)) assert.include(call.args, "--resume");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "interrupts a running process, cancels waiting follow-ups, and allows the next turn",
+  () =>
+    Effect.gen(function* () {
+      const { make } = yield* setup;
+      const adapter = yield* make();
+      const queue = yield* Stream.toQueue(adapter.streamEvents, { capacity: "unbounded" });
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const first = yield* adapter.sendTurn({ threadId, input: "hang" });
+      const overlapping = yield* adapter
+        .sendTurn({ threadId, input: "overlap" })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* adapter.interruptTurn(threadId, first.turnId);
+      const failure = yield* Fiber.join(overlapping).pipe(Effect.flip);
+      assert.equal(failure._tag, "ProviderAdapterValidationError");
+      assert.include(String(failure), "canceled");
+      const events = yield* takeTurn(queue);
+      assert.equal(events.at(-1)?.type, "turn.completed");
+      assert.include(
+        events.map((event) => (event.type === "turn.completed" ? event.payload.state : "")),
+        "interrupted",
+      );
+      yield* adapter.sendTurn({ threadId, input: "next" });
+      yield* takeTurn(queue);
+      yield* adapter.stopAll();
+      assert.deepEqual(yield* adapter.listSessions(), []);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "stopping a session cancels waiting messages instead of replaying them after restart",
+  () =>
+    Effect.gen(function* () {
+      const { fs, cwd, make } = yield* setup;
+      const adapter = yield* make();
+      const queue = yield* Stream.toQueue(adapter.streamEvents, { capacity: "unbounded" });
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      yield* adapter.sendTurn({ threadId, input: "hang" });
+      const waiting = yield* adapter
+        .sendTurn({ threadId, input: "must not run" })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* adapter.stopSession(threadId);
+      const failure = yield* Fiber.join(waiting).pipe(Effect.flip);
+      assert.equal(failure._tag, "ProviderAdapterSessionNotFoundError");
+      yield* takeTurn(queue);
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      yield* adapter.sendTurn({ threadId, input: "fresh" });
+      yield* takeTurn(queue);
+      const calls = (yield* fs.readFileString(`${cwd}/calls.jsonl`))
+        .trim()
+        .split("\n")
+        .map((line) => decodeCall(line));
+      assert.deepEqual(
+        calls.map((call) => call.prompt.split("\n").at(-1)),
+        ["hang", "fresh"],
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 for (const prompt of ["early-error", "bad-json", "limit"]) {
