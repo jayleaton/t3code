@@ -1,3 +1,4 @@
+import { EnvironmentRpcUnavailableError } from "../rpc/client.ts";
 import { AgentSkill, type ServerSettings, type ServerSettingsPatch } from "@t3tools/contracts";
 import { syncAgentLibraryBeforeUse } from "../operations/agentLibrary.ts";
 import { derivePendingRequests } from "../pendingRequests.ts";
@@ -638,12 +639,33 @@ export function createGatewayRuntimePort(
   const mutateLibrary = (
     rawEnvironmentId: string,
     mutate: (settings: ServerSettings) => ServerSettingsPatch,
+    requiresResources = false,
   ) => {
     const operation = profileQueue.then(() =>
       run(
         Effect.gen(function* () {
           const registry = yield* EnvironmentRegistry;
           const environmentId = EnvironmentId.make(rawEnvironmentId);
+          if (requiresResources) {
+            yield* registry.run(
+              environmentId,
+              Effect.gen(function* () {
+                const supervisor = yield* EnvironmentSupervisor;
+                const session = yield* SubscriptionRef.get(supervisor.session);
+                if (
+                  Option.isNone(session) ||
+                  !(yield* session.value.initialConfig).environment.capabilities.agentSkillResources
+                ) {
+                  return yield* Effect.fail(
+                    new EnvironmentRpcUnavailableError({
+                      environmentId,
+                      message: "Update T3 on this machine to import skill resources.",
+                    }),
+                  );
+                }
+              }),
+            );
+          }
           yield* registry.run(environmentId, syncAgentLibraryBeforeUse());
           const settings = yield* registry.run(
             environmentId,
@@ -691,21 +713,29 @@ export function createGatewayRuntimePort(
       );
       const now = await run(DateTime.now.pipe(Effect.map(DateTime.formatIso)));
       const skill = decodeSkill({ ...input, skillId, revision: 1, createdAt: now, updatedAt: now });
-      const settings = await mutateLibrary(environmentId, (current) => ({
-        agentSkills: [...current.agentSkills, skill],
-      }));
+      const settings = await mutateLibrary(
+        environmentId,
+        (current) => ({
+          agentSkills: [...current.agentSkills, skill],
+        }),
+        !!input.resources?.length,
+      );
       return settings.agentSkills.find((item) => item.skillId === skillId)!;
     },
     updateSkill: async (environmentId, skillId, patch) => {
-      const settings = await mutateLibrary(environmentId, (current) => {
-        if (!current.agentSkills.some((skill) => skill.skillId === skillId))
-          throw new Error(`Skill ${skillId} was not found.`);
-        return {
-          agentSkills: current.agentSkills.map((skill) =>
-            skill.skillId === skillId ? decodeSkill({ ...skill, ...patch }) : skill,
-          ),
-        };
-      });
+      const settings = await mutateLibrary(
+        environmentId,
+        (current) => {
+          if (!current.agentSkills.some((skill) => skill.skillId === skillId))
+            throw new Error(`Skill ${skillId} was not found.`);
+          return {
+            agentSkills: current.agentSkills.map((skill) =>
+              skill.skillId === skillId ? decodeSkill({ ...skill, ...patch }) : skill,
+            ),
+          };
+        },
+        patch.resources !== undefined,
+      );
       return settings.agentSkills.find((skill) => skill.skillId === skillId)!;
     },
     deleteSkill: async (environmentId, skillId) => {

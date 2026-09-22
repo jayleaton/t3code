@@ -148,6 +148,7 @@ describe("canonicalizeClientCommandTimestamps", () => {
       name: "Review",
       description: "Review changes",
       content: "Original skill",
+      resources: [{ path: "scripts/check.sh", contentBase64: "b2s=", executable: true }],
       revision: 1,
       createdAt: serverReceivedAt,
       updatedAt: serverReceivedAt,
@@ -158,7 +159,12 @@ describe("canonicalizeClientCommandTimestamps", () => {
       [],
       [skill, { ...skill, skillId: "unassigned" }],
     );
-    const updatedSkill = { ...skill, revision: 2, content: "Updated skill" };
+    const updatedSkill = {
+      ...skill,
+      revision: 2,
+      content: "Updated skill",
+      resources: [{ path: "assets/new.bin", contentBase64: "AP+A/w==" }],
+    };
     const second = resolveThreadCreateProfile(
       { profileSelection: { ...command.profileSelection, revision: 2 } },
       [{ ...profile, revision: 2, systemPrompt: "Updated prompt" }],

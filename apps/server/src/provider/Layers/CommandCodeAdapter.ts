@@ -74,6 +74,8 @@ interface SessionContext {
   instructions: string | undefined;
   nativeId: string | undefined;
   fiber: Fiber.Fiber<void> | undefined;
+  readonly sendGate: Semaphore.Semaphore;
+  interruptEpoch: number;
   turns: ProviderThreadTurnSnapshot[];
 }
 
@@ -130,6 +132,7 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
     Effect.gen(function* () {
       const context = yield* getSession(threadId);
       if (turnId && context.session.activeTurnId !== turnId) return;
+      context.interruptEpoch++;
       if (context.fiber) yield* Fiber.interrupt(context.fiber);
     });
   const stopSession = (threadId: ThreadId) =>
@@ -178,6 +181,8 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
           instructions: input.agentInstructions,
           nativeId,
           fiber: undefined,
+          sendGate: yield* Semaphore.make(1),
+          interruptEpoch: 0,
           turns: [],
         };
         sessions.set(input.threadId, context);
@@ -190,16 +195,34 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
       }),
     );
 
-  const sendTurn: ProviderAdapterShape<ProviderAdapterError>["sendTurn"] = (input) =>
-    gate.withPermits(1)(
+  // Headless Command Code cannot steer. Serialize admission per session, then
+  // wait for the preceding process and its terminal events before resuming it.
+  const withIdleSession = Effect.fn("CommandCodeAdapter.withIdleSession")(function* <A, E, R>(
+    threadId: ThreadId,
+    use: (context: SessionContext) => Effect.Effect<A, E, R>,
+  ) {
+    const context = yield* getSession(threadId);
+    const interruptEpoch = context.interruptEpoch;
+    return yield* context.sendGate.withPermits(1)(
       Effect.gen(function* () {
-        const context = yield* getSession(input.threadId);
-        if (context.fiber)
+        if (context.fiber) yield* Fiber.await(context.fiber);
+        if (sessions.get(threadId) !== context)
+          return yield* new ProviderAdapterSessionNotFoundError({ provider: PROVIDER, threadId });
+        if (context.interruptEpoch !== interruptEpoch)
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "sendTurn",
-            issue: "A Command Code turn is already running.",
+            issue:
+              "Queued Command Code message was canceled by an interruption. Send it again to continue.",
           });
+        return yield* use(context);
+      }),
+    );
+  });
+
+  const sendTurn: ProviderAdapterShape<ProviderAdapterError>["sendTurn"] = (input) =>
+    withIdleSession(input.threadId, (context) =>
+      Effect.gen(function* () {
         if (!input.input?.trim() && !input.attachments?.length)
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
@@ -516,7 +539,6 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
                 ...(errorMessage ? { lastError: errorMessage } : { lastError: undefined }),
               };
               yield* emit(context, { type: "session.state.changed", payload: { state: "ready" } });
-              context.fiber = undefined;
               yield* emit(context, {
                 type: "turn.completed",
                 turnId,
@@ -528,6 +550,7 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
                   ...(result?.stopReason ? { stopReason: result.stopReason } : {}),
                 },
               });
+              context.fiber = undefined;
             }),
           ),
           Effect.ignoreCause({ log: false }),

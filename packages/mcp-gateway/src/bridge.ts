@@ -128,7 +128,7 @@ export function createBridgeRuntimePort(input: {
   const server = new WebSocketServer({
     host: input.host ?? "127.0.0.1",
     port: input.port,
-    maxPayload: 1024 * 1024,
+    maxPayload: 32 * 1024 * 1024,
   });
   let startupStatus: GatewayBridgeStartupResult | { readonly status: "starting" } = {
     status: "starting",

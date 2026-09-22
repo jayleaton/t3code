@@ -55,6 +55,15 @@ export const syncAgentLibraryBeforeUse = Effect.fn("syncAgentLibraryBeforeUse")(
           : [],
       ),
     ]);
+    if (
+      library.agentSkills.some((skill) => skill.resources?.length) &&
+      target.environment.capabilities.agentSkillResources !== true
+    ) {
+      return yield* new EnvironmentRpcUnavailableError({
+        environmentId,
+        message: "Update T3 on this machine to synchronize skill resources.",
+      });
+    }
     const supportsSkills = target.environment.capabilities.agentSkillsSync === true;
     if (
       !supportsSkills &&

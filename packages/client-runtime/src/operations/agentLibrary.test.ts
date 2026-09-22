@@ -63,7 +63,15 @@ it.effect(
         mcpGatewayProfiles: [
           { ...profile, systemPrompt: "New rules", revision: 2, updatedAt: "2026-01-02" },
         ],
-        agentSkills: [{ ...skill, content: "New skill", revision: 2, updatedAt: "2026-01-02" }],
+        agentSkills: [
+          {
+            ...skill,
+            content: "New skill",
+            resources: [{ path: "references/nested/rules.md", contentBase64: "b2s=" }],
+            revision: 2,
+            updatedAt: "2026-01-02",
+          },
+        ],
       };
       let writes = 0;
       const dispatched: ClientOrchestrationCommand[] = [];
@@ -80,6 +88,9 @@ it.effect(
               dispatched.push(command);
               expect(local.mcpGatewayProfiles[0]?.systemPrompt).toBe("New rules");
               expect(local.agentSkills[0]?.content).toBe("New skill");
+              expect(local.agentSkills[0]?.resources).toEqual([
+                { path: "references/nested/rules.md", contentBase64: "b2s=" },
+              ]);
               return { sequence: 1 };
             }),
           [WS_METHODS.serverGetSettings]: () =>
@@ -109,7 +120,13 @@ it.effect(
             Option.some({
               client,
               initialConfig: Effect.succeed({
-                environment: { capabilities: { agentLibrarySync: true, agentSkillsSync: true } },
+                environment: {
+                  capabilities: {
+                    agentLibrarySync: true,
+                    agentSkillsSync: true,
+                    agentSkillResources: true,
+                  },
+                },
               } as ServerConfig),
               subscribeServerConfig: (input) => client.subscribeServerConfig(input),
               ready: Effect.void,
@@ -190,6 +207,9 @@ it.effect(
       });
       expect(local.mcpGatewayProfiles[0]?.systemPrompt).toBe("New rules");
       expect(local.agentSkills[0]?.content).toBe("New skill");
+      expect(local.agentSkills[0]?.resources).toEqual([
+        { path: "references/nested/rules.md", contentBase64: "b2s=" },
+      ]);
       expect(writes).toBe(1);
       yield* sync;
       expect(writes).toBe(1);

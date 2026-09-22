@@ -397,7 +397,18 @@ function withServerOwnedMcpGatewayProfiles(
   }
   const skills = patch.agentSkills?.map((candidate) => {
     const existing = current.agentSkills.find((skill) => skill.skillId === candidate.skillId);
-    const { revision: _revision, createdAt: _created, updatedAt: _updated, ...content } = candidate;
+    const {
+      revision: _revision,
+      createdAt: _created,
+      updatedAt: _updated,
+      ...rawContent
+    } = candidate;
+    const content = {
+      ...rawContent,
+      ...(candidate.resources === undefined && existing?.resources !== undefined
+        ? { resources: existing.resources }
+        : {}),
+    };
     if (existing) {
       const { revision: _r, createdAt: _c, updatedAt: _u, ...previous } = existing;
       if (Equal.equals(content, previous)) return existing;

@@ -280,8 +280,20 @@ The MCP can list skills with read access and create, update, or delete them with
 access. One shared library supplies every assigned agent, regardless of provider.
 
 For manual editing, open **Skills** on the Agents board and expand **Create or edit manually**.
-Assign skills in the agent editor. Skills currently store `SKILL.md` instructions, not bundled
-scripts or binary assets. Deleting a skill excludes it from new chats; existing chats retain their saved copy.
+Assign skills in the agent editor. Skills can include references, scripts, and binary assets beside
+`SKILL.md`. When importing through MCP, include a `resources` list with each file's relative `path`,
+base64-encoded `contentBase64`, and optional `executable` flag. Nested paths stay relative to the
+skill folder; references are read only when needed. Each skill supports up to 256 files, 1 MiB per
+file and 2 MiB of resources; the shared library supports 8 MiB of resources. On update, omitting
+`resources` preserves the files, while supplying a list replaces them (`[]` removes them).
+
+Update the T3 gateway, clients, and connected environments before using resource bundles. Older
+environments cannot synchronize them. New chats receive the updated bundle; existing chats retain
+their starting copy, including files. Deleting a skill excludes it from new chats.
+
+To migrate previously imported skills that still refer to local folders, use the supported
+[resource import utility](../operations/skill-resource-import.md). It verifies uploaded resources
+before removing the local-folder workaround and preserves skill IDs and agent assignments.
 
 Before creating an agent chat, T3 synchronizes its library from environments available to the client.
 Keep both machines connected to a client at least once after an edit so the destination can

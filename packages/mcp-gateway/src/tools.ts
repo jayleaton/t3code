@@ -1,3 +1,4 @@
+import { skillFields } from "./skillInput.ts";
 import { z } from "zod";
 import * as NodeCrypto from "node:crypto";
 
@@ -70,11 +71,7 @@ const profileInput = z.object({
   environmentIds: z.array(z.string().trim().min(1)).optional(),
 });
 
-const skillInput = z.object({
-  name: z.string().trim().min(1).max(200),
-  description: z.string().max(1024),
-  content: z.string().trim().min(1).max(64000),
-});
+const skillInput = z.object(skillFields);
 
 async function shareSkills(context: GatewayToolContext, sourceId: string) {
   const failedEnvironmentIds: string[] = [];

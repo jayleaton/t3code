@@ -319,7 +319,7 @@ export function parseGatewayStatusSnapshot(value: unknown): GatewayStatusSnapsho
   return value as GatewayStatusSnapshot;
 }
 
-export type GatewaySkillInput = Pick<AgentSkill, "name" | "description" | "content">;
+export type GatewaySkillInput = Pick<AgentSkill, "name" | "description" | "content" | "resources">;
 
 export interface GatewayRuntimePort {
   listSkills?(environmentId: string): Promise<ReadonlyArray<AgentSkill>>;

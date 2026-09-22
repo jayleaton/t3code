@@ -20,8 +20,12 @@ describe("runtime profile persistence", () => {
       Effect.gen(function* () {
         let settings: ServerSettings = DEFAULT_SERVER_SETTINGS;
         const writes: unknown[] = [];
+        let resourcesSupported = true;
         const session = yield* SubscriptionRef.make(
           Option.some({
+            initialConfig: Effect.sync(() => ({
+              environment: { capabilities: { agentSkillResources: resourcesSupported } },
+            })),
             client: {
               [WS_METHODS.serverGetSettings]: () => Effect.succeed(settings),
               [WS_METHODS.serverUpdateSettings]: (input: {
@@ -106,6 +110,7 @@ describe("runtime profile persistence", () => {
           name: "Review",
           description: "Review PRs",
           content: "# Review\nCheck correctness",
+          resources: [{ path: "scripts/check.sh", contentBase64: "b2s=", executable: true }],
         };
         const skills = yield* Effect.promise(() =>
           Promise.all([
@@ -120,6 +125,19 @@ describe("runtime profile persistence", () => {
         );
         expect(revised.content).toContain("regressions");
         expect(revised.skillId).toBe(skillId);
+        expect(revised.resources).toEqual(skillInput.resources);
+        const cleared = yield* Effect.promise(() =>
+          port.updateSkill!("local", skillId, { resources: [] }),
+        );
+        expect(cleared.resources).toEqual([]);
+        resourcesSupported = false;
+        yield* Effect.promise(() =>
+          expect(
+            port.updateSkill!("local", skillId, { resources: skillInput.resources }),
+          ).rejects.toThrow("Update T3"),
+        );
+        expect(settings.agentSkills[0]?.resources).toEqual([]);
+        resourcesSupported = true;
         expect(
           (yield* Effect.promise(() => port.listSkills!("local"))).map((skill) => skill.name),
         ).toEqual(["Review", "Tests"]);

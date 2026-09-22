@@ -25,12 +25,6 @@ import { collectInlineContextIds } from "~/lib/composerContextReferences";
 
 export type SkillMeta = { label: string; description: string | null };
 
-// Markdown allows emphasis around inline code. StarterKit's code mark excludes
-// every other mark by default, so inserting these parsed spans would throw.
-export const ComposerCodeFormattingExtension = Code.extend({
-  excludes: "",
-});
-
 /** Outermost mark first, so closers mirror openers when nested. */
 const MARK_NESTING_ORDER: RichTextMark[] = ["strike", "bold", "italic", "code"];
 
@@ -47,6 +41,13 @@ const TIPTAP_TO_MARK: Record<string, RichTextMark> = {
   strike: "strike",
   code: "code",
 };
+
+/**
+ * Tiptap's code mark excludes every other mark, which rejects the `bold+code`
+ * spans markdown like `**\`x\`**` parses into and drops the whole insert.
+ * Code nests inside emphasis here, so it only excludes itself like the rest.
+ */
+export const ComposerCodeExtension = Code.extend({ excludes: "code" });
 
 /**
  * Task list items keep their exact source indent in an attribute so nesting

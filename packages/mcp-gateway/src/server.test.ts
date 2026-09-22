@@ -170,11 +170,18 @@ describe("MCP gateway server", () => {
         name: "Review",
         description: "Review PRs",
         content: "# Review\nCheck correctness",
+        resources: [{ path: "assets/raw.bin", contentBase64: "AP+A/w==", executable: false }],
       },
     });
     expect(createdSkill.isError).not.toBe(true);
     expect(createdSkill.structuredContent).toMatchObject({
-      data: { skill: { skillId: "review", content: "# Review\nCheck correctness" } },
+      data: {
+        skill: {
+          skillId: "review",
+          content: "# Review\nCheck correctness",
+          resources: [{ path: "assets/raw.bin", contentBase64: "AP+A/w==", executable: false }],
+        },
+      },
     });
     const assigned = await client.callTool({
       name: "t3_update_agent",

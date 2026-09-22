@@ -62,7 +62,10 @@ export function splitSharedServerPatch(patch: ServerSettingsPatch): {
 export function filterSharedServerPatch(
   patch: ServerSettingsPatch,
   capabilities:
-    | Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation" | "agentSkillsSync">
+    | Pick<
+        ExecutionEnvironmentCapabilities,
+        "threadRestartContinuation" | "agentSkillsSync" | "agentSkillResources"
+      >
     | undefined,
   settings?: ServerSettings,
   sourceSettings = settings,
@@ -77,6 +80,12 @@ export function filterSharedServerPatch(
           ({ skillIds: _skillIds, ...profile }) => profile,
         ),
       };
+  }
+  if (
+    capabilities?.agentSkillResources !== true &&
+    patch.agentSkills?.some((skill) => skill.resources?.length)
+  ) {
+    patch = Struct.omit(patch, ["agentSkills", "agentSkillDeletedAt"]);
   }
   const instanceId =
     patch.textGenerationModelSelection?.instanceId ??
@@ -105,7 +114,7 @@ export function pickSharedServerSettings(
   settings: ServerSettings,
   capabilities?: Pick<
     ExecutionEnvironmentCapabilities,
-    "threadRestartContinuation" | "agentSkillsSync"
+    "threadRestartContinuation" | "agentSkillsSync" | "agentSkillResources"
   >,
 ): ServerSettingsPatch {
   return filterSharedServerPatch(
@@ -139,7 +148,10 @@ export interface SharedSettingsEnvironment {
   readonly syncEligible: boolean;
   readonly settings: ServerSettings | null;
   readonly capabilities?:
-    | Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation" | "agentSkillsSync">
+    | Pick<
+        ExecutionEnvironmentCapabilities,
+        "threadRestartContinuation" | "agentSkillsSync" | "agentSkillResources"
+      >
     | undefined;
 }
 
@@ -155,7 +167,10 @@ export function findSharedSettingsMismatches(input: {
   readonly primaryEnvironmentId: EnvironmentId | null;
   readonly primarySettings: ServerSettings | null;
   readonly primaryCapabilities?:
-    | Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation" | "agentSkillsSync">
+    | Pick<
+        ExecutionEnvironmentCapabilities,
+        "threadRestartContinuation" | "agentSkillsSync" | "agentSkillResources"
+      >
     | undefined;
   readonly environments: ReadonlyArray<SharedSettingsEnvironment>;
 }): ReadonlyArray<{ readonly environmentId: EnvironmentId; readonly label: string }> {

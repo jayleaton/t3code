@@ -104,6 +104,36 @@ describe("gateway bridge", () => {
     await bridge.close();
   });
 
+  it("transports skill bundles larger than the old 1 MiB bridge limit", async () => {
+    const port = await unusedPort();
+    const bridge = createBridgeRuntimePort({ port, token: TOKEN });
+    await bridge.ready;
+    const skill = {
+      skillId: "large",
+      name: "Large",
+      description: "Binary",
+      content: "Read assets/raw.bin",
+      revision: 1,
+      createdAt: "now",
+      updatedAt: "now",
+      resources: [
+        { path: "assets/raw.bin", contentBase64: Buffer.alloc(900_000, 255).toString("base64") },
+      ],
+    };
+    const client = new WebSocket(`ws://127.0.0.1:${port}`);
+    const authenticated = authenticate(client, (message) => {
+      client.send(JSON.stringify({ id: message.id, result: [skill] }));
+    });
+    await opened(client);
+    await authenticated;
+    try {
+      expect(await bridge.port.listSkills!("local")).toEqual([skill]);
+    } finally {
+      client.close();
+      await bridge.close();
+    }
+  });
+
   it("round-trips un-settlement through the authenticated client bridge", async () => {
     const port = await unusedPort();
     const bridge = createBridgeRuntimePort({ port, token: TOKEN });
