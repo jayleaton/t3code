@@ -66,12 +66,20 @@ const createThreadFields = {
   title: z.string().trim().min(1),
   profile: z.string().trim().min(1).optional(),
   profileId: z.string().trim().min(1).optional(),
-  reasoningEffort: z.string().trim().min(1).optional(),
+  reasoningEffort: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe("Thinking level override. Omit to use the agent's configured level."),
   modelSelection: z
     .object({ instanceId: z.string().trim().min(1), model: z.string().trim().min(1) })
     .strict()
     .optional(),
-  runtimeMode: z.enum(["approval-required", "auto-accept-edits", "auto", "full-access"]).optional(),
+  runtimeMode: z
+    .enum(["approval-required", "auto-accept-edits", "auto", "full-access"])
+    .optional()
+    .describe("Permission mode for chats without an agent. Agent chats always use the agent's."),
   interactionMode: z.enum(["default", "plan"]).optional(),
   workspaceMode: z.enum(["checkout", "worktree"]).optional(),
   baseBranch: z.string().trim().min(1).optional(),

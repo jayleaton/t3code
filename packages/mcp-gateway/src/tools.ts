@@ -1584,9 +1584,11 @@ export async function callGatewayTool(
         }
         const modelSelection =
           rawModelSelection === undefined ? undefined : record(rawModelSelection);
-        const hasThreadRuntimeMode = input.runtimeMode !== undefined;
+        // An agent's permission mode is owned by the user who defined it; callers
+        // can neither lower nor escalate it for that agent's chats.
+        const hasThreadRuntimeMode = profile === undefined && input.runtimeMode !== undefined;
         const hasThreadInteractionMode = input.interactionMode !== undefined;
-        const requestedRuntimeMode = input.runtimeMode ?? profile?.runtimeMode;
+        const requestedRuntimeMode = profile?.runtimeMode ?? input.runtimeMode;
         const requestedInteractionMode = input.interactionMode ?? profile?.interactionMode;
         const resolvedRuntimeMode:
           | "approval-required"
