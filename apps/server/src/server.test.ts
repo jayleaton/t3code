@@ -6869,6 +6869,28 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("routes websocket rpc client focus to connected clients only", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const [listed, focusError] = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.all([
+            client[WS_METHODS.clientsList]({}),
+            Effect.flip(
+              client[WS_METHODS.clientsFocus]({
+                clientId: "windows-desktop",
+                target: { _tag: "thread", threadId: ThreadId.make("thread-1") },
+              }),
+            ),
+          ]),
+        ),
+      );
+      assert.deepStrictEqual(listed, { clients: [] });
+      assert.equal(focusError._tag, "ClientNotConnectedError");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect(
     "routes websocket rpc subscribeServerLifecycle replays snapshot and streams updates",
     () =>

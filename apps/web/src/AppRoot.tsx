@@ -1,6 +1,7 @@
 import { RouterProvider } from "@tanstack/react-router";
 
 import { ElectronBrowserHost } from "./browser/ElectronBrowserHost";
+import { ClientFocusHost } from "./ClientFocusHost";
 import { McpGatewayHost } from "./McpGatewayHost";
 import { PreviewAutomationHosts } from "./components/preview/PreviewAutomationHosts";
 import { QuitHoldOverlay } from "./components/QuitHoldOverlay";
@@ -17,6 +18,7 @@ export function AppRoot({ router }: { readonly router: AppRouter }) {
     <AppAtomRegistryProvider>
       <RouterProvider router={router} />
       <McpGatewayHost router={router} />
+      <ClientFocusHost router={router} />
       <PreviewAutomationHosts />
       <ElectronBrowserHost />
       <QuitHoldOverlay />

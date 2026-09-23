@@ -31,6 +31,14 @@ import {
   HostPowerSnapshot,
 } from "./background.ts";
 import {
+  ClientFocusHost,
+  ClientFocusInput,
+  ClientFocusRequest,
+  ClientFocusResult,
+  ClientListResult,
+  ClientNotConnectedError,
+} from "./clientFocus.ts";
+import {
   FilesystemBrowseInput,
   FilesystemBrowseResult,
   FilesystemBrowseError,
@@ -390,6 +398,9 @@ export const WS_METHODS = {
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
   serverSignalProcess: "server.signalProcess",
   serverReportClientActivity: "server.reportClientActivity",
+  clientsConnectFocus: "clients.connectFocus",
+  clientsList: "clients.list",
+  clientsFocus: "clients.focus",
   serverReportHostPowerState: "server.reportHostPowerState",
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
   serverGetUsageSummary: "server.getUsageSummary",
@@ -690,6 +701,25 @@ const WsCloudInstallRelayClientRpc = Rpc.make(WS_METHODS.cloudInstallRelayClient
 const WsServerReportClientActivityRpc = Rpc.make(WS_METHODS.serverReportClientActivity, {
   payload: ClientActivityReportInput,
   error: EnvironmentAuthorizationError,
+});
+
+const WsClientsConnectFocusRpc = Rpc.make(WS_METHODS.clientsConnectFocus, {
+  payload: ClientFocusHost,
+  success: ClientFocusRequest,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const WsClientsListRpc = Rpc.make(WS_METHODS.clientsList, {
+  payload: Schema.Struct({}),
+  success: ClientListResult,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsClientsFocusRpc = Rpc.make(WS_METHODS.clientsFocus, {
+  payload: ClientFocusInput,
+  success: ClientFocusResult,
+  error: Schema.Union([ClientNotConnectedError, EnvironmentAuthorizationError]),
 });
 
 const WsServerReportHostPowerStateRpc = Rpc.make(WS_METHODS.serverReportHostPowerState, {
@@ -1555,6 +1585,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsMcpGatewayConnectRpc,
   WsMcpGatewayRespondRpc,
   WsPreviewAutomationConnectRpc,
+  WsClientsConnectFocusRpc,
+  WsClientsListRpc,
+  WsClientsFocusRpc,
   WsPreviewAutomationRespondRpc,
   WsPreviewAutomationFocusHostRpc,
   WsSubscribePreviewEventsRpc,

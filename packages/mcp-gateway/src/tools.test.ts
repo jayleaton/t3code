@@ -274,6 +274,52 @@ describe("gateway chat tools", () => {
     expect(open).toHaveBeenCalledTimes(1);
   });
 
+  it("focuses a chat, a file, or the Agents board on a named device", async () => {
+    const focused: Array<{ device: string; target: unknown }> = [];
+    const context = {
+      port: {
+        ...makePort(),
+        focusDevice: async (_environmentId: string, device: string, target: unknown) => {
+          focused.push({ device, target });
+          return { deviceId: "win", label: "WIN-STUDIO", status: "delivered" as const };
+        },
+      },
+      grants: { remote: ["read"] as const },
+    };
+    const focus = (input: Record<string, unknown>) =>
+      callGatewayTool(context, "t3_focus_device", {
+        environmentId: "remote",
+        device: "WIN-STUDIO",
+        ...input,
+      });
+
+    await focus({ threadId: "chat" });
+    await focus({ threadId: "chat", path: "shots/after.png", line: 3 });
+    await focus({ view: "agents" });
+    expect(focused).toEqual([
+      { device: "WIN-STUDIO", target: { type: "thread", threadId: "chat" } },
+      {
+        device: "WIN-STUDIO",
+        target: { type: "file", threadId: "chat", path: "shots/after.png", line: 3 },
+      },
+      { device: "WIN-STUDIO", target: { type: "agents" } },
+    ]);
+    await expect(focus({ path: "shots/after.png" })).rejects.toMatchObject({
+      code: "invalid_input",
+    });
+    await expect(focus({ threadId: "chat", line: 3 })).rejects.toMatchObject({
+      code: "invalid_input",
+    });
+    await expect(
+      callGatewayTool({ ...context, grants: { remote: ["send"] as const } }, "t3_focus_device", {
+        environmentId: "remote",
+        device: "WIN-STUDIO",
+        threadId: "chat",
+      }),
+    ).rejects.toMatchObject({ code: "scope_required" });
+    expect(focused).toHaveLength(3);
+  });
+
   it.each(["local", "remote"])("reads, creates, and sends chats in %s", async (environmentId) => {
     const port = makePort();
     const context = { port, grants };

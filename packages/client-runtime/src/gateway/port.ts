@@ -126,6 +126,26 @@ export interface GatewayEnvironmentSummary {
   readonly grantedScopes?: ReadonlyArray<string>;
 }
 
+export interface GatewayDevice {
+  readonly deviceId: string;
+  readonly label: string;
+  readonly kind: "web" | "desktop" | "mobile" | "unknown";
+  readonly platform?: string;
+  readonly visible: boolean;
+  readonly focused: boolean;
+  readonly connectedAt: string;
+}
+
+export type GatewayFocusTarget =
+  | { readonly type: "thread"; readonly threadId: string }
+  | {
+      readonly type: "file";
+      readonly threadId: string;
+      readonly path: string;
+      readonly line?: number;
+    }
+  | { readonly type: "agents" };
+
 export interface GatewayPage<T> {
   readonly items: ReadonlyArray<T>;
   readonly nextCursor?: string;
@@ -359,6 +379,14 @@ export interface GatewayRuntimePort {
     threadId: string,
   ): Promise<{ environmentId: string; threadId: string; status: "succeeded" }>;
   listEnvironments(): Promise<ReadonlyArray<GatewayEnvironmentSummary>>;
+  /** Clients (desktop, web, mobile) connected to the environment that can be focused. */
+  listDevices?(environmentId: string): Promise<ReadonlyArray<GatewayDevice>>;
+  /** Bring a thread, file, or the Agents board on screen on one connected client. */
+  focusDevice?(
+    environmentId: string,
+    device: string,
+    target: GatewayFocusTarget,
+  ): Promise<{ readonly deviceId: string; readonly label: string; readonly status: "delivered" }>;
   getEnvironmentStatus(environmentId: string): Promise<Record<string, unknown>>;
   listProfiles?(environmentId: string): Promise<ReadonlyArray<GatewayProfile>>;
   /** Resolve readable profile labels against the environment's live provider catalog. */

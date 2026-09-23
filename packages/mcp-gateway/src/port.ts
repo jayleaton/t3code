@@ -7,6 +7,7 @@ import {
 import type {
   GatewayApprovalDecision,
   GatewayEnvironmentSummary,
+  GatewayFocusTarget,
   GatewayMutationResult,
   GatewayPage,
   GatewayProfile,
@@ -27,6 +28,7 @@ export {
 export type {
   GatewayApprovalDecision,
   GatewayEnvironmentSummary,
+  GatewayFocusTarget,
   GatewayMutationResult,
   GatewayPage,
   GatewayProfile,

@@ -61,7 +61,7 @@ function stableScopeKey(environmentId: EnvironmentId, scope: BackgroundScope): s
   }
 }
 
-function getClientId(): string {
+export function getClientId(): string {
   try {
     const existing = window.localStorage.getItem(CLIENT_ID_STORAGE_KEY);
     if (existing) return existing;

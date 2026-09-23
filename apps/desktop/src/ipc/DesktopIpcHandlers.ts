@@ -40,6 +40,7 @@ import {
 import {
   revealWindow,
   getAppBranding,
+  getClientDeviceName,
   getMcpGatewayBridgeToken,
   getMcpGatewayLaunchConfig,
   getLocalEnvironmentBootstraps,
@@ -85,6 +86,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
 
   yield* ipc.handle(revealWindow);
   yield* ipc.handleSync(getAppBranding);
+  yield* ipc.handleSync(getClientDeviceName);
   yield* ipc.handleSync(getMcpGatewayBridgeToken);
   yield* ipc.handleSync(getMcpGatewayLaunchConfig);
   yield* ipc.handle(McpGatewayIpc.configureManagedMcpGateway);

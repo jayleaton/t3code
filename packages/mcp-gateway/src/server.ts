@@ -188,6 +188,21 @@ const TOOL_SPECS = {
     "Open a local or remote chat in the connected desktop app and reveal its window. Requires read access; does not start or stop a turn.",
     { environmentId, threadId },
   ],
+  t3_list_devices: [
+    "List T3 apps (desktop, web, mobile) connected to an environment that you can bring content on screen for with t3_focus_device. focused/visible show which device the user is looking at now. A device connected to several environments appears once per environment.",
+    { environmentId },
+  ],
+  t3_focus_device: [
+    "Bring a chat, a file, or the Agents board on screen on one connected device, e.g. pull a chat into focus on the user's other computer or phone. Pass device as a deviceId or exact label from t3_list_devices. With threadId alone the chat opens; add path to also preview a file from that chat's workspace (images, video, PDF, code; absolute paths may point anywhere the environment host can read) and line to reveal a line. view=agents opens the Agents board instead. Does not start or stop a turn.",
+    {
+      environmentId,
+      device: z.string().trim().min(1),
+      threadId: threadId.optional(),
+      path: z.string().trim().min(1).max(1024).optional(),
+      line: z.number().int().min(1).optional(),
+      view: z.enum(["thread", "agents"]).optional(),
+    },
+  ],
   t3_get_thread: [
     "Read one T3 chat and its messages.",
     { environmentId, threadId, ...optionalRequestContext },
