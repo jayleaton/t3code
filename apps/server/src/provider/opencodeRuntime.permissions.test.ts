@@ -68,11 +68,24 @@ describe("buildOpenCodePermissionRules", () => {
     }
   });
 
-  it("allows everything only under full access", () => {
+  it("allows everything under full access but denies the doom loop guard", () => {
     NodeAssert.deepEqual(buildOpenCodePermissionRules("full-access"), [
       { permission: "*", pattern: "*", action: "allow" },
       { permission: "external_directory", pattern: "*", action: "allow" },
+      // `ask` is auto-approved in full-access, so the guard must deny instead.
+      { permission: "doom_loop", pattern: "*", action: "deny" },
     ]);
+    NodeAssert.equal(actionFor("full-access", "external_directory"), "allow");
+    NodeAssert.equal(actionFor("full-access", "bash"), "allow");
+    // `deny` is terminal and only trips OpenCode's repeated-identical-call
+    // heuristic, so an unattended first call still runs.
+    NodeAssert.equal(actionFor("full-access", "doom_loop"), "deny");
+  });
+
+  it("still asks before the doom loop guard outside full access", () => {
+    for (const runtimeMode of ["approval-required", "auto-accept-edits", "auto"] as const) {
+      NodeAssert.equal(actionFor(runtimeMode, "doom_loop"), "ask");
+    }
   });
 });
 

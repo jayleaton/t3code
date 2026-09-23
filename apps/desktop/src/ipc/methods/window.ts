@@ -41,6 +41,7 @@ import * as MacPermissions from "../../permissions/MacPermissions.ts";
 import { safariPermissionCheck } from "../../preview/BrowserImport/SafariPermission.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
+import { resolveMcpGatewayLaunchConfig } from "../../mcpGatewayLaunchConfig.ts";
 import { readMcpGatewayBridgeTokenFromProcess } from "../../mcpGatewayCredential.ts";
 import {
   extractDistroFromUncPath,
@@ -63,19 +64,6 @@ const McpGatewayLaunchConfigSchema = Schema.Struct({
   args: Schema.Array(Schema.String),
   env: Schema.Record(Schema.String, Schema.String),
 });
-
-export function resolveMcpGatewayLaunchConfig(input: {
-  readonly isPackaged: boolean;
-  readonly executablePath: string;
-  readonly resourcesPath: string;
-}) {
-  if (!input.isPackaged) return null;
-  return {
-    command: input.executablePath,
-    args: [`${input.resourcesPath}/t3-mcp-gateway.mjs`],
-    env: { ELECTRON_RUN_AS_NODE: "1" },
-  };
-}
 
 function toWebSocketBaseUrl(httpBaseUrl: URL): string {
   const url = new URL(httpBaseUrl.href);
@@ -102,6 +90,7 @@ export const getMcpGatewayLaunchConfig = DesktopIpc.makeSyncIpcMethod({
       isPackaged: environment.isPackaged,
       executablePath: process.execPath,
       resourcesPath: environment.resourcesPath,
+      stateFile: environment.path.join(environment.baseDir, "mcp-gateway-v3.sqlite"),
     });
   }),
 });

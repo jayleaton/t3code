@@ -133,6 +133,43 @@ describe("gateway event store", () => {
     expect(store.history("env-1", 1, 10).map((event) => event.type)).toEqual(["b", "c"]);
   });
 
+  it("amortizes retention sweeps during replay and trims before history reads", () => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-events-replay-"));
+    const file = NodePath.join(directory, "events.sqlite");
+    const store = createGatewayEventStore({
+      file,
+      retentionEvents: 2,
+      retentionDays: 7,
+      now: () => clock.value,
+      newEventId: () => `evt-${++counter}`,
+    });
+    try {
+      store.emit({ environmentId: "env-1", type: "a" });
+      store.emit({ environmentId: "env-1", type: "b" });
+      store.emit({ environmentId: "env-1", type: "c" });
+
+      const beforeRead = new NodeSqlite.DatabaseSync(file, { readOnly: true });
+      expect(
+        (beforeRead.prepare("SELECT COUNT(*) AS count FROM events").get() as { count: number })
+          .count,
+      ).toBe(3);
+      beforeRead.close();
+
+      expect(() => store.history("env-1", 0, 10)).toThrowError(
+        expect.objectContaining({ code: "cursor_expired" }),
+      );
+      const afterRead = new NodeSqlite.DatabaseSync(file, { readOnly: true });
+      expect(
+        (afterRead.prepare("SELECT COUNT(*) AS count FROM events").get() as { count: number })
+          .count,
+      ).toBe(2);
+      afterRead.close();
+    } finally {
+      store.close();
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("keeps subscriptions with monotonic idempotent acks and typed cursors", () => {
     const store = makeStore();
     store.emit({ environmentId: "env-1", type: "thread.started" });
@@ -313,5 +350,89 @@ describe("gateway event store", () => {
     store.forgetRequest("key-1");
     expect(store.rememberRequest("key-1", '{"a":2}', { status: "accepted" })).toBe("accepted");
     expect(store.recallRequest("key-2")).toBeUndefined();
+  });
+
+  it("waits for a matching live event scoped to its environment and thread", async () => {
+    const store = makeStore();
+    const wait = store.waitForEvent({
+      environmentId: "env-1",
+      threadId: "thread-a",
+      afterSequence: 0,
+      timeoutMs: 1_000,
+    });
+    store.emit({ environmentId: "env-1", type: "thread.started", threadId: "thread-b" });
+    store.emit({ environmentId: "env-2", type: "thread.completed", threadId: "thread-a" });
+    const expected = store.emit({
+      environmentId: "env-1",
+      type: "thread.completed",
+      threadId: "thread-a",
+    });
+    await expect(wait).resolves.toMatchObject({
+      eventId: expected.eventId,
+      type: "thread.completed",
+    });
+  });
+
+  it("replays a matching event after the cursor instead of waiting", async () => {
+    const store = makeStore();
+    store.emit({ environmentId: "env-1", type: "thread.started", threadId: "thread-a" });
+    const completed = store.emit({
+      environmentId: "env-1",
+      type: "thread.completed",
+      threadId: "thread-a",
+    });
+    await expect(
+      store.waitForEvent({
+        environmentId: "env-1",
+        threadId: "thread-a",
+        afterSequence: 1,
+        timeoutMs: 50,
+      }),
+    ).resolves.toMatchObject({ eventId: completed.eventId });
+  });
+
+  it("honours the predicate and resolves undefined when the timeout elapses", async () => {
+    const store = makeStore();
+    const wait = store.waitForEvent({
+      environmentId: "env-1",
+      afterSequence: 0,
+      timeoutMs: 500,
+      predicate: (event) => event.type === "thread.completed",
+    });
+    store.emit({ environmentId: "env-1", type: "thread.started", threadId: "thread-a" });
+    const completed = store.emit({
+      environmentId: "env-1",
+      type: "thread.completed",
+      threadId: "thread-a",
+    });
+    await expect(wait).resolves.toMatchObject({ eventId: completed.eventId });
+
+    await expect(
+      store.waitForEvent({
+        environmentId: "env-1",
+        threadId: "thread-a",
+        afterSequence: store.latestSequence("env-1"),
+        timeoutMs: 20,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects rather than lies when the cursor is older than retention", async () => {
+    const store = createGatewayEventStore({
+      file: ":memory:",
+      retentionEvents: 1,
+      now: () => clock.value,
+      newEventId: () => `evt-${++counter}`,
+    });
+    store.emit({ environmentId: "env-1", type: "thread.started", threadId: "thread-a" });
+    store.emit({ environmentId: "env-1", type: "thread.completed", threadId: "thread-a" });
+    await expect(
+      store.waitForEvent({
+        environmentId: "env-1",
+        threadId: "thread-a",
+        afterSequence: 0,
+        timeoutMs: 50,
+      }),
+    ).rejects.toMatchObject({ code: "cursor_expired" });
   });
 });

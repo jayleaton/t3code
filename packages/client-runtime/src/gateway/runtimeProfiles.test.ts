@@ -20,8 +20,12 @@ describe("runtime profile persistence", () => {
       Effect.gen(function* () {
         let settings: ServerSettings = DEFAULT_SERVER_SETTINGS;
         const writes: unknown[] = [];
+        let resourcesSupported = true;
         const session = yield* SubscriptionRef.make(
           Option.some({
+            initialConfig: Effect.sync(() => ({
+              environment: { capabilities: { agentSkillResources: resourcesSupported } },
+            })),
             client: {
               [WS_METHODS.serverGetSettings]: () => Effect.succeed(settings),
               [WS_METHODS.serverUpdateSettings]: (input: {
@@ -56,6 +60,7 @@ describe("runtime profile persistence", () => {
           session,
         } as unknown as EnvironmentSupervisor["Service"];
         const registry = {
+          entries: yield* SubscriptionRef.make(new Map()),
           run: <A, E>(_id: EnvironmentId, effect: Effect.Effect<A, E, EnvironmentSupervisor>) =>
             effect.pipe(Effect.provideService(EnvironmentSupervisor, supervisor)),
         } as unknown as EnvironmentRegistry["Service"];
@@ -101,6 +106,46 @@ describe("runtime profile persistence", () => {
           replicateProfiles: true,
           patch: { mcpGatewayProfiles: [{ revision: 2 }] },
         });
+        const skillInput = {
+          name: "Review",
+          description: "Review PRs",
+          content: "# Review\nCheck correctness",
+          resources: [{ path: "scripts/check.sh", contentBase64: "b2s=", executable: true }],
+        };
+        const skills = yield* Effect.promise(() =>
+          Promise.all([
+            port.createSkill!("local", skillInput),
+            port.createSkill!("local", { ...skillInput, name: "Tests" }),
+          ]),
+        );
+        expect(settings.agentSkills).toHaveLength(2);
+        const skillId = skills[0]!.skillId;
+        const revised = yield* Effect.promise(() =>
+          port.updateSkill!("local", skillId, { content: "# Review\nCheck regressions" }),
+        );
+        expect(revised.content).toContain("regressions");
+        expect(revised.skillId).toBe(skillId);
+        expect(revised.resources).toEqual(skillInput.resources);
+        const cleared = yield* Effect.promise(() =>
+          port.updateSkill!("local", skillId, { resources: [] }),
+        );
+        expect(cleared.resources).toEqual([]);
+        resourcesSupported = false;
+        yield* Effect.promise(() =>
+          expect(
+            port.updateSkill!("local", skillId, { resources: skillInput.resources }),
+          ).rejects.toThrow("Update T3"),
+        );
+        expect(settings.agentSkills[0]?.resources).toEqual([]);
+        resourcesSupported = true;
+        expect(
+          (yield* Effect.promise(() => port.listSkills!("local"))).map((skill) => skill.name),
+        ).toEqual(["Review", "Tests"]);
+        yield* Effect.promise(() => port.updateProfile!("local", id, { skillIds: [skillId] }));
+        expect(settings.mcpGatewayProfiles[0]?.skillIds).toEqual([skillId]);
+        yield* Effect.promise(() => port.deleteSkill!("local", skillId));
+        expect(settings.agentSkills.map((skill) => skill.name)).toEqual(["Tests"]);
+        expect(writes.at(-1)).toMatchObject({ patch: { agentSkills: [{ name: "Tests" }] } });
         yield* Effect.promise(() => port.deleteProfile!("local", id));
         expect(settings.mcpGatewayProfiles).toEqual([]);
       }),

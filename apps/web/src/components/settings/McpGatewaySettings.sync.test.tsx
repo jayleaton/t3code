@@ -17,6 +17,9 @@ vi.mock("../../hooks/useSettings", () => ({
   useUpdatePrimarySettings: () => vi.fn(),
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => [] }));
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ children }: { children: ReactNode }) => <a>{children}</a>,
+}));
 
 vi.mock("./settingsLayout", () => ({
   SettingsPageContainer: ({ children }: { children: ReactNode }) => <div>{children}</div>,

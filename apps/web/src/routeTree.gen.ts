@@ -211,8 +211,8 @@ export interface FileRoutesByFullPath {
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
-  '/agents/': typeof AgentsIndexRoute
   '/settings/storage': typeof SettingsStorageRoute
+  '/agents/': typeof AgentsIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/agents/$environmentId/$threadId': typeof AgentsEnvironmentIdThreadIdRoute
@@ -304,8 +304,8 @@ export interface FileRouteTypes {
     | '/settings/scheduled-tasks'
     | '/settings/snap-shot'
     | '/settings/source-control'
-    | '/agents/'
     | '/settings/storage'
+    | '/agents/'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
     | '/agents/$environmentId/$threadId'

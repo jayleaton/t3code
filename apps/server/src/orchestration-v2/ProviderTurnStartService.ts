@@ -1,3 +1,5 @@
+import { syncAgentSkillFiles } from "../provider/AgentInstructionFiles.ts";
+import * as Path from "effect/Path";
 import { agentProfilePrompt } from "./AgentProfile.ts";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
@@ -86,6 +88,7 @@ export const layer: Layer.Layer<
   | ContextHandoffService.ContextHandoffServiceV2
   | IdAllocatorV2
   | FileSystem.FileSystem
+  | Path.Path
   | GitWorkflowService
   | ProjectService
   | ProviderAuthService
@@ -100,6 +103,7 @@ export const layer: Layer.Layer<
     const contextHandoffService = yield* ContextHandoffService.ContextHandoffServiceV2;
     const idAllocator = yield* IdAllocatorV2;
     const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
     const gitWorkflow = yield* GitWorkflowService;
     const projects = yield* ProjectService;
     const providerAuth = yield* ProviderAuthService;
@@ -894,8 +898,23 @@ export const layer: Layer.Layer<
       const routableSubagents = projection.subagents.filter((subagent) =>
         canRouteRelatedSubagent(subagent.status),
       );
+      const skillIndex = projection.thread.profileSnapshot?.skills?.length
+        ? yield* syncAgentSkillFiles({
+            cwd:
+              resolvedRuntimePolicy.cwd ??
+              Option.getOrThrow(yield* projects.getById(projection.thread.projectId)).workspaceRoot,
+            threadId: projection.thread.id,
+            skills: projection.thread.profileSnapshot.skills,
+          }).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+          )
+        : "";
       const userText = projectComposerContextForProvider({
-        text: agentProfilePrompt(message.text, projection.thread.profileSnapshot),
+        text: agentProfilePrompt(
+          skillIndex ? `${skillIndex}\n\n${message.text}` : message.text,
+          projection.thread.profileSnapshot,
+        ),
         records: message.context?.records ?? [],
       });
       const tokenCap = yield* handoffTokenCapConfig.pipe(

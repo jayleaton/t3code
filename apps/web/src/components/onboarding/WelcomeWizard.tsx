@@ -473,7 +473,7 @@ function ConnectAccountOption({
             </p>
             <CommandBlock command="npx t3 connect" className="mt-3" />
             <p className="mt-3 text-xs text-muted-foreground">
-              Keep T3 Code running. Select the computers you want to set up above.
+              Keep T3 Agents running. Select the computers you want to set up above.
             </p>
           </div>
         </CollapsiblePanel>

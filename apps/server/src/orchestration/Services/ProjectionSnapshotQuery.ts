@@ -13,6 +13,7 @@ import type {
   MessageId,
   ProjectId,
   ThreadId,
+  ThreadProfileSnapshot,
 } from "@t3tools/contracts";
 import type {
   OrchestrationCheckpointSummary,
@@ -243,11 +244,16 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<Option.Option<ProjectionFullThreadDiffContext>, ProjectionRepositoryError>;
 
   /**
-   * Read a single active thread shell row by id.
+   * Read a single active thread shell row by id, including its saved provider instructions.
    */
   readonly getThreadShellById: (
     threadId: ThreadId,
-  ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
+  ) => Effect.Effect<
+    Option.Option<
+      OrchestrationThreadShell & { readonly profileSnapshot?: ThreadProfileSnapshot | undefined }
+    >,
+    ProjectionRepositoryError
+  >;
 
   /** Read the active thread and session facts used to ingest provider events. */
   readonly getThreadRuntimeContext: (

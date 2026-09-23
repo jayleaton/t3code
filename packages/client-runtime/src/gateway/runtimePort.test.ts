@@ -1,4 +1,7 @@
 import {
+  DEFAULT_SERVER_SETTINGS,
+  WS_METHODS,
+  type OrchestrationV2ThreadLaunchInput,
   EnvironmentId,
   MessageId,
   ORCHESTRATION_V2_WS_METHODS,
@@ -177,6 +180,18 @@ describe("Gateway Runtime Port", () => {
       profileName: "Cody",
       revision: 1,
       systemPrompt: "private specialization instructions",
+      skills: [
+        {
+          skillId: "private-skill",
+          name: "Private skill",
+          description: "Test",
+          content: "private skill resource",
+          resources: [],
+          revision: 1,
+          createdAt: "2026-09-23T00:00:00.000Z",
+          updatedAt: "2026-09-23T00:00:00.000Z",
+        },
+      ],
       effectiveSource: {
         modelSelection: "profile",
         runtimeMode: "profile",
@@ -207,6 +222,7 @@ describe("Gateway Runtime Port", () => {
     expect(result.profileSnapshot?.profileId).toBe("code");
     expect(result.messages[0]?.text).toHaveLength(120_000);
     expect(JSON.stringify(result)).not.toContain("private specialization instructions");
+    expect(JSON.stringify(result)).not.toContain("private skill resource");
     expect(result).not.toHaveProperty("providerSessions");
   });
 
@@ -231,7 +247,9 @@ describe("Gateway Runtime Port", () => {
     ["starting", "queued"],
     ["running", "running"],
     ["failed", "failed"],
-    ["cancelled", "canceled"],
+    ["cancelled", "stopped"],
+    ["rolled_back", "stopped"],
+    ["waiting", "running"],
     ["completed", "completed"],
   ] as const)("maps V2 %s to %s", (status, expected) => {
     expect(gatewayStatusFromThread({ status, pendingRuntimeRequest: null })).toBe(expected);
@@ -412,6 +430,8 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const writes: Array<{ environmentId: string; command: OrchestrationV2Command }> = [];
+      const launches: Array<{ environmentId: string; input: OrchestrationV2ThreadLaunchInput }> =
+        [];
       const supervisors = new Map<string, EnvironmentSupervisor["Service"]>();
       for (const environmentId of ["machine-a", "machine-b"]) {
         const session = yield* SubscriptionRef.make(
@@ -420,6 +440,15 @@ it.effect(
               environment: { capabilities: { serverResolvedCommandContext: true } },
             }),
             client: {
+              [WS_METHODS.serverGetConfig]: () => Effect.succeed({ providers: [] }),
+              [WS_METHODS.serverGetSettings]: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
+              [ORCHESTRATION_V2_WS_METHODS.launchThread]: (
+                input: OrchestrationV2ThreadLaunchInput,
+              ) =>
+                Effect.sync(() => {
+                  launches.push({ environmentId, input });
+                  return { threadId: input.threadId, projection: v2Projection, resumed: false };
+                }),
               [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: () =>
                 Stream.make({
                   kind: "snapshot",
@@ -464,6 +493,28 @@ it.effect(
             text: "Remote follow-up",
           }),
         );
+        yield* Effect.promise(() =>
+          port.createThread({
+            environmentId: "machine-b",
+            projectId: "shared-project",
+            threadId: "shared-thread",
+            title: "Worktree test",
+            requestId: "launch-test",
+            workspaceMode: "worktree",
+            baseBranch: "main",
+            modelSelection: { instanceId: "codex", model: "test" },
+          }),
+        );
+        expect(launches).toEqual([
+          {
+            environmentId: "machine-b",
+            input: expect.objectContaining({
+              projectId: "shared-project",
+              threadId: "shared-thread",
+              workspaceStrategy: { type: "worktree", baseRef: "main" },
+            }),
+          },
+        ]);
         expect(writes).toEqual([
           {
             environmentId: "machine-b",

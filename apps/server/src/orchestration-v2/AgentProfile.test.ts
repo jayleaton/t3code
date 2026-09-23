@@ -37,6 +37,28 @@ describe("V2 profile association", () => {
     );
     expect(agentProfilePrompt("Normal chat", undefined)).toBe("Normal chat");
   });
+  it("freezes only the selected skill bundles with the profile", () => {
+    const skill = {
+      skillId: "review",
+      name: "Review",
+      description: "Review rules",
+      content: "Check invariants",
+      resources: [{ path: "references/rules.md", contentBase64: "b2s=" }],
+      revision: 2,
+      createdAt: "2026-09-23T00:00:00.000Z",
+      updatedAt: "2026-09-23T00:00:00.000Z",
+    };
+    const resolved = resolveThreadCreateProfile(
+      command,
+      [{ ...profile, skillIds: ["review"] }],
+      [],
+      [skill, { ...skill, skillId: "unrelated" }],
+    );
+    expect(resolved.profileSnapshot?.skills).toEqual([skill]);
+    expect(
+      resolveThreadCreateProfile(command, [profile], [], [skill]).profileSnapshot?.skills,
+    ).toEqual([]);
+  });
   it("rejects missing, stale, read-only profiles and incomplete overrides", () => {
     expect(() => resolveThreadCreateProfile(command, [])).toThrow(/missing/);
     expect(() =>

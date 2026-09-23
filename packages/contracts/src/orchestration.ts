@@ -1,3 +1,4 @@
+import { AgentSkill } from "./agentSkills.ts";
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -68,6 +69,7 @@ export {
 
 // Correlation id is command id by design in this model.
 export const ThreadProfileSnapshot = Schema.Struct({
+  skills: Schema.optional(Schema.Array(AgentSkill)),
   systemPrompt: Schema.optional(Schema.String.check(Schema.isMaxLength(32_000))),
   profileId: Schema.NullOr(TrimmedNonEmptyString),
   profileName: Schema.NullOr(TrimmedNonEmptyString),

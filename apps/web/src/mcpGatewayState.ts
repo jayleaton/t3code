@@ -133,3 +133,15 @@ export function setMcpGatewayEnabled(enabled: boolean): void {
   window.localStorage.setItem(MCP_GATEWAY_ENABLED_KEY, String(enabled));
   window.dispatchEvent(new Event(MCP_GATEWAY_STATE_EVENT));
 }
+
+let restartGateway: (() => void) | null = null;
+
+export function setMcpGatewayRestarter(restarter: (() => void) | null): void {
+  restartGateway = restarter;
+}
+
+export function restartMcpGateway(): boolean {
+  if (!restartGateway || !isMcpGatewayEnabled()) return false;
+  restartGateway();
+  return true;
+}

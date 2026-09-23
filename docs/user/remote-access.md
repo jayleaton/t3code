@@ -3,6 +3,10 @@
 Connect a phone, browser, or another desktop app to T3 Code running on a different
 machine. That machine must stay running and reachable while you work.
 
+In **Settings → Connections**, open a machine’s **More actions** menu to rename it or
+choose its icon (including desktop, laptop, and server). Names and icons are saved on
+that machine and shown on connected devices. **Reset name** restores the original name.
+
 ## T3 Connect
 
 T3 Connect makes an environment available to your other devices without setting
@@ -190,9 +194,17 @@ devices. For server version warnings, follow [Updating T3 Code](./updating.md).
 
 ## Use MCP with connected environments
 
-Configure your assistant using the launch configuration in **Settings → MCP Gateway**, then enable
-the gateway in the desktop app. Keep that desktop connected to the environments your assistant
-needs to access. If you configure a custom companion port, set the same **Bridge port** in MCP Gateway settings; the standard port works without changing it.
+Enable **Settings → MCP Gateway** in the desktop app, then grant access to the environments
+that your agents need. New T3-managed agent sessions on granted environments receive the
+gateway tools automatically, including sessions running on remote machines. Restart existing
+agent sessions to attach the gateway. Keep this desktop connected while the agents use it.
+Disabling the gateway disconnects managed gateway sessions immediately.
+
+For assistants outside T3 Code, copy the external MCP host configuration from the same page.
+For standalone OpenCode, merge **Copy OpenCode config** into `~/.config/opencode/opencode.jsonc`
+on the desktop's machine, preserving existing servers, then reconnect OpenCode. Other hosts
+using `mcpServers` can use **Copy MCP config**. The copied configuration includes the bridge
+token and the desktop's state-file path.
 
 Enable access per environment and select **Save** to apply permission changes. Default access allows
 reading chats, creating threads, and sending messages. **Enable all environments** enables machines
@@ -251,24 +263,48 @@ switch away; settled chats remain on the board under **Settled**.
 
 Agents are shared across clients connected to the same server. Updated clients also synchronize
 the agent library between connected environments that support agent sync, including after reconnecting. Each target resolves the provider and model locally; an unavailable or
-ambiguous selection must be re-selected before starting a thread. Agent changes apply only to
-new chats.
+ambiguous selection must be re-selected before starting a thread. Agent configuration and skill changes apply when a new chat is created. Existing chats keep the configuration and skill contents they started with.
 
 Add a short **Specialization** when creating or editing an agent to show what it does beneath its name and in MCP. This description does not replace its instructions.
 
 MCP assistants can discover agents with read access using `t3_list_agents`, or manage them using `t3_create_agent`, `t3_update_agent`, and `t3_delete_agent` with create
 or admin access. Agent writes share only to connected environments with one of those grants;
-check the returned sync failures. Use `profileId` with `t3_create_thread` to snapshot an agent’s instructions and settings,
-then `t3_send_message` to start work. The environment-local `/mcp/workspace` endpoint exposes `list_agents` and `get_agents_view` with the same profile and state filters, using runs from its hosting machine. Agent listings include specializations without exposing system prompts. Use `t3_get_agents_view` with an `environmentId` to list agents alongside their chats and run status. Filter by `profileId` and `state` (`active`, `settled`, or `all`); active is the default and includes completed chats that have not been settled. Chats belonging to deleted agents appear under `orphanedRuns`. Use `t3_unsettle_thread`
+check the returned sync failures. Use `profileId` with `t3_create_thread` to select an agent and its initial settings,
+then `t3_send_message` to start work, or `t3_create_and_start_thread` to create the chat and send its opening task in one idempotent call. The environment-local `/mcp/workspace` endpoint exposes `list_agents` and `get_agents_view` with the same profile and state filters, using runs from its hosting machine. Agent listings include specializations without exposing system prompts. Use `t3_get_agents_view` with an `environmentId` to list agents alongside their chats and run status. Filter by `profileId`, `state` (`active`, `settled`, or `all`; active is the default and includes completed chats that have not been settled), and `executionState` (`running`, `queued`, `waiting-approval`, `waiting-input`, `completed`, `failed`, `interrupted`, `stopped`, or `idle`). Chats belonging to deleted agents appear under `orphanedRuns`. To follow one chat without polling, use `t3_wait_for_thread_status`, which returns the new status and a resume cursor when it changes or the bounded timeout elapses. Use `t3_unsettle_thread`
 with lifecycle access to return a settled chat to the active list. `t3_open_agents` opens the
 board in the connected desktop window with read access.
 
-Each chat keeps the agent instructions it started with, including after the agent is edited or
-deleted. When work starts, T3 places that chat’s generated `AGENT.md` in its own directory under
-`.agents/t3/` in the workspace. This runtime directory is ignored by Git. Settling removes that
-generated file; continuing the conversation
-restores its original instructions. Other chats and project-owned instruction files are left
-alone. Edit the agent in the app to change instructions for future chats.
+Ask an assistant connected to the **T3 Agents MCP** to create a shared skill and assign it to
+an agent. For example: “Create a shared skill for reviewing pull requests and assign it to Randy.”
+The MCP can list skills with read access and create, update, or delete them with create or admin
+access. One shared library supplies every assigned agent, regardless of provider.
+
+For manual editing, open **Skills** on the Agents board and expand **Create or edit manually**.
+Assign skills in the agent editor. Skills can include references, scripts, and binary assets beside
+`SKILL.md`. When importing through MCP, include a `resources` list with each file's relative `path`,
+base64-encoded `contentBase64`, and optional `executable` flag. Nested paths stay relative to the
+skill folder; references are read only when needed. Each skill supports up to 256 files, 1 MiB per
+file and 2 MiB of resources; the shared library supports 8 MiB of resources. On update, omitting
+`resources` preserves the files, while supplying a list replaces them (`[]` removes them).
+
+Update the T3 gateway, clients, and connected environments before using resource bundles. Older
+environments cannot synchronize them. New chats receive the updated bundle; existing chats retain
+their starting copy, including files. Deleting a skill excludes it from new chats.
+
+To migrate previously imported skills that still refer to local folders, use the supported
+[resource import utility](../operations/skill-resource-import.md). It verifies uploaded resources
+before removing the local-folder workaround and preserves skill IDs and agent assignments.
+
+Before creating an agent chat, T3 synchronizes its library from environments available to the client.
+Keep both machines connected to a client at least once after an edit so the destination can
+receive it. Offline machines catch up when they reconnect; a disconnected source that this
+client has never seen cannot supply updates.
+
+Each chat has generated instructions and assigned skill files under `.agents/t3/` in its workspace.
+T3 creates these from the configuration saved when the chat was created and clears them when
+the chat is settled. Continuing or resuming restores that same configuration, even if the agent
+or shared skills have since been edited or deleted. Deleting an agent keeps its existing chats
+and their saved instructions and skills.
 
 Use the speed control on a chat card to choose a model-supported speed tier. The setting applies
 to the next provider request, including when changed during a running turn; it does not restart

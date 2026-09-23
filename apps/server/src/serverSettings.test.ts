@@ -31,6 +31,7 @@ import * as ServerSettingsModule from "./serverSettings.ts";
 import { resolveProviderInstanceTerminalEnvironment } from "./terminal/Manager.ts";
 
 const decodeSettingsPatch = Schema.decodeUnknownEffect(ServerSettingsPatch);
+const decodeSavedSettings = Schema.decodeUnknownEffect(Schema.fromJsonString(ServerSettings));
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 const decodeServerSettingsJson = Schema.decodeUnknownEffect(Schema.fromJsonString(ServerSettings));
 
@@ -179,6 +180,21 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("persists and resets a machine name without changing its chosen icon", () =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* settings.updateSettings({
+        environmentLabel: "Build laptop",
+        environmentIcon: "laptop",
+      });
+      assert.equal((yield* settings.getSettings).environmentLabel, "Build laptop");
+      yield* settings.updateSettings({ environmentLabel: null });
+      const reset = yield* settings.getSettings;
+      assert.isNull(reset.environmentLabel);
+      assert.equal(reset.environmentIcon, "laptop");
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("decodes nested settings patches", () =>
     Effect.gen(function* () {
       assert.deepEqual(
@@ -282,6 +298,48 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.deepEqual(deleted.mcpGatewayProfiles, []);
       const stale = yield* settings.updateSettings({ mcpGatewayProfiles: [profile] }, true);
       assert.deepEqual(stale.mcpGatewayProfiles, []);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("owns skill revisions and retains deletion tombstones across stale replicas", () =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      const skill = {
+        skillId: "review",
+        name: "Review",
+        description: "Review code",
+        content: "First",
+        resources: [{ path: "scripts/check.sh", contentBase64: "b2s=", executable: true }],
+        revision: 4,
+        createdAt: "2026-01-01",
+        updatedAt: "2026-01-01",
+      };
+      const replicated = yield* settings.updateSettings({ agentSkills: [skill] }, true);
+      assert.deepEqual(replicated.agentSkills, [skill]);
+      const edited = yield* settings.updateSettings({
+        agentSkills: [{ ...skill, content: "Second" }],
+      });
+      assert.equal(edited.agentSkills[0]?.revision, 5);
+      assert.equal(edited.agentSkills[0]?.content, "Second");
+      const same = yield* settings.updateSettings({ agentSkills: edited.agentSkills });
+      assert.deepEqual(same.agentSkills, edited.agentSkills);
+      const fs = yield* FileSystem.FileSystem;
+      const { settingsPath } = yield* ServerConfig.ServerConfig;
+      const saved = yield* decodeSavedSettings(yield* fs.readFileString(settingsPath));
+      assert.deepEqual(saved.agentSkills, edited.agentSkills);
+      const textOnly = yield* settings.updateSettings({
+        agentSkills: edited.agentSkills.map(({ resources: _resources, ...skill }) => skill),
+      });
+      assert.deepEqual(textOnly.agentSkills, edited.agentSkills);
+      const cleared = yield* settings.updateSettings({
+        agentSkills: edited.agentSkills.map((skill) => ({ ...skill, resources: [] })),
+      });
+      assert.deepEqual(cleared.agentSkills[0]?.resources, []);
+      assert.equal(cleared.agentSkills[0]?.revision, 6);
+      const deleted = yield* settings.updateSettings({ agentSkills: [] });
+      assert.isString(deleted.agentSkillDeletedAt.review);
+      const stale = yield* settings.updateSettings({ agentSkills: [skill] }, true);
+      assert.deepEqual(stale.agentSkills, []);
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 

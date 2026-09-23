@@ -468,14 +468,22 @@ function withServerOwnedMcpGatewayProfiles(
   now: string,
   replicateProfiles = false,
 ): ServerSettingsPatch {
-  if (patch.mcpGatewayProfiles === undefined) return patch;
+  if (
+    patch.mcpGatewayProfiles === undefined &&
+    patch.agentSkills === undefined &&
+    patch.mcpGatewayProfileDeletedAt === undefined &&
+    patch.agentSkillDeletedAt === undefined
+  )
+    return patch;
   if (replicateProfiles)
     return {
       ...patch,
       ...mergeAgentLibraries([
         current,
         {
-          mcpGatewayProfiles: patch.mcpGatewayProfiles,
+          agentSkills: patch.agentSkills ?? [],
+          agentSkillDeletedAt: patch.agentSkillDeletedAt ?? {},
+          mcpGatewayProfiles: patch.mcpGatewayProfiles ?? [],
           mcpGatewayProfileDeletedAt: patch.mcpGatewayProfileDeletedAt ?? {},
         },
       ]),
@@ -485,42 +493,86 @@ function withServerOwnedMcpGatewayProfiles(
       Math.max(
         Date.parse(now),
         ...current.mcpGatewayProfiles.map((profile) => (Date.parse(profile.updatedAt) || 0) + 1),
+        ...current.agentSkills.map((skill) => (Date.parse(skill.updatedAt) || 0) + 1),
+        ...Object.values(current.agentSkillDeletedAt).map((at) => (Date.parse(at) || 0) + 1),
         ...Object.values(current.mcpGatewayProfileDeletedAt).map((at) => (Date.parse(at) || 0) + 1),
       ),
     ),
   );
-  const deleted = { ...current.mcpGatewayProfileDeletedAt };
-  for (const profile of current.mcpGatewayProfiles) {
-    if (!patch.mcpGatewayProfiles.some((candidate) => candidate.profileId === profile.profileId))
-      deleted[profile.profileId] = mutationTime;
+  const skillDeleted = { ...current.agentSkillDeletedAt };
+  if (patch.agentSkills !== undefined) {
+    for (const skill of current.agentSkills) {
+      if (!patch.agentSkills.some((candidate) => candidate.skillId === skill.skillId))
+        skillDeleted[skill.skillId] = mutationTime;
+    }
   }
-  const profiles = patch.mcpGatewayProfiles.map((candidate): McpGatewayProfile => {
-    const existing = current.mcpGatewayProfiles.find(
-      (profile) => profile.profileId === candidate.profileId,
-    );
+  const skills = patch.agentSkills?.map((candidate) => {
+    const existing = current.agentSkills.find((skill) => skill.skillId === candidate.skillId);
     const {
-      revision: _candidateRevision,
-      createdAt: _candidateCreatedAt,
-      updatedAt: _candidateUpdatedAt,
-      ...candidateContent
+      revision: _revision,
+      createdAt: _created,
+      updatedAt: _updated,
+      ...rawContent
     } = candidate;
-    if (existing !== undefined) {
-      const {
-        revision: _existingRevision,
-        createdAt: _existingCreatedAt,
-        updatedAt: _existingUpdatedAt,
-        ...existingContent
-      } = existing;
-      if (Equal.equals(candidateContent, existingContent)) return existing;
+    const content = {
+      ...rawContent,
+      ...(candidate.resources === undefined && existing?.resources !== undefined
+        ? { resources: existing.resources }
+        : {}),
+    };
+    if (existing) {
+      const { revision: _r, createdAt: _c, updatedAt: _u, ...previous } = existing;
+      if (Equal.equals(content, previous)) return existing;
     }
     return {
-      ...candidateContent,
+      ...content,
       revision: (existing?.revision ?? 0) + 1,
       createdAt: existing?.createdAt ?? now,
       updatedAt: mutationTime,
     };
   });
-  return { ...patch, mcpGatewayProfiles: profiles, mcpGatewayProfileDeletedAt: deleted };
+  const deleted = { ...current.mcpGatewayProfileDeletedAt };
+  for (const profile of current.mcpGatewayProfiles) {
+    if (
+      patch.mcpGatewayProfiles &&
+      !patch.mcpGatewayProfiles.some((candidate) => candidate.profileId === profile.profileId)
+    )
+      deleted[profile.profileId] = mutationTime;
+  }
+  const profiles = (patch.mcpGatewayProfiles ?? current.mcpGatewayProfiles).map(
+    (candidate): McpGatewayProfile => {
+      const existing = current.mcpGatewayProfiles.find(
+        (profile) => profile.profileId === candidate.profileId,
+      );
+      const {
+        revision: _candidateRevision,
+        createdAt: _candidateCreatedAt,
+        updatedAt: _candidateUpdatedAt,
+        ...candidateContent
+      } = candidate;
+      if (existing !== undefined) {
+        const {
+          revision: _existingRevision,
+          createdAt: _existingCreatedAt,
+          updatedAt: _existingUpdatedAt,
+          ...existingContent
+        } = existing;
+        if (Equal.equals(candidateContent, existingContent)) return existing;
+      }
+      return {
+        ...candidateContent,
+        revision: (existing?.revision ?? 0) + 1,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: mutationTime,
+      };
+    },
+  );
+  return {
+    ...patch,
+    mcpGatewayProfiles: profiles,
+    mcpGatewayProfileDeletedAt: deleted,
+    ...(skills === undefined ? {} : { agentSkills: skills, agentSkillDeletedAt: skillDeleted }),
+  };
 }
 
 function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {

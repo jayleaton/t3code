@@ -1,10 +1,4 @@
-import {
-  ChevronsLeftRightEllipsisIcon,
-  EllipsisIcon,
-  PlusIcon,
-  QrCodeIcon,
-  TerminalIcon,
-} from "lucide-react";
+import { ChevronsLeftRightEllipsisIcon, PlusIcon, QrCodeIcon, TerminalIcon } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/unstable/reactivity";
 import {
@@ -68,7 +62,7 @@ import {
 } from "./settingsLayout";
 import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
 import { searchableSetting } from "./settingsSearch";
-import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
+import { EnvironmentActionsMenu } from "./EnvironmentActionsMenu";
 import {
   EnvironmentRow,
   environmentTransportLabel,
@@ -113,7 +107,7 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { QRCodeSvg } from "../ui/qr-code";
 import { Spinner } from "../ui/spinner";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
+import { MenuItem, MenuSeparator } from "../ui/menu";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -1618,34 +1612,20 @@ function SavedBackendListRow({
           {unsupported ? "Client not supported" : enabled ? "Switch off" : "Switch on"}
         </TooltipPopup>
       </Tooltip>
-      <Menu>
-        <MenuTrigger
-          render={
-            <Button
-              type="button"
-              variant="ghost-muted"
-              size="icon-xs"
-              disabled={isRemoving}
-              aria-label={`More actions for ${environment.label}`}
-            />
-          }
-        >
-          <EllipsisIcon className="size-3.5" />
-        </MenuTrigger>
-        <MenuPopup align="end">
-          <EnvironmentIconMenu
-            environmentId={environmentId}
-            serverConfig={environment.serverConfig}
-          />
-          {errorTraceId ? (
-            <MenuItem onClick={() => copyTraceId(errorTraceId)}>Copy trace ID</MenuItem>
-          ) : null}
-          <MenuSeparator />
-          <MenuItem variant="destructive" onClick={() => onRemove(environment)}>
-            {isRemoving ? "Removing…" : "Remove from this device…"}
-          </MenuItem>
-        </MenuPopup>
-      </Menu>
+      <EnvironmentActionsMenu
+        environmentId={environmentId}
+        label={environment.label}
+        serverConfig={environment.serverConfig}
+        disabled={isRemoving}
+      >
+        {errorTraceId ? (
+          <MenuItem onClick={() => copyTraceId(errorTraceId)}>Copy trace ID</MenuItem>
+        ) : null}
+        <MenuSeparator />
+        <MenuItem variant="destructive" onClick={() => onRemove(environment)}>
+          {isRemoving ? "Removing…" : "Remove from this device…"}
+        </MenuItem>
+      </EnvironmentActionsMenu>
     </EnvironmentRow>
   );
 }
@@ -3283,26 +3263,11 @@ export function ConnectionsSettings() {
             }
             headerAction={
               primaryEnvironmentId !== null ? (
-                <Menu>
-                  <MenuTrigger
-                    render={
-                      <Button
-                        type="button"
-                        variant="ghost-muted"
-                        size="icon-xs"
-                        aria-label="More actions for this machine"
-                      />
-                    }
-                  >
-                    <EllipsisIcon className="size-3.5" />
-                  </MenuTrigger>
-                  <MenuPopup align="end">
-                    <EnvironmentIconMenu
-                      environmentId={primaryEnvironmentId}
-                      serverConfig={primaryServerConfig}
-                    />
-                  </MenuPopup>
-                </Menu>
+                <EnvironmentActionsMenu
+                  environmentId={primaryEnvironmentId}
+                  label={primaryEnvironment?.label ?? "This machine"}
+                  serverConfig={primaryServerConfig}
+                />
               ) : null
             }
           >

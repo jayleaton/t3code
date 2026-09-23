@@ -5,7 +5,27 @@ therefore create several launcher processes. The launchers share one detached ga
 per loopback bridge address (default `127.0.0.1:47631`). Only that owner opens the durable
 SQLite store, ingests runtime events, and runs webhook delivery.
 
-The desktop connects to the owner's existing runtime bridge. Each launcher uses a separate,
+Enabling MCP Gateway makes the desktop an MCP host: it opens a stdio connection using
+its packaged launch config, including `ELECTRON_RUN_AS_NODE=1` and an explicit
+`T3_MCP_STATE_FILE`. This starts the owner before a managed agent needs it. The desktop
+registers a gateway relay on each granted environment over its authenticated T3 connection.
+New managed provider sessions receive a second, provider-local `/mcp/gateway` endpoint.
+That endpoint uses the existing provider-scoped credential and relays MCP messages to a
+separate desktop stdio connection for each session. The desktop executable, bridge token,
+and state path are never sent to remote machines. Codex, Claude, Cursor, Grok, OpenCode,
+and Antigravity use this path. An externally configured OpenCode server retains its own MCP
+configuration, as with the existing preview/device integration.
+
+Restart an existing provider session after enabling the gateway. Disabling it closes the
+relay sessions immediately; new sessions no longer receive the gateway endpoint. A session
+is pinned to the desktop selected at initialization, so a disconnect cannot silently switch
+its grants to those of another desktop. In-flight mutations are never replayed on reconnect.
+
+Standalone MCP hosts can still use the launch configuration in Settings. Use its explicit
+state file: legacy manual launchers default to `~/.t3code/mcp-gateway-v3.sqlite`, while the
+desktop uses its T3 home (normally `~/.t3`). All launchers sharing a port must agree.
+
+The desktop connects to the owner's runtime bridge. Each launcher uses a separate,
 mutually authenticated MCP connection on `/mcp` at the same address. MCP connections cannot
 replace the desktop connection or change its grants. Tool requests, responses and notification
 subscriptions stay separate between sessions; durable receipts and events are shared.
@@ -17,10 +37,15 @@ the launcher that started it exits. It shuts down after 30 seconds with no MCP s
 finishing any in-flight webhook delivery before closing the store.
 
 All launchers sharing an address must use the same bridge token, state file, retention setting,
-repository allowlist and initial grants. A different configuration, wrong token, unrelated
-listener or older gateway causes an explicit connection error. A launcher does not claim to
-provide a working MCP session when its bridge is unavailable. Independent gateways must use
-distinct bridge ports and state files.
+repository allowlist and initial grants. A launcher does not claim to provide a working MCP
+session when its bridge is unavailable. Independent gateways must use distinct bridge ports and
+state files.
+
+Connection failures name the class of mismatch instead of one generic error: a gateway protocol
+version mismatch, a state-file or configuration mismatch (different state file, retention,
+allowlist, or grants), or a bridge-token authentication failure. The diagnostics never include
+the token or other credentials. Start or stop the process that owns the port according to the
+reported class, then reconnect.
 
 If the owner stops, attached MCP sessions disconnect. Reconnect through the MCP host to start
 or attach to an owner again. The desktop uses its existing bridge reconnect behavior. The

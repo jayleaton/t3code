@@ -12,13 +12,12 @@ needs acceptance testing.
 ## Prerequisites and upstream movement
 
 This draft imports pingdotgg/t3code#2829 at
-`1ee1d0464271295d7b389cff343c5862caf31afa` (reviewed while open on 2026-09-17),
-on fork main `bff01b2d0e`. Fork PR #4 and the subsequent Agents workspace,
-encryption identity, upgrade repair, loading retry, and release fixes are now in
-that main baseline. The upstream history was rewritten since the earlier reviewed
-`163e8e65fa8c2391f19b547ec07e360a9ce4f470`. The refresh uses that reviewed tree
-as the three-way merge base, preserving separate fork-main and upstream merge
-commits. Do not infer the reviewed changes from a linear upstream commit range.
+`d6dcd101a349fffd90730f0bea589abfd5ce03f7` (reviewed while open on 2026-09-23),
+then integrates fork main `1423c895a78dab152e5019cba362a0c126017084`.
+Upstream rewrites this branch: use the previous reviewed tree
+`1ee1d0464271295d7b389cff343c5862caf31afa` as the explicit three-way base.
+Keep the upstream import and fork integration in separate merge commits;
+do not infer the reviewed changes from a linear upstream commit range.
 
 Do not install this draft over an existing installation. V2's event format,
 projection layout, receipt semantics, provider runtime, and client protocol are
@@ -31,10 +30,11 @@ permanent frozen copy of its runtime.
 
 ## Data boundary
 
-Fork main owns migrations through 54, including its upgrade repair and title state.
-The upstream V2 migration module is registered as migration **55**.
+Fork main owns migrations through 55, including its upgrade repair, title state,
+and viewed PR files. V2 is registered as **56**, followed by upstream index cleanup
+as **57**. A preflight guard rejects older draft V2 migration numbers before writes.
 This is a fork migration history, not interchangeable with an upstream V2 database.
-Tests use memory databases; integrated verification uses a read-only `VACUUM INTO`
+Tests use memory databases; integrated verification uses a read-only SQLite backup
 copy in the worktree. Never experiment against the installed database.
 
 Legacy import retains the profile snapshot. Upstream now owns the earlier draft's
@@ -79,7 +79,9 @@ Native settlement rechecks all eligible associated chats after a merge, retainin
 upstream protections for active, pinned, or explicitly unsettled work.
 
 The old local workspace MCP toolkit, V1 lifecycle/approval-batch orchestration,
-and provider-specific profile instruction files are superseded. Keep the profile
+and provider-specific profile instruction injection are superseded. Skill resources
+remain content-addressed, thread-scoped files, materialized at the common V2 turn
+boundary; their bodies never enter shell projections or gateway summaries. Keep the profile
 snapshot, profile revision/tombstone settings merge, client grant/delivery store,
 and machine-aware navigation. Desktop branding, fork release feed, bundled build
 version, and branded startup route remain independent of orchestration. Official
@@ -88,3 +90,9 @@ T3 Connect/auth/relay configuration is retained; this draft requires no fork clo
 V2 now owns durable queued runs, queued editing, worktree preparation, and draft
 promotion. The fork's V1 browser-local message queue and worktree activity recovery
 are superseded by those native paths; they must not be layered on top of V2.
+
+Command Code uses the fork CLI protocol helpers at a native V2 adapter boundary.
+The orchestrator owns queueing and terminal runs; the CLI owns resumable history.
+Headless approvals remain noninteractive and never elevate supervised permissions.
+The managed MCP bridge advertises gateway access only while an authorized client
+gateway is available, and that gateway still applies its own grants on every action.

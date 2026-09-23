@@ -1,4 +1,9 @@
-import { GitPullRequestIcon } from "lucide-react";
+import { useNowMinute } from "../../hooks/useNowMinute";
+import { formatRelativeTime } from "../../timestampFormat";
+import { PROVIDER_ICON_BY_PROVIDER } from "../chat/providerIconUtils";
+import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
+import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
+import { PinIcon } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { useState, useRef, useEffect, type CSSProperties } from "react";
 import { Link, useLocation } from "@tanstack/react-router";
@@ -6,7 +11,7 @@ import { PreviewCard, PreviewCardTrigger, PreviewCardPopup } from "../ui/preview
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { useProject } from "../../state/entities";
-import type { McpGatewayProfile } from "@t3tools/contracts";
+import { resolveEnvironmentMachineKind, type McpGatewayProfile } from "@t3tools/contracts";
 import { AgentIcon } from "./AgentIcon";
 import { useEnvironment } from "../../state/environments";
 import { AgentChatPreview } from "./AgentChatPreview";
@@ -23,9 +28,11 @@ import { useOpenPrLink } from "../../lib/openPullRequestLink";
 export function ThreadCard({
   thread,
   profile,
+  dragging = false,
   onContextMenu,
 }: {
   profile?: McpGatewayProfile | undefined;
+  dragging?: boolean;
   thread: EnvironmentThreadShell;
   onContextMenu: (
     thread: EnvironmentThreadShell,
@@ -34,6 +41,17 @@ export function ThreadCard({
 }) {
   const pathname = useLocation({ select: (location) => location.pathname });
   const environment = useEnvironment(thread.environmentId);
+  useNowMinute();
+  const timestamp = thread.latestUserMessageAt ?? thread.updatedAt;
+  const relativeTime = formatRelativeTime(timestamp)?.value;
+  const provider = environment?.serverConfig?.providers.find(
+    (candidate) => candidate.instanceId === thread.modelSelection.instanceId,
+  );
+  const ModelProviderIcon = provider ? PROVIDER_ICON_BY_PROVIDER[provider.driver] : undefined;
+  const model = provider?.models.find(
+    (candidate) => candidate.slug === thread.modelSelection.model,
+  );
+  const modelLabel = model?.name ?? thread.modelSelection.model;
   const project = useProject(scopeProjectRef(thread.environmentId, thread.projectId));
   const prReference = thread.linkedPullRequest ?? thread.branchPullRequest;
   const linkedPr = useLinkedThreadPullRequest(thread.environmentId, prReference);
@@ -88,7 +106,7 @@ export function ThreadCard({
       style={{ "--agent-color": profile?.color ?? "var(--muted-foreground)" } as CSSProperties}
     >
       <PreviewCard
-        open={!contextMenuOpen && previewOpen}
+        open={!dragging && !contextMenuOpen && previewOpen}
         onOpenChange={(open, details) => {
           if (
             !open &&
@@ -99,7 +117,7 @@ export function ThreadCard({
           )
             return;
           if (!open) editing.current = false;
-          setPreviewOpen(open);
+          setPreviewOpen(open && !dragging);
         }}
       >
         <PreviewCardTrigger
@@ -122,7 +140,31 @@ export function ThreadCard({
           className={`agent-thread agent-thread-${status}`}
         >
           <div className="agent-thread-title">
-            <strong>{thread.title}</strong>
+            <strong>
+              {thread.pinnedAt != null && (
+                <PinIcon aria-label="Pinned" className="agent-thread-pin" size={11} />
+              )}
+              {thread.title}
+            </strong>
+            <Tooltip>
+              <TooltipTrigger render={<time className="agent-thread-time" dateTime={timestamp} />}>
+                {relativeTime === "just now" ? "now" : relativeTime}
+              </TooltipTrigger>
+              <TooltipPopup>{new Date(timestamp).toLocaleString()}</TooltipPopup>
+            </Tooltip>
+          </div>
+          <div className="agent-thread-meta">
+            <span className="agent-thread-project">
+              <EnvironmentMachineIcon
+                kind={resolveEnvironmentMachineKind(environment?.serverConfig ?? null)}
+                className="mr-1 inline-block size-3.5 align-[-2px]"
+                aria-hidden="true"
+              />
+              {environment?.label ?? "Machine unavailable"}/
+              {project?.title ?? "Project unavailable"}
+            </span>
+          </div>
+          <div className="agent-thread-footer">
             <div className="agent-thread-identity">
               {thread.profileSnapshot && (
                 <span>
@@ -132,24 +174,22 @@ export function ThreadCard({
                   </span>
                 </span>
               )}
-              <span className={`agent-status agent-status-${status}`}>
-                {agentThreadStatusLabel(status)}
-              </span>
+              {ModelProviderIcon && (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span className="agent-thread-model" aria-label={`Model: ${modelLabel}`} />
+                    }
+                  >
+                    <ModelProviderIcon className="size-3.5" aria-hidden="true" />
+                  </TooltipTrigger>
+                  <TooltipPopup>{modelLabel}</TooltipPopup>
+                </Tooltip>
+              )}
             </div>
-          </div>
-          <div className="agent-thread-meta">
-            <span className="agent-thread-project">
-              {project?.title ?? "Project unavailable"}
-              {environment && <> · {environment.label}</>}
+            <span className={`agent-status agent-status-${status}`}>
+              {agentThreadStatusLabel(status)}
             </span>
-            <time className="agent-thread-time" dateTime={thread.updatedAt}>
-              {new Date(thread.updatedAt).toLocaleString(undefined, {
-                month: "short",
-                day: "numeric",
-                hour: "numeric",
-                minute: "2-digit",
-              })}
-            </time>
           </div>
           {environment?.connection.phase !== "connected" && (
             <p className="agent-thread-time">Environment unavailable</p>
@@ -198,7 +238,7 @@ export function ThreadCard({
                   />
                 }
               >
-                <GitPullRequestIcon size={12} aria-hidden="true" />
+                <PullRequestGlyph.pullRequest size={12} aria-hidden="true" />
                 <span className="agent-thread-pr-repository">{reference.repository}</span>
                 <span>#{reference.number}</span>
               </TooltipTrigger>

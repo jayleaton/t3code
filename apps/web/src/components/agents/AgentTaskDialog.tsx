@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import {
   createGatewayRuntimePortFromContext,
@@ -10,6 +11,7 @@ import {
   type McpGatewayProfile,
   type ThreadProfileSelection,
 } from "@t3tools/contracts";
+import { withReasoningEffortOption } from "@t3tools/shared/model";
 import { connectionAtomRuntime } from "../../connection/runtime";
 import { useEnvironments } from "../../state/environments";
 import { useProjects } from "../../state/entities";
@@ -30,6 +32,7 @@ export function AgentTaskDialog({
   onClose: () => void;
 }) {
   const runtime = useAtomValue(connectionAtomRuntime);
+  const navigate = useNavigate();
   const { environments } = useEnvironments();
   const projects = useProjects();
   const [initialDraft] = useState(() =>
@@ -98,29 +101,39 @@ export function AgentTaskDialog({
         interactionMode: profile.interactionMode,
       },
     );
+    // V2 implicit drafts inherit project defaults; an agent starts with explicit profile choices.
+    store.setRuntimeMode(draftId, profile.runtimeMode);
+    store.setInteractionMode(draftId, profile.interactionMode);
+    const options = withReasoningEffortOption(
+      modelSelection.options,
+      profile.reasoningEffort,
+      target?.serverConfig?.providers
+        .find((provider) => provider.instanceId === modelSelection.instanceId)
+        ?.models.find((model) => model.slug === modelSelection.model)?.capabilities
+        ?.optionDescriptors,
+    );
     store.setModelSelection(
       draftId,
       {
         instanceId: ProviderInstanceId.make(modelSelection.instanceId),
         model: modelSelection.model,
-        ...(modelSelection.options ? { options: modelSelection.options } : {}),
-        ...(profile.reasoningEffort
-          ? {
-              options: [
-                ...(modelSelection.options ?? []).filter(
-                  (option) => option.id !== "reasoningEffort",
-                ),
-                { id: "reasoningEffort", value: profile.reasoningEffort },
-              ],
-            }
-          : {}),
+        ...(options ? { options } : {}),
       },
       { replaceOptions: true },
     );
   };
   const finish = () => {
     useComposerDraftStore.getState().clearDraftThread(draftId);
+    // Open the new chat inside the Agents workspace instead of dropping the
+    // user back on the board with nothing selected.
+    const environmentId = target?.environmentId ?? draftSession?.environmentId;
     onClose();
+    if (environmentId) {
+      void navigate({
+        to: "/agents/$environmentId/$threadId",
+        params: { environmentId, threadId },
+      });
+    }
   };
   return (
     <Dialog

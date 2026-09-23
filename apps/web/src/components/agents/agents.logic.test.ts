@@ -4,10 +4,13 @@ import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { v2ThreadShell } from "./agents.testFixtures";
 import * as DateTime from "effect/DateTime";
 import {
+  planAgentThreadMove,
   agentThreadStatus,
   groupAgentThreads,
   isAgentChatInFocus,
   selectAgentWorkspaceThreads,
+  selectPinnedAgentThreads,
+  excludePinnedAgentThreads,
   resolveAgentTaskProject,
 } from "./agents.logic";
 const profile: McpGatewayProfile = {
@@ -146,6 +149,30 @@ describe("agent task project selection", () => {
   });
 });
 
+describe("pinned agent chats", () => {
+  it("lists unsettled pins newest-first and removes them from the filtered list", () => {
+    const pinned = { ...thread("pinned", "write"), pinnedAt: "2026-09-06T02:00:00.000Z" };
+    const olderPin = {
+      ...thread("older-pin", "review"),
+      environmentId: EnvironmentId.make("remote"),
+      pinnedAt: "2026-09-06T01:00:00.000Z",
+    };
+    const unpinned = thread("unpinned", "write");
+    const settledPin = {
+      ...thread("settled-pin", "write", "2026-09-06T03:00:00.000Z"),
+      pinnedAt: "2026-09-06T03:00:00.000Z",
+    };
+    const all = [unpinned, olderPin, settledPin, pinned];
+    const selected = selectPinnedAgentThreads(all);
+    expect(selected.map((item) => item.id)).toEqual(["pinned", "older-pin"]);
+    expect(excludePinnedAgentThreads(all, selected).map((item) => item.id)).toEqual([
+      "unpinned",
+      "settled-pin",
+    ]);
+    expect(excludePinnedAgentThreads([unpinned], [])).toEqual([unpinned]);
+  });
+});
+
 describe("agent workspace pull request search", () => {
   it("finds PR references without matching the title and still applies the agent filter", () => {
     const linked = {
@@ -167,5 +194,79 @@ describe("agent workspace pull request search", () => {
       linked,
     ]);
     expect(selectAgentWorkspaceThreads([linked], "other", "owner/repository").active).toEqual([]);
+  });
+});
+
+describe("agent active card order", () => {
+  const older = { ...thread("older", "write"), createdAt: "2026-09-01T00:00:00.000Z" };
+  const newer = thread("newer", "write");
+  const active = (items: readonly (typeof older)[]) =>
+    selectAgentWorkspaceThreads(items, null, "").active;
+
+  it("keeps creation order when messages, status, or update times change", () => {
+    expect(active([older, newer]).map((item) => item.id)).toEqual(["newer", "older"]);
+    expect(
+      active([
+        {
+          ...older,
+          updatedAt: "2026-09-20T00:00:00.000Z",
+          latestUserMessageAt: "2026-09-20T00:00:00.000Z",
+          hasPendingApprovals: true,
+        },
+        newer,
+      ]).map((item) => item.id),
+    ).toEqual(["newer", "older"]);
+  });
+
+  it("persists moves in both directions and leaves new chats at the top", () => {
+    const items = [older, newer];
+    const apply = (input: typeof items, moved: typeof older, direction: "up" | "down") => {
+      const plan = planAgentThreadMove(active(input), input, moved, direction)!;
+      return input.map((item) => ({
+        ...item,
+        activeOrderKey:
+          plan.find((assignment) => assignment.thread.id === item.id)?.orderKey ??
+          item.activeOrderKey,
+      }));
+    };
+    const moved = apply(items, older, "up");
+    expect(active(JSON.parse(JSON.stringify(moved))).map((item) => item.id)).toEqual([
+      "older",
+      "newer",
+    ]);
+    expect(active([...moved, thread("new-chat", "write")]).map((item) => item.id)).toEqual([
+      "new-chat",
+      "older",
+      "newer",
+    ]);
+    expect(active(apply(moved, older, "down")).map((item) => item.id)).toEqual(["newer", "older"]);
+    expect(planAgentThreadMove(active(items), items, newer, "up")).toBeNull();
+    expect(planAgentThreadMove(active(items), items, older, "down")).toBeNull();
+  });
+
+  it("excludes pinned and settled cards and scopes duplicate IDs to their machines", () => {
+    const remote = { ...older, environmentId: EnvironmentId.make("remote") };
+    const pinned = { ...thread("pinned", "write"), pinnedAt: "2026-09-06T00:00:00.000Z" };
+    const settled = thread("settled", "write", "2026-09-06T00:00:00.000Z");
+    const items = [older, remote, pinned, settled];
+    const plan = planAgentThreadMove(items, items, remote, "up")!;
+    const arranged = items.map((item) => ({
+      ...item,
+      activeOrderKey:
+        plan.find(
+          (assignment) =>
+            assignment.thread.id === item.id &&
+            assignment.thread.environmentId === item.environmentId,
+        )?.orderKey ?? null,
+    }));
+    expect(plan.every(({ thread }) => thread.pinnedAt == null && thread.settledAt === null)).toBe(
+      true,
+    );
+    expect(
+      active(arranged)
+        .filter((item) => item.pinnedAt == null)
+        .map((item) => item.environmentId),
+    ).toEqual(["remote", "local"]);
+    expect(planAgentThreadMove(items, items, pinned, "down")).toBeNull();
   });
 });

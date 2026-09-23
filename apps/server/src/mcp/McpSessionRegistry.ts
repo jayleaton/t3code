@@ -1,3 +1,4 @@
+import { closeActiveGatewayThread, closeAllActiveGatewaySessions } from "./McpGatewayBroker.ts";
 import { ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -152,6 +153,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           providerSessionId,
           providerInstanceId: scope.providerInstanceId,
           endpoint,
+          ...(scope.capabilities.has("gateway") ? { gatewayEndpoint: `${endpoint}/gateway` } : {}),
           authorizationHeader: `Bearer ${rawToken}`,
           browserToolsAvailable: scope.capabilities.has("preview"),
           capabilities: scope.capabilities,
@@ -239,6 +241,7 @@ export const issueActiveMcpCredential = (
   activeMcpSessionRegistry
     ? activeMcpSessionRegistry
         .revokeThread(request.threadId)
+        .pipe(Effect.andThen(closeActiveGatewayThread(request.threadId)))
         .pipe(Effect.andThen(activeMcpSessionRegistry.issue(request)))
     : Effect.sync((): McpIssuedCredential | undefined => undefined);
 
@@ -249,11 +252,15 @@ export const issueActiveMcpCredential = (
 export const touchActiveMcpThread = (threadId: ThreadId): Effect.Effect<void> =>
   activeMcpSessionRegistry ? activeMcpSessionRegistry.touch(threadId) : Effect.void;
 
-const revokeActiveMcpThread = (threadId: ThreadId): Effect.Effect<void> =>
-  activeMcpSessionRegistry ? activeMcpSessionRegistry.revokeThread(threadId) : Effect.void;
+export const revokeActiveMcpThread = (threadId: ThreadId): Effect.Effect<void> =>
+  (activeMcpSessionRegistry ? activeMcpSessionRegistry.revokeThread(threadId) : Effect.void).pipe(
+    Effect.andThen(closeActiveGatewayThread(threadId)),
+  );
 
-const revokeAllActiveMcpCredentials = (): Effect.Effect<void> =>
-  activeMcpSessionRegistry ? activeMcpSessionRegistry.revokeAll : Effect.void;
+export const revokeAllActiveMcpCredentials = (): Effect.Effect<void> =>
+  (activeMcpSessionRegistry ? activeMcpSessionRegistry.revokeAll : Effect.void).pipe(
+    Effect.andThen(closeAllActiveGatewaySessions()),
+  );
 
 /** Exposed for tests. */
 export const __testing = {

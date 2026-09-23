@@ -1,5 +1,6 @@
 import {
   type McpGatewayProfile,
+  type AgentSkill,
   type ServerProvider,
   type ThreadProfileSnapshot,
   OrchestrationDispatchCommandError,
@@ -24,6 +25,7 @@ export function resolveThreadCreateProfile<
   command: T,
   profiles: ReadonlyArray<McpGatewayProfile>,
   providers: ReadonlyArray<ServerProvider> = [],
+  skills: ReadonlyArray<AgentSkill> = [],
 ): T & { readonly profileSnapshot?: ThreadProfileSnapshot } {
   const selection = command.profileSelection;
   if (selection === undefined) return command;
@@ -113,6 +115,7 @@ export function resolveThreadCreateProfile<
     runtimeMode,
     interactionMode,
     profileSnapshot: {
+      skills: skills.filter((skill) => profile.skillIds?.includes(skill.skillId)),
       profileId: profile.profileId,
       profileName: profile.name,
       ...(profile.systemPrompt === undefined ? {} : { systemPrompt: profile.systemPrompt }),

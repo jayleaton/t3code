@@ -10,6 +10,17 @@ import {
 import type { McpGatewayProfile } from "@t3tools/contracts";
 
 export const agentColors = ["#f5b775", "#7bb5ff", "#b797ff", "#71d8bc", "#f293b7"];
+
+/** Stable palette color for an agent, by its position in the full profile list. */
+export function agentColorFor(
+  profile: McpGatewayProfile,
+  profiles: readonly McpGatewayProfile[],
+): string {
+  if (profile.color) return profile.color;
+  const index = profiles.findIndex((item) => item.profileId === profile.profileId);
+  return agentColors[(index < 0 ? 0 : index) % agentColors.length]!;
+}
+
 export const agentIcons = {
   orb: "Orb",
   bot: "Robot",

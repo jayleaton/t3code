@@ -108,27 +108,11 @@ function SidebarUpdateArchitectureWarningContent() {
   );
 }
 
-export function SidebarUpdatePill() {
+export function DesktopUpdateButton() {
   return isElectron ? <SidebarUpdateControl /> : null;
 }
 
 function SidebarUpdateControl() {
-  return (
-    <SidebarMenuItem className="ml-auto shrink-0">
-      <DesktopUpdateControl />
-    </SidebarMenuItem>
-  );
-}
-
-/**
- * Desktop-only update check/install button. Callers own the visuals through
- * `className`; update availability is exposed as `data-update-state`.
- */
-export function DesktopUpdateButton({ className }: { className?: string | undefined } = {}) {
-  return isElectron ? <DesktopUpdateControl className={className} /> : null;
-}
-
-function DesktopUpdateControl({ className }: { className?: string | undefined } = {}) {
   const state = useDesktopUpdateState();
   const [isActionPending, setIsActionPending] = useState(false);
   const [checkAnimationKey, setCheckAnimationKey] = useState(0);
@@ -318,25 +302,20 @@ function DesktopUpdateControl({ className }: { className?: string | undefined } 
       type="button"
       aria-label={tooltip}
       aria-disabled={isInteractionDisabled || undefined}
-      data-update-state={iconStatus}
-      className={
-        className ??
-        cn(
-          "inline-flex size-8 items-center justify-center rounded-full outline-hidden ring-ring transition-colors focus-visible:ring-2",
-          isInteractionDisabled ? "cursor-not-allowed" : "cursor-pointer",
-          showUpdateIconState
-            ? cn(
-                "bg-sidebar-control-surface text-sidebar-foreground",
-                !isInteractionDisabled && "hover:bg-sidebar-row-hover",
-              )
-            : cn(
-                "text-[var(--sidebar-icon-color)]",
-                !isInteractionDisabled &&
-                  "hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
-              ),
-          disabled && !showUpdateIconState && "opacity-60",
-        )
-      }
+      className={cn(
+        "inline-flex size-8 items-center justify-center rounded-full outline-hidden ring-ring transition-colors focus-visible:ring-2",
+        isInteractionDisabled ? "cursor-not-allowed" : "cursor-pointer",
+        showUpdateIconState
+          ? cn(
+              "bg-sidebar-control-surface text-sidebar-foreground",
+              !isInteractionDisabled && "hover:bg-sidebar-row-hover",
+            )
+          : cn(
+              "text-[var(--sidebar-icon-color)]",
+              !isInteractionDisabled && "hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
+            ),
+        disabled && !showUpdateIconState && "opacity-60",
+      )}
       onClick={handleAction}
       onBlur={() => {
         suppressReleaseNotesFocusOpen.current = false;
@@ -433,35 +412,11 @@ function DesktopUpdateControl({ className }: { className?: string | undefined } 
               state={state}
               tooltip={tooltip}
             />
-          }
-        />
-        {!showReleaseNotesPopover ? (
-          <TooltipPopup align="center" side="top" variant={showUpdateDetails ? "glass" : "default"}>
-            {tooltip}
-          </TooltipPopup>
+          </PopoverPopup>
         ) : null}
-      </Tooltip>
-      {showReleaseNotesPopover && state ? (
-        <PopoverPopup
-          align="center"
-          aria-label="Nightly update release notes"
-          className="max-w-none text-balance shadow-xl shadow-black/25"
-          initialFocus={false}
-          onKeyDownCapture={(event) => {
-            if (
-              event.key === "Escape" &&
-              releaseNotesPopupRef.current?.contains(document.activeElement)
-            ) {
-              suppressReleaseNotesFocusOpen.current = true;
-            }
-          }}
-          ref={releaseNotesPopupRef}
-          side="top"
-          tooltipStyle
-        >
-          <SidebarUpdateReleaseNotes shell={window.desktopBridge} state={state} tooltip={tooltip} />
-        </PopoverPopup>
-      ) : null}
-    </Popover>
+      </Popover>
+    </SidebarMenuItem>
   );
 }
+
+export const SidebarUpdatePill = DesktopUpdateButton;

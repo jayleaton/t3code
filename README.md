@@ -1,14 +1,27 @@
-# T3 Code
+# T3 Agents
 
-T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
+> [!IMPORTANT]
+> **T3 Agents is an unofficial fork and UI wrapper around [T3 Code](https://github.com/pingdotgg/t3code),
+> the original project by the T3 Tools team.**
+>
+> We do not maintain, own, or manage T3 Code. Everything underneath this interface — the server,
+> orchestration, provider adapters, and provider CLIs — comes from the upstream project, and we only
+> add UI on top of it. Because upstream keeps moving, things here can break, lag behind, or change
+> without notice. For the supported, maintained product, use
+> **[T3 Code](https://github.com/pingdotgg/t3code)**.
 
-Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, and Google Antigravity. If they're set up on your computer, T3 Code can control them.
+T3 Agents is a focused front end for the [T3 Code](https://github.com/pingdotgg/t3code) agent harness
+control surface. It lets you direct the agents on your machine — Claude Code, Codex, Cursor, Grok
+Build, OpenCode, and Google Antigravity — from one workspace, with the same mobile app
+([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824),
+[Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), web app, and
+[Electron-based desktop app](https://t3.codes) surfaces as upstream.
 
 ## "Wait, what are you selling me?"
 
-Nothing. We built T3 Code because we wanted the best possible development experience with agents. We were inspired by existing solutions like the Codex desktop app, Conductor, Claude Desktop and Cursor Glass, but none met our bar.
-
-We wanted something performant, remote-ready, and truly open. If we ever go the wrong direction, we want you to have everything you need to fork and build the editor that you want.
+Nothing. This fork exists because we wanted to build on top of T3 Code, not because we are selling
+anything. T3 Code itself was built by its own team to be performant, remote-ready, and truly open; if
+you want the project those words describe, use [the original](https://github.com/pingdotgg/t3code).
 
 ## Installation
 
@@ -40,7 +53,7 @@ To try it once without installing, run `npx t3@latest` instead.
 
 ### Desktop app
 
-Install the latest version of the desktop app from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), or from your favorite package registry:
+Install the latest version of the desktop app from this fork's [GitHub Releases](https://github.com/jayleaton/t3code/releases), or from your favorite package registry. Upstream releases live at [pingdotgg/t3code](https://github.com/pingdotgg/t3code/releases):
 
 #### Windows (`winget`)
 

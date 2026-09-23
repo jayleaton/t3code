@@ -32,6 +32,7 @@ const schema = getSchemaByResolvedExtensions(
       blockquote: false,
       bulletList: false,
       codeBlock: false,
+      code: false,
       heading: false,
       horizontalRule: false,
       listItem: false,
@@ -39,7 +40,6 @@ const schema = getSchemaByResolvedExtensions(
       dropcursor: false,
       gapcursor: false,
       trailingNode: false,
-      code: false,
     }),
     ComposerCodeExtension,
     stubAtom("composer-mention", { path: { default: "" }, source: { default: "" } }),
@@ -123,6 +123,14 @@ function roundTripPlain(value: string) {
 }
 
 describe("composer rich text document model", () => {
+  it.each([
+    "**Keep `maxOutput` / `limit.output` at 8192 minimum.**",
+    "*Use `max_tokens` here.*",
+    "~~Remove `old_setting`.~~",
+    "***`nested`***",
+  ])("accepts pasted inline code nested inside formatting: %s", (value) => {
+    expect(roundTrip(value).value).toBe(value);
+  });
   it.each(["€", "£", "¥", "₹", "₩", "₿", "𑿝"])(
     "canonicalizes %s skill aliases while preserving amounts",
     (prefix) => {

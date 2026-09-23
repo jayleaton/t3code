@@ -1328,6 +1328,18 @@ describe("thread outbox", () => {
     ).toBe("send");
   });
 
+  it("holds a non-steerable provider's follow-up until the running turn ends", () => {
+    const input = {
+      isCreation: false,
+      threadExists: true,
+      shellStatus: "live" as const,
+      environmentConnected: true,
+      supportsTurnSteering: false,
+    };
+    expect(resolveThreadOutboxDeliveryAction({ ...input, threadBusy: true })).toBe("wait");
+    expect(resolveThreadOutboxDeliveryAction({ ...input, threadBusy: false })).toBe("send");
+  });
+
   it("sends existing-thread messages whenever connected so queued messages can steer", () => {
     expect(
       resolveThreadOutboxDeliveryAction({

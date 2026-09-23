@@ -8,6 +8,9 @@ import { useEnvironments } from "../../state/environments";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
+import { Textarea } from "../ui/textarea";
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { buildMcpGatewayHostConfig } from "../../mcpGatewayLaunchConfig";
 import {
   Menu,
   MenuCheckboxItem,
@@ -505,6 +508,22 @@ export function McpGatewaySettings() {
     enabled ? getMcpGatewayStatus() : "disabled",
   );
   const [statusSnapshot, setStatusSnapshot] = useState(getMcpGatewayStatusSnapshot);
+  const [launch] = useState(() => window.desktopBridge?.getMcpGatewayLaunchConfig?.() ?? null);
+  const [failedCopy, setFailedCopy] = useState<string | null>(null);
+  const { copyToClipboard, isCopied } = useCopyToClipboard<string>({
+    target: "MCP gateway configuration",
+    onCopy: () => setFailedCopy(null),
+    onError: (_error, value) => setFailedCopy(value),
+  });
+  const copyConfig = (format: "standard" | "opencode") => {
+    if (launch === null) return;
+    const value = JSON.stringify(
+      buildMcpGatewayHostConfig(launch, token, getMcpGatewayPort())[format],
+      null,
+      2,
+    );
+    copyToClipboard(value, value);
+  };
 
   useEffect(() => {
     const onStatus = (event: Event) => setStatus((event as CustomEvent<McpGatewayUiState>).detail);
@@ -555,7 +574,7 @@ export function McpGatewaySettings() {
         <SettingsRow
           id="enable-mcp-gateway"
           title="Enable MCP Gateway"
-          description="Connect this client runtime to the local T3 MCP companion. Disabled by default; when disabled no gateway socket or session is created."
+          description="Start the desktop gateway and make it available to new T3-managed agent sessions on granted local and remote environments. Restart existing agent sessions to attach the gateway."
           status={`Status: ${status}`}
           control={
             <Switch
@@ -698,8 +717,43 @@ export function McpGatewaySettings() {
           }
         />
         <SettingsRow
+          title="External MCP hosts"
+          description="For assistants outside T3 Code, merge this configuration into their MCP settings on this computer, preserving existing servers, then reconnect the assistant. For OpenCode, use the OpenCode configuration in ~/.config/opencode/opencode.jsonc. The copied configuration includes your bridge token."
+          status={
+            launch === null
+              ? "Available in the installed desktop app."
+              : isCopied
+                ? "Copied"
+                : undefined
+          }
+          control={
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={launch === null || token.length < 16}
+                onClick={() => copyConfig("opencode")}
+              >
+                Copy OpenCode config
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={launch === null || token.length < 16}
+                onClick={() => copyConfig("standard")}
+              >
+                Copy MCP config
+              </Button>
+            </div>
+          }
+        >
+          {failedCopy !== null ? (
+            <Textarea readOnly aria-label="MCP configuration to copy manually" value={failedCopy} />
+          ) : null}
+        </SettingsRow>
+        <SettingsRow
           title="Companion endpoint"
-          description="Start t3-mcp-gateway in your MCP host with T3_MCP_BRIDGE_TOKEN. The companion listens only on loopback, rejects unauthenticated clients, and receives the persisted environment grants above after authentication."
+          description="The desktop starts the companion when enabled. Managed agents reach it through their T3 environment connection, including remote and relay connections. External MCP hosts can use the configuration above."
           status={`ws://127.0.0.1:${getMcpGatewayPort()}`}
         />
       </SettingsSection>

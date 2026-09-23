@@ -2688,13 +2688,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   wslRuntimeBundled = false,
   arch?: typeof BuildArch.Type,
 ) {
-  const appId = yield* Config.string("T3CODE_DESKTOP_APP_ID").pipe(
+  const appId = yield* Config.String("T3CODE_DESKTOP_APP_ID").pipe(
     Config.withDefault(DESKTOP_APP_ID),
   );
-  const productName = yield* Config.string("T3CODE_DESKTOP_PRODUCT_NAME").pipe(
+  const productName = yield* Config.String("T3CODE_DESKTOP_PRODUCT_NAME").pipe(
     Config.withDefault(resolveDesktopProductName(version)),
   );
-  const brand = yield* Config.string("T3CODE_DESKTOP_BRAND").pipe(Config.withDefault("t3"));
+  const brand = yield* Config.String("T3CODE_DESKTOP_BRAND").pipe(Config.withDefault("t3"));
   const buildConfig: Record<string, unknown> = {
     appId,
     productName,
@@ -3461,7 +3461,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   });
 
   const appVersion = options.version ?? serverPackageJson.version;
-  const distributionBrand = yield* Config.string("T3CODE_DESKTOP_BRAND").pipe(
+  const distributionBrand = yield* Config.String("T3CODE_DESKTOP_BRAND").pipe(
     Config.withDefault("t3"),
   );
   const iconAssets = resolveDesktopBuildIconAssets(appVersion, distributionBrand);
@@ -3899,7 +3899,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   if (options.platform === "win") {
     yield* validateWindowsPackagedPayload({
       stageDistDir,
-      appExecutableName: `${yield* Config.string("T3CODE_DESKTOP_PRODUCT_NAME").pipe(
+      appExecutableName: `${yield* Config.String("T3CODE_DESKTOP_PRODUCT_NAME").pipe(
         Config.withDefault(resolveDesktopProductName(appVersion)),
       )}.exe`,
       targetArch: options.arch,

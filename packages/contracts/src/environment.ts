@@ -118,6 +118,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server evaluates merge and inactivity settlement without a client. */
   threadAutoSettlement: Schema.optionalKey(Schema.Boolean),
   agentLibrarySync: Schema.optionalKey(Schema.Boolean),
+  /** Shared skill content and live agent instruction refresh. */
+  agentSkillsSync: Schema.optionalKey(Schema.Boolean),
+  agentSkillResources: Schema.optionalKey(Schema.Boolean),
   /** First-turn bootstrap retains the selected agent profile. Missing means update before sending agent drafts. */
   agentThreadBootstrap: Schema.optionalKey(Schema.Boolean),
   storageCleanup: Schema.optionalKey(Schema.Boolean),
@@ -184,6 +187,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       Absent on older servers, where clients must clone with the blocking
       `sourceControl.cloneRepository` call instead. */
   projectCloneTracking: Schema.optionalKey(Schema.Boolean),
+  /** Server persists a user-chosen machine name. */
+  environmentLabel: Schema.optionalKey(Schema.Boolean),
   /** Server detects `platform.machine` and persists the `environmentIcon`
       setting. Older servers drop the key on write, so clients show the
       picker inert rather than offering a choice that would never stick. */

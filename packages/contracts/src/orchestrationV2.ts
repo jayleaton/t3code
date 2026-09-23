@@ -1497,7 +1497,9 @@ export type OrchestrationV2LatestVisibleMessageSummary =
   typeof OrchestrationV2LatestVisibleMessageSummary.Type;
 
 export const OrchestrationV2ThreadShell = Schema.Struct({
-  profileSnapshot: Schema.optional(ThreadProfileSnapshot),
+  profileSnapshot: Schema.optional(
+    ThreadProfileSnapshot.mapFields(({ skills: _skills, ...fields }) => fields),
+  ),
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,

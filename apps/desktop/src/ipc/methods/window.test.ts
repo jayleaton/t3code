@@ -31,9 +31,10 @@ import {
   getWindowFullscreenState,
   pasteAsText,
   pickProjectFavicon,
-  resolveMcpGatewayLaunchConfig,
   probeRemoteEditors,
 } from "./window.ts";
+
+import { resolveMcpGatewayLaunchConfig } from "../../mcpGatewayLaunchConfig.ts";
 
 describe("resolveMcpGatewayLaunchConfig", () => {
   it("returns an Electron-as-Node command only for packaged desktop builds", () => {
@@ -42,6 +43,7 @@ describe("resolveMcpGatewayLaunchConfig", () => {
         isPackaged: false,
         executablePath: "/app/T3 Code",
         resourcesPath: "/app/resources",
+        stateFile: "/custom/t3/mcp-gateway-v3.sqlite",
       }),
     );
     assert.deepEqual(
@@ -49,11 +51,12 @@ describe("resolveMcpGatewayLaunchConfig", () => {
         isPackaged: true,
         executablePath: "/app/T3 Code",
         resourcesPath: "/app/resources",
+        stateFile: "/custom/t3/mcp-gateway-v3.sqlite",
       }),
       {
         command: "/app/T3 Code",
         args: ["/app/resources/t3-mcp-gateway.mjs"],
-        env: { ELECTRON_RUN_AS_NODE: "1" },
+        env: { ELECTRON_RUN_AS_NODE: "1", T3_MCP_STATE_FILE: "/custom/t3/mcp-gateway-v3.sqlite" },
       },
     );
   });

@@ -1,4 +1,5 @@
 import { remapComposerContextAttachments } from "@t3tools/shared/composerContextReferences";
+import { syncAgentLibraryBeforeUse } from "./agentLibrary.ts";
 import {
   type ThreadLinkedPullRequest,
   type ThreadProfileSelection,
@@ -387,12 +388,24 @@ export const deleteProject = Effect.fn("EnvironmentCommands.deleteProject")(func
   });
 });
 
+const synchronizedProfileSelection = Effect.fn("synchronizedProfileSelection")(function* (
+  selection: ThreadProfileSelection | undefined,
+) {
+  if (!selection) return undefined;
+  const library = yield* syncAgentLibraryBeforeUse(selection.profileId);
+  const profile = library?.mcpGatewayProfiles.find(
+    (item) => item.profileId === selection.profileId,
+  );
+  return profile ? { ...selection, revision: profile.revision } : selection;
+});
+
 export const createThread = Effect.fn("EnvironmentCommands.createThread")(function* (
   input: CreateThreadInput,
 ) {
+  const profileSelection = yield* synchronizedProfileSelection(input.profileSelection);
   return yield* dispatch({
     type: "thread.create",
-    ...(input.profileSelection === undefined ? {} : { profileSelection: input.profileSelection }),
+    ...(profileSelection === undefined ? {} : { profileSelection }),
     commandId: yield* allocateCommandId(input),
     createdBy: "user",
     creationSource: input.creationSource ?? "web",
@@ -649,14 +662,13 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
                 ? {}
                 : { branch: bootstrap.branch }),
             };
+    const profileSelection = yield* synchronizedProfileSelection(bootstrap?.profileSelection);
     return yield* request(ORCHESTRATION_V2_WS_METHODS.launchThread, {
       commandId,
       creationSource: input.creationSource ?? "web",
       threadId: input.threadId,
       ...(bootstrap === undefined ? { reuseExistingThread: true } : {}),
-      ...(bootstrap?.profileSelection === undefined
-        ? {}
-        : { profileSelection: bootstrap.profileSelection }),
+      ...(profileSelection === undefined ? {} : { profileSelection }),
       projectId: thread.projectId,
       title: input.titleSeed ?? thread.title,
       generateTitle: input.titleSeed !== undefined,

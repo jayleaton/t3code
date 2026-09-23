@@ -1111,3 +1111,17 @@ it("validates remote device hosts and rejects ambiguous host ids", () => {
   ).toThrow();
   expect(() => decodeDeviceHostSettings({ deviceHosts: [{ ...host, port: 0 }] })).toThrow();
 });
+
+describe("machine name settings", () => {
+  it("defaults old snapshots to no override and round-trips a custom name", () => {
+    expect(decodeServerSettings({}).environmentLabel).toBeNull();
+    expect(
+      encodeServerSettings(decodeServerSettings({ environmentLabel: "Build laptop" }))
+        .environmentLabel,
+    ).toBe("Build laptop");
+  });
+  it("rejects blank and oversized names", () => {
+    expect(() => decodeServerSettings({ environmentLabel: "   " })).toThrow();
+    expect(() => decodeServerSettings({ environmentLabel: "x".repeat(81) })).toThrow();
+  });
+});

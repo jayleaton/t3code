@@ -1,3 +1,6 @@
+import { EnvironmentRpcUnavailableError } from "../rpc/client.ts";
+import { AgentSkill, type ServerSettings, type ServerSettingsPatch } from "@t3tools/contracts";
+import { syncAgentLibraryBeforeUse } from "../operations/agentLibrary.ts";
 import { performAgentHandoff } from "./handoff.ts";
 import {
   RuntimeRequestId,
@@ -26,10 +29,11 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import { EnvironmentRegistry } from "../connection/registry.ts";
+import { EnvironmentSupervisor } from "../connection/supervisor.ts";
+import { ShellSnapshotLoader } from "../state/shellSnapshotHttp.ts";
 import {
   interruptThreadTurn,
   stopThreadSession,
-  createThread,
   respondToThreadApproval,
   startThreadTurn,
   settleThread,
@@ -42,6 +46,7 @@ import type {
   GatewayRuntimeEvent,
   GatewayRuntimeEventSource,
   GatewayRuntimePort,
+  GatewayThreadExecutionState,
 } from "./port.ts";
 
 export interface GatewayEffectRuntime {
@@ -144,6 +149,7 @@ function gatewayProjectProjection(project: OrchestrationV2ShellSnapshot["project
   return {
     id: project.id,
     title: project.title,
+    workspaceRoot: project.workspaceRoot,
     defaultModelSelection: project.defaultModelSelection,
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
@@ -152,18 +158,22 @@ function gatewayProjectProjection(project: OrchestrationV2ShellSnapshot["project
 
 export function gatewayStatusFromThread(
   thread: Pick<OrchestrationV2ThreadShell, "status" | "pendingRuntimeRequest">,
-): string {
+): GatewayThreadExecutionState {
   if (thread.pendingRuntimeRequest)
     return thread.pendingRuntimeRequest.kind === "user_input"
       ? "waiting-input"
       : "waiting-approval";
   if (thread.status === "preparing" || thread.status === "starting") return "queued";
-  return thread.status === "cancelled" ? "canceled" : thread.status;
+  if (thread.status === "cancelled" || thread.status === "rolled_back") return "stopped";
+  if (thread.status === "waiting") return "running";
+  return thread.status;
 }
 
-function profileAssociation(profile: OrchestrationV2ThreadShell["profileSnapshot"]) {
+function profileAssociation(
+  profile: import("@t3tools/contracts").ThreadProfileSnapshot | undefined,
+) {
   if (!profile) return undefined;
-  const { systemPrompt: _instructions, ...association } = profile;
+  const { systemPrompt: _instructions, skills: _skills, ...association } = profile;
   return association;
 }
 
@@ -175,6 +185,9 @@ function gatewayThreadShellProjection(thread: OrchestrationV2ThreadShell) {
     profileSnapshot: profileAssociation(thread.profileSnapshot),
     settledAt: iso(thread.settledAt),
     status: gatewayStatusFromThread(thread),
+    hasPendingApprovals:
+      thread.pendingRuntimeRequest !== null && thread.pendingRuntimeRequest.kind !== "user_input",
+    hasPendingUserInput: thread.pendingRuntimeRequest?.kind === "user_input",
     modelSelection: thread.modelSelection,
     latestRunId: thread.latestRunId,
     activeRunId: thread.activeRunId,
@@ -195,6 +208,8 @@ export function gatewayThreadProjection(projection: OrchestrationV2ThreadProject
       status: latestRun?.status ?? "idle",
       pendingRuntimeRequest: pending ?? null,
     }),
+    hasPendingApprovals: pending !== undefined && pending.kind !== "user_input",
+    hasPendingUserInput: pending?.kind === "user_input",
     modelSelection: thread.modelSelection,
     profileSnapshot: profileAssociation(thread.profileSnapshot),
     settledAt: iso(thread.settledAt),
@@ -264,7 +279,7 @@ const decodeProfile = Schema.decodeUnknownSync(McpGatewayProfile);
 const decodeProfiles = Schema.decodeUnknownEffect(Schema.Array(McpGatewayProfile));
 
 export function createGatewayRuntimeEventSourceFromContext(
-  context: Context.Context<EnvironmentRegistry | Crypto.Crypto>,
+  context: Context.Context<EnvironmentRegistry | Crypto.Crypto | ShellSnapshotLoader>,
 ): GatewayRuntimeEventSource {
   return {
     subscribe: (listener, subscription) => {
@@ -272,10 +287,8 @@ export function createGatewayRuntimeEventSourceFromContext(
       const stream = Stream.unwrap(
         Effect.gen(function* () {
           const registry = yield* EnvironmentRegistry;
-          return Stream.concat(
-            Stream.fromEffect(SubscriptionRef.get(registry.entries)),
-            SubscriptionRef.changes(registry.entries),
-          ).pipe(
+          // changes already includes the current entries; do not start a second replay.
+          return SubscriptionRef.changes(registry.entries).pipe(
             Stream.switchMap((entries) =>
               Stream.mergeAll(
                 [...entries.values()]
@@ -285,10 +298,14 @@ export function createGatewayRuntimeEventSourceFromContext(
                     return registry
                       .runStream(
                         environmentId,
-                        subscribe(ORCHESTRATION_V2_WS_METHODS.subscribeShell, {
-                          afterSequence:
-                            subscription.afterSequenceByEnvironment[environmentId] ?? 0,
-                        }),
+                        subscribe(
+                          ORCHESTRATION_V2_WS_METHODS.subscribeShell,
+                          {
+                            afterSequence:
+                              subscription.afterSequenceByEnvironment[environmentId] ?? 0,
+                          },
+                          { streamBufferSize: 500 },
+                        ),
                       )
                       .pipe(
                         Stream.map((item) => gatewayEventFromV2(environmentId, item)),
@@ -318,17 +335,39 @@ export function createGatewayRuntimePort(
   const run = <A, E>(effect: Effect.Effect<A, E, EnvironmentRegistry | Crypto.Crypto>) =>
     runtime.runPromise(effect);
 
-  // Serialize profile read/modify/write operations issued by this host.
+  // Serialize shared library read/modify/write operations issued by this host.
   let profileQueue: Promise<unknown> = Promise.resolve();
-  const mutateProfiles = (
+  const mutateLibrary = (
     rawEnvironmentId: string,
-    mutate: (profiles: ReadonlyArray<McpGatewayProfile>) => ReadonlyArray<McpGatewayProfile>,
+    mutate: (settings: ServerSettings) => ServerSettingsPatch,
+    requiresResources = false,
   ) => {
     const operation = profileQueue.then(() =>
       run(
         Effect.gen(function* () {
           const registry = yield* EnvironmentRegistry;
           const environmentId = EnvironmentId.make(rawEnvironmentId);
+          if (requiresResources) {
+            yield* registry.run(
+              environmentId,
+              Effect.gen(function* () {
+                const supervisor = yield* EnvironmentSupervisor;
+                const session = yield* SubscriptionRef.get(supervisor.session);
+                if (
+                  Option.isNone(session) ||
+                  !(yield* session.value.initialConfig).environment.capabilities.agentSkillResources
+                ) {
+                  return yield* Effect.fail(
+                    new EnvironmentRpcUnavailableError({
+                      environmentId,
+                      message: "Update T3 on this machine to import skill resources.",
+                    }),
+                  );
+                }
+              }),
+            );
+          }
+          yield* registry.run(environmentId, syncAgentLibraryBeforeUse());
           const settings = yield* registry.run(
             environmentId,
             request(WS_METHODS.serverGetSettings, {}),
@@ -336,7 +375,7 @@ export function createGatewayRuntimePort(
           return yield* registry.run(
             environmentId,
             request(WS_METHODS.serverUpdateSettings, {
-              patch: { mcpGatewayProfiles: mutate(settings.mcpGatewayProfiles) },
+              patch: mutate(settings),
             }),
           );
         }),
@@ -345,7 +384,74 @@ export function createGatewayRuntimePort(
     profileQueue = operation.catch(() => undefined);
     return operation;
   };
+  const mutateProfiles = (
+    environmentId: string,
+    mutate: (profiles: ReadonlyArray<McpGatewayProfile>) => ReadonlyArray<McpGatewayProfile>,
+  ) =>
+    mutateLibrary(environmentId, (settings) => ({
+      mcpGatewayProfiles: mutate(settings.mcpGatewayProfiles),
+    }));
+  const decodeSkill = Schema.decodeUnknownSync(AgentSkill);
   const port: GatewayRuntimePort = {
+    listSkills: async (environmentId) => {
+      await port.syncAgentLibrary!(environmentId);
+      return run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          const settings = yield* registry.run(
+            EnvironmentId.make(environmentId),
+            request(WS_METHODS.serverGetSettings, {}),
+          );
+          return settings.agentSkills;
+        }),
+      );
+    },
+    createSkill: async (environmentId, input) => {
+      const skillId = await run(
+        Effect.gen(function* () {
+          return yield* (yield* Crypto.Crypto).randomUUIDv4;
+        }),
+      );
+      const now = await run(DateTime.now.pipe(Effect.map(DateTime.formatIso)));
+      const skill = decodeSkill({ ...input, skillId, revision: 1, createdAt: now, updatedAt: now });
+      const settings = await mutateLibrary(
+        environmentId,
+        (current) => ({
+          agentSkills: [...current.agentSkills, skill],
+        }),
+        !!input.resources?.length,
+      );
+      return settings.agentSkills.find((item) => item.skillId === skillId)!;
+    },
+    updateSkill: async (environmentId, skillId, patch) => {
+      const settings = await mutateLibrary(
+        environmentId,
+        (current) => {
+          if (!current.agentSkills.some((skill) => skill.skillId === skillId))
+            throw new Error(`Skill ${skillId} was not found.`);
+          return {
+            agentSkills: current.agentSkills.map((skill) =>
+              skill.skillId === skillId ? decodeSkill({ ...skill, ...patch }) : skill,
+            ),
+          };
+        },
+        patch.resources !== undefined,
+      );
+      return settings.agentSkills.find((skill) => skill.skillId === skillId)!;
+    },
+    deleteSkill: async (environmentId, skillId) => {
+      await mutateLibrary(environmentId, (current) => ({
+        agentSkills: current.agentSkills.filter((skill) => skill.skillId !== skillId),
+      }));
+      return { skillId, status: "succeeded" };
+    },
+    syncAgentLibrary: (environmentId) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          yield* registry.run(EnvironmentId.make(environmentId), syncAgentLibraryBeforeUse());
+        }),
+      ),
     unsettleThread: (environmentId, threadId) =>
       run(
         Effect.gen(function* () {
@@ -378,6 +484,7 @@ export function createGatewayRuntimePort(
         }),
       ),
     handoffThread: async (input) => {
+      await port.syncAgentLibrary!(input.environmentId);
       const source = await run(shellSnapshot(EnvironmentId.make(input.sourceEnvironmentId)));
       const thread = source.threads.find((t) => t.id === input.sourceThreadId);
       const project = source.projects.find((p) => p.id === thread?.projectId);
@@ -622,6 +729,11 @@ export function createGatewayRuntimePort(
         Effect.gen(function* () {
           const registry = yield* EnvironmentRegistry;
           const environmentId = EnvironmentId.make(input.environmentId);
+          if (input.profileSelection)
+            yield* registry.run(
+              environmentId,
+              syncAgentLibraryBeforeUse(input.profileSelection.profileId),
+            );
           const config = yield* registry.run(
             environmentId,
             request(WS_METHODS.serverGetConfig, {}),
@@ -643,7 +755,7 @@ export function createGatewayRuntimePort(
 
           yield* registry.run(
             EnvironmentId.make(input.environmentId),
-            createThread({
+            request(ORCHESTRATION_V2_WS_METHODS.launchThread, {
               commandId: CommandId.make(input.requestId),
               threadId: ThreadId.make(input.threadId),
               projectId: ProjectId.make(input.projectId),
@@ -662,9 +774,16 @@ export function createGatewayRuntimePort(
               interactionMode: input.interactionMode ?? profile?.interactionMode ?? "default",
               ...(input.profileSelection === undefined
                 ? {}
-                : { profileSelection: input.profileSelection }),
-              branch: null,
-              worktreePath: null,
+                : {
+                    profileSelection: {
+                      ...input.profileSelection,
+                      revision: profile?.revision ?? input.profileSelection.revision,
+                    },
+                  }),
+              workspaceStrategy:
+                input.workspaceMode === "worktree"
+                  ? { type: "worktree", baseRef: input.baseBranch?.trim() || "HEAD" }
+                  : { type: "root", ...(input.baseBranch ? { branch: input.baseBranch } : {}) },
             }),
           );
           return {

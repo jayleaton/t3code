@@ -1,3 +1,5 @@
+import { AgentSkill, MAX_SKILL_LIBRARY_BYTES, skillResourceBytes } from "./agentSkills.ts";
+export { AgentSkill } from "./agentSkills.ts";
 import { SshDeviceHostConfigs } from "./device.ts";
 import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
@@ -738,6 +740,31 @@ export const GrokSettings = makeProviderSettingsSchema(
 );
 export type GrokSettings = typeof GrokSettings.Type;
 
+export const CommandCodeSettings = makeProviderSettingsSchema(
+  {
+    // Users opt in from Settings.
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("commandcode").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the Command Code CLI binary.",
+        providerSettingsForm: { placeholder: "commandcode", clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(CustomModelSetting).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath"],
+  },
+);
+export type CommandCodeSettings = typeof CommandCodeSettings.Type;
+
 /**
  * Antigravity ACP auth methods. Personal and Enterprise open a Google sign-in
  * in the browser. The API key and Agent Platform methods take credentials from
@@ -1036,12 +1063,30 @@ export const BackgroundActivitySettings = Schema.Struct({
 }).pipe(Schema.withDecodingDefault(Effect.succeed({})));
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
+const AgentSkills = Schema.Array(AgentSkill).check(
+  Schema.isMaxLength(200),
+  Schema.makeFilter(
+    (skills) =>
+      skills.reduce(
+        (total, skill) =>
+          total +
+          (skill.resources ?? []).reduce(
+            (size, file) => size + skillResourceBytes(file.contentBase64),
+            0,
+          ),
+        0,
+      ) <= MAX_SKILL_LIBRARY_BYTES,
+    { message: "Skill library resources exceed 8 MiB" },
+  ),
+);
+
 export const McpGatewayProfile = Schema.Struct({
   description: Schema.optional(Schema.String.check(Schema.isMaxLength(280))),
   color: Schema.optional(Schema.String.check(Schema.isPattern(/^#[0-9a-fA-F]{6}$/))),
   icon: Schema.optional(
     Schema.Literals(["orb", "bot", "code", "pen", "search", "shield", "sparkles", "terminal"]),
   ),
+  skillIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   systemPrompt: Schema.optional(Schema.String.check(Schema.isMaxLength(32_000))),
   profileId: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
@@ -1337,6 +1382,10 @@ export const ServerSettings = Schema.Struct({
   defaultThemeSetAt: Schema.String.check(Schema.isMaxLength(64)).pipe(
     Schema.withDecodingDefault(Effect.succeed("")),
   ),
+  /** A shared display name for this machine. Null restores its connection label. */
+  environmentLabel: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(80))).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   /**
    * The icon clients draw for this environment. Null means "use what the
    * server detected" (`environment.platform.machine`), falling back to a
@@ -1368,6 +1417,10 @@ export const ServerSettings = Schema.Struct({
   ),
   addProjectBaseDirectory: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   mcpGatewayProfileDeletedAt: Schema.Record(Schema.String, Schema.String).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  agentSkills: AgentSkills.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  agentSkillDeletedAt: Schema.Record(Schema.String, Schema.String).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   mcpGatewayProfiles: McpGatewayProfiles.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
@@ -1410,6 +1463,7 @@ export const ServerSettings = Schema.Struct({
     codex: CodexSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     cursor: CursorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    commandcode: CommandCodeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     grok: GrokSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     pi: PiSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     opencode: OpenCodeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
@@ -1570,6 +1624,12 @@ const GrokSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
 });
 
+const CommandCodeSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
+});
+
 const AntigravitySettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   authMethod: Schema.optionalKey(AntigravityAuthMethod),
@@ -1669,12 +1729,17 @@ export const ServerSettingsPatch = Schema.Struct({
   automaticGitFetchInterval: Schema.optionalKey(Schema.DurationFromMillis),
   providerHealthRefreshInterval: Schema.optionalKey(Schema.DurationFromMillis),
   backgroundActivityProfile: Schema.optionalKey(BackgroundActivityProfile),
+  environmentLabel: Schema.optionalKey(
+    Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(80))),
+  ),
   environmentIcon: Schema.optionalKey(Schema.NullOr(EnvironmentMachineKind)),
   defaultThreadEnvMode: Schema.optionalKey(Schema.NullOr(ThreadEnvMode)),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
   worktreeSubmodules: Schema.optionalKey(Schema.NullOr(WorktreeSubmodules)),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   mcpGatewayProfileDeletedAt: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  agentSkills: Schema.optionalKey(AgentSkills),
+  agentSkillDeletedAt: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   mcpGatewayProfiles: Schema.optionalKey(McpGatewayProfiles),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   sourceControlWritingStyle: Schema.optionalKey(
@@ -1698,6 +1763,7 @@ export const ServerSettingsPatch = Schema.Struct({
       codex: Schema.optionalKey(CodexSettingsPatch),
       claudeAgent: Schema.optionalKey(ClaudeSettingsPatch),
       cursor: Schema.optionalKey(CursorSettingsPatch),
+      commandcode: Schema.optionalKey(CommandCodeSettingsPatch),
       grok: Schema.optionalKey(GrokSettingsPatch),
       pi: Schema.optionalKey(PiSettingsPatch),
       opencode: Schema.optionalKey(OpenCodeSettingsPatch),
@@ -1815,10 +1881,29 @@ export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;
 /** Reconcile portable agents by identity; deletion wins an equal timestamp. */
 export function mergeAgentLibraries(
   libraries: ReadonlyArray<{
+    readonly agentSkills?: ReadonlyArray<AgentSkill>;
+    readonly agentSkillDeletedAt?: Readonly<Record<string, string>>;
     readonly mcpGatewayProfiles: ReadonlyArray<McpGatewayProfile>;
     readonly mcpGatewayProfileDeletedAt?: Readonly<Record<string, string>>;
   }>,
 ) {
+  const skillDeleted: Record<string, string> = {};
+  const skills = new Map<string, AgentSkill>();
+  for (const library of libraries) {
+    for (const [id, at] of Object.entries(library.agentSkillDeletedAt ?? {})) {
+      if (at > (skillDeleted[id] ?? "")) skillDeleted[id] = at;
+    }
+    for (const skill of library.agentSkills ?? []) {
+      const previous = skills.get(skill.skillId);
+      if (
+        !previous ||
+        skill.updatedAt > previous.updatedAt ||
+        (skill.updatedAt === previous.updatedAt && JSON.stringify(skill) > JSON.stringify(previous))
+      ) {
+        skills.set(skill.skillId, skill);
+      }
+    }
+  }
   const deleted: Record<string, string> = {};
   const profiles = new Map<string, McpGatewayProfile>();
   for (const library of libraries) {
@@ -1831,7 +1916,9 @@ export function mergeAgentLibraries(
         !previous ||
         candidate.updatedAt > previous.updatedAt ||
         (candidate.updatedAt === previous.updatedAt &&
-          JSON.stringify(candidate) > JSON.stringify(previous))
+          ((candidate.skillIds !== undefined && previous.skillIds === undefined) ||
+            ((candidate.skillIds === undefined) === (previous.skillIds === undefined) &&
+              JSON.stringify(candidate) > JSON.stringify(previous))))
       )
         profiles.set(candidate.profileId, candidate);
     }
@@ -1851,9 +1938,29 @@ export function mergeAgentLibraries(
       (a, b) => a.createdAt.localeCompare(b.createdAt) || a.profileId.localeCompare(b.profileId),
     );
   return {
+    agentSkills: [...skills.values()]
+      .filter((skill) => skill.updatedAt > (skillDeleted[skill.skillId] ?? ""))
+      .sort((a, b) => a.skillId.localeCompare(b.skillId)),
+    agentSkillDeletedAt: Object.fromEntries(
+      Object.entries(skillDeleted).sort(([a], [b]) => a.localeCompare(b)),
+    ),
     mcpGatewayProfiles: result,
     mcpGatewayProfileDeletedAt: Object.fromEntries(
       Object.entries(deleted).sort(([a], [b]) => a.localeCompare(b)),
     ),
+  };
+}
+
+/** Older servers cannot retain skill content or assignments; compare only their supported fields. */
+export function agentLibraryForSync(
+  library: ReturnType<typeof mergeAgentLibraries>,
+  supportsSkills: boolean,
+) {
+  if (supportsSkills) return library;
+  return {
+    mcpGatewayProfiles: library.mcpGatewayProfiles.map(
+      ({ skillIds: _skillIds, ...profile }) => profile,
+    ),
+    mcpGatewayProfileDeletedAt: library.mcpGatewayProfileDeletedAt,
   };
 }

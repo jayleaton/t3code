@@ -1283,7 +1283,7 @@ export function threadShellFromProjection(
     projectId: projection.thread.projectId,
     ...(projection.thread.profileSnapshot === undefined
       ? {}
-      : { profileSnapshot: projection.thread.profileSnapshot }),
+      : { profileSnapshot: shellProfileSnapshot(projection.thread.profileSnapshot) }),
     title: projection.thread.title,
     providerInstanceId: projection.thread.providerInstanceId,
     modelSelection: projection.thread.modelSelection,
@@ -1516,7 +1516,7 @@ function shellFromState(input: {
     projectId: input.state.thread.projectId,
     ...(input.state.thread.profileSnapshot === undefined
       ? {}
-      : { profileSnapshot: input.state.thread.profileSnapshot }),
+      : { profileSnapshot: shellProfileSnapshot(input.state.thread.profileSnapshot) }),
     title: input.state.thread.title,
     providerInstanceId: input.state.thread.providerInstanceId,
     modelSelection: input.state.thread.modelSelection,
@@ -5848,3 +5848,10 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
     return service;
   }),
 );
+
+function shellProfileSnapshot({
+  skills: _skills,
+  ...association
+}: import("@t3tools/contracts").ThreadProfileSnapshot) {
+  return association;
+}

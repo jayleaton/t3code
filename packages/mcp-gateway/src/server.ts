@@ -1,10 +1,11 @@
+import { skillFields } from "./skillInput.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import * as NodeCrypto from "node:crypto";
 import * as DateTime from "effect/DateTime";
 import { z } from "zod";
 
-import { GatewayError, type GatewayRuntimePort } from "./port.ts";
+import { GatewayError, GATEWAY_THREAD_EXECUTION_STATES, type GatewayRuntimePort } from "./port.ts";
 import {
   callGatewayTool,
   handoffInputSchema,
@@ -31,6 +32,7 @@ const pr = {
   number: z.number().int().min(1),
 };
 const webhook = { environmentId, webhookId: z.string().trim().min(1) };
+const executionState = z.enum(GATEWAY_THREAD_EXECUTION_STATES);
 
 const profileFields = {
   name: z.string().trim().min(1).max(200),
@@ -44,6 +46,7 @@ const profileFields = {
   icon: z
     .enum(["orb", "bot", "code", "pen", "search", "shield", "sparkles", "terminal"])
     .optional(),
+  skillIds: z.array(z.string().trim().min(1)).optional(),
   systemPrompt: z.string().max(32_000).optional(),
   reasoningEffort: z.string().trim().min(1).optional(),
   runtimeMode: z.enum([
@@ -57,19 +60,67 @@ const profileFields = {
   environmentIds: z.array(z.string().trim().min(1)).optional(),
 };
 
+const createThreadFields = {
+  environmentId,
+  projectId: z.string().trim().min(1),
+  title: z.string().trim().min(1),
+  profile: z.string().trim().min(1).optional(),
+  profileId: z.string().trim().min(1).optional(),
+  reasoningEffort: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe("Thinking level override. Omit to use the agent's configured level."),
+  modelSelection: z
+    .object({ instanceId: z.string().trim().min(1), model: z.string().trim().min(1) })
+    .strict()
+    .optional(),
+  runtimeMode: z
+    .enum(["approval-required", "auto-accept-edits", "auto", "full-access"])
+    .optional()
+    .describe("Permission mode for chats without an agent. Agent chats always use the agent's."),
+  interactionMode: z.enum(["default", "plan"]).optional(),
+  workspaceMode: z.enum(["checkout", "worktree"]).optional(),
+  baseBranch: z.string().trim().min(1).optional(),
+  idempotencyKey,
+  correlationId: optionalRequestContext.correlationId,
+};
+
 type ToolSpec = readonly [description: string, inputSchema: z.ZodRawShape];
 
 const TOOL_SPECS = {
+  t3_list_skills: [
+    "List the shared T3 skills library, including SKILL.md contents, base64 resources, executable flags and revisions. Use skillId with t3_update_skill or assign skillIds using t3_update_agent.",
+    { environmentId },
+  ],
+  t3_create_skill: [
+    "Create a reusable skill in the shared T3 Agents library. Supply a name, when-to-use description, and full SKILL.md Markdown content. Optional resources contain relative path, contentBase64, and executable fields; include scripts, references and binary assets without inlining them. Limits: 256 files, 1 MiB per file, 2 MiB per skill. Requires create or admin access. Assign the returned skillId to agents with t3_update_agent. Changes sync across connected machines and apply to newly created threads. Existing threads keep their starting skills.",
+    { environmentId, ...skillFields },
+  ],
+  t3_update_skill: [
+    "Update a shared skill bundle by skillId. Omit resources to preserve files; supply resources to replace all files (an empty array removes them). New threads for assigned agents receive the change. Existing threads keep their starting skills. Requires create or admin access.",
+    {
+      environmentId,
+      skillId: z.string().trim().min(1),
+      patch: z.object(skillFields).partial().strict(),
+    },
+  ],
+  t3_delete_skill: [
+    "Delete a shared skill from the library. New threads will no longer include it. Existing threads keep their starting skills. Requires create or admin access.",
+    { environmentId, skillId: z.string().trim().min(1) },
+  ],
   t3_list_agents: [
     "List agents from the shared Agents library available on this environment, including specialization descriptions, instructions and model settings. Use t3_get_agents_view to find their chats/runs. Use profileId to create chats or hand work to an agent.",
     { environmentId, ...optionalRequestContext },
   ],
   t3_get_agents_view: [
-    "List the Agents board for an environment: agent specializations and their chat/run summaries, including thread IDs and status. Use this to find an agent’s running or completed work without searching unrelated threads. Filter by profileId and state (active means unsettled, including completed chats). Use t3_get_thread or t3_open_thread with a returned threadId for details.",
+    "List the Agents board for an environment: agent specializations and their chat/run summaries, including thread IDs and status. Use this to find an agent’s running or completed work without searching unrelated threads. Filter by profileId, state (active means unsettled, including completed chats), and executionState (for example running or waiting-input). Use t3_get_thread or t3_open_thread with a returned threadId for details.",
     {
       environmentId,
       profileId: z.string().trim().min(1).optional(),
       state: z.enum(["active", "settled", "all"]).optional(),
+      executionState: executionState.optional(),
       ...optionalRequestContext,
     },
   ],
@@ -78,7 +129,7 @@ const TOOL_SPECS = {
     { environmentId, ...profileFields },
   ],
   t3_update_agent: [
-    "Update an agent by profileId. New threads use the new revision; existing threads stay unchanged.",
+    "Update an agent by profileId. Updated configuration and assigned skillIds apply to newly created threads. Existing threads keep their starting configuration and skill contents.",
     {
       environmentId,
       profileId: z.string().trim().min(1),
@@ -123,10 +174,11 @@ const TOOL_SPECS = {
     { environmentId, ...optionalRequestContext },
   ],
   t3_list_threads: [
-    "List chats in one T3 environment, optionally filtered by agent profileId, project, and active/settled state.",
+    "List chats in one T3 environment, optionally filtered by agent profileId, project, active/settled state, and executionState. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly.",
     {
       environmentId,
       state: z.enum(["all", "active", "settled"]).optional(),
+      executionState: executionState.optional(),
       projectId: z.string().trim().min(1).optional(),
       profileId: z.string().trim().min(1).optional(),
       ...optionalRequestContext,
@@ -161,6 +213,17 @@ const TOOL_SPECS = {
     "Read durable operation events after a sequence cursor.",
     { environmentId, threadId: threadId.optional(), ...page, ...optionalRequestContext },
   ],
+  t3_wait_for_thread_status: [
+    "Wait (bounded) for one chat’s execution status to change. Reuses the durable replay/live event stream: pass afterSequence from a previous result to catch up without missing a transition, or omit it to start from the current position. Returns status, previousStatus, changed, matched, timedOut, and cursor for the next call. Waits until timeoutMs (default 30000) elapses; a waiting-input/waiting-approval status means the chat needs the user.",
+    {
+      environmentId,
+      threadId,
+      untilStatuses: z.array(executionState).min(1).optional(),
+      afterSequence: z.number().int().min(0).optional(),
+      timeoutMs: z.number().int().min(250).max(120_000).optional(),
+      ...optionalRequestContext,
+    },
+  ],
   t3_list_artifacts: [
     "List durable artifacts for one chat.",
     { environmentId, threadId, ...optionalRequestContext },
@@ -175,25 +238,12 @@ const TOOL_SPECS = {
     },
   ],
   t3_create_thread: [
-    "Create a chat with an immutable resolved profile snapshot. For agent tasks, pass profileId from t3_list_agents to snapshot that agent’s instructions and settings. Then use t3_send_message to start work.",
-    {
-      environmentId,
-      projectId: z.string().trim().min(1),
-      title: z.string().trim().min(1),
-      profile: z.string().trim().min(1).optional(),
-      profileId: z.string().trim().min(1).optional(),
-      reasoningEffort: z.string().trim().min(1).optional(),
-      modelSelection: z
-        .object({ instanceId: z.string().trim().min(1), model: z.string().trim().min(1) })
-        .strict()
-        .optional(),
-      runtimeMode: z
-        .enum(["approval-required", "auto-accept-edits", "auto", "full-access"])
-        .optional(),
-      interactionMode: z.enum(["default", "plan"]).optional(),
-      idempotencyKey,
-      correlationId: optionalRequestContext.correlationId,
-    },
+    "Create a chat with an immutable resolved profile snapshot. For agent tasks, pass profileId from t3_list_agents to snapshot that agent’s instructions and settings. Then use t3_send_message to start work. Prefer t3_create_and_start_thread when you already have the opening task.",
+    createThreadFields,
+  ],
+  t3_create_and_start_thread: [
+    "Create a chat and send its opening task in one idempotent operation. Requires create and send scope. Retrying with the same idempotencyKey reuses the same chat and message instead of duplicating work. Returns explicit creation, message delivery, and current executionState; partial means the chat exists but the message was not confirmed, so inspect the returned threadId and retry rather than creating another chat.",
+    { ...createThreadFields, text: z.string().trim().min(1) },
   ],
   t3_send_message: [
     "Send a user message to an existing T3 chat.",

@@ -113,6 +113,20 @@ describe("MCP gateway server", () => {
     const gateway = createMcpGateway({
       port: {
         ...port,
+        createSkill: async (_environmentId, input) => ({
+          ...input,
+          skillId: "review",
+          revision: 1,
+          createdAt: "2026-09-21T00:00:00Z",
+          updatedAt: "2026-09-21T00:00:00Z",
+        }),
+        updateProfile: async (_environmentId, profileId, patch) => ({
+          profileId,
+          name: "Code",
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          skillIds: patch.skillIds ?? [],
+        }),
         listProfiles: async () => [
           {
             profileId: "code",
@@ -144,7 +158,39 @@ describe("MCP gateway server", () => {
 
     const listedTools = await client.listTools();
     const toolNames = listedTools.tools.map((tool) => tool.name);
-    expect(toolNames).toHaveLength(59);
+    expect(toolNames).toHaveLength(65);
+    expect(
+      listedTools.tools.find((tool) => tool.name === "t3_update_agent")?.inputSchema.properties
+        ?.patch,
+    ).toMatchObject({ properties: { skillIds: { type: "array" } } });
+    const createdSkill = await client.callTool({
+      name: "t3_create_skill",
+      arguments: {
+        environmentId: "local",
+        name: "Review",
+        description: "Review PRs",
+        content: "# Review\nCheck correctness",
+        resources: [{ path: "assets/raw.bin", contentBase64: "AP+A/w==", executable: false }],
+      },
+    });
+    expect(createdSkill.isError).not.toBe(true);
+    expect(createdSkill.structuredContent).toMatchObject({
+      data: {
+        skill: {
+          skillId: "review",
+          content: "# Review\nCheck correctness",
+          resources: [{ path: "assets/raw.bin", contentBase64: "AP+A/w==", executable: false }],
+        },
+      },
+    });
+    const assigned = await client.callTool({
+      name: "t3_update_agent",
+      arguments: { environmentId: "local", profileId: "code", patch: { skillIds: ["review"] } },
+    });
+    expect(assigned.isError).not.toBe(true);
+    expect(assigned.structuredContent).toMatchObject({
+      data: { profile: { skillIds: ["review"] } },
+    });
     const agents = await client.callTool({
       name: "t3_list_agents",
       arguments: { environmentId: "local" },
@@ -176,6 +222,10 @@ describe("MCP gateway server", () => {
     expect(toolNames).toEqual(
       expect.arrayContaining([
         "t3_summarize_thread",
+        "t3_list_skills",
+        "t3_create_skill",
+        "t3_update_skill",
+        "t3_delete_skill",
         "t3_create_agent",
         "t3_update_agent",
         "t3_delete_agent",
@@ -190,6 +240,8 @@ describe("MCP gateway server", () => {
         "t3_get_pr",
         "t3_get_pr_checks",
         "t3_list_review_comments",
+        "t3_create_and_start_thread",
+        "t3_wait_for_thread_status",
       ]),
     );
     const result = await client.callTool({
@@ -206,6 +258,49 @@ describe("MCP gateway server", () => {
     await client.close();
     await gateway.server.close();
   });
+
+  it.each(["t3_create_thread", "t3_create_and_start_thread"] as const)(
+    "%s forwards worktree creation options through the MCP boundary",
+    async (toolName) => {
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const creates: Array<Parameters<GatewayRuntimePort["createThread"]>[0]> = [];
+      const gateway = createMcpGateway({
+        port: {
+          ...port,
+          createThread: async (input) => {
+            creates.push(input);
+            return port.createThread(input);
+          },
+        },
+        grants: { local: ["create", "send"] },
+      });
+      const client = new Client({ name: "gateway-test", version: "1.0.0" });
+      await gateway.connect(serverTransport);
+      await client.connect(clientTransport);
+
+      try {
+        const result = await client.callTool({
+          name: toolName,
+          arguments: {
+            environmentId: "local",
+            projectId: "project-1",
+            title: "Worktree chat",
+            ...(toolName === "t3_create_and_start_thread" ? { text: "Inspect this worktree" } : {}),
+            workspaceMode: "worktree",
+            baseBranch: " main ",
+            idempotencyKey: "worktree-create-1",
+          },
+        });
+
+        expect(result.isError).not.toBe(true);
+        expect(creates).toHaveLength(1);
+        expect(creates[0]).toMatchObject({ workspaceMode: "worktree", baseBranch: "main" });
+      } finally {
+        await client.close();
+        await gateway.server.close();
+      }
+    },
+  );
 
   it("applies grant changes after the MCP server is already connected", async () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

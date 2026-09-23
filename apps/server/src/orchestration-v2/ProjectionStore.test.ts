@@ -2484,6 +2484,29 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
           id: threadId,
           projectId,
           title: "Projection shell",
+          profileSnapshot: {
+            profileId: "review",
+            profileName: "Reviewer",
+            revision: 1,
+            skills: [
+              {
+                skillId: "review",
+                name: "Review",
+                description: "Rules",
+                content: "private resource body",
+                resources: [],
+                revision: 1,
+                createdAt: nowIso,
+                updatedAt: nowIso,
+              },
+            ],
+            effectiveSource: {
+              modelSelection: "profile",
+              runtimeMode: "profile",
+              interactionMode: "profile",
+              reasoningEffort: "profile",
+            },
+          },
           providerInstanceId,
           modelSelection: modelSelection,
           runtimeMode: "full-access",
@@ -2559,6 +2582,14 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
 
       const shell = yield* projectionStore.getShellSnapshot();
       const fullProjectionExit = yield* Effect.exit(projectionStore.getThreadProjection(threadId));
+      assert.equal(
+        shell.threads.find((thread) => thread.id === threadId)?.profileSnapshot?.profileId,
+        "review",
+      );
+      assert.notProperty(
+        shell.threads.find((thread) => thread.id === threadId)?.profileSnapshot,
+        "skills",
+      );
 
       assert.deepEqual(
         shell.threads

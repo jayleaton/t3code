@@ -932,3 +932,11 @@ export class ServerSelfUpdateError extends Schema.TaggedError<ServerSelfUpdateEr
     return `Server update failed: ${this.reason}`;
   }
 }
+
+/** A machine's saved name, falling back to the connection label until settings are available. */
+export function resolveEnvironmentLabel(
+  config: { readonly settings?: Pick<ServerSettings, "environmentLabel"> } | null,
+  fallback: string,
+): string {
+  return config?.settings?.environmentLabel ?? fallback;
+}

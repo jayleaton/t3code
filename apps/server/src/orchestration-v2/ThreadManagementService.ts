@@ -477,7 +477,12 @@ const make = Effect.gen(function* () {
         const library = yield* Option.getOrThrow(settings).getSettings;
         const catalog = yield* Option.getOrThrow(providers).getProviders;
         return yield* Effect.try(() =>
-          resolveThreadCreateProfile(command, library.mcpGatewayProfiles, catalog),
+          resolveThreadCreateProfile(
+            command,
+            library.mcpGatewayProfiles,
+            catalog,
+            library.agentSkills,
+          ),
         );
       }).pipe(
         Effect.mapError(

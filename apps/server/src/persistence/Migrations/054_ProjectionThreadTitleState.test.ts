@@ -6,7 +6,7 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { runMigrations } from "../Migrations.ts";
 
 for (const upstreamColumnExists of [false, true]) {
-  it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()))(
+  it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })))(
     `054_ProjectionThreadTitleState ${upstreamColumnExists}`,
     (it) => {
       it.effect(

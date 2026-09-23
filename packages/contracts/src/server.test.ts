@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
   resolveEnvironmentMachineKind,
+  resolveEnvironmentLabel,
   ServerConfig,
   ServerObservability,
   ServerProvider,
@@ -249,5 +250,18 @@ describe("resolveEnvironmentMachineKind", () => {
     expect(
       resolveEnvironmentMachineKind({ environment: parsed, settings: decodeSettings({}) }),
     ).toBe("server");
+  });
+});
+
+describe("machine display name", () => {
+  it("uses the saved name and restores the connection label after resetting", () => {
+    expect(
+      resolveEnvironmentLabel({ settings: { environmentLabel: "Build laptop" } }, "host.local"),
+    ).toBe("Build laptop");
+    expect(resolveEnvironmentLabel({ settings: { environmentLabel: null } }, "host.local")).toBe(
+      "host.local",
+    );
+    expect(resolveEnvironmentLabel(null, "host.local")).toBe("host.local");
+    expect(resolveEnvironmentLabel({}, "host.local")).toBe("host.local");
   });
 });
