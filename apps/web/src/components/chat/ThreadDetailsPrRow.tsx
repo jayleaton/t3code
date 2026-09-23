@@ -21,6 +21,7 @@ import { ArrowUpRightIcon, FileDiffIcon, GitBranchIcon, TriangleAlertIcon } from
 import { useState, type MouseEvent as ReactMouseEvent } from "react";
 
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
+import { usePullRequestChecksRefresh } from "~/hooks/usePullRequestChecksRefresh";
 import { cn } from "~/lib/utils";
 import { useServerConfigs } from "~/state/entities";
 import { pullRequestEnvironment } from "~/state/pullRequests";
@@ -69,6 +70,7 @@ import {
   THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS,
   THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS,
   THREAD_DETAILS_PANEL_ROW_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_BUTTON_SURFACE_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
 } from "./threadDetailsPanelStyles";
 
@@ -137,10 +139,11 @@ export function ThreadDetailsPrRow({
     key: `workspace-pr:${refreshKey}`,
     intervalMs: 10 * 60_000,
   });
-  useLiveRefresh(checksQuery.isPending || detailQuery.isPending ? null : checksQuery.refresh, {
+  usePullRequestChecksRefresh({
+    refresh: checksQuery.isPending || detailQuery.isPending ? null : checksQuery.refresh,
     enabled: open && supportsChecks && !(checksQuery.isSuccess && checksQuery.data === null),
     key: `workspace-pr-checks:${refreshKey}`,
-    intervalMs: 45_000,
+    checks: detail?.checks ?? [],
   });
 
   const { actionPending, perform } = usePullRequestActionRunner({
@@ -369,6 +372,10 @@ export function ThreadDetailsPrRow({
                 checksState={checksRollup}
                 checks={detail.checks}
                 variant="count"
+                className={cn(
+                  THREAD_DETAILS_PANEL_SPLIT_BUTTON_SURFACE_CLASS,
+                  "text-[13px] sm:text-[13px]",
+                )}
               />
             </>
           ) : null}

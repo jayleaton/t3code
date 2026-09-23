@@ -3,6 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   CommandId,
   EnvironmentId,
+  EventId,
   IsoDateTime,
   MessageId,
   type ModelSelection,
@@ -11,7 +12,6 @@ import {
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ThreadProjection,
   OrchestratorMcpCreateThreadsResult,
-  OrchestratorMcpCreatedThread,
   OrchestratorMcpDelegateTaskResult,
   OrchestratorMcpTaskCancelResult,
   OrchestratorMcpThreadInterruptResult,
@@ -48,6 +48,7 @@ import { McpSchema, McpServer } from "effect/unstable/ai";
 import { ClaudeProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import { CodexOrchestratorReplayHarness } from "../orchestration-v2/Adapters/CodexAdapterV2.testkit.ts";
+import { EventSinkV2 } from "../orchestration-v2/EventSink.ts";
 import { OrchestratorV2, type OrchestratorV2Shape } from "../orchestration-v2/Orchestrator.ts";
 import { layer as threadManagementServiceLayer } from "../orchestration-v2/ThreadManagementService.ts";
 import {
@@ -91,7 +92,6 @@ const queuedFollowupPrompt = "Complete the queued follow-up and return the final
 const queuedFollowupResult = "Queued delegated follow-up completed.";
 
 const decodeCreateThreadsResult = Schema.decodeUnknownEffect(OrchestratorMcpCreateThreadsResult);
-const decodeCreatedThread = Schema.decodeUnknownEffect(OrchestratorMcpCreatedThread);
 const decodeDelegateTaskResult = Schema.decodeUnknownEffect(OrchestratorMcpDelegateTaskResult);
 const decodeTaskCancelResult = Schema.decodeUnknownEffect(OrchestratorMcpTaskCancelResult);
 const decodeThreadInterruptResult = Schema.decodeUnknownEffect(
@@ -1011,6 +1011,28 @@ describe("orchestrator MCP toolkit", () => {
               )?.completionDelivery?.state,
             ).toBe("claimed");
 
+            const firstChunk = truncatedResultRead.items[0]!;
+            expect(firstChunk.nextTextOffset).toBe(1);
+            const remainderCall = yield* invoke("t3_thread_read", {
+              threadId: directChildThreadId,
+              itemId: firstChunk.itemId,
+              textOffset: firstChunk.nextTextOffset,
+              maxCharsPerItem: 50_000,
+            });
+            const remainder = yield* decodeThreadReadResult(remainderCall.structuredContent).pipe(
+              Effect.orDie,
+            );
+            expect(remainder.items[0]?.nextTextOffset).toBeNull();
+            expect(firstChunk.text + (remainder.items[0]?.text ?? "")).toBe(
+              "Claude completed: Complete before a parent reads this child result directly.",
+            );
+            // Reading a suffix alone cannot acknowledge a whole child result.
+            expect(
+              (yield* orchestrator.getThreadProjection(parentThreadId)).subagents.find(
+                (task) => task.id === directRead.task.id,
+              )?.completionDelivery?.state,
+            ).toBe("claimed");
+
             const terminalResultReadCall = yield* invoke("t3_thread_read", {
               threadId: directChildThreadId,
               afterPosition: childPromptRead.nextPosition,
@@ -1026,6 +1048,48 @@ describe("orchestrator MCP toolkit", () => {
                 textTruncated: false,
               },
             ]);
+            const longText = "界🧪\n".repeat(20_000) + "FINAL_CONSTRAINT";
+            const childProjection = yield* orchestrator.getThreadProjection(directChildThreadId);
+            const sourceItem = childProjection.turnItems.find(
+              (item) => item.type === "user_message",
+            )!;
+            const oversizedItem = {
+              ...sourceItem,
+              id: TurnItemId.make("item:oversized-retrieval"),
+              type: "assistant_message" as const,
+              text: longText,
+              streaming: false,
+              ordinal: 999,
+            };
+            yield* (yield* EventSinkV2).write({
+              events: [
+                {
+                  id: EventId.make("event:oversized-retrieval"),
+                  type: "turn-item.updated",
+                  threadId: directChildThreadId,
+                  occurredAt: yield* DateTime.now,
+                  payload: oversizedItem,
+                },
+              ],
+            });
+            let recovered = "";
+            let textOffset: number | null = 0;
+            while (textOffset !== null) {
+              const pageCall = yield* invoke("t3_thread_read", {
+                threadId: directChildThreadId,
+                itemId: oversizedItem.id,
+                textOffset,
+                maxCharsPerItem: 50_000,
+              });
+              const page: OrchestratorMcpThreadReadResult = yield* decodeThreadReadResult(
+                pageCall.structuredContent,
+              ).pipe(Effect.orDie);
+              expect(page.items).toHaveLength(1);
+              recovered += page.items[0]!.text;
+              textOffset = page.items[0]!.nextTextOffset ?? null;
+            }
+            expect(recovered).toBe(longText);
+
             const acknowledgedByDirectRead = yield* waitForProjection(
               orchestrator,
               parentThreadId,
@@ -1389,6 +1453,17 @@ describe("orchestrator MCP toolkit", () => {
             const delegated = yield* decodeDelegateTaskResult(delegatedCall.structuredContent).pipe(
               Effect.orDie,
             );
+            const delegatedSource = yield* orchestrator.getThreadProjection(
+              delegated.childThreadId,
+            );
+            expect(delegatedSource.messages[0]).toMatchObject({
+              senderThreadId: parentThreadId,
+            });
+            expect(
+              delegatedSource.turnItems.find((item) => item.type === "user_message"),
+            ).toMatchObject({
+              senderThreadId: parentThreadId,
+            });
             expect(delegated.status).toBe("completed");
             expect(delegated.summary).toBe(delegatedResult);
             expect(delegated.providerInstanceId).toBe(claudeInstanceId);
@@ -1783,6 +1858,15 @@ describe("orchestrator MCP toolkit", () => {
               providerInstanceId: claudeInstanceId,
               model: claudeModel,
             });
+            const createdSource = yield* orchestrator.getThreadProjection(promptedThread.threadId);
+            expect(createdSource.messages[0]).toMatchObject({
+              senderThreadId: parentThreadId,
+            });
+            expect(
+              createdSource.turnItems.find((item) => item.type === "user_message"),
+            ).toMatchObject({
+              senderThreadId: parentThreadId,
+            });
             const emptyProjection = yield* orchestrator.getThreadProjection(emptyThread.threadId);
             expect(emptyProjection.thread.lineage).toEqual({
               parentThreadId: null,
@@ -2033,6 +2117,19 @@ describe("orchestrator MCP toolkit", () => {
             const sent = yield* decodeThreadSendResult(sendCall.structuredContent).pipe(
               Effect.orDie,
             );
+            const sentSource = yield* orchestrator.getThreadProjection(emptyThread.threadId);
+            expect(
+              sentSource.messages.find((message) => message.id === sent.messageId),
+            ).toMatchObject({
+              senderThreadId: parentThreadId,
+            });
+            expect(
+              sentSource.turnItems.find(
+                (item) => item.type === "user_message" && item.messageId === sent.messageId,
+              ),
+            ).toMatchObject({
+              senderThreadId: parentThreadId,
+            });
             expect(sent.delivery).toBe("started");
             const waitCall = yield* invoke("t3_thread_wait", {
               threadId: emptyThread.threadId,
@@ -2060,14 +2157,13 @@ describe("orchestrator MCP toolkit", () => {
               (yield* orchestrator.getThreadProjection(emptyThread.threadId)).runs,
             ).toHaveLength(1);
 
-            const activeThreadCall = yield* invoke("t3_thread_start", {
-              prompt: cancellationPrompt,
-              title: "Managed active thread",
+            const activeThreadCall = yield* invoke("create_threads", {
+              threads: [{ prompt: cancellationPrompt, title: "Managed active thread" }],
               clientRequestId: "managed-active-thread-1",
             });
-            const activeThread = yield* decodeCreatedThread(
+            const activeThread = (yield* decodeCreateThreadsResult(
               activeThreadCall.structuredContent,
-            ).pipe(Effect.orDie);
+            ).pipe(Effect.orDie)).threads[0]!;
             const activeThreadItem = (yield* orchestrator.getThreadProjection(
               parentThreadId,
             )).visibleTurnItems
@@ -2117,6 +2213,19 @@ describe("orchestrator MCP toolkit", () => {
             expect(steered).toMatchObject({
               runId: activeRun.id,
               delivery: "steered",
+            });
+            const steeredSource = yield* orchestrator.getThreadProjection(activeThread.threadId);
+            expect(
+              steeredSource.messages.find((message) => message.id === steered.messageId),
+            ).toMatchObject({
+              senderThreadId: parentThreadId,
+            });
+            expect(
+              steeredSource.turnItems.find(
+                (item) => item.type === "user_message" && item.messageId === steered.messageId,
+              ),
+            ).toMatchObject({
+              senderThreadId: parentThreadId,
             });
             const interruptCall = yield* invoke("t3_thread_interrupt", {
               threadId: activeThread.threadId,

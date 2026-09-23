@@ -29,6 +29,7 @@ import type * as EffectAcpProtocol from "effect-acp/protocol";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
+import { appendAcpStderrTail, sanitizeAcpStderrExcerpt } from "./AcpStderr.ts";
 import {
   collectSessionConfigOptionValues,
   decideToolCallUpdateEmission,
@@ -263,21 +264,22 @@ export function wrapCommandForLinuxCgroup(
   args: ReadonlyArray<string>,
 ): { readonly command: string; readonly args: ReadonlyArray<string> } {
   return {
-    command: process.execPath,
+    command: "/bin/sh",
     args: [
-      "-e",
+      "-c",
       [
-        'const fs = require("node:fs");',
-        "try {",
-        '  fs.writeFileSync(process.argv[1] + "/cgroup.procs", String(process.pid) + "\\n");',
-        '  const actual = fs.readFileSync("/proc/self/cgroup", "utf8").split("\\n").find((line) => line.startsWith("0::"))?.slice(3);',
-        "  if (actual !== process.argv[2]) process.exit(126);",
-        "  const env = { ...process.env };",
-        "  delete env.ELECTRON_RUN_AS_NODE;",
-        "  delete env.T3_ACP_CGROUP_WRAPPER;",
-        "  process.execve(process.argv[3], process.argv.slice(3), env);",
-        "} catch { process.exit(125); }",
+        "lease_path=$1; expected=$2; shift 2",
+        'printf "%s\\n" "$$" > "$lease_path/cgroup.procs" || exit 125',
+        "actual=",
+        "while IFS= read -r line; do",
+        '  case "$line" in 0::*) [ -z "$actual" ] || exit 126; actual=${line#0::};; esac',
+        "done < /proc/self/cgroup || exit 125",
+        '[ "$actual" = "$expected" ] || exit 126',
+        "unset ELECTRON_RUN_AS_NODE T3_ACP_CGROUP_WRAPPER",
+        "trap 'exit 125' 0",
+        'exec "$@"',
       ].join("\n"),
+      "t3-acp-cgroup-wrapper",
       lease.path,
       lease.relativePath,
       command,
@@ -1093,7 +1095,7 @@ export function selectAcpAgentAuthMethod(
   if (preferred) {
     return authMethods?.find((method) => method.id === preferred);
   }
-  return authMethods?.find((method) => !("type" in method));
+  return authMethods?.find((method) => method.type === undefined || method.type === "agent");
 }
 
 function isAcpAuthenticationRequired(error: EffectAcpErrors.AcpError): boolean {
@@ -1208,6 +1210,8 @@ export class AcpSessionRuntime extends Context.Service<
       EffectAcpSchema.InitializeResponse,
       EffectAcpErrors.AcpError
     >;
+    /** Explicit login uses the negotiated v1 authenticate / v2 auth/login operation. */
+    readonly authenticate?: (methodId: string) => Effect.Effect<void, EffectAcpErrors.AcpError>;
     /**
      * Initializes the ACP connection, authenticates, and loads, resumes, or creates the session.
      * Concurrent calls share the same in-flight startup and a failed startup may be retried.
@@ -1403,6 +1407,8 @@ export const make = (
     );
     const stoppingRef = yield* Ref.make(false);
     const stderrFailure = yield* Deferred.make<never, EffectAcpErrors.AcpError>();
+    const stderrTailRef = yield* Ref.make("");
+    const stderrDrained = yield* Deferred.make<void>();
     const runtimeClosed = yield* Deferred.make<void>();
     const promptSerializationSemaphore = yield* Semaphore.make(1);
     const sessionLoadSemaphore = yield* Semaphore.make(1);
@@ -1424,22 +1430,45 @@ export const make = (
       }
     });
 
+    const enrichProcessExitWithStderr = (
+      error: EffectAcpErrors.AcpError,
+    ): Effect.Effect<EffectAcpErrors.AcpError> =>
+      error._tag !== "AcpProcessExitedError" || (error.stderr?.trim().length ?? 0) > 0
+        ? Effect.succeed(error)
+        : Deferred.await(stderrDrained).pipe(
+            Effect.timeout("250 millis"),
+            Effect.ignore,
+            Effect.andThen(Ref.get(stderrTailRef)),
+            Effect.map((tail) => {
+              const stderr = sanitizeAcpStderrExcerpt(tail);
+              return stderr.length === 0
+                ? error
+                : new EffectAcpErrors.AcpProcessExitedError({
+                    ...(error.code !== undefined ? { code: error.code } : {}),
+                    ...(error.pid !== undefined ? { pid: error.pid } : {}),
+                    stderr,
+                    ...(error.cause !== undefined ? { cause: error.cause } : {}),
+                  });
+            }),
+          );
+
     const recordTermination = Effect.fn("AcpSessionRuntime.recordTermination")(function* (
       error: EffectAcpErrors.AcpError,
     ) {
       if (yield* Ref.get(stoppingRef)) {
         return;
       }
+      const enriched = yield* enrichProcessExitWithStderr(error);
       const firstTermination = yield* Ref.modify(terminationErrorRef, (current) =>
         Option.isSome(current)
           ? ([false, current] as const)
-          : ([true, Option.some(error)] as const),
+          : ([true, Option.some(enriched)] as const),
       );
       if (!firstTermination) {
         return;
       }
       yield* closeActiveAssistantSegment({ queue: eventQueue, assistantSegmentRef });
-      yield* Queue.offer(eventQueue, { _tag: "ConnectionTerminated", error });
+      yield* Queue.offer(eventQueue, { _tag: "ConnectionTerminated", error: enriched });
     });
 
     const logRequest = (event: AcpSessionRequestLogEvent) =>
@@ -1456,6 +1485,9 @@ export const make = (
             ? Effect.raceFirst(effect, Deferred.await(stderrFailure))
             : effect
           ).pipe(
+            Effect.catch((error) =>
+              enrichProcessExitWithStderr(error).pipe(Effect.flatMap(Effect.fail)),
+            ),
             Effect.tap((result) =>
               logRequest({
                 method,
@@ -1709,10 +1741,10 @@ export const make = (
     yield* child.stderr.pipe(
       Stream.decodeText(),
       Stream.runForEach((chunk) =>
-        (options.onStderr
-          ? options.onStderr(chunk.slice(-maxStderrChunkLength))
-          : Effect.void
-        ).pipe(
+        Ref.update(stderrTailRef, (current) => appendAcpStderrTail(current, chunk)).pipe(
+          Effect.andThen(
+            options.onStderr ? options.onStderr(chunk.slice(-maxStderrChunkLength)) : Effect.void,
+          ),
           Effect.catch((error) =>
             Effect.gen(function* () {
               yield* Deferred.fail(stderrFailure, error);
@@ -1722,6 +1754,7 @@ export const make = (
           ),
         ),
       ),
+      Effect.ensuring(Deferred.succeed(stderrDrained, undefined)),
       Effect.ignore,
       Effect.forkIn(runtimeScope),
     );
@@ -2197,7 +2230,11 @@ export const make = (
               cause: { configuredAuthMethodId, authMethods: initializeResult.authMethods },
             });
           }
-          if (authMethod !== undefined && "type" in authMethod) {
+          if (
+            authMethod !== undefined &&
+            authMethod.type !== undefined &&
+            authMethod.type !== "agent"
+          ) {
             return yield* new EffectAcpErrors.AcpTransportError({
               detail: `ACP authentication method "${authMethod.id}" requires ${authMethod.type} authentication, which cannot run inside a headless provider session`,
               cause: authMethod,
@@ -2456,6 +2493,13 @@ export const make = (
       handleExtRequest: acp.handleExtRequest,
       handleExtNotification: acp.handleExtNotification,
       initialize: () => initialize,
+      authenticate: (methodId) =>
+        initialize.pipe(
+          Effect.andThen(
+            runLoggedRequest("authenticate", { methodId }, acp.agent.authenticate({ methodId })),
+          ),
+          Effect.asVoid,
+        ),
       start: () => start,
       getEvents: () => Stream.fromQueue(eventQueue),
       drainEvents,

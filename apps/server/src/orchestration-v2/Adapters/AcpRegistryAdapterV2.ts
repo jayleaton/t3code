@@ -9,9 +9,11 @@ import {
   ProviderDriverKind,
 } from "@t3tools/contracts";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import { resolveSelfInvocation, type SelfInvocation } from "@t3tools/shared/nodeRuntime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -32,6 +34,8 @@ import { makeAcpNativeLoggerFactory } from "../../provider/acp/AcpNativeLogging.
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
 import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
 import { IdAllocatorV2 } from "../IdAllocator.ts";
+import { makeProviderFailure } from "../ProviderFailure.ts";
+import { MISTRAL_VIBE_RATE_LIMITED, registerMistralVibeAcpExtensions } from "./MistralVibeAcp.ts";
 import {
   ProviderAdapterDriverCreateError,
   type ProviderAdapterDriver,
@@ -48,6 +52,7 @@ export const ACP_REGISTRY_PROVIDER = ProviderDriverKind.make("acpRegistry");
 export const ACP_REGISTRY_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(ACP_REGISTRY_PROVIDER);
 
 const DEFAULT_ACP_REGISTRY_SETTINGS = Schema.decodeSync(AcpRegistrySettings)({});
+const isAcpRequestError = Schema.is(EffectAcpErrors.AcpRequestError);
 
 export interface AcpRegistryAdapterV2Options {
   readonly instanceId: Parameters<typeof makeAcpAdapterV2>[0]["instanceId"];
@@ -55,6 +60,7 @@ export interface AcpRegistryAdapterV2Options {
   readonly environment: NodeJS.ProcessEnv;
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly crypto: Crypto.Crypto;
+  readonly selfInvocation: SelfInvocation;
   readonly fileSystem: FileSystem.FileSystem;
   readonly idAllocator: IdAllocatorV2["Service"];
   readonly resolver: Pick<AcpRegistryCatalog["Service"], "resolve">;
@@ -69,6 +75,22 @@ export interface AcpRegistryAdapterV2Options {
     Crypto.Crypto | Scope.Scope
   >;
   readonly assertComplete?: Effect.Effect<void, EffectAcpErrors.AcpError>;
+}
+
+export function acpRegistryPromptFailure(agentId: string, cause: unknown) {
+  return makeProviderFailure({
+    cause,
+    ...(isAcpRequestError(cause)
+      ? {
+          message: cause.errorMessage,
+          code: String(cause.code),
+          class:
+            agentId === "mistral-vibe" && cause.code === MISTRAL_VIBE_RATE_LIMITED
+              ? ("usage_limit" as const)
+              : ("provider_error" as const),
+        }
+      : { class: "provider_error" as const }),
+  });
 }
 
 function makeAcpRegistryRuntime(options: AcpRegistryAdapterV2Options) {
@@ -121,6 +143,10 @@ export function makeAcpRegistryAdapterV2(options: AcpRegistryAdapterV2Options) {
   const flavor: AcpAdapterV2Flavor = {
     driver: ACP_REGISTRY_PROVIDER,
     capabilities: AcpProviderCapabilitiesV2,
+    promptFailure: (cause) => acpRegistryPromptFailure(options.settings.agentId, cause),
+    ...(options.settings.agentId === "mistral-vibe"
+      ? { registerExtensions: registerMistralVibeAcpExtensions }
+      : {}),
     ...(isDevin
       ? {
           clientCapabilitiesMeta: {
@@ -169,6 +195,7 @@ export function makeAcpRegistryAdapterV2(options: AcpRegistryAdapterV2Options) {
     fileSystem: options.fileSystem,
     idAllocator: options.idAllocator,
     serverConfig: options.serverConfig,
+    selfInvocation: options.selfInvocation,
     clientTerminals: {
       childProcessSpawner: options.childProcessSpawner,
       environment: options.environment,
@@ -184,6 +211,7 @@ export type AcpRegistryAdapterV2DriverEnv =
   | FileSystem.FileSystem
   | AcpRegistryCatalog
   | IdAllocatorV2
+  | Path.Path
   | ProviderEventLoggers
   | ServerConfig;
 
@@ -197,6 +225,7 @@ export const AcpRegistryAdapterV2Driver: ProviderAdapterDriver<
   create: Effect.fn("AcpRegistryAdapterV2Driver.create")(
     function* (input: ProviderAdapterDriverCreateInput<AcpRegistrySettings>) {
       const hostEnvironment = yield* HostProcessEnvironment;
+      const selfInvocation = yield* resolveSelfInvocation();
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const crypto = yield* Crypto.Crypto;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -219,6 +248,7 @@ export const AcpRegistryAdapterV2Driver: ProviderAdapterDriver<
           ? { runtimeCoordinator: runtimeCoordinator.value }
           : {}),
         serverConfig,
+        selfInvocation,
         nativeLogging: (threadId) =>
           makeNativeLogger({
             nativeEventLogger: providerEventLoggers.native,

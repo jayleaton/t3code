@@ -33,6 +33,7 @@ export function observeTimelineRun(
   }
   return { observation, anchorMessageId: input.messageId };
 }
+import type { RunAttemptId } from "@t3tools/contracts";
 
 // Match the titlebar fade inset so draft promotion preserves the first row's position.
 export const CHAT_TIMELINE_ANCHOR_OFFSET = 24;
@@ -139,4 +140,36 @@ export function getAnchoredTurnMetrics({
     targetScrollToRevealEnd,
     scrollDeltaToRevealEnd,
   };
+}
+
+export interface RememberedTimelinePosition {
+  readonly rowId: string;
+  readonly offsetWithinRow: number;
+  readonly scrollOffset: number;
+  readonly atEnd: boolean;
+  readonly disclosures?: {
+    readonly runs: ReadonlySet<RunId>;
+    readonly workGroups: ReadonlySet<string>;
+    readonly attempts: ReadonlySet<RunAttemptId>;
+    readonly workGroupState: {
+      scrollPositions: Map<string, { readonly entryId: string; readonly offset: number }>;
+      expandedEntries: Set<string>;
+    };
+  };
+}
+
+// Scoped thread keys keep separate environments independent. Bound the session cache.
+const rememberedTimelinePositions = new Map<string, RememberedTimelinePosition>();
+
+export function readTimelinePosition(threadKey: string) {
+  return rememberedTimelinePositions.get(threadKey);
+}
+
+export function rememberTimelinePosition(threadKey: string, position: RememberedTimelinePosition) {
+  rememberedTimelinePositions.delete(threadKey);
+  rememberedTimelinePositions.set(threadKey, position);
+  if (rememberedTimelinePositions.size > 100) {
+    const oldest = rememberedTimelinePositions.keys().next().value;
+    if (oldest !== undefined) rememberedTimelinePositions.delete(oldest);
+  }
 }

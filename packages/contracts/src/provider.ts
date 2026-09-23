@@ -9,7 +9,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import {
-  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  getProviderAttachmentLimitError,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ChatAttachment,
 } from "./chatAttachment.ts";
@@ -79,7 +79,9 @@ export const ProviderSendTurnInput = Schema.Struct({
     TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
   ),
   attachments: Schema.optional(
-    Schema.Array(ChatAttachment).check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS)),
+    Schema.Array(ChatAttachment).check(
+      Schema.makeFilter((attachments) => getProviderAttachmentLimitError(attachments) ?? true),
+    ),
   ),
   modelSelection: Schema.optional(ModelSelection),
   interactionMode: Schema.optional(ProviderInteractionMode),

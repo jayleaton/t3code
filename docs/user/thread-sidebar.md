@@ -20,9 +20,20 @@ on Windows and Linux to start a new thread and immediately open another draft. T
 next draft keeps the workspace mode and base branch you selected. With **New
 worktree**, each background submission creates its own worktree.
 
+To send the same prompt to several models on web or desktop, **Shift-click** models
+in a new thread's model picker to add or remove them. A regular click returns to a
+single model. Choose a base branch and send. Each selection starts a separate thread
+and worktree while you stay in the new thread composer. This requires a Git project.
+
 ## Pin and reorder threads
 
 Pin a thread from its menu to keep it above your active work.
+
+On web and desktop, unpinning, settling, snoozing, and archiving a thread each show
+a notification with **Undo** for five seconds. Undo restores the thread's previous
+state, including its pinned position, and reopens an archived thread you were
+viewing. `mod+z` triggers the most recent Undo when no text field is focused; see
+[Keybindings](./keybindings.md#commands-with-special-behavior).
 
 On web and desktop, you can also drag files from your computer onto any thread row:
 the thread opens and the files are attached in its composer, ready for
@@ -97,9 +108,9 @@ prevent automatic settlement. An open pull request does not prevent inactivity
 settlement, but an old closed or merged pull request does not settle work you
 resumed after it closed.
 
-Change these rules in **Settings → General**. They continue to run when your apps
-are closed. On web and desktop, choose an environment at the top to change only
-its rules, or **All environments** to update connected environments together.
+Change these rules in **Settings → General** on web and desktop, or **Settings → Thread behavior** on mobile.
+They continue to run when your apps are closed. On web and desktop, choose an environment at the
+top to change only its rules, or **All environments** to update connected environments together.
 Mixed values show where the selected environments disagree. Mobile applies these
 rules to connected environments that support shared settings. Offline environments
 and older servers keep their previous values. Changing a rule does not reopen
@@ -128,6 +139,25 @@ link when available, otherwise its thread ID. See [keybindings](./keybindings.md
 for custom configuration.
 
 ## Inspect agent work
+
+**Limited** means the provider stopped on a usage or rate limit. The conversation
+keeps the provider's explanation. Retry after the limit resets, or switch to
+another provider instance.
+
+When the provider reports a reset time, choose **Resume at reset** to schedule a
+continuation. You can cancel it from the thread. Enable **Auto-resume limited
+threads** in **Settings → General** on web and desktop, or **Settings → Thread
+behavior** on mobile, to schedule limit stops by default.
+The environment must be running when the reset arrives; it resumes overdue
+continuations after a restart. Sending a new message, archiving, or settling the
+thread prevents a pending continuation from starting.
+
+Choose **Snooze until reset** to hide the thread until its allowance returns.
+Snooze and auto-resume are independent: snooze alone wakes the thread without
+sending a message; enabling both wakes and continues it. **Wake now** cancels
+the snooze. Enable **Snooze limited threads** in thread behavior settings to
+snooze limit stops by default. Providers without a reset time offer manual
+retry and the normal snooze choices.
 
 On web and desktop, use **Agents** to follow work delegated to subagents.
 

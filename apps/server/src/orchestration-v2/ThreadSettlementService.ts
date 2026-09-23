@@ -1,5 +1,11 @@
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
-import { CommandId, type OrchestrationV2ThreadShell } from "@t3tools/contracts";
+import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
+import {
+  CommandId,
+  type ThreadId,
+  type OrchestrationV2DomainEvent,
+  type OrchestrationV2ThreadShell,
+} from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -156,7 +162,29 @@ export function resolveAutoSettlementAt(input: {
   readonly autoSettleAfterDays: number | null;
   readonly autoSettleOnMerge: boolean;
 }): DateTime.Utc | null {
-  const { thread, pullRequest } = input;
+  const { thread } = input;
+  let pullRequest = input.pullRequest;
+  const links = visibleThreadPullRequests(thread.pullRequests ?? []);
+  if (links.some((link) => link.snapshot === null || link.snapshot.state === "open")) return null;
+  if (links.length > 0) {
+    const terminalAt = (link: (typeof links)[number]) => {
+      const snapshot = link.snapshot;
+      const value = snapshot?.state === "merged" ? snapshot.mergedAt : snapshot?.closedAt;
+      const timestamp = Date.parse(value ?? "");
+      return Number.isNaN(timestamp) ? Number.NEGATIVE_INFINITY : timestamp;
+    };
+    const latest = links.reduce((current, candidate) =>
+      terminalAt(candidate) > terminalAt(current) ? candidate : current,
+    );
+    pullRequest =
+      latest.snapshot === null
+        ? null
+        : {
+            state: latest.snapshot.state,
+            mergedAt: latest.snapshot.mergedAt ?? null,
+            closedAt: latest.snapshot.closedAt ?? null,
+          };
+  }
   if (!isAutoSettlementCandidate(thread, input.nowMs)) return null;
   const activityAtMs = latestMillis([
     toMillis(thread.latestUserMessageAt),
@@ -232,6 +260,7 @@ export const make = Effect.gen(function* () {
 
   const sweep = Effect.fn("ThreadSettlementServiceV2.sweep")(function* (
     mergedPullRequest: PullRequestService.PullRequestMergeEvent | null,
+    threadId?: ThreadId,
   ) {
     const settings = yield* settingsService.getSettings;
     if (!autoSettlementConfigured(settings)) {
@@ -245,7 +274,11 @@ export const make = Effect.gen(function* () {
     // the merged pull request: most threads carry no link and settle from
     // their branch lookup, which would otherwise wait for the next minute's
     // sweep on a possibly stale cached answer.
-    const candidates = threads.filter((thread) => isAutoSettlementCandidate(thread, nowMs));
+    const candidates = threads.filter(
+      (thread) =>
+        (threadId === undefined || thread.id === threadId) &&
+        isAutoSettlementCandidate(thread, nowMs),
+    );
 
     const settleThread = Effect.fn("ThreadSettlementServiceV2.settleThread")(
       function* (thread: (typeof candidates)[number], pullRequest: SettlementPullRequest | null) {
@@ -291,7 +324,9 @@ export const make = Effect.gen(function* () {
       candidates,
       (thread) => settleThread(thread, null),
       { concurrency: 8 },
-    )).filter((thread) => thread !== null);
+    ))
+      .filter((thread) => thread !== null)
+      .filter((thread) => visibleThreadPullRequests(thread.pullRequests ?? []).length === 0);
     // Use the same cwd as the sidebar so both paths share GitManager's PR cache.
     const lookupCwdByThreadId = new Map<string, string>();
     yield* Effect.forEach(
@@ -345,9 +380,30 @@ export const make = Effect.gen(function* () {
     };
     const groups = Map.groupBy(lookupCandidates, lookupKey);
 
-    const pullRequestFor = Effect.fn("ThreadSettlementServiceV2.pullRequestFor")(function* (
-      thread: (typeof lookupCandidates)[number],
+    const wouldSettle = Effect.fn("ThreadSettlementServiceV2.wouldSettle")(function* (
+      group: ReadonlyArray<(typeof lookupCandidates)[number]>,
+      pullRequest: SettlementPullRequest,
     ) {
+      const currentSettings = yield* settingsService.getSettings;
+      const decisionNow = yield* DateTime.now;
+      return group.some((thread) => {
+        const { settings } = resolveProjectSettings(currentSettings, thread.projectId);
+        return (
+          resolveAutoSettlementAt({
+            thread,
+            pullRequest,
+            nowMs: DateTime.toEpochMillis(decisionNow),
+            autoSettleAfterDays: settings.sidebarAutoSettleAfterDays,
+            autoSettleOnMerge: settings.sidebarAutoSettleOnMerge,
+          }) !== null
+        );
+      });
+    });
+
+    const pullRequestFor = Effect.fn("ThreadSettlementServiceV2.pullRequestFor")(function* (
+      group: ReadonlyArray<(typeof lookupCandidates)[number]>,
+    ) {
+      const thread = group[0]!;
       const reference = thread.linkedPullRequest ?? thread.branchPullRequest;
       if (reference != null) {
         // The event carries the merged state, so only the threads linked to
@@ -377,8 +433,16 @@ export const make = Effect.gen(function* () {
               },
               { recoverTransientFailure: false },
             );
+        const terminal = {
+          state: summary.state,
+          closedAt: summary.closedAt ?? null,
+          mergedAt: summary.mergedAt ?? null,
+        } satisfies SettlementPullRequest;
         const cwd = lookupCwdByThreadId.get(thread.id);
         if (summary.state !== "open" && thread.branch !== null && cwd !== undefined) {
+          // Recheck reused branches only when this sweep would settle a thread.
+          // Eligibility that changes after this check waits for the next sweep.
+          if (!(yield* wouldSettle(group, terminal))) return undefined;
           const current = yield* git.branchPullRequest(
             { cwd, branch: thread.branch },
             { refresh: true },
@@ -392,11 +456,7 @@ export const make = Effect.gen(function* () {
             return current;
           }
         }
-        return {
-          state: summary.state,
-          closedAt: summary.closedAt ?? null,
-          mergedAt: summary.mergedAt ?? null,
-        } satisfies SettlementPullRequest;
+        return terminal;
       }
       if (thread.branch === null) return null;
       const cwd = lookupCwdByThreadId.get(thread.id);
@@ -410,7 +470,8 @@ export const make = Effect.gen(function* () {
       groups.values(),
       (group) =>
         Effect.gen(function* () {
-          const pullRequest = yield* pullRequestFor(group[0]!);
+          const pullRequest = yield* pullRequestFor(group);
+          if (pullRequest === undefined) return;
           yield* Effect.forEach(group, (thread) => settleThread(thread, pullRequest), {
             discard: true,
           });
@@ -428,8 +489,11 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const runSweep = (mergedPullRequest: PullRequestService.PullRequestMergeEvent | null) =>
-    sweep(mergedPullRequest).pipe(
+  const runSweep = (
+    mergedPullRequest: PullRequestService.PullRequestMergeEvent | null,
+    threadId?: ThreadId,
+  ) =>
+    sweep(mergedPullRequest, threadId).pipe(
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.failCause(cause)
@@ -438,13 +502,36 @@ export const make = Effect.gen(function* () {
             }),
       ),
     );
-  const worker = yield* makeDrainableWorker(() => runSweep(null));
+  const worker = yield* makeDrainableWorker((threadId: ThreadId | undefined) =>
+    runSweep(null, threadId),
+  );
+
+  const processEvent = (event: OrchestrationV2DomainEvent) => {
+    switch (event.type) {
+      case "thread.pull-request-synced":
+      case "provider-session.detached":
+        return worker.enqueue(event.threadId);
+      case "provider-session.updated":
+        return event.payload.status !== "starting" && event.payload.status !== "running"
+          ? worker.enqueue(event.threadId)
+          : Effect.void;
+      case "run.updated":
+        return ["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
+          event.payload.status,
+        )
+          ? worker.enqueue(event.threadId)
+          : Effect.void;
+      default:
+        return Effect.void;
+    }
+  };
 
   const start: ThreadSettlementServiceV2["Service"]["start"] = Effect.fn(
     "ThreadSettlementServiceV2.start",
   )(function* () {
     const settingsChanges = yield* settingsService.subscribeChanges;
     const mergedPullRequests = yield* pullRequests.subscribeMerges;
+    const events = orchestrator.streamDomainEvents;
     const initialSettings = yield* settingsService.getSettings.pipe(Effect.orDie);
     let lastSettlementSettings = autoSettlementSettingsKey(initialSettings);
     yield* forkParked(
@@ -463,7 +550,14 @@ export const make = Effect.gen(function* () {
         return worker.enqueue(undefined);
       }),
     );
-    yield* forkParked(Stream.runForEach(mergedPullRequests, runSweep));
+    yield* forkParked(Stream.runForEach(mergedPullRequests, (event) => runSweep(event)));
+    yield* forkParked(
+      Stream.runForEach(events, processEvent).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Thread settlement event stream failed", { cause }),
+        ),
+      ),
+    );
   });
 
   return { start, drain: worker.drain } satisfies ThreadSettlementServiceV2["Service"];

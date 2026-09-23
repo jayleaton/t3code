@@ -36,7 +36,7 @@ import { uuidv4 } from "../lib/uuid";
 
 import { makeQueuedMessageMetadata } from "../lib/commandMetadata";
 import { isModelSelectionUnavailable } from "../lib/modelOptions";
-import { resolveProviderInteractionMode } from "../features/threads/legacy-plan-mode";
+import { resolveProviderInteractionMode } from "./legacy-plan-mode";
 import {
   convertPastedImagesToAttachments,
   createPastedTextComposerAttachment,
@@ -50,6 +50,7 @@ import { scopedThreadKey } from "../lib/scopedEntities";
 import { buildThreadFeed } from "../lib/threadActivity";
 import { acknowledgedThreadMessagesAtom } from "./acknowledged-thread-messages";
 import { appendPendingThreadMessages } from "../features/threads/pending-thread-feed";
+import { threadAllowsProviderSwitch } from "./thread-provider-switching";
 import { appAtomRegistry } from "../state/atom-registry";
 import { pendingThreadCreationMessage } from "./pending-thread-creation";
 import {
@@ -335,6 +336,17 @@ export function useThreadComposerState() {
         selectedDraft?.interactionMode ?? selectedThread.interactionMode,
       )
     : null;
+  // Whether the model picker may leave this thread's provider. Derived here
+  // because the projection already drives this hook; the composer only needs
+  // the answer, not a subscription to every projection update.
+  const canSwitchThreadProvider = useMemo(
+    () =>
+      threadAllowsProviderSwitch({
+        thread: selectedThreadShell,
+        projection: selectedThreadProjection?.projection,
+      }),
+    [selectedThreadProjection, selectedThreadShell],
+  );
   const selectedThreadRuntime = useMemo(
     () =>
       selectedThreadProjection
@@ -1023,6 +1035,7 @@ export function useThreadComposerState() {
     cancelQueuedRunEdit,
     onRemoveQueuedEditAttachment,
     modelSelection,
+    canSwitchThreadProvider,
     runtimeMode,
     interactionMode,
     activeThreadBusy,

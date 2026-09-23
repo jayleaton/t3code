@@ -1,7 +1,12 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { ThreadTurnSubagents } from "@t3tools/client-runtime/state/thread-subagents";
-import type { EnvironmentId, OrchestrationV2Subagent, ThreadId } from "@t3tools/contracts";
-import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import {
+  isOrchestrationV2WorkActive,
+  type EnvironmentId,
+  type OrchestrationV2Subagent,
+  type ThreadId,
+} from "@t3tools/contracts";
+import { deriveSubagentElapsedMs, formatDuration } from "@t3tools/shared/orchestrationTiming";
 import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import * as DateTime from "effect/DateTime";
 import * as Haptics from "expo-haptics";
@@ -13,20 +18,14 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AndroidSheetHeader } from "../../components/AndroidScreenHeader";
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
-import { cn } from "../../lib/cn";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { environmentThreadDetails } from "../../state/threads";
 import { nativeHeaderScrollEdgeEffects } from "../../native/StackHeader";
-import { resolveSubagentRowPresentation, type SubagentRowTone } from "./threadAgentsPresentation";
+import { resolveSubagentRowPresentation } from "./threadAgentsPresentation";
+
+import { SubagentStatusDot } from "./SubagentStatusDot";
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
-
-const TONE_DOT_CLASS = {
-  working: "bg-adaptive-sky-600-400",
-  completed: "bg-adaptive-emerald-600-400",
-  failed: "bg-adaptive-rose-600-400",
-  stopped: "bg-foreground-muted",
-} as const satisfies Record<SubagentRowTone, string>;
 
 type AgentsTarget = { readonly environmentId: EnvironmentId; readonly threadId: ThreadId };
 
@@ -133,7 +132,7 @@ function AgentRow(props: {
 
   const row = (
     <View className="min-h-14 flex-row items-center gap-3 border-b border-border py-3">
-      <View className={cn("h-2 w-2 shrink-0 rounded-full", TONE_DOT_CLASS[presentation.tone])} />
+      <SubagentStatusDot tone={presentation.tone} placement="sheet" />
       <View className="min-w-0 flex-1 gap-0.5">
         <Text className="font-t3-medium text-sm text-foreground" numberOfLines={1}>
           {presentation.title}
@@ -181,19 +180,23 @@ function AgentRow(props: {
  * shared second tick, so a settled sheet never repaints.
  */
 function useSubagentElapsed(
-  subagent: Pick<OrchestrationV2Subagent, "startedAt" | "completedAt">,
+  subagent: Pick<OrchestrationV2Subagent, "status" | "startedAt" | "completedAt">,
   tickSeconds: boolean,
 ): string | null {
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const running = subagent.completedAt === null;
+  const running = isOrchestrationV2WorkActive(subagent.status);
   useEffect(() => {
     if (!tickSeconds || !running) return;
     const intervalId = setInterval(() => setNowMs(Date.now()), 1_000);
     return () => clearInterval(intervalId);
   }, [running, tickSeconds]);
-  if (subagent.startedAt === null) return null;
-  const startedAtMs = DateTime.toEpochMillis(subagent.startedAt);
-  const endMs =
-    subagent.completedAt === null ? nowMs : DateTime.toEpochMillis(subagent.completedAt);
-  return endMs <= startedAtMs ? null : formatDuration(endMs - startedAtMs);
+  const elapsedMs = deriveSubagentElapsedMs(
+    {
+      status: subagent.status,
+      startedAt: subagent.startedAt === null ? null : DateTime.formatIso(subagent.startedAt),
+      completedAt: subagent.completedAt === null ? null : DateTime.formatIso(subagent.completedAt),
+    },
+    nowMs,
+  );
+  return elapsedMs === null || elapsedMs === 0 ? null : formatDuration(elapsedMs);
 }

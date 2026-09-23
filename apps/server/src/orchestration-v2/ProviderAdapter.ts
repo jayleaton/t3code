@@ -1,3 +1,4 @@
+import type { OrchestrationV2HistoricalMessage } from "@t3tools/contracts";
 import {
   ChatAttachment,
   CheckpointId,
@@ -60,6 +61,7 @@ export const ProviderAdapterV2TurnMessage = Schema.Struct({
   createdBy: OrchestrationV2ConversationMessage.fields.createdBy,
   creationSource: OrchestrationV2ConversationMessage.fields.creationSource,
   scheduledTaskId: OrchestrationV2ConversationMessage.fields.scheduledTaskId,
+  senderThreadId: OrchestrationV2ConversationMessage.fields.senderThreadId,
 });
 export type ProviderAdapterV2TurnMessage = typeof ProviderAdapterV2TurnMessage.Type;
 
@@ -343,6 +345,7 @@ export class ProviderAdapterProtocolError extends Schema.TaggedError<ProviderAda
   {
     driver: ProviderDriverKind,
     detail: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
     payload: Schema.optional(Schema.Unknown),
   },
 ) {
@@ -473,6 +476,11 @@ export interface ProviderAdapterV2EventSubscription {
   readonly close: Effect.Effect<void>;
 }
 
+export interface ProviderAdapterV2HistoricalContext {
+  readonly messages: ReadonlyArray<OrchestrationV2HistoricalMessage>;
+  readonly context: string;
+}
+
 export interface ProviderAdapterV2SessionRuntime {
   readonly instanceId: ProviderInstanceId;
   readonly driver: ProviderDriverKind;
@@ -500,6 +508,12 @@ export interface ProviderAdapterV2SessionRuntime {
   readonly hasPendingBackgroundWorkForThread?: (
     providerThread: OrchestrationV2ProviderThread,
   ) => Effect.Effect<boolean>;
+  /** Capacity for the requested model/options, independent of native thread usage. */
+  readonly getModelContextWindow?: (modelSelection: ModelSelection) => number | undefined;
+  /** Whether an option-only change preserves measured native usage and capacity.
+   * Compaction thresholds are still discarded. Unknown transitions invalidate usage.
+   */
+  readonly canReuseContextUsage?: (previous: ModelSelection, next: ModelSelection) => boolean;
   readonly ensureThread: (
     input: ProviderAdapterV2EnsureThreadInput,
   ) => Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapterV2Error>;
@@ -509,6 +523,12 @@ export interface ProviderAdapterV2SessionRuntime {
     readonly modelSelection?: ModelSelection;
     readonly runtimePolicy?: ProviderAdapterV2RuntimePolicy;
   }) => Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapterV2Error>;
+  /** False means the native protocol explicitly does not support history injection. */
+  readonly injectHistory?: (
+    input: ProviderAdapterV2HistoricalContext & {
+      readonly providerThread: OrchestrationV2ProviderThread;
+    },
+  ) => Effect.Effect<boolean, ProviderAdapterV2Error>;
   readonly startTurn: (
     input: ProviderAdapterV2TurnInput,
   ) => Effect.Effect<void, ProviderAdapterV2Error>;

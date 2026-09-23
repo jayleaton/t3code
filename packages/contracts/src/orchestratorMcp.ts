@@ -78,7 +78,7 @@ const OrchestratorMcpTargetOptionsFromRecord = Schema.Record(
 ).pipe(
   Schema.decodeTo(
     Schema.Array(ProviderOptionSelection),
-    SchemaTransformation.transformOrFail({
+    SchemaTransformation.transformEffect({
       decode: (record) =>
         Effect.succeed(Object.entries(record).map(([id, value]) => ({ id, value }))),
       encode: (selections: ReadonlyArray<ProviderOptionSelection>) =>
@@ -273,16 +273,6 @@ export const OrchestratorMcpCreateThreadsResult = Schema.Struct({
 });
 export type OrchestratorMcpCreateThreadsResult = typeof OrchestratorMcpCreateThreadsResult.Type;
 
-export const OrchestratorMcpThreadStartInput = Schema.Struct({
-  prompt: OrchestratorMcpPrompt,
-  title: Schema.optional(OrchestratorMcpTitle),
-  target: Schema.optional(OrchestratorMcpTarget),
-  clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
-  runtimeMode: Schema.optional(OrchestratorMcpRuntimeMode),
-  interactionMode: Schema.optional(OrchestratorMcpInteractionMode),
-});
-export type OrchestratorMcpThreadStartInput = typeof OrchestratorMcpThreadStartInput.Type;
-
 export const OrchestratorMcpThreadStatus = Schema.Union([
   Schema.Literal("idle"),
   OrchestrationV2RunStatus,
@@ -331,6 +321,8 @@ export type OrchestratorMcpThreadListResult = typeof OrchestratorMcpThreadListRe
 
 export const OrchestratorMcpThreadReadInput = Schema.Struct({
   threadId: ThreadId,
+  itemId: Schema.optional(TurnItemId),
+  textOffset: Schema.optional(NonNegativeInt),
   view: Schema.optional(Schema.Literals(["messages", "activity"])),
   afterPosition: Schema.optional(NonNegativeInt),
   limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(100))),
@@ -393,6 +385,7 @@ export const OrchestratorMcpThreadTimelineItem = Schema.Struct({
   title: Schema.NullOr(Schema.String),
   text: Schema.NullOr(Schema.String),
   textTruncated: Schema.Boolean,
+  nextTextOffset: Schema.optional(Schema.NullOr(NonNegativeInt)),
   updatedAt: IsoDateTime,
 });
 export type OrchestratorMcpThreadTimelineItem = typeof OrchestratorMcpThreadTimelineItem.Type;

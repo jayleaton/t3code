@@ -18,6 +18,8 @@ const state = vi.hoisted(() => ({
   approval: false,
   sessionError: false,
   turnError: false,
+  limited: false,
+  subagent: false,
   add: vi.fn(
     (_toast: { title: string; description: string; actionProps: { onClick: () => void } }) =>
       "toast-1",
@@ -46,8 +48,8 @@ function mockThreadShell() {
     activeProviderThreadId: null,
     lineage: {
       rootThreadId: "thread-1",
-      parentThreadId: null,
-      relationshipToParent: null,
+      parentThreadId: state.subagent ? "parent" : null,
+      relationshipToParent: state.subagent ? "subagent" : null,
     },
     forkedFrom: null,
     createdBy: "user",
@@ -56,9 +58,10 @@ function mockThreadShell() {
     activeRunId: null,
     status: state.completedAt
       ? "completed"
-      : state.sessionError || state.turnError
+      : state.sessionError || state.turnError || state.limited
         ? "failed"
         : "running",
+    lastErrorClass: state.limited ? "usage_limit" : null,
     pendingRuntimeRequest: state.input
       ? { id: "request-1", kind: "user_input", createdAt: SHELL_NOW }
       : state.approval
@@ -146,6 +149,8 @@ beforeEach(() => {
     approval: false,
     sessionError: false,
     turnError: false,
+    limited: false,
+    subagent: false,
   });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("window", new EventTarget());
@@ -167,6 +172,19 @@ afterEach(async () => {
 });
 
 describe("thread notifications", () => {
+  it.each([true, false])("keeps subagents silent with focus=%s", async (focused) => {
+    state.subagent = true;
+    state.focused = focused;
+    state.mode = "notifications-and-sound";
+    await render();
+    await complete();
+    state.input = true;
+    await render();
+    expect(state.sound).not.toHaveBeenCalled();
+    expect(state.add).not.toHaveBeenCalled();
+    expect(state.notification).not.toHaveBeenCalled();
+  });
+
   it("alerts once with system alerts off and opens the completed thread", async () => {
     await render();
     await complete();
@@ -203,6 +221,7 @@ describe("thread notifications", () => {
     ["approval", "Approval needed"],
     ["sessionError", "Thread failed"],
     ["turnError", "Thread failed"],
+    ["limited", "Usage limit reached"],
   ] as const)("uses the same %s event for in-app and desktop alerts", async (event, title) => {
     state.mode = "notifications-and-sound";
     await render();

@@ -31,6 +31,7 @@ export interface QueuedThreadRun {
 export interface ThreadQueueWorkflowState {
   readonly activeRun: Run | null;
   readonly queuedRuns: ReadonlyArray<QueuedThreadRun>;
+  readonly isHeld: boolean;
   readonly canReorder: boolean;
   readonly canPromoteToSteer: boolean;
 }
@@ -62,7 +63,7 @@ export function resolveLatestMergeBackRun(projection: Projection): Run | null {
   return hasNewerActiveRun ? null : latestProviderFinishedRun;
 }
 
-export function resolveThreadProviderSession(projection: Projection): ProviderSession | null {
+function resolveThreadProviderSession(projection: Projection): ProviderSession | null {
   const activeRun = resolveActiveThreadRun(projection);
   const providerThreadId = activeRun?.providerThreadId ?? projection.thread.activeProviderThreadId;
   const activeProviderThread =
@@ -83,6 +84,18 @@ export function resolveThreadProviderSession(projection: Projection): ProviderSe
     projection.providerSessions.findLast(
       (session) => session.status !== "stopped" && session.status !== "error",
     ) ?? null
+  );
+}
+
+export function threadSupportsProviderHandoff(projection: Projection | null | undefined): boolean {
+  if (projection == null) return false;
+  const session = resolveThreadProviderSession(projection);
+  if (session !== null) {
+    return session.capabilities.sessions.supportsProviderSwitchingViaHandoff;
+  }
+  return (
+    resolveActiveThreadRun(projection) === null &&
+    (projection.thread.historyOrigin === "v1_import" || projection.runs.length === 0)
   );
 }
 
@@ -132,6 +145,7 @@ export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQu
   return {
     activeRun,
     queuedRuns,
+    isHeld: projection.runs.some((run) => run.status === "queued" && run.queueHeld === true),
     canReorder: capabilities?.supportsQueuedMessages === true,
     canPromoteToSteer:
       hasSteerableProviderTurn &&

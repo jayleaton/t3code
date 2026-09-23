@@ -500,6 +500,7 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
         ),
     }),
     Layer.mock(OrchestratorV2)({
+      streamDomainEvents: Stream.empty,
       dispatch,
     }),
     Layer.mock(GitManager)({
@@ -553,42 +554,43 @@ const startHarness = Effect.fn("startThreadSettlementHarness")(function* (
 });
 
 describe("ThreadSettlementServiceV2 worker", () => {
-  it.effect("a merge settles every eligible associated chat and protects unrelated chats", () =>
+  it.effect("settles a merged pull request stored only in the thread links", () =>
     Effect.scoped(
       Effect.gen(function* () {
         yield* TestClock.setTime(Date.parse(NOW));
-        const settled = yield* Deferred.make<void>();
-        const count = yield* Ref.make(0);
-        const linkedPullRequest = {
-          projectId: PROJECT_ID,
-          repository: "owner/repository",
-          number: 42,
-          url: "https://github.com/owner/repository/pull/42",
-        };
-        const fixture = yield* makeHarness({
-          snapshot: makeSnapshot([
-            makeThread("agent-chat-one", { linkedPullRequest }),
-            makeThread("agent-chat-two", { linkedPullRequest }),
-            makeThread("unrelated", { linkedPullRequest: { ...linkedPullRequest, number: 99 } }),
-          ]),
-          settings: {
-            ...DEFAULT_SERVER_SETTINGS,
-            sidebarAutoSettleAfterDays: null,
-            sidebarAutoSettleOnMerge: true,
-          },
-          onDispatch: () =>
-            Ref.updateAndGet(count, (n) => n + 1).pipe(
-              Effect.flatMap((n) => (n === 2 ? Deferred.succeed(settled, undefined) : Effect.void)),
-            ),
+        const thread = makeThread("merged-link", {
+          pullRequests: [
+            {
+              host: "example.test",
+              repository: "owner/repository",
+              number: 42,
+              url: "https://example.test/owner/repository/pull/42",
+              source: "manual",
+              linkedAt: "2026-08-20T00:00:00.000Z",
+              snapshot: {
+                state: "merged",
+                title: "Pull request",
+                headBranch: "feature",
+                baseBranch: "main",
+                isDraft: false,
+                updatedAt: NOW,
+                syncedAt: NOW,
+                mergedAt: NOW,
+              },
+              stack: null,
+            },
+          ],
         });
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([thread]),
+          settings: { ...DEFAULT_SERVER_SETTINGS, sidebarAutoSettleAfterDays: null },
+        });
+
         yield* Effect.gen(function* () {
           const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
           yield* startHarness(service, fixture.activation, fixture.snapshotReads);
-          yield* fixture.publishMerge;
-          yield* Deferred.await(settled);
-          expect((yield* Ref.get(fixture.commands)).map((c) => c.threadId).sort()).toEqual([
-            "agent-chat-one",
-            "agent-chat-two",
+          expect((yield* Ref.get(fixture.commands)).map((command) => command.threadId)).toEqual([
+            thread.id,
           ]);
         }).pipe(Effect.provide(fixture.layer));
       }),
@@ -642,6 +644,50 @@ describe("ThreadSettlementServiceV2 worker", () => {
           expect(commands).toHaveLength(1);
           expect(commands[0]?.settledAt).toEqual(thread.latestRunCompletedAt);
           expect(commands[0]?.snapshotAt).toEqual(thread.updatedAt);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect("skips the branch recheck when a terminal link would settle nothing", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const previous = {
+          projectId: PROJECT_ID,
+          repository: "owner/repository",
+          number: 1,
+          url: "https://example.test/owner/repository/pull/1",
+        };
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot(
+            [
+              makeThread("resumed-manual", {
+                branch: "main",
+                linkedPullRequest: previous,
+                latestUserMessageAt: DateTime.makeUnsafe("2026-08-28T00:00:00.000Z"),
+              }),
+            ],
+            [makeProject()],
+          ),
+          settings: {
+            ...DEFAULT_SERVER_SETTINGS,
+            sidebarAutoSettleAfterDays: null,
+            sidebarAutoSettleOnMerge: true,
+          },
+          branchPullRequest: () => Effect.succeed(makeBranchPullRequest("open")),
+          pullRequestSummary: (input) =>
+            Effect.succeed({
+              ...makePullRequestSummary({ ...input, state: "merged" }),
+              mergedAt: "2026-08-27T00:00:00.000Z",
+            }),
+        });
+        yield* Effect.gen(function* () {
+          const reactor = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          yield* startHarness(reactor, fixture.activation, fixture.snapshotReads);
+          assert.deepStrictEqual(yield* Ref.get(fixture.commands), []);
+          assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 1);
+          assert.deepStrictEqual(yield* Ref.get(fixture.branchCalls), []);
         }).pipe(Effect.provide(fixture.layer));
       }),
     ),
@@ -857,4 +903,46 @@ describe("ThreadSettlementServiceV2 worker", () => {
       }),
     ),
   );
+  it.effect("a merge settles every eligible associated chat and protects unrelated chats", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const settled = yield* Deferred.make<void>();
+        const count = yield* Ref.make(0);
+        const linkedPullRequest = {
+          projectId: PROJECT_ID,
+          repository: "owner/repository",
+          number: 42,
+          url: "https://github.com/owner/repository/pull/42",
+        };
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([
+            makeThread("agent-chat-one", { linkedPullRequest }),
+            makeThread("agent-chat-two", { linkedPullRequest }),
+            makeThread("unrelated", { linkedPullRequest: { ...linkedPullRequest, number: 99 } }),
+          ]),
+          settings: {
+            ...DEFAULT_SERVER_SETTINGS,
+            sidebarAutoSettleAfterDays: null,
+            sidebarAutoSettleOnMerge: true,
+          },
+          onDispatch: () =>
+            Ref.updateAndGet(count, (n) => n + 1).pipe(
+              Effect.flatMap((n) => (n === 2 ? Deferred.succeed(settled, undefined) : Effect.void)),
+            ),
+        });
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+          yield* fixture.publishMerge;
+          yield* Deferred.await(settled);
+          expect((yield* Ref.get(fixture.commands)).map((c) => c.threadId).sort()).toEqual([
+            "agent-chat-one",
+            "agent-chat-two",
+          ]);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
 });

@@ -27,7 +27,8 @@ import {
   ThreadId,
   type OrchestrationV2ProviderThread,
 } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { HostProcessIsExecutable, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
@@ -90,6 +91,8 @@ import {
 } from "./AcpAdapterV2.ts";
 
 import { makeGrokAdapterV2 } from "./GrokAdapterV2.ts";
+import { registerMistralVibeAcpExtensions } from "./MistralVibeAcp.ts";
+import { acpRegistryPromptFailure } from "./AcpRegistryAdapterV2.ts";
 
 const DEFAULT_GROK_SETTINGS = Schema.decodeSync(GrokSettings)({});
 
@@ -546,6 +549,97 @@ function makeTurnInput(input: {
 }
 
 describe("AcpAdapterV2", () => {
+  for (const outcome of ["failed", "recovered", "completed", "cancelled"] as const) {
+    it.live(`projects Mistral retry notices and their ${outcome} outcome`, () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const instanceId = ProviderInstanceId.make(`vibe-retry-${outcome}`);
+        const threadId = ThreadId.make(`thread-vibe-retry-${outcome}`);
+        const adapter = makeAcpAdapterV2({
+          crypto: yield* Crypto.Crypto,
+          instanceId,
+          fileSystem: yield* FileSystem.FileSystem,
+          idAllocator: yield* IdAllocatorV2,
+          serverConfig: yield* ServerConfig,
+          selfInvocation: yield* resolveSelfInvocation(),
+          flavor: {
+            driver: ProviderDriverKind.make("acpRegistry"),
+            capabilities: AcpProviderCapabilitiesV2,
+            registerExtensions: registerMistralVibeAcpExtensions,
+            promptFailure: (cause) => acpRegistryPromptFailure("mistral-vibe", cause),
+            makeRuntime: makeMockRuntime({
+              childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+              mockAgentPath: yield* path.fromFileUrl(
+                new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+              ),
+              environment: { T3_ACP_VIBE_RETRY_OUTCOME: outcome },
+            }),
+          },
+        });
+        const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make(`session-vibe-retry-${outcome}`),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy,
+            now: yield* DateTime.now,
+          }),
+        );
+        const events = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        const retries = events.flatMap((event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "error"
+            ? [event.turnItem]
+            : [],
+        );
+        const running = retries.filter((item) => item.status === "running");
+        assert.deepEqual(
+          running.map((item) => item.retry?.attempt),
+          [1, 2],
+        );
+        assert.equal(new Set(retries.map((item) => item.id)).size, 1);
+        assert.include(running[0]!.failure.message, "Rate limit reached");
+        assert.notInclude(running[0]!.failure.message, "private-key");
+        const terminal = events.find((event) => event.type === "turn.terminal");
+        assert.isDefined(terminal);
+        if (terminal?.type !== "turn.terminal") return yield* Effect.die("Missing terminal");
+        if (outcome === "failed") {
+          assert.equal(terminal.status, "failed");
+          assert.equal(terminal.failure?.class, "usage_limit");
+          assert.include(terminal.failure?.message ?? "", "Rate limit exceeded for mistral");
+          if (terminal.status === "failed") assert.equal(terminal.retry?.attempt, 2);
+        } else if (outcome === "cancelled") {
+          assert.equal(terminal.status, "cancelled");
+          assert.equal(retries.at(-1)?.status, "cancelled");
+          assert.equal(retries.at(-1)?.title, "Provider retry stopped");
+        } else {
+          assert.equal(terminal.status, "completed");
+          assert.equal(retries.at(-1)?.status, "completed");
+          assert.equal(retries.at(-1)?.title, "Provider recovered");
+        }
+      }).pipe(Effect.provide(testLayer), Effect.scoped),
+    );
+  }
+
   it("preserves legacy ids and scopes v2 ids by provider instance", () => {
     const instanceId = ProviderInstanceId.make("acp-identity-test");
     assert.equal(
@@ -558,6 +652,79 @@ describe("AcpAdapterV2", () => {
     );
   });
 
+  it.effect("starts the MCP bridge directly from the self-contained runtime", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation().pipe(
+        Effect.provideService(HostProcessIsExecutable, true),
+      );
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+
+      const instanceId = ProviderInstanceId.make("acp-test-self-contained-mcp-bridge");
+      const threadId = ThreadId.make("thread-acp-self-contained-mcp-bridge");
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("environment-acp-self-contained-mcp-bridge"),
+        threadId,
+        providerSessionId: "mcp-session-acp-self-contained-mcp-bridge",
+        providerInstanceId: instanceId,
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer self-contained-mcp-bridge-token",
+        browserToolsAvailable: false,
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          McpProviderSession.clearMcpProviderSession(threadId);
+        }),
+      );
+
+      let runtimeInput: AcpAdapterV2RuntimeInput | undefined;
+      const makeRuntime = makeMockRuntime({ childProcessSpawner, mockAgentPath });
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: (input) =>
+            Effect.sync(() => {
+              runtimeInput = input;
+            }).pipe(Effect.andThen(makeRuntime(input))),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+        selfInvocation,
+      });
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-self-contained-mcp-bridge"),
+        modelSelection,
+        runtimePolicy,
+      });
+
+      const mcpServer = runtimeInput?.mcpServers[0];
+      if (mcpServer === undefined || !("command" in mcpServer)) {
+        return yield* Effect.die("ACP runtime must receive the t3-code stdio MCP server");
+      }
+      assert.equal(mcpServer.command, process.execPath);
+      assert.deepEqual(mcpServer.args, ["acp-mcp-bridge"]);
+      assert.equal(runtimeInput?.processEnvironment?.T3_ACP_MCP_NODE, process.execPath);
+      assert.equal(runtimeInput?.processEnvironment?.T3_ACP_MCP_ENTRYPOINT, undefined);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.live("refreshes ACP prompt instructions when the interaction mode changes", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -565,6 +732,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -594,6 +762,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const policy = (interactionMode: "default" | "plan") =>
         ProviderAdapterV2RuntimePolicy.make({
@@ -690,6 +859,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -717,6 +887,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-v2-plan-replay-boundary");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -789,6 +960,7 @@ describe("AcpAdapterV2", () => {
         fileSystem: yield* FileSystem.FileSystem,
         idAllocator,
         serverConfig: yield* ServerConfig,
+        selfInvocation: yield* resolveSelfInvocation(),
         flavor: {
           driver: ACP_TEST_DRIVER,
           capabilities: AcpProviderCapabilitiesV2,
@@ -1001,6 +1173,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -1029,6 +1202,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-v2-fidelity");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -1148,6 +1322,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -1168,6 +1343,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
         });
         const threadId = ThreadId.make("thread-acp-eager-resume");
         const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -1231,6 +1407,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -1253,6 +1430,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-stale-eager-resume");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -1375,6 +1553,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -1403,6 +1582,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-unexpected-termination");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -1456,6 +1636,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -1490,6 +1671,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-provider-exit-running-command");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -1539,6 +1721,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -1567,6 +1750,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-cgroup-unavailable");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -1593,6 +1777,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -1637,6 +1822,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-cgroup-join-failure");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -1669,6 +1855,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -1712,6 +1899,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
         clientTerminals: { childProcessSpawner },
       });
       const sourceThreadId = ThreadId.make("thread-acp-native-fork-source");
@@ -1877,6 +2065,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -1905,6 +2094,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const workspace = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "t3-acp-client-policy-workspace-",
@@ -1955,6 +2145,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -1982,6 +2173,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const workspace = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "t3-acp-client-policy-read-",
@@ -2021,6 +2213,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -2060,6 +2253,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
         clientTerminals: { childProcessSpawner },
       });
       const threadId = ThreadId.make("thread-acp-unknown-permission-grant");
@@ -2156,6 +2350,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -2171,6 +2366,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-missing-native-thread");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -2216,6 +2412,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -2253,6 +2450,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-rollback-session");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -2381,6 +2579,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -2464,6 +2663,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
         continuationRequests: { offer: () => Effect.void },
       });
       const threadId = ThreadId.make("thread-acp-rollback-retry-generation");
@@ -2540,6 +2740,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -2581,6 +2782,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-rollback-failure-compensation");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -2654,6 +2856,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -2670,6 +2873,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-idle-finalizer");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -2702,6 +2906,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -2717,6 +2922,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation: yield* resolveSelfInvocation(),
           makeRuntime: makeMockRuntime({ childProcessSpawner, mockAgentPath, protocolEvents }),
         });
         yield* adapter.openSession({
@@ -2752,6 +2958,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -2767,6 +2974,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation: yield* resolveSelfInvocation(),
         makeRuntime: makeMockRuntime({ childProcessSpawner, mockAgentPath, protocolEvents }),
       });
       const threadId = ThreadId.make("grok-model-switch-back");
@@ -2827,6 +3035,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -2842,6 +3051,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-unsupported-option");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -2874,6 +3084,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -2890,6 +3101,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const firstThreadId = ThreadId.make("thread-acp-active-setup:first");
       const secondThreadId = ThreadId.make("thread-acp-active-setup:second");
@@ -2983,6 +3195,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -3009,6 +3222,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-empty-successful-bash");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -3128,6 +3342,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
       const native: { current?: AcpSessionRuntime.AcpSessionRuntime["Service"] } = {};
       const instanceId = ProviderInstanceId.make("acp-native-cancel");
@@ -3154,6 +3369,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-native-cancel");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -3240,6 +3456,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -3261,6 +3478,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-cancel-permission");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -3339,6 +3557,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -3365,6 +3584,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-response-wins-permission");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -3436,6 +3656,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -3462,6 +3683,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-reordered-elicitation");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -3523,6 +3745,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -3542,6 +3765,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-mcp-approval-elicitation");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -3589,6 +3813,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -3616,6 +3841,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
         testHooks: {
           onNativeResponseLifecycle: (event) =>
             Effect.sync(() => {
@@ -3695,6 +3921,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -3719,6 +3946,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
         testHooks: {
           afterNativeResponseTransportClosed: () =>
             Deferred.succeed(transportClosed, undefined).pipe(
@@ -3807,6 +4035,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -3851,6 +4080,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
         testHooks: {
           onNativeResponseLifecycle: (event) =>
             Effect.sync(() => {
@@ -3946,6 +4176,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -3987,6 +4218,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-pending-response-cancel");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -4060,6 +4292,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -4100,6 +4333,7 @@ describe("AcpAdapterV2", () => {
             fileSystem,
             idAllocator,
             serverConfig,
+            selfInvocation,
           });
           const threadId = ThreadId.make(`thread-acp-immediate-permission-${name}`);
           const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -4163,6 +4397,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -4197,6 +4432,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-immediate-url-elicitation");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -4254,6 +4490,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -4292,6 +4529,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-missing-response-ack");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -4345,6 +4583,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -4379,6 +4618,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-teardown-wins-elicitation");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -4456,6 +4696,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -4477,6 +4718,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-cancel-timeout");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -4557,6 +4799,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -4582,6 +4825,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-double-stop");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -4653,6 +4897,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -4687,6 +4932,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-interrupt-background-hold");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -4759,6 +5005,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -4807,6 +5054,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
         });
         const threadId = ThreadId.make("thread-acp-subagent-carryover");
         const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -4917,6 +5165,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -4963,6 +5212,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
           continuationRequests: { offer: () => Effect.void },
         });
         const threadId = ThreadId.make("thread-acp-carryover-pending-pin");
@@ -5074,6 +5324,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -5143,6 +5394,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
         continuationRequests: { offer: () => Effect.void },
       });
       const threadId = ThreadId.make("thread-acp-active-carryover-pending-pin");
@@ -5321,6 +5573,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -5404,6 +5657,7 @@ describe("AcpAdapterV2", () => {
             fileSystem,
             idAllocator,
             serverConfig,
+            selfInvocation,
             continuationRequests: { offer: () => Effect.void },
           });
           const threadId = ThreadId.make("thread-acp-subagent-finalize-window");
@@ -5550,6 +5804,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -5607,6 +5862,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
           continuationRequests: {
             offer: (request) =>
               Effect.sync(() => {
@@ -5777,6 +6033,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -5835,6 +6092,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
         continuationRequests: {
           offer: (request) =>
             Effect.sync(() => {
@@ -6027,6 +6285,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -6084,6 +6343,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
           continuationRequests: {
             offer: (request) =>
               Effect.sync(() => {
@@ -6325,6 +6585,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -6392,6 +6653,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
           continuationRequests: {
             offer: (request) =>
               Effect.sync(() => {
@@ -6566,6 +6828,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -6634,6 +6897,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
         continuationRequests: {
           offer: (request) =>
             Effect.sync(() => {
@@ -6803,6 +7067,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -6861,6 +7126,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
           continuationRequests: {
             offer: (request) =>
               Effect.sync(() => {
@@ -7084,6 +7350,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -7141,6 +7408,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
           continuationRequests: {
             offer: (request) =>
               Effect.sync(() => {
@@ -7336,6 +7604,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -7401,6 +7670,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
         });
         const threadId = ThreadId.make("thread-acp-settled-soft-steer");
         const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -7522,6 +7792,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -7553,6 +7824,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-unsettled-steer-stays-hard");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -7610,6 +7882,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -7657,6 +7930,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
           continuationRequests: {
             offer: (request) =>
               Effect.sync(() => {
@@ -7802,6 +8076,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -7841,6 +8116,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
         continuationRequests: { offer: () => Effect.void },
       });
       const threadId = ThreadId.make("thread-acp-stop-quarantine-late-task");
@@ -7947,6 +8223,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -7985,6 +8262,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
         continuationRequests: { offer: () => Effect.void },
       });
       const threadId = ThreadId.make("thread-acp-production-stop-hard-kill");
@@ -8076,6 +8354,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -8147,6 +8426,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
         });
         const threadId = ThreadId.make("thread-acp-stop-after-soft-steer-orphan");
         const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -8384,6 +8664,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -8444,6 +8725,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
         continuationRequests: { offer: () => Effect.void },
       });
       const threadId = ThreadId.make("thread-acp-direct-stop-deferred-terminal");
@@ -8579,6 +8861,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -8653,6 +8936,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
         });
         const threadId = ThreadId.make("thread-acp-settled-soft-admission-race");
         const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -8747,6 +9031,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -8784,6 +9069,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
           continuationRequests: {
             offer: (request) =>
               Effect.sync(() => {
@@ -8876,6 +9162,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -8905,6 +9192,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
           continuationRequests: {
             offer: (request) =>
               Effect.sync(() => {
@@ -8994,6 +9282,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -9039,6 +9328,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
         continuationRequests: {
           offer: (request) =>
             Effect.sync(() => {
@@ -9201,6 +9491,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -9244,6 +9535,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
         });
         const threadId = ThreadId.make("thread-acp-injected-report-hold");
         const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -9365,6 +9657,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -9423,6 +9716,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
           continuationRequests: {
             offer: (request) =>
               Effect.sync(() => {
@@ -9565,6 +9859,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -9619,6 +9914,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
           continuationRequests: {
             offer: (request) =>
               Effect.sync(() => {
@@ -9803,6 +10099,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -9864,6 +10161,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
           continuationRequests: {
             offer: (request) =>
               Effect.sync(() => {
@@ -10020,6 +10318,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -10085,6 +10384,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
           continuationRequests: {
             offer: (request) =>
               Effect.sync(() => {
@@ -10233,6 +10533,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -10320,6 +10621,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
           continuationRequests: {
             offer: (request) =>
               Effect.sync(() => {
@@ -10603,6 +10905,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -10671,6 +10974,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
         continuationRequests: {
           offer: (request) =>
             Effect.sync(() => {
@@ -10932,6 +11236,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -10981,6 +11286,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
           continuationRequests: {
             offer: (request) =>
               Effect.sync(() => {
@@ -11117,6 +11423,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -11170,6 +11477,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
         continuationRequests: {
           offer: (request) =>
             Effect.sync(() => {
@@ -11359,6 +11667,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -11410,6 +11719,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
         continuationRequests: {
           offer: (request) =>
             Effect.sync(() => {
@@ -11547,6 +11857,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -11568,6 +11879,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-restart-after-interrupt");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -11791,6 +12103,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -11839,6 +12152,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
         continuationRequests: {
           offer: (request) =>
             Effect.sync(() => {
@@ -12007,6 +12321,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -12030,6 +12345,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-missing-hard-teardown");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -12094,6 +12410,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -12130,6 +12447,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-concurrent-hard-teardown");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -12205,6 +12523,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -12287,6 +12606,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
         testHooks: {
           afterHardTeardownTransportDrained: () =>
             Deferred.succeed(transportDrained, undefined).pipe(
@@ -12565,6 +12885,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -12591,6 +12912,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-stale-deferred-cleanup");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -12688,6 +13010,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -12724,6 +13047,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-concurrent-resume-teardown");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -12820,6 +13144,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -12873,6 +13198,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
         continuationRequests: { offer: () => Effect.void },
       });
       const threadId = ThreadId.make("thread-acp-direct-stop-running-command");
@@ -13095,6 +13421,7 @@ describe("AcpAdapterV2", () => {
         const idAllocator = yield* IdAllocatorV2;
         const path = yield* Path.Path;
         const serverConfig = yield* ServerConfig;
+        const selfInvocation = yield* resolveSelfInvocation();
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -13141,6 +13468,7 @@ describe("AcpAdapterV2", () => {
           fileSystem,
           idAllocator,
           serverConfig,
+          selfInvocation,
         });
         const threadId = ThreadId.make("thread-acp-direct-stop-subagent-hold");
         const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -13259,6 +13587,7 @@ describe("AcpAdapterV2", () => {
       const idAllocator = yield* IdAllocatorV2;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -13303,6 +13632,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        selfInvocation,
       });
       const threadId = ThreadId.make("thread-acp-restart-active-in-process");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({

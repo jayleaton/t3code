@@ -1,5 +1,6 @@
 import {
   CommandId,
+  type RunId,
   isProviderAvailable,
   MessageId,
   type ModelSelection,
@@ -162,7 +163,8 @@ function failure(code: OrchestratorMcpFailure["code"], message: string): Orchest
   return new OrchestratorMcpFailure({ code, message });
 }
 
-function threadManagementFailure(error: ThreadManagementError): OrchestratorMcpFailure {
+function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
+  if (!isThreadManagementError(error)) return failure("orchestration_error", errorMessage(error));
   switch (error._tag) {
     case "ThreadManagementThreadNotFoundError":
       return failure("thread_not_found", error.message);
@@ -302,7 +304,7 @@ function taskStatusForRun(
 }
 
 export function delegatedTaskRun(
-  childProjection: OrchestrationV2ThreadProjection,
+  childProjection: Pick<OrchestrationV2ThreadProjection, "runs" | "contextTransfers">,
   task: OrchestrationV2Subagent,
 ): OrchestrationV2Run | undefined {
   const spawnTransfer = childProjection.contextTransfers.find(
@@ -321,7 +323,7 @@ export function delegatedTaskRun(
 }
 
 export function hasPendingChildRuns(
-  childProjection: OrchestrationV2ThreadProjection,
+  childProjection: Pick<OrchestrationV2ThreadProjection, "runs">,
   delegatedRun: OrchestrationV2Run | undefined,
 ): boolean {
   return childProjection.runs.some(
@@ -343,8 +345,8 @@ function isTerminalTaskStatus(
 }
 
 function directAppOwnedChildTask(
-  parent: OrchestrationV2ThreadProjection,
-  target: OrchestrationV2ThreadProjection,
+  parent: Pick<OrchestrationV2ThreadProjection, "thread" | "subagents">,
+  target: Pick<OrchestrationV2ThreadProjection, "thread">,
 ): OrchestrationV2Subagent | undefined {
   if (
     target.thread.lineage.parentThreadId !== parent.thread.id ||
@@ -361,10 +363,13 @@ function directAppOwnedChildTask(
 }
 
 function pageIncludesTerminalTaskResult(input: {
-  readonly parent: OrchestrationV2ThreadProjection;
+  readonly parent: Pick<OrchestrationV2ThreadProjection, "thread" | "contextTransfers">;
   readonly page: ReadonlyArray<OrchestrationV2ThreadProjection["visibleTurnItems"][number]>;
   readonly task: OrchestrationV2Subagent;
-  readonly target: OrchestrationV2ThreadProjection;
+  readonly target: Pick<
+    OrchestrationV2ThreadProjection,
+    "thread" | "runs" | "contextTransfers" | "messages" | "turnItems"
+  >;
   readonly maxChars: number;
 }): boolean {
   const transfer = input.parent.contextTransfers.find(
@@ -398,7 +403,7 @@ function pageIncludesTerminalTaskResult(input: {
 }
 
 function latestTerminalResultRun(
-  projection: OrchestrationV2ThreadProjection,
+  projection: Pick<OrchestrationV2ThreadProjection, "messages" | "runs">,
   delegatedRun: OrchestrationV2Run | undefined,
 ): OrchestrationV2Run | undefined {
   const monitorRunIds = new Set(
@@ -578,7 +583,10 @@ function listItemFromShell(shell: OrchestrationV2ThreadShell): OrchestratorMcpTh
   };
 }
 
-function threadDetail(projection: OrchestrationV2ThreadProjection): OrchestratorMcpThreadDetail {
+function threadDetail(
+  projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "runtimeRequests">,
+  itemCount: number,
+): OrchestratorMcpThreadDetail {
   const latest = latestRun(projection);
   const active = latestActiveRun(projection);
   return {
@@ -608,13 +616,13 @@ function threadDetail(projection: OrchestrationV2ThreadProjection): Orchestrator
     parentThreadId: projection.thread.lineage.parentThreadId,
     relationshipToParent: projection.thread.lineage.relationshipToParent,
     runCount: projection.runs.length,
-    itemCount: projection.visibleTurnItems.length,
+    itemCount,
     pendingRequestCount: projection.runtimeRequests.filter(
       (request) => request.status === "pending",
     ).length,
     archived: projection.thread.archivedAt !== null,
     createdAt: DateTime.formatIso(projection.thread.createdAt),
-    updatedAt: DateTime.formatIso(projection.updatedAt),
+    updatedAt: DateTime.formatIso(projection.thread.updatedAt),
   };
 }
 
@@ -701,10 +709,13 @@ function turnItemText(item: OrchestrationV2TurnItem): string | null {
 function timelineItem(input: {
   readonly row: OrchestrationV2ThreadProjection["visibleTurnItems"][number];
   readonly maxChars: number;
+  readonly textOffset?: number;
   readonly messagesByThreadId: ReadonlyMap<ThreadId, OrchestrationV2ThreadProjection["messages"]>;
 }): OrchestratorMcpThreadTimelineItem {
   const text = turnItemText(input.row.item);
-  const textTruncated = text !== null && text.length > input.maxChars;
+  const offset = input.textOffset ?? 0;
+  const end = offset + input.maxChars;
+  const textTruncated = text !== null && text.length > end;
   const messageId =
     input.row.item.type === "user_message" || input.row.item.type === "assistant_message"
       ? input.row.item.messageId
@@ -727,8 +738,9 @@ function timelineItem(input: {
     type: input.row.item.type,
     status: input.row.item.status,
     title: input.row.item.title,
-    text: textTruncated ? `${text.slice(0, input.maxChars)}\n…[truncated]` : text,
+    text: text === null ? null : text.slice(offset, end),
     textTruncated,
+    nextTextOffset: textTruncated ? end : null,
     updatedAt: DateTime.formatIso(input.row.item.updatedAt),
   };
 }
@@ -752,7 +764,20 @@ const make = Effect.gen(function* () {
 
   const loadProjection = (threadId: ThreadId) =>
     threadManagement
-      .getThreadProjection(threadId)
+      .getThreadRecords(
+        threadId,
+        [
+          "runs",
+          "messages",
+          "subagents",
+          "providerThreads",
+          "providerTurns",
+          "runtimeRequests",
+          "contextTransfers",
+          "turnItems",
+        ],
+        { turnItemTypes: [], messageRoles: ["user"] },
+      )
       .pipe(
         Effect.mapError((error) =>
           failure(
@@ -765,9 +790,22 @@ const make = Effect.gen(function* () {
   const loadProjectThread = (
     projectId: OrchestrationV2ThreadProjection["thread"]["projectId"],
     threadId: ThreadId,
-  ): Effect.Effect<OrchestrationV2ThreadProjection, OrchestratorMcpFailure> =>
+  ) =>
     threadManagement
-      .getProjectThread({ projectId, threadId })
+      .getProjectThreadRecords(
+        { projectId, threadId },
+        [
+          "runs",
+          "messages",
+          "subagents",
+          "providerThreads",
+          "providerTurns",
+          "runtimeRequests",
+          "contextTransfers",
+          "turnItems",
+        ],
+        { turnItemTypes: [], messageRoles: ["user"] },
+      )
       .pipe(Effect.mapError(threadManagementFailure));
 
   const loadScopedThread = (scope: McpInvocationScope, threadId: ThreadId) =>
@@ -778,6 +816,53 @@ const make = Effect.gen(function* () {
         threadId === scope.threadId
           ? parent
           : yield* loadProjectThread(parent.thread.projectId, threadId);
+      return { parent, target } as const;
+    });
+
+  /**
+   * A thread the user attached as context (a `thread` record on one of their own messages)
+   * is readable even outside the calling project. Only records the user authored count:
+   * an agent cannot widen its own reach by writing a record.
+   */
+  const userAttachedThreadIds = (
+    parent: Pick<OrchestrationV2ThreadProjection, "messages">,
+  ): Set<ThreadId> => {
+    const ids = new Set<ThreadId>();
+    for (const message of parent.messages) {
+      if (message.role !== "user" || message.createdBy !== "user") continue;
+      for (const record of message.context?.records ?? []) {
+        if (record.kind === "thread" && "threadId" in record) ids.add(record.threadId);
+      }
+    }
+    return ids;
+  };
+
+  const loadReadableThread = (scope: McpInvocationScope, threadId: ThreadId) =>
+    Effect.gen(function* () {
+      yield* requireCapability(scope);
+      const parent = yield* loadProjection(scope.threadId);
+      const loadTarget = () =>
+        threadManagement
+          .getThreadRecords(threadId, ["runs", "runtimeRequests", "contextTransfers"])
+          .pipe(Effect.mapError(threadManagementFailure));
+      if (threadId === scope.threadId) return { parent, target: yield* loadTarget() } as const;
+      const target = yield* threadManagement
+        .getProjectThreadRecords({ projectId: parent.thread.projectId, threadId }, [
+          "runs",
+          "runtimeRequests",
+          "contextTransfers",
+        ])
+        .pipe(
+          Effect.mapError(threadManagementFailure),
+          Effect.catchIf(
+            (error) =>
+              error.code === "thread_not_found" && userAttachedThreadIds(parent).has(threadId),
+            loadTarget,
+          ),
+        );
+      if (target.thread.deletedAt !== null) {
+        return yield* failure("thread_not_found", `Thread ${threadId} is no longer available.`);
+      }
       return { parent, target } as const;
     });
 
@@ -793,7 +878,7 @@ const make = Effect.gen(function* () {
     providerAdapters.list().pipe(Effect.map((instanceIds) => new Set(instanceIds)));
 
   const resolveTarget = (input: {
-    readonly parent: OrchestrationV2ThreadProjection;
+    readonly parent: Pick<OrchestrationV2ThreadProjection, "thread">;
     readonly target: OrchestratorMcpTarget | undefined;
     readonly providers: ReadonlyArray<ServerProvider>;
   }): Effect.Effect<ResolvedTarget, OrchestratorMcpFailure> =>
@@ -815,13 +900,24 @@ const make = Effect.gen(function* () {
             `No V2 provider adapter is registered for driver ${requestedDriver}.`,
           );
         }
+        // Inherit the parent's instance only when it can actually serve the
+        // child; an unavailable parent yields to a healthy instance of the
+        // requested driver rather than failing the delegation.
         const inheritedCandidate = candidates.find(
-          (candidate) => candidate.instanceId === input.parent.thread.modelSelection.instanceId,
+          (candidate) =>
+            candidate.instanceId === input.parent.thread.modelSelection.instanceId &&
+            providerConstraints(candidate, true).length === 0,
         );
         const availableCandidate = candidates.find(
           (candidate) => providerConstraints(candidate, true).length === 0,
         );
         instanceId = inheritedCandidate?.instanceId ?? availableCandidate?.instanceId;
+        if (instanceId === undefined) {
+          return yield* failure(
+            "provider_unavailable",
+            `No available V2 provider instance for driver ${requestedDriver}.`,
+          );
+        }
       }
       instanceId ??= input.parent.thread.modelSelection.instanceId;
 
@@ -926,10 +1022,34 @@ const make = Effect.gen(function* () {
           `Delegated task ${taskId} does not belong to thread ${scope.threadId}.`,
         );
       }
-      const childProjection = yield* loadProjection(task.childThreadId);
-      const childRun = delegatedTaskRun(childProjection, task);
-      const terminalRun = latestTerminalResultRun(childProjection, childRun);
-      const progress = delegatedTaskProgress(childProjection);
+      const childControls = yield* threadManagement
+        .getThreadRecords(
+          task.childThreadId,
+          ["runs", "messages", "contextTransfers", "subagents", "providerThreads"],
+          { messageRoles: ["user"] },
+        )
+        .pipe(Effect.mapError(threadManagementFailure));
+      const childRun = delegatedTaskRun(childControls, task);
+      const terminalRun = latestTerminalResultRun(childControls, childRun);
+      const progress = delegatedTaskProgress(childControls);
+      const resultRunIds = [
+        ...new Set(
+          [progress.resultRun?.id, terminalRun?.id].filter((id): id is RunId => id !== undefined),
+        ),
+      ];
+      const resultRecords = yield* threadManagement
+        .getThreadRecords(task.childThreadId, ["messages", "turnItems"], {
+          messageRoles: ["assistant"],
+          messageRunIds: resultRunIds,
+          turnItemRunIds: resultRunIds,
+          turnItemTypes: ["assistant_message", "error"],
+        })
+        .pipe(Effect.mapError(threadManagementFailure));
+      const childProjection = {
+        ...childControls,
+        messages: [...childControls.messages, ...resultRecords.messages],
+        turnItems: resultRecords.turnItems,
+      };
       const workState = task.result !== null ? "result_available" : progress.state;
       const status =
         task.result !== null
@@ -1520,6 +1640,7 @@ const make = Effect.gen(function* () {
                       index,
                     }),
                     threadId,
+                    senderThreadId: scope.threadId,
                     messageId: stableMessageId({
                       scope,
                       requestKey: key,
@@ -1619,58 +1740,83 @@ const make = Effect.gen(function* () {
       }),
     readThread: (scope, input) =>
       Effect.gen(function* () {
-        const { parent, target } = yield* loadScopedThread(scope, input.threadId);
+        const { parent, target } = yield* loadReadableThread(scope, input.threadId);
         const view = input.view ?? "messages";
         const afterPosition = input.afterPosition ?? -1;
         const limit = input.limit ?? DEFAULT_THREAD_READ_LIMIT;
         const maxChars = input.maxCharsPerItem ?? DEFAULT_THREAD_ITEM_MAX_CHARS;
-        const matching = target.visibleTurnItems
-          .filter((row) => row.position > afterPosition)
-          .filter(
-            (row) =>
-              view === "activity" ||
-              row.item.type === "user_message" ||
-              row.item.type === "assistant_message" ||
-              row.item.type === "proposed_plan",
-          );
-        const page = matching.slice(0, limit);
-        const sourceThreadIds = [
-          ...new Set(
-            page
-              .filter(
-                (row) => row.item.type === "user_message" || row.item.type === "assistant_message",
-              )
-              .map((row) => row.sourceThreadId)
-              .filter((threadId) => threadId !== target.thread.id),
-          ),
-        ];
-        const sourceProjections = yield* Effect.forEach(
-          sourceThreadIds,
-          (sourceThreadId) => loadProjectThread(target.thread.projectId, sourceThreadId),
-          { concurrency: 8 },
+        const timeline = yield* threadManagement
+          .getTimelinePage(input.threadId, {
+            afterPosition,
+            limit,
+            view,
+            ...(input.itemId === undefined ? {} : { itemId: input.itemId }),
+          })
+          .pipe(Effect.mapError(threadManagementFailure));
+        const page = timeline.items;
+        const messageIdsByThread = new Map<ThreadId, Array<MessageId>>();
+        for (const row of page) {
+          if (row.item.type !== "user_message" && row.item.type !== "assistant_message") continue;
+          const ids = messageIdsByThread.get(row.sourceThreadId) ?? [];
+          ids.push(row.item.messageId);
+          messageIdsByThread.set(row.sourceThreadId, ids);
+        }
+        const sourceMessages = yield* Effect.forEach(
+          [...messageIdsByThread],
+          ([threadId, messageIds]) =>
+            threadManagement.getThreadRecords(threadId, ["messages"], { messageIds }).pipe(
+              Effect.map((records) => [threadId, records.messages] as const),
+              Effect.mapError(threadManagementFailure),
+            ),
+          { concurrency: 1 },
         );
-        const messagesByThreadId = new Map<ThreadId, OrchestrationV2ThreadProjection["messages"]>([
-          [target.thread.id, target.messages],
-          ...sourceProjections.map(
-            (projection) => [projection.thread.id, projection.messages] as const,
-          ),
-        ]);
+        const messagesByThreadId = new Map(sourceMessages);
         const task = directAppOwnedChildTask(parent, target);
-        if (
-          task !== undefined &&
-          pageIncludesTerminalTaskResult({ parent, page, task, target, maxChars })
-        ) {
-          yield* readTask(scope, task.id, false, true, "thread-read-acknowledge");
+        if (task !== undefined && (input.textOffset ?? 0) === 0) {
+          const transfer = parent.contextTransfers.find(
+            (transfer) =>
+              transfer.type === "subagent_result" &&
+              transfer.sourceThreadId === target.thread.id &&
+              transfer.targetThreadId === parent.thread.id,
+          );
+          const resultRunId = transfer?.sourcePoint.runId ?? delegatedTaskRun(target, task)?.id;
+          const resultRunIds = resultRunId === undefined ? [] : [resultRunId];
+          const resultRecords = yield* threadManagement
+            .getThreadRecords(target.thread.id, ["messages", "turnItems"], {
+              messageRoles: ["assistant"],
+              messageRunIds: resultRunIds,
+              turnItemRunIds: resultRunIds,
+              turnItemTypes: ["assistant_message", "error"],
+            })
+            .pipe(Effect.mapError(threadManagementFailure));
+          if (
+            pageIncludesTerminalTaskResult({
+              parent,
+              page,
+              task,
+              target: { ...target, ...resultRecords },
+              maxChars,
+            })
+          ) {
+            yield* readTask(scope, task.id, false, true, "thread-read-acknowledge");
+          }
         }
         return {
-          thread: threadDetail(target),
+          thread: threadDetail(target, timeline.totalItems),
           recentRuns: target.runs
             .toSorted((left, right) => right.ordinal - left.ordinal)
             .slice(0, input.runLimit ?? DEFAULT_THREAD_RUN_LIMIT)
             .map(threadRun),
-          items: page.map((row) => timelineItem({ row, maxChars, messagesByThreadId })),
+          items: page.map((row) =>
+            timelineItem({
+              row,
+              maxChars,
+              messagesByThreadId,
+              ...(input.itemId === undefined ? {} : { textOffset: input.textOffset ?? 0 }),
+            }),
+          ),
           nextPosition: page.at(-1)?.position ?? null,
-          hasMore: page.length < matching.length,
+          hasMore: timeline.hasMore,
         } satisfies OrchestratorMcpThreadReadResult;
       }),
     sendToThread: (scope, input) =>
@@ -1695,6 +1841,7 @@ const make = Effect.gen(function* () {
               operation: "thread-send",
             }),
             threadId: input.threadId,
+            senderThreadId: scope.threadId,
             messageId,
             text: input.message,
             attachments: [],

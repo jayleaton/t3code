@@ -1,3 +1,4 @@
+import * as Stream from "effect/Stream";
 import {
   ProjectId,
   ProviderInstanceId,
@@ -215,6 +216,7 @@ const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (options: 
           })),
         ),
       dispatch,
+      streamDomainEvents: Stream.empty,
     }),
     Layer.succeed(ServerActivation, Deferred.await(activation)),
     Layer.succeed(Crypto.Crypto, testCrypto),

@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import { CalendarClockIcon, PlayIcon, Settings2Icon } from "lucide-react";
+import { CalendarClockIcon, PencilIcon, PlayIcon, Settings2Icon } from "lucide-react";
 import { useState } from "react";
 import type { EnvironmentId, ScheduledTask, ThreadId } from "@t3tools/contracts";
 import {
@@ -7,6 +7,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 
+import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { cn } from "../../lib/utils";
 import { relativeLabel, scheduleLabel } from "../settings/ScheduledTasksSettings";
 import { useEnvironmentQuery } from "../../state/query";
@@ -97,18 +98,11 @@ export function ThreadAutomationsPanel(props: {
   };
 
   return (
-    <section
-      aria-labelledby="thread-details-automations-heading"
-      className="border-t border-border/65 px-2 pb-2.5 pt-2"
+    <ThreadDetailsSection
+      headingId="thread-details-automations-heading"
+      title="Automations"
       data-thread-automations-panel
-    >
-      <div className="mb-1 flex min-h-8 items-center justify-between gap-2 px-2">
-        <h3
-          id="thread-details-automations-heading"
-          className="text-[11px] font-medium text-muted-foreground"
-        >
-          Automations
-        </h3>
+      actions={
         <Tooltip>
           <TooltipTrigger
             render={
@@ -116,17 +110,22 @@ export function ThreadAutomationsPanel(props: {
                 size="icon-xs"
                 variant="ghost"
                 className={THREAD_DETAILS_PANEL_ICON_ACTION_CLASS}
-                aria-label="Manage schedule tasks"
-                onClick={() => void navigate({ to: "/settings/scheduled-tasks" })}
+                aria-label="Manage scheduled tasks"
+                onClick={() =>
+                  void navigate({
+                    to: "/settings/scheduled-tasks",
+                    search: { environmentId: props.environmentId },
+                  })
+                }
               >
                 <Settings2Icon className="size-3.5" />
               </Button>
             }
           />
-          <TooltipPopup>Manage schedule tasks</TooltipPopup>
+          <TooltipPopup>Manage scheduled tasks</TooltipPopup>
         </Tooltip>
-      </div>
-
+      }
+    >
       {tasksQuery.error !== null ? (
         <p className="px-2.5 py-1.5 text-[11px] text-destructive">
           Could not load automations: {tasksQuery.error}
@@ -166,6 +165,27 @@ export function ThreadAutomationsPanel(props: {
                     size="icon-xs"
                     variant="ghost"
                     className={THREAD_DETAILS_PANEL_ICON_ACTION_CLASS}
+                    aria-label={`Edit ${task.title}`}
+                    onClick={() =>
+                      void navigate({
+                        to: "/settings/scheduled-tasks",
+                        search: { environmentId: props.environmentId, taskId: task.id },
+                      })
+                    }
+                  >
+                    <PencilIcon className="size-3.5" />
+                  </Button>
+                }
+              />
+              <TooltipPopup>Edit automation</TooltipPopup>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    className={THREAD_DETAILS_PANEL_ICON_ACTION_CLASS}
                     aria-label={`Run ${task.title} now`}
                     disabled={busyTaskId !== null || task.lastRunStatus === "running"}
                     onClick={() => void runNow(task)}
@@ -185,6 +205,6 @@ export function ThreadAutomationsPanel(props: {
           </li>
         ))}
       </ul>
-    </section>
+    </ThreadDetailsSection>
   );
 }

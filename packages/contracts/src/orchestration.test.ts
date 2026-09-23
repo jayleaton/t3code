@@ -85,6 +85,18 @@ it.effect("decodes a dispatch error after its bootstrap thread was deleted", () 
   }),
 );
 
+it.effect("decodes a dispatch error before its bootstrap thread was created", () =>
+  Effect.gen(function* () {
+    const error = yield* decodeDispatchCommandError({
+      _tag: "OrchestrationDispatchCommandError",
+      message: "A separate worktree requires a base commit.",
+      bootstrapThreadDisposition: "not-created",
+    });
+
+    assert.strictEqual(error.bootstrapThreadDisposition, "not-created");
+  }),
+);
+
 it.effect("parses turn diff input when fromTurnCount <= toTurnCount", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeTurnDiffInput({
@@ -546,6 +558,7 @@ it.effect("accepts bootstrap metadata in thread.turn.start", () =>
           baseBranch: "main",
           branch: "t3code/example",
           startFromOrigin: true,
+          requireWorktree: true,
         },
         runSetupScript: true,
       },
@@ -554,6 +567,7 @@ it.effect("accepts bootstrap metadata in thread.turn.start", () =>
     assert.strictEqual(parsed.bootstrap?.createThread?.projectId, "project-1");
     assert.strictEqual(parsed.bootstrap?.prepareWorktree?.baseBranch, "main");
     assert.strictEqual(parsed.bootstrap?.prepareWorktree?.startFromOrigin, true);
+    assert.strictEqual(parsed.bootstrap?.prepareWorktree?.requireWorktree, true);
     assert.strictEqual(parsed.bootstrap?.runSetupScript, true);
   }),
 );
@@ -577,6 +591,24 @@ it.effect("decodes thread.created runtime mode for historical events", () =>
 
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
     assert.strictEqual(parsed.modelSelection.instanceId, "codex");
+  }),
+);
+
+// Builds that emit thinking traces persist reasoning as message events; the
+// union must keep decoding them.
+it.effect("decodes message events with a reasoning role", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadMessageSentPayload({
+      threadId: "thread-1",
+      messageId: "reasoning:summary:1",
+      role: "reasoning",
+      text: "thinking",
+      turnId: null,
+      streaming: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(parsed.role, "reasoning");
   }),
 );
 
@@ -796,6 +828,37 @@ it.effect("decodes thread pull request links with snapshot and stack", () =>
     assert.strictEqual(shell.pullRequests.length, 2);
     assert.strictEqual(shell.pullRequests[1]?.stack?.layers.length, 2);
     assert.strictEqual(shell.pullRequests[1]?.snapshot?.state, "open");
+  }),
+);
+
+// A stored event that fails to decode stops the event store read, and with it
+// server startup, so rows written before `turnId` existed must still load.
+it.effect("decodes a legacy message-sent event persisted without turnId", () =>
+  Effect.gen(function* () {
+    const event = yield* decodeOrchestrationEvent({
+      sequence: 539,
+      eventId: "event-message-legacy-1",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      type: "thread.message-sent",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: "cmd-message-legacy-1",
+      causationEventId: null,
+      correlationId: "cmd-message-legacy-1",
+      metadata: {},
+      payload: {
+        threadId: "thread-1",
+        messageId: "message-1",
+        role: "user",
+        text: "written before turn ids were recorded",
+        streaming: false,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    assert.strictEqual(event.type, "thread.message-sent");
+    if (event.type !== "thread.message-sent") return;
+    assert.strictEqual(event.payload.turnId, null);
   }),
 );
 

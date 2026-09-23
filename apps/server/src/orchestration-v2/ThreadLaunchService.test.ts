@@ -1,3 +1,4 @@
+import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
@@ -267,7 +268,7 @@ for (const target of ["new", "existing"] as const) {
       () => {
         const harness = makeHarness();
         const scheduledTasks = ScheduledTasks.layer.pipe(
-          Layer.provide(Layer.mergeAll(harness.layer, NodeCrypto.layer)),
+          Layer.provide(Layer.mergeAll(harness.layer, NodeCrypto.layer, Scheduler.layer)),
         );
         return Effect.gen(function* () {
           const tasks = yield* ScheduledTasks.ScheduledTaskService;
@@ -319,7 +320,7 @@ for (const target of ["new", "existing"] as const) {
   }
 }
 
-it.effect("retains automation attribution while a message waits in the queue", () => {
+it.effect("retains automation and sender attribution while a message waits in the queue", () => {
   const harness = makeHarness({ runSetup: () => Effect.never });
   return Effect.gen(function* () {
     const launches = yield* ThreadLaunch.ThreadLaunchService;
@@ -332,12 +333,14 @@ it.effect("retains automation attribution while a message waits in the queue", (
       }),
     );
     const scheduledTaskId = ScheduledTaskId.make("scheduled-task:queued");
+    const senderThreadId = ThreadId.make("thread:agent-sender");
     const queued = yield* threads.sendToThread({
       projectId,
       commandId: CommandId.make("command:automation:queued"),
       threadId: launched.threadId,
       messageId: MessageId.make("message:automation:queued"),
       scheduledTaskId,
+      senderThreadId,
       text: "Run the audit",
       attachments: [],
       mode: "queue",
@@ -348,6 +351,7 @@ it.effect("retains automation attribution while a message waits in the queue", (
     const projection = yield* threads.getThreadProjection(launched.threadId);
     const message = projection.messages.find((item) => item.id === queued.message.id);
     assert.equal(message?.scheduledTaskId, scheduledTaskId);
+    assert.equal(message?.senderThreadId, senderThreadId);
     assert.equal(message?.text, "Run the audit");
   }).pipe(Effect.provide(harness.layer));
 });
@@ -557,7 +561,7 @@ it.effect(
         assert.equal(followUp.delivery, "queued");
         assert.equal(followUp.run.status, "queued");
         assert.equal(
-          followUp.projection.nodes.find(
+          (yield* threads.getThreadRecords(launched.threadId, ["nodes"])).nodes.find(
             (node) => node.runId === followUp.run.id && node.kind === "root_turn",
           )?.checkpointScopeId,
           null,

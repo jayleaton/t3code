@@ -1,4 +1,11 @@
-import { NativeStackScreenOptions } from "../../native/StackHeader";
+import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
+import { buildProjectThreadStartTurnInput } from "../../lib/projectThreadStartTurn";
+import { useWorktreeSetup } from "./use-worktree-setup";
+import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
+import { ScreenHeader } from "../../components/ScreenHeader";
+import { ScreenHeaderButton } from "../../components/ScreenHeaderButton";
+import type { ScreenHeaderAction } from "../../components/ScreenHeader.types";
+import { useThreadHeaderOptions } from "./useThreadHeaderOptions";
 import {
   StackActions,
   useFocusEffect,
@@ -28,17 +35,11 @@ import { recoverFailedThreadDraft } from "../../state/recover-failed-thread-draf
 import { useEnvironmentQuery } from "../../state/query";
 import { dismissGitActionResult, useGitActionProgress } from "../../state/use-vcs-action-state";
 import { vcsEnvironment } from "../../state/vcs";
-
 import { EmptyState } from "../../components/EmptyState";
-import {
-  AndroidScreenHeader,
-  type AndroidHeaderAction,
-} from "../../components/AndroidScreenHeader";
 import { LoadingScreen } from "../../components/LoadingScreen";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { connectionTone } from "../connection/connectionTone";
-
 import {
   useRemoteConnections,
   useRemoteConnectionStatus,
@@ -59,11 +60,6 @@ import {
 } from "../terminal/terminalLaunchContext";
 import { terminalDebugLog } from "../terminal/terminalDebugLog";
 import { ThreadDetailScreen, type ThreadDetailScreenProps } from "./ThreadDetailScreen";
-import {
-  ThreadGitControls,
-  useThreadGitCenterHeaderItems,
-  useThreadGitRightHeaderItems,
-} from "./ThreadGitControls";
 import { GitOverviewSheet } from "./git/GitOverviewSheet";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useSelectedThreadGitActions } from "../../state/use-selected-thread-git-actions";
@@ -81,7 +77,6 @@ import {
   useAdaptiveWorkspacePaneRole,
   useRegisterWorkspaceInspector,
 } from "../layout/AdaptiveWorkspaceLayout";
-import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { ThreadFileNavigatorPane } from "../files/thread-file-navigator-pane";
 import {
   ThreadInspectorContentStack,
@@ -89,12 +84,116 @@ import {
 } from "./thread-inspector-content-stack";
 import { threadRouteIsHydrating } from "./thread-route-hydration";
 
+function ThreadHeader(
+  props: Parameters<typeof useThreadHeaderOptions>[0] & {
+    readonly hasThreadCwd: boolean;
+    readonly hasWorkspaceRoot: boolean;
+    readonly fileInspectorSupported: boolean;
+    readonly inspectorMode: ThreadInspectorMode | null;
+    readonly onToggleInspector: () => void;
+    readonly onOpenGitInspector: () => void;
+    readonly onOpenFilesInspector: () => void;
+  },
+) {
+  const navigation = useNavigation();
+  const { layout, panes, toggleAuxiliaryPane } = useAdaptiveWorkspaceLayout();
+  const { onOpenTerminal, onMergeBack } = props.gitControls;
+  const native = useThreadHeaderOptions(props);
+  const androidHeaderActions = useMemo<ReadonlyArray<ScreenHeaderAction>>(() => {
+    const actions: ScreenHeaderAction[] = [];
+    if (props.onReturnToThread) {
+      actions.push({
+        accessibilityLabel: "Return to chat",
+        icon: "chevron.left",
+        onPress: props.onReturnToThread,
+      });
+    }
+    if (props.hasThreadCwd) {
+      const filesVisible = props.inspectorMode === "files" && panes.auxiliaryPaneVisible;
+      actions.push({
+        accessibilityLabel: filesVisible ? "Close files" : "Open files",
+        selected: filesVisible,
+        icon: "folder",
+        onPress: filesVisible ? toggleAuxiliaryPane : props.onOpenFilesInspector,
+      });
+    }
+    if (props.hasWorkspaceRoot) {
+      actions.push({
+        accessibilityLabel: "Open terminal",
+        icon: "terminal",
+        onPress: () => onOpenTerminal(null),
+      });
+    }
+    actions.push({
+      accessibilityLabel: "Open git controls",
+      icon: "point.topleft.down.curvedto.point.bottomright.up",
+      onPress: props.onOpenGitInspector,
+    });
+    if (onMergeBack) {
+      actions.push({
+        accessibilityLabel: "Merge back to source",
+        icon: "arrow.triangle.merge",
+        onPress: onMergeBack,
+      });
+    }
+    return actions;
+  }, [
+    props.inspectorMode,
+    panes.auxiliaryPaneVisible,
+    props.onOpenFilesInspector,
+    onOpenTerminal,
+    onMergeBack,
+    props.onOpenGitInspector,
+    toggleAuxiliaryPane,
+    props.onReturnToThread,
+    props.hasThreadCwd,
+    props.hasWorkspaceRoot,
+  ]);
+
+  return (
+    <>
+      <ScreenHeader
+        title={props.title}
+        subtitle={props.subtitle}
+        sidebar={native.sidebar}
+        options={native.options}
+        optionsVersion={props.gitControls.projectScripts}
+        trailing={
+          props.fileInspectorSupported && props.hasThreadCwd ? (
+            <ScreenHeaderButton
+              accessibilityLabel={
+                props.inspectorMode !== null && panes.auxiliaryPaneVisible
+                  ? "Hide inspector"
+                  : "Show inspector"
+              }
+              icon="sidebar.right"
+              selected={props.inspectorMode !== null && panes.auxiliaryPaneVisible}
+              onPress={props.onToggleInspector}
+            />
+          ) : null
+        }
+        onBack={
+          layout.usesSplitView
+            ? undefined
+            : () => {
+                // A deep link or cold start has no previous route; Home is the way out.
+                // Read the history at press time: it changes without re-rendering this screen.
+                if (navigation.canGoBack()) navigation.goBack();
+                else navigation.dispatch(StackActions.replace("Home"));
+              }
+        }
+        actions={androidHeaderActions}
+        hideBottomBorder
+      />
+      {native.fallback}
+    </>
+  );
+}
+
 interface ThreadInspectorSelection {
   readonly routeThreadIdentity: string | null;
   readonly mode: ThreadInspectorMode;
 }
-
-type NativeHeaderItems = ReadonlyArray<Record<string, unknown>>;
 
 function InspectorPaneRoleActivation() {
   useAdaptiveWorkspacePaneRole("inspector");
@@ -223,16 +322,10 @@ function ThreadRouteContent(
     readonly selectedThreadDetailState: ReturnType<typeof useSelectedThreadDetailState>;
   },
 ) {
-  const { materialYouStyleLayoutActive, themeVariables } = useAppearancePreferences();
+  const { themeVariables } = useAppearancePreferences();
   const headerColor = themeVariables["--color-header"];
-  const {
-    fileInspector,
-    layout,
-    panes,
-    showAuxiliaryPane,
-    toggleAuxiliaryPane,
-    togglePrimarySidebar,
-  } = useAdaptiveWorkspaceLayout();
+  const { fileInspector, layout, panes, showAuxiliaryPane, toggleAuxiliaryPane } =
+    useAdaptiveWorkspaceLayout();
   const { connectionState } = useRemoteConnectionStatus();
   const { onReconnectEnvironment } = useRemoteConnections();
   const {
@@ -731,108 +824,6 @@ function ThreadRouteContent(
     onPull: gitActions.onPullSelectedThreadBranch,
     onRunAction: gitActions.onRunSelectedThreadGitAction,
   };
-  const threadCenterHeaderItems = useThreadGitCenterHeaderItems(threadGitControlProps);
-  const compactRightHeaderItems = useThreadGitRightHeaderItems(threadGitControlProps);
-  const splitLeftHeaderItems = useMemo<NativeHeaderItems>(
-    () => [
-      {
-        // Match Mail's split-view detail toolbar: the first detail action sits
-        // inside the content pane, not flush against the sidebar divider.
-        spacing: 18,
-        type: "spacing" as const,
-      },
-      ...(props.onReturnToThread
-        ? [
-            withNativeGlassHeaderItem({
-              accessibilityLabel: "Return to chat",
-              icon: { name: "chevron.left", type: "sfSymbol" as const },
-              identifier: "thread-left-return",
-              onPress: props.onReturnToThread,
-              type: "button" as const,
-            }),
-          ]
-        : []),
-      withNativeGlassHeaderItem({
-        accessibilityLabel: panes.primarySidebarVisible
-          ? "Maximize content"
-          : "Show thread sidebar",
-        icon: {
-          name: panes.primarySidebarVisible ? "arrow.up.left.and.arrow.down.right" : "sidebar.left",
-          type: "sfSymbol" as const,
-        },
-        identifier: "thread-left-sidebar",
-        onPress: togglePrimarySidebar,
-        type: "button" as const,
-      }),
-      withNativeGlassHeaderItem({
-        accessibilityLabel: "New task",
-        icon: { name: "square.and.pencil", type: "sfSymbol" as const },
-        identifier: "thread-left-new-task",
-        onPress: () => navigation.navigate("NewTaskSheet", { screen: "NewTask" }),
-        type: "button" as const,
-      }),
-    ],
-    [panes.primarySidebarVisible, props.onReturnToThread, navigation, togglePrimarySidebar],
-  );
-  const androidHeaderActions = useMemo<ReadonlyArray<AndroidHeaderAction>>(() => {
-    if (Platform.OS !== "android") return [];
-
-    const actions: AndroidHeaderAction[] = [];
-    if (props.onReturnToThread) {
-      actions.push({
-        accessibilityLabel: "Return to chat",
-        icon: "chevron.left",
-        onPress: props.onReturnToThread,
-      });
-    }
-    if (selectedThreadCwd !== null) {
-      actions.push({
-        accessibilityLabel: "Open files",
-        icon: "folder",
-        onPress: handleOpenFilesInspector,
-      });
-    }
-    if (selectedThreadProject?.workspaceRoot) {
-      actions.push({
-        accessibilityLabel: "Open terminal",
-        icon: "terminal",
-        onPress: () => handleOpenTerminal(null),
-      });
-    }
-    actions.push({
-      accessibilityLabel: "Open git controls",
-      icon: "point.topleft.down.curvedto.point.bottomright.up",
-      onPress: handleOpenGitInspector,
-    });
-    if (mergeBackTargetThreadId !== null && mergeBackRun !== null) {
-      actions.push({
-        accessibilityLabel: "Merge back to source",
-        icon: "arrow.triangle.merge",
-        onPress: () => void handleMergeBack(),
-      });
-    }
-    if (fileInspector.supported && selectedThreadCwd !== null) {
-      actions.push({
-        accessibilityLabel: "Toggle inspector",
-        icon: "sidebar.right",
-        onPress: handleToggleInspector,
-      });
-    }
-    return actions;
-  }, [
-    fileInspector.supported,
-    handleMergeBack,
-    handleOpenFilesInspector,
-    handleOpenTerminal,
-    handleOpenGitInspector,
-    handleToggleInspector,
-    mergeBackRun,
-    mergeBackTargetThreadId,
-    props.onReturnToThread,
-    selectedThreadCwd,
-    selectedThreadProject?.workspaceRoot,
-  ]);
-
   const handleEditFailedCreation = useCallback(async () => {
     const creation = selectedThreadCreation?.message;
     if (!creation?.creation || routeThreadIdentity === null) {
@@ -863,8 +854,89 @@ function ThreadRouteContent(
       }),
     );
   }, [navigation, routeThreadIdentity, selectedThreadCreation, selectedThreadProject]);
+  const setupTurnStartedAt = composer.selectedThreadActivityRun?.startedAt ?? null;
+  const { snapshot: worktreeSetupSnapshot, visible: worktreeSetup } = useWorktreeSetup({
+    environmentId: selectedThread?.environmentId ?? null,
+    threadId: selectedThread?.id ?? null,
+    preparing:
+      composer.selectedThreadActivityRun?.status === "preparing" ||
+      selectedThread?.runtime?.status === "preparing" ||
+      selectedThread?.worktreePath != null ||
+      (selectedThreadCreation?.message.creation?.workspaceMode === "worktree" &&
+        selectedThreadCreation.outcome == null),
+    turnStarted: setupTurnStartedAt !== null,
+    followUpSent:
+      composer.selectedThreadFeed.filter(
+        (entry) => entry.type === "message" && entry.message.role === "user",
+      ).length +
+        composer.selectedThreadQueueCount >
+      1,
+  });
   const awaitingBootstrapTurn =
-    selectedThreadDetail?.runs.some((run) => run.status === "preparing") ?? false;
+    worktreeSetup !== null
+      ? worktreeSetup.phase === "running" && !worktreeSetupAgentStarted(worktreeSetup)
+      : (selectedThreadDetail?.runs.some((run) => run.status === "preparing") ?? false);
+  const cancelWorktreeSetup = useAtomCommand(vcsEnvironment.cancelWorktreeSetup);
+  const handleCancelWorktreeSetup = useCallback(() => {
+    if (!selectedThread) return;
+    void cancelWorktreeSetup({
+      environmentId: selectedThread.environmentId,
+      input: { threadId: selectedThread.id },
+    });
+  }, [cancelWorktreeSetup, selectedThread]);
+  const startLocalThread = useAtomCommand(threadEnvironment.startTurn, "work locally");
+  const localResendBusy = useRef(false);
+  const setupMessage = selectedThreadDetail?.messages.find((message) => message.role === "user");
+  const handleWorkLocally = useCallback(async () => {
+    if (!selectedThread || !selectedThreadProject || !setupMessage || localResendBusy.current)
+      return;
+    localResendBusy.current = true;
+    try {
+      const result = await cancelWorktreeSetup({
+        environmentId: selectedThread.environmentId,
+        input: { threadId: selectedThread.id },
+      });
+      if (result._tag !== "Success" || !result.value.cancelled) return;
+      // V2 accepts the launch before setup runs, so cancellation never rejects
+      // the original outbox delivery. Reuse the server-owned prompt and uploads.
+      const metadata = makeTurnCommandMetadata();
+      const launched = await startLocalThread({
+        environmentId: selectedThread.environmentId,
+        input: buildProjectThreadStartTurnInput({
+          ...metadata,
+          projectId: selectedThread.projectId,
+          projectCwd: selectedThreadProject.workspaceRoot,
+          text: setupMessage.text,
+          ...(setupMessage.context ? { context: setupMessage.context } : {}),
+          uploadedAttachments: setupMessage.attachments,
+          modelSelection: selectedThread.modelSelection,
+          runtimeMode: selectedThread.runtimeMode,
+          interactionMode: selectedThread.interactionMode,
+          workspaceMode: "local",
+          branch: null,
+          worktreePath: null,
+          startFromOrigin: false,
+          worktreeBranchName: "",
+        }),
+      });
+      if (launched._tag !== "Success") return;
+      navigation.dispatch(
+        StackActions.replace("Thread", {
+          environmentId: String(selectedThread.environmentId),
+          threadId: metadata.threadId,
+        }),
+      );
+    } finally {
+      localResendBusy.current = false;
+    }
+  }, [
+    cancelWorktreeSetup,
+    navigation,
+    selectedThread,
+    selectedThreadProject,
+    setupMessage,
+    startLocalThread,
+  ]);
   const creationState = ((): ThreadDetailScreenProps["creationState"] => {
     if (selectedThreadCreation === null) {
       return awaitingBootstrapTurn ? { kind: "preparing", preparingWorktree: true } : null;
@@ -881,23 +953,6 @@ function ThreadRouteContent(
       preparingWorktree: selectedThreadCreation.message.creation?.workspaceMode === "worktree",
     };
   })();
-  // Deep links / cold starts land with Thread as the ONLY route, where the
-  // native back button does not render. Provide an explicit Home escape for
-  // that case; when history exists the native back button is used instead.
-  const canGoBack = navigation.canGoBack();
-  const compactHomeHeaderItems = useMemo<NativeHeaderItems>(
-    () => [
-      withNativeGlassHeaderItem({
-        accessibilityLabel: "Go to threads list",
-        icon: { name: "list.bullet", type: "sfSymbol" as const },
-        identifier: "thread-left-home",
-        onPress: () => navigation.dispatch(StackActions.replace("Home")),
-        type: "button" as const,
-      }),
-    ],
-    [navigation],
-  );
-
   if (!environmentId || !threadId) {
     return <OpeningThreadLoadingScreen />;
   }
@@ -919,25 +974,11 @@ function ThreadRouteContent(
           connectionState: routeConnectionState,
         });
   const serverConfig = routeEnvironmentRuntime?.serverConfig ?? null;
-  const renderThreadRouteBody = (showActionControls: boolean) => (
+  const renderThreadRouteBody = () => (
     <>
-      <ThreadGitControls {...threadGitControlProps} showActionControls={showActionControls} />
-
       <GitActionProgressOverlay progress={gitActionProgress} onDismiss={dismissGitActionResult} />
 
-      <View
-        className={materialYouStyleLayoutActive ? "flex-1 bg-thread-canvas" : "flex-1 bg-screen"}
-        style={
-          materialYouStyleLayoutActive
-            ? {
-                borderTopLeftRadius: 28,
-                borderTopRightRadius: 28,
-                marginRight: layout.usesSplitView ? 8 : 0,
-                overflow: "hidden",
-              }
-            : undefined
-        }
-      >
+      <View className="flex-1 bg-screen android:overflow-hidden android:rounded-t-[28px] android:bg-thread-canvas">
         <ThreadDetailScreen
           selectedThread={selectedThreadWithDraftSettings ?? selectedThread}
           contentPresentation={contentPresentation}
@@ -948,9 +989,35 @@ function ThreadRouteContent(
           onDismissFeedback={composer.dismissFeedback}
           selectedThreadFeed={composer.selectedThreadFeed}
           activityRun={composer.selectedThreadActivityRun}
-          activeWorkStartedAt={composer.activeWorkStartedAt}
+          activeWorkStartedAt={
+            creationState?.kind === "preparing" ||
+            (worktreeSetup !== null && setupTurnStartedAt === null)
+              ? null
+              : composer.activeWorkStartedAt
+          }
           isCompacting={composer.isCompacting}
           creationState={creationState}
+          setupWorkingStartedAt={
+            composer.activeWorkStartedAt !== null &&
+            worktreeSetupSnapshot !== null &&
+            composer.selectedThreadFeed.filter(
+              (entry) => entry.type === "message" && entry.message.role === "user",
+            ).length <= 1
+              ? composer.activeWorkStartedAt
+              : null
+          }
+          worktreeSetup={
+            worktreeSetup
+              ? {
+                  snapshot: worktreeSetup,
+                  turnStartedAt: setupTurnStartedAt,
+                  working: composer.activeWorkStartedAt !== null,
+                  turnStarted: setupTurnStartedAt !== null,
+                  onCancel: handleCancelWorktreeSetup,
+                  onWorkLocally: setupMessage && selectedThreadProject ? handleWorkLocally : null,
+                }
+              : null
+          }
           activePendingApproval={requests.activePendingApproval}
           respondingApprovalId={requests.respondingApprovalId}
           activePendingUserInput={requests.activePendingUserInput}
@@ -963,7 +1030,7 @@ function ThreadRouteContent(
           threadSyncStatus={selectedThreadDetailState.status}
           historyControls={historyControls}
           activeThreadBusy={composer.activeThreadBusy}
-          canStopThread={composer.interruptibleRunId !== null}
+          canStopThread={awaitingBootstrapTurn || composer.interruptibleRunId !== null}
           queuedRunEdit={composer.queuedRunEdit}
           composerDraftKey={composer.composerDraftKey}
           followUpBehavior={composer.followUpBehavior}
@@ -987,9 +1054,10 @@ function ThreadRouteContent(
           onNativePasteText={composer.onNativePasteText}
           onRemoveDraftImage={composer.onRemoveDraftImage}
           serverConfig={serverConfig}
-          onStopThread={handleStopThread}
+          onStopThread={awaitingBootstrapTurn ? handleCancelWorktreeSetup : handleStopThread}
           onSendMessage={composer.onSendMessage}
           onReconnectEnvironment={handleReconnectEnvironment}
+          canSwitchThreadProvider={composer.canSwitchThreadProvider}
           onUpdateThreadModelSelection={composer.onUpdateModelSelection}
           onUpdateThreadRuntimeMode={composer.onUpdateRuntimeMode}
           onUpdateThreadInteractionMode={composer.onUpdateInteractionMode}
@@ -1006,71 +1074,23 @@ function ThreadRouteContent(
   return (
     <>
       {activeInspectorRenderer ? <InspectorPaneRoleActivation /> : null}
-      <NativeStackScreenOptions
-        optionsVersion={threadGitControlProps.projectScripts}
-        options={{
-          // Android draws its own in-flow header (AndroidScreenHeader below);
-          // the native stack header stays iOS-only.
-          headerShown: Platform.OS !== "android",
-          headerTitle: selectedThread.title,
-          headerTitleStyle: usesNativeHeaderGlass
-            ? {
-                fontSize: 17,
-                fontWeight: "800",
-              }
-            : undefined,
-          title: selectedThread.title,
-          headerBackVisible: !layout.usesSplitView,
-          // Compact uses the NATIVE back button when a previous route exists;
-          // deep links / cold starts get an explicit Home button instead.
-          // Split view always uses its custom left items.
-          unstable_headerLeftItems:
-            Platform.OS === "ios"
-              ? layout.usesSplitView
-                ? () => splitLeftHeaderItems
-                : canGoBack
-                  ? undefined
-                  : () => compactHomeHeaderItems
-              : undefined,
-          // Search lives in the persistent sidebar, so the split header keeps
-          // the git controls on the RIGHT (no center items — center space is
-          // reserved for future breadcrumbs/status).
-          unstable_headerRightItems:
-            Platform.OS === "ios"
-              ? () => (layout.usesSplitView ? threadCenterHeaderItems : compactRightHeaderItems)
-              : undefined,
-          unstable_headerSubtitle: usesNativeHeaderGlass ? headerSubtitle : undefined,
-          contentStyle:
-            Platform.OS === "android" && materialYouStyleLayoutActive
-              ? { backgroundColor: headerColor }
-              : undefined,
-        }}
+      <ThreadHeader
+        title={selectedThread.title}
+        subtitle={headerSubtitle}
+        headerColor={headerColor}
+        usesNativeHeaderGlass={usesNativeHeaderGlass}
+        gitControls={threadGitControlProps}
+        hasThreadCwd={selectedThreadCwd !== null}
+        hasWorkspaceRoot={Boolean(selectedThreadProject?.workspaceRoot)}
+        fileInspectorSupported={fileInspector.supported}
+        inspectorMode={inspectorMode}
+        onToggleInspector={handleToggleInspector}
+        onOpenGitInspector={handleOpenGitInspector}
+        onOpenFilesInspector={handleOpenFilesInspector}
+        onReturnToThread={props.onReturnToThread}
       />
 
-      {Platform.OS === "android" ? (
-        <AndroidScreenHeader
-          title={selectedThread.title}
-          subtitle={headerSubtitle}
-          onBack={
-            layout.usesSplitView
-              ? undefined
-              : () => {
-                  // A deep link or cold start has no previous route; Home is the way out.
-                  // Read the history at press time: it changes without re-rendering this screen.
-                  if (navigation.canGoBack()) navigation.goBack();
-                  else navigation.dispatch(StackActions.replace("Home"));
-                }
-          }
-          actions={androidHeaderActions}
-          hideBottomBorder={materialYouStyleLayoutActive}
-        />
-      ) : null}
-
-      {/* Android surfaces the git/files/inspector actions in its in-flow
-          header above, so the fallback action toolbar stays iOS-only. */}
-      {renderThreadRouteBody(
-        Platform.OS !== "android" && !layout.usesSplitView && !usesNativeHeaderGlass,
-      )}
+      {renderThreadRouteBody()}
     </>
   );
 }

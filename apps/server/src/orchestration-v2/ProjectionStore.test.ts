@@ -1,6 +1,7 @@
-import { assert, it } from "@effect/vitest";
+import { assert, it, vi } from "@effect/vitest";
 import {
   EventId,
+  CommandId,
   CheckpointId,
   CheckpointRef,
   CheckpointScopeId,
@@ -299,6 +300,18 @@ it.effect("memory recovery selection includes unfinished items from missing runs
 );
 
 it.layer(TestLayer)("ProjectionStoreV2", (it) => {
+  it.effect("limits turn-start history to the requested runs, including an empty selection", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStoreV2;
+      const threadId = yield* addRolledBackRecoveryCandidate("selected-turn-start-history");
+      const runId = (yield* store.getThreadProjection(threadId)).runs[0]!.id;
+      const history = yield* store.getTurnStartHistory(threadId);
+      assert.isNotEmpty(history);
+      assert.deepEqual(yield* store.getTurnStartHistory(threadId, [runId]), history);
+      assert.deepEqual(yield* store.getTurnStartHistory(threadId, []), []);
+      assert.deepEqual(yield* store.getTurnStartHistory(threadId, [RunId.make("run:other")]), []);
+    }),
+  );
   it.effect("preserves stored provider usage when a terminal update omits it", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStoreV2;
@@ -444,6 +457,7 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       });
 
       const allIds: string[] = [];
+      let lastToolPayload = "";
       for (let turn = 1; turn <= 45; turn += 1) {
         const rows = Array.from({ length: 102 }, (_, offset) => {
           const ordinal = (turn - 1) * 102 + offset + 1;
@@ -484,6 +498,8 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
                   output: "x".repeat(2048),
                   exitCode: 0,
                 };
+          const payloadJson = encodeUnknownJsonString(item);
+          if (offset >= 2) lastToolPayload = payloadJson;
           return {
             turn_item_id: id,
             thread_id: threadId,
@@ -496,15 +512,29 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
             type: item.type,
             status: "completed",
             updated_at: nowIso,
-            payload_json: encodeUnknownJsonString(item),
+            payload_json: payloadJson,
           };
         });
         yield* sql`INSERT INTO orchestration_v2_projection_turn_items ${sql.insert(rows)}`;
       }
-      const initial = yield* projectionStore.getThreadSnapshotWindow(threadId, {
-        rowLimit: 77,
-        userTurnLimit: 10,
-      });
+      const initial = yield* Effect.acquireUseRelease(
+        Effect.sync(() => vi.spyOn(JSON, "parse")),
+        (parse) =>
+          projectionStore
+            .getThreadSnapshotWindow(threadId, { rowLimit: 77, userTurnLimit: 10 })
+            .pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  // Tool outputs must not be allocated again just to collect cohort IDs.
+                  assert.lengthOf(
+                    parse.mock.calls.filter(([input]) => input === lastToolPayload),
+                    1,
+                  );
+                }),
+              ),
+            ),
+        (parse) => Effect.sync(() => parse.mockRestore()),
+      );
       // Only the selected turn cohort and two lookahead anchors are decoded.
       assert.lengthOf(initial.projection.turnItems, 12 * 102);
       const bounded = buildBoundedThreadProjection({
@@ -1918,6 +1948,261 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
     }),
   );
 
+  it.effect("projects only the latest failed root turn's limit into SQL and memory shells", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStoreV2;
+      const threadId = yield* addRolledBackRecoveryCandidate("limit-shell");
+      const otherThreadId = yield* addRolledBackRecoveryCandidate("other-limit-shell");
+      const original = (yield* store.getThreadProjection(threadId)).runs[0]!;
+      const now = yield* DateTime.now;
+      const limitItem = {
+        id: TurnItemId.make("limit-shell:error"),
+        threadId,
+        runId: original.id,
+        nodeId: original.rootNodeId,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 2,
+        status: "failed" as const,
+        title: "Usage limit reached",
+        startedAt: now,
+        completedAt: now,
+        updatedAt: now,
+        type: "error" as const,
+        failure: {
+          class: "usage_limit" as const,
+          message: "Plan limit reached.",
+          resetAt: "2099-01-01T00:00:00.000Z",
+          code: "usageLimitExceeded",
+          retryable: null,
+        },
+      };
+      const applyRun = (status: typeof original.status, rootNodeId = original.rootNodeId) =>
+        store.apply({
+          id: EventId.make(`event:limit-shell:run:${status}:${rootNodeId}`),
+          type: "run.updated",
+          threadId,
+          occurredAt: now,
+          payload: { ...original, rootNodeId, status },
+        });
+      const assertSummary = Effect.fnUntraced(function* (
+        lastError: string | null,
+        lastErrorClass: string | null,
+      ) {
+        const projection = yield* store.getThreadProjection(threadId);
+        const memoryShell = threadShellFromProjection(projection);
+        const shells = yield* store.getShellSnapshot();
+        const sqlShell = shells.threads.find((row) => row.id === threadId)!;
+        for (const shell of [memoryShell, sqlShell]) {
+          assert.equal(shell.lastError, lastError);
+          assert.equal(shell.lastErrorClass, lastErrorClass);
+          assert.equal(
+            shell.usageLimitResetAt,
+            lastErrorClass === "usage_limit" ? "2099-01-01T00:00:00.000Z" : null,
+          );
+        }
+        assert.isNull(shells.threads.find((row) => row.id === otherThreadId)!.lastErrorClass);
+        const candidates = yield* store.getLimitRecoveryCandidates({
+          now,
+          autoResume: true,
+          snooze: false,
+        });
+        const candidate = candidates.find((row) => row.id === threadId);
+        if (lastErrorClass === "usage_limit") {
+          assert.deepEqual(candidate, {
+            id: sqlShell.id,
+            status: sqlShell.status,
+            lastErrorClass: sqlShell.lastErrorClass,
+            usageLimitResetAt: sqlShell.usageLimitResetAt,
+            latestRunId: sqlShell.latestRunId,
+            latestRunCompletedAt: sqlShell.latestRunCompletedAt,
+            updatedAt: sqlShell.updatedAt,
+            archivedAt: sqlShell.archivedAt,
+            settledOverride: sqlShell.settledOverride,
+            pendingRuntimeRequest: null,
+            limitRecovery: sqlShell.limitRecovery,
+            snoozedUntil: sqlShell.snoozedUntil,
+          });
+        } else assert.isUndefined(candidate);
+        assert.isUndefined(candidates.find((row) => row.id === otherThreadId));
+      });
+      yield* store.apply({
+        id: EventId.make("event:limit-shell:error"),
+        type: "turn-item.updated",
+        threadId,
+        occurredAt: now,
+        payload: limitItem,
+      });
+      yield* applyRun("failed");
+      yield* assertSummary("Plan limit reached.", "usage_limit");
+      const sql = yield* SqlClient.SqlClient;
+      const [originalRow] = yield* sql<{
+        payload_json: string;
+      }>`SELECT payload_json FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}`;
+      for (const [field, value] of [
+        ["archivedAt", DateTime.formatIso(now)],
+        ["settledOverride", "settled"],
+      ]) {
+        yield* sql`UPDATE orchestration_v2_projection_threads
+          SET payload_json = json_set(payload_json, ${`$.${field}`}, ${value})
+          WHERE thread_id = ${threadId}`;
+        assert.isUndefined(
+          (yield* store.getLimitRecoveryCandidates({ now, autoResume: true, snooze: false })).find(
+            (row) => row.id === threadId,
+          ),
+        );
+        yield* sql`UPDATE orchestration_v2_projection_threads
+          SET payload_json = ${originalRow!.payload_json} WHERE thread_id = ${threadId}`;
+      }
+      yield* sql`UPDATE orchestration_v2_projection_threads SET deleted_at = ${DateTime.formatIso(now)} WHERE thread_id = ${threadId}`;
+      assert.isUndefined(
+        (yield* store.getLimitRecoveryCandidates({ now, autoResume: true, snooze: false })).find(
+          (row) => row.id === threadId,
+        ),
+      );
+      yield* sql`UPDATE orchestration_v2_projection_threads SET deleted_at = NULL WHERE thread_id = ${threadId}`;
+      const recoveryOptions = { now, autoResume: false, snooze: false };
+      assert.isUndefined(
+        (yield* store.getLimitRecoveryCandidates(recoveryOptions)).find(
+          (row) => row.id === threadId,
+        ),
+      );
+      const reset = DateTime.makeUnsafe(limitItem.failure.resetAt);
+      const recovery = {
+        runId: original.id,
+        resetAt: limitItem.failure.resetAt,
+        autoResume: true,
+        requestId: CommandId.make("recovery:choice"),
+      };
+      yield* sql`UPDATE orchestration_v2_projection_threads
+        SET payload_json = json_set(payload_json, '$.limitRecovery', json(${encodeUnknownJsonString(recovery)}))
+        WHERE thread_id = ${threadId}`;
+      // Armed future retries need no state decoding until they become due.
+      assert.isUndefined(
+        (yield* store.getLimitRecoveryCandidates({ ...recoveryOptions, autoResume: true })).find(
+          (row) => row.id === threadId,
+        ),
+      );
+      const due = (yield* store.getLimitRecoveryCandidates({
+        ...recoveryOptions,
+        now: reset,
+      })).find((row) => row.id === threadId)!;
+      assert.deepEqual(due.limitRecovery, recovery);
+      yield* sql`INSERT INTO orchestration_v2_projection_runtime_requests
+        (runtime_request_id, thread_id, node_id, kind, status, created_at, payload_json)
+        VALUES ('limit-shell:pending-request', ${threadId}, ${original.rootNodeId}, 'approval', 'pending', ${DateTime.formatIso(now)}, '{}')`;
+      assert.isUndefined(
+        (yield* store.getLimitRecoveryCandidates({ ...recoveryOptions, now: reset })).find(
+          (row) => row.id === threadId,
+        ),
+      );
+      yield* sql`DELETE FROM orchestration_v2_projection_runtime_requests WHERE runtime_request_id = 'limit-shell:pending-request'`;
+      yield* sql`UPDATE orchestration_v2_projection_threads
+        SET payload_json = json_set(payload_json, '$.snoozedUntil', ${DateTime.formatIso(DateTime.add(reset, { minutes: 1 }))})
+        WHERE thread_id = ${threadId}`;
+      assert.isUndefined(
+        (yield* store.getLimitRecoveryCandidates({ ...recoveryOptions, now: reset })).find(
+          (row) => row.id === threadId,
+        ),
+      );
+      yield* sql`UPDATE orchestration_v2_projection_threads
+        SET payload_json = json_set(payload_json, '$.snoozedUntil', NULL, '$.limitRecovery.autoResume', json('false'))
+        WHERE thread_id = ${threadId}`;
+      assert.isUndefined(
+        (yield* store.getLimitRecoveryCandidates({
+          ...recoveryOptions,
+          now: reset,
+          autoResume: true,
+        })).find((row) => row.id === threadId),
+      );
+      yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json = ${originalRow!.payload_json} WHERE thread_id = ${threadId}`;
+      const session = {
+        id: ProviderSessionId.make("session:limit-shell:shared"),
+        driver,
+        providerInstanceId,
+        status: "ready" as const,
+        cwd: "/workspace",
+        model: modelSelection.model,
+        capabilities: CodexProviderCapabilitiesV2,
+        createdAt: now,
+        updatedAt: now,
+        lastError: null,
+      };
+      for (const boundThreadId of [threadId, otherThreadId]) {
+        yield* store.apply({
+          id: EventId.make(`event:limit-shell:bind:${boundThreadId}`),
+          type: "provider-session.attached",
+          threadId: boundThreadId,
+          driver,
+          providerInstanceId,
+          occurredAt: now,
+          payload: session,
+        });
+      }
+      yield* assertSummary("Plan limit reached.", "usage_limit");
+      yield* store.apply({
+        id: EventId.make("event:limit-shell:session-failed"),
+        type: "provider-session.updated",
+        threadId,
+        occurredAt: now,
+        payload: { ...session, status: "error", lastError: "Provider process exited." },
+      });
+      yield* assertSummary("Provider process exited.", null);
+      yield* store.apply({
+        id: EventId.make("event:limit-shell:session-recovered"),
+        type: "provider-session.updated",
+        threadId,
+        occurredAt: now,
+        payload: session,
+      });
+      yield* assertSummary("Plan limit reached.", "usage_limit");
+      // A failed child is visible in history but does not replace the root's reason.
+      yield* store.apply({
+        id: EventId.make("event:limit-shell:child-error"),
+        type: "turn-item.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          ...limitItem,
+          id: TurnItemId.make("limit-shell:child-error"),
+          nodeId: NodeId.make("child-node"),
+          ordinal: 3,
+          failure: { ...limitItem.failure, class: "provider_error", message: "Child failed." },
+        },
+      });
+      yield* assertSummary("Plan limit reached.", "usage_limit");
+      // A later ordinary root error replaces the limit classification.
+      yield* store.apply({
+        id: EventId.make("event:limit-shell:replacement"),
+        type: "turn-item.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          ...limitItem,
+          id: TurnItemId.make("limit-shell:replacement"),
+          ordinal: 4,
+          failure: { ...limitItem.failure, class: "provider_error", message: "Provider failed." },
+        },
+      });
+      yield* assertSummary("Provider failed.", "provider_error");
+      for (const status of [
+        "running",
+        "completed",
+        "interrupted",
+        "cancelled",
+        "rolled_back",
+      ] as const) {
+        yield* applyRun(status);
+        yield* assertSummary(null, null);
+      }
+      // A new attempt's root cannot inherit an earlier attempt's limit.
+      yield* applyRun("failed", NodeId.make("new-attempt-root"));
+      yield* assertSummary(null, null);
+    }),
+  );
+
   it.effect("projects one shared provider session into multiple thread bindings", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStoreV2;
@@ -3084,7 +3369,28 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
         },
       });
 
+      const sourceMessages = (yield* projectionStore.getThreadRecords(sourceThreadId, ["messages"]))
+        .messages;
+      assert.deepEqual(
+        sourceMessages,
+        (yield* projectionStore.getThreadProjection(sourceThreadId)).messages,
+      );
       const targetAfterRollback = yield* projectionStore.getThreadProjection(targetThreadId);
+      const forwardPage = yield* projectionStore.getTimelinePage(targetThreadId, {
+        view: "activity",
+        limit: 2,
+      });
+      assert.deepEqual(forwardPage.items, targetAfterRollback.visibleTurnItems.slice(0, 2));
+      assert.equal(forwardPage.totalItems, targetAfterRollback.visibleTurnItems.length);
+      assert.isTrue(forwardPage.hasMore);
+      const followingPage = yield* projectionStore.getTimelinePage(targetThreadId, {
+        view: "activity",
+        limit: 10,
+        afterPosition: 1,
+      });
+      assert.deepEqual(followingPage.items, targetAfterRollback.visibleTurnItems.slice(2));
+      assert.isFalse(followingPage.hasMore);
+
       assert.deepEqual(
         targetAfterRollback.visibleTurnItems.map((row) => [
           row.visibility,
@@ -3510,6 +3816,24 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
         turnCursor = page.nextCursor;
       }
       assert.deepEqual(turnPagedIds, expectedNestedIds);
+      const fullNested = yield* projectionStore.getThreadProjection(nestedThreadId);
+      const nestedForward = yield* projectionStore.getTimelinePage(nestedThreadId, {
+        view: "activity",
+        limit: expectedNestedIds.length + 1,
+      });
+      assert.deepEqual(nestedForward.items, fullNested.visibleTurnItems);
+      const messagePage = yield* projectionStore.getTimelinePage(nestedThreadId, {
+        view: "messages",
+        limit: 2,
+      });
+      assert.deepEqual(
+        messagePage.items,
+        fullNested.visibleTurnItems
+          .filter((row) =>
+            ["user_message", "assistant_message", "proposed_plan"].includes(row.item.type),
+          )
+          .slice(0, 2),
+      );
 
       const emptyMiddleThreadId = ThreadId.make(
         "thread:projection-fork-source-rollback:empty-middle",

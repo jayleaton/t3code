@@ -3,6 +3,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Predicate from "effect/Predicate";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as RpcClient from "effect/unstable/rpc/RpcClient";
@@ -14,7 +15,7 @@ import * as AcpError from "./errors.ts";
 import * as AcpProtocol from "./protocol.ts";
 import * as AcpRpcs from "./rpc.ts";
 import * as AcpSchema from "./compat.ts";
-import type * as AcpSchemaV1 from "./_generated/schema-v1.gen.ts";
+import * as AcpSchemaV1 from "./_generated/schema-v1.gen.ts";
 import * as AcpSchemaV2 from "./_generated/schema.gen.ts";
 import { AGENT_METHODS, CLIENT_METHODS } from "./_generated/meta.gen.ts";
 import {
@@ -24,6 +25,10 @@ import {
   runHandler,
 } from "./_internal/shared.ts";
 import { makeChildStdio, makeTerminationError } from "./_internal/stdio.ts";
+
+const decodeElicitationRequest = Schema.decodeUnknownEffect(
+  Schema.Union([AcpSchemaV2.CreateElicitationRequest, AcpSchemaV1.CreateElicitationRequest]),
+);
 
 export interface AcpClientOptions {
   readonly logIncoming?: boolean;
@@ -653,60 +658,63 @@ function normalizeInitializeResponse(
     ...(response.authMethods === undefined
       ? {}
       : {
-          authMethods: response.authMethods.map((method) => {
-            const record = method as AcpSchemaV2.AuthMethod;
-            const base = {
-              id: record.methodId,
-              name: record.name,
-              ...(record.description === undefined ? {} : { description: record.description }),
-              ...(record._meta === undefined ? {} : { _meta: record._meta }),
-            };
-            if (
-              record.type === "env_var" &&
-              Array.isArray(record.vars) &&
-              record.vars.every(
-                (variable) =>
-                  typeof variable === "object" &&
-                  variable !== null &&
-                  typeof (variable as { readonly name?: unknown }).name === "string",
-              )
-            ) {
+          authMethods: response.authMethods
+            .map((method) => {
+              const record = method as AcpSchemaV2.AuthMethod;
+              const base = {
+                id: record.methodId,
+                name: record.name,
+                ...(record.description === undefined ? {} : { description: record.description }),
+                ...(record._meta === undefined ? {} : { _meta: record._meta }),
+              };
+              if (
+                record.type === "env_var" &&
+                Array.isArray(record.vars) &&
+                record.vars.every(
+                  (variable) =>
+                    typeof variable === "object" &&
+                    variable !== null &&
+                    typeof (variable as { readonly name?: unknown }).name === "string",
+                )
+              ) {
+                return {
+                  ...base,
+                  type: "env_var" as const,
+                  vars: record.vars.map((variable) => {
+                    const value = variable as { readonly name: string; readonly label?: unknown };
+                    return {
+                      name: value.name,
+                      ...(typeof value.label === "string" ? { label: value.label } : {}),
+                    };
+                  }),
+                  ...(typeof record.link === "string" ? { link: record.link } : {}),
+                };
+              }
+              if (record.type === "agent") return { ...base, type: "agent" as const };
+              if (record.type !== "terminal") return undefined;
               return {
                 ...base,
-                type: "env_var" as const,
-                vars: record.vars.map((variable) => {
-                  const value = variable as { readonly name: string; readonly label?: unknown };
-                  return {
-                    name: value.name,
-                    ...(typeof value.label === "string" ? { label: value.label } : {}),
-                  };
-                }),
-                ...(typeof record.link === "string" ? { link: record.link } : {}),
+                type: "terminal" as const,
+                ...(Array.isArray(record.args)
+                  ? {
+                      args: record.args.filter(
+                        (argument): argument is string => typeof argument === "string",
+                      ),
+                    }
+                  : {}),
+                ...(Array.isArray(record.env)
+                  ? {
+                      env: Object.fromEntries(
+                        (record.env as ReadonlyArray<AcpSchemaV2.EnvVariable>).map((variable) => [
+                          variable.name,
+                          variable.value,
+                        ]),
+                      ),
+                    }
+                  : {}),
               };
-            }
-            if (record.type !== "terminal") return { ...base, type: "agent" as const };
-            return {
-              ...base,
-              type: "terminal" as const,
-              ...(Array.isArray(record.args)
-                ? {
-                    args: record.args.filter(
-                      (argument): argument is string => typeof argument === "string",
-                    ),
-                  }
-                : {}),
-              ...(Array.isArray(record.env)
-                ? {
-                    env: Object.fromEntries(
-                      (record.env as ReadonlyArray<AcpSchemaV2.EnvVariable>).map((variable) => [
-                        variable.name,
-                        variable.value,
-                      ]),
-                    ),
-                  }
-                : {}),
-            };
-          }),
+            })
+            .filter(Predicate.isNotUndefined),
         }),
     ...(response._meta === undefined ? {} : { _meta: response._meta }),
   };
@@ -996,11 +1004,21 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
           })),
         ),
       [CLIENT_METHODS.elicitation_create]: (payload, { requestId }) =>
-        runHandler(
-          coreHandlers.elicitation,
-          payload,
-          CLIENT_METHODS.elicitation_create,
-          requestContext(requestId, CLIENT_METHODS.elicitation_create),
+        decodeElicitationRequest(payload).pipe(
+          Effect.mapError((cause) =>
+            AcpError.AcpRequestError.invalidExtensionPayload(
+              CLIENT_METHODS.elicitation_create,
+              cause,
+            ).toProtocolError(),
+          ),
+          Effect.flatMap((request) =>
+            runHandler(
+              coreHandlers.elicitation,
+              request,
+              CLIENT_METHODS.elicitation_create,
+              requestContext(requestId, CLIENT_METHODS.elicitation_create),
+            ),
+          ),
         ),
       [CLIENT_METHODS.mcp_connect]: (payload, { requestId }) =>
         runHandler(

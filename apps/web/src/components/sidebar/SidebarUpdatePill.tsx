@@ -100,7 +100,7 @@ function SidebarUpdateArchitectureWarningContent() {
   if (!visible || !description) return null;
 
   return (
-    <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8 text-xs">
+    <Alert variant="warning">
       <TriangleAlertIcon />
       <AlertTitle>Intel build on Apple Silicon</AlertTitle>
       <AlertDescription>{description}</AlertDescription>
@@ -369,33 +369,69 @@ function DesktopUpdateControl({ className }: { className?: string | undefined } 
   );
 
   return (
-    <Popover
-      handle={releaseNotesPopoverHandle}
-      onOpenChange={(open, details) => {
-        if (open && !showReleaseNotesPopover) {
-          details.cancel();
-          return;
-        }
-        handleSidebarUpdateReleaseNotesPopoverOpenChange(open, details);
-      }}
-    >
-      <Tooltip disabled={showReleaseNotesPopover}>
-        <TooltipTrigger
-          id={releaseNotesTriggerId}
-          render={
-            <PopoverTrigger
-              {...(!showReleaseNotesPopover
-                ? {
-                    "aria-controls": undefined,
-                    "aria-expanded": undefined,
-                    "aria-haspopup": undefined,
-                  }
-                : {})}
-              closeDelay={150}
-              handle={releaseNotesPopoverHandle}
-              id={releaseNotesTriggerId}
-              openOnHover={showReleaseNotesPopover}
-              render={updateButton}
+    <SidebarMenuItem className="ml-auto shrink-0">
+      <Popover
+        handle={releaseNotesPopoverHandle}
+        onOpenChange={(open, details) => {
+          if (open && !showReleaseNotesPopover) {
+            details.cancel();
+            return;
+          }
+          handleSidebarUpdateReleaseNotesPopoverOpenChange(open, details);
+        }}
+      >
+        <Tooltip disabled={showReleaseNotesPopover}>
+          <TooltipTrigger
+            id={releaseNotesTriggerId}
+            render={
+              <PopoverTrigger
+                {...(!showReleaseNotesPopover
+                  ? {
+                      "aria-controls": undefined,
+                      "aria-expanded": undefined,
+                      "aria-haspopup": undefined,
+                    }
+                  : {})}
+                closeDelay={150}
+                handle={releaseNotesPopoverHandle}
+                id={releaseNotesTriggerId}
+                openOnHover={showReleaseNotesPopover}
+                render={updateButton}
+              />
+            }
+          />
+          {!showReleaseNotesPopover ? (
+            <TooltipPopup
+              align="center"
+              side="top"
+              variant={showUpdateDetails ? "glass" : "default"}
+            >
+              {tooltip}
+            </TooltipPopup>
+          ) : null}
+        </Tooltip>
+        {showReleaseNotesPopover && state ? (
+          <PopoverPopup
+            align="center"
+            aria-label="Nightly update release notes"
+            className="text-balance shadow-xl shadow-black/25"
+            initialFocus={false}
+            onKeyDownCapture={(event) => {
+              if (
+                event.key === "Escape" &&
+                releaseNotesPopupRef.current?.contains(document.activeElement)
+              ) {
+                suppressReleaseNotesFocusOpen.current = true;
+              }
+            }}
+            ref={releaseNotesPopupRef}
+            side="top"
+            tooltipStyle
+          >
+            <SidebarUpdateReleaseNotes
+              shell={window.desktopBridge}
+              state={state}
+              tooltip={tooltip}
             />
           }
         />

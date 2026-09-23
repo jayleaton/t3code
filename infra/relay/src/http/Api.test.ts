@@ -319,9 +319,7 @@ function relayUnlinkTestLayer(input?: {
       EnvironmentLinks.EnvironmentLinks,
       EnvironmentLinks.EnvironmentLinks.of({
         upsert: () => Effect.die("unused upsert"),
-        listUsersForEnvironment: () => Effect.die("unused listUsersForEnvironment"),
         listDeliveryUsersForEnvironment: () => Effect.die("unused listDeliveryUsersForEnvironment"),
-        listPublicKeysForEnvironment: () => Effect.die("unused listPublicKeysForEnvironment"),
         listForUser: () => Effect.die("unused listForUser"),
         getForUser: input?.getForUser ?? (() => Effect.succeed(null)),
         revokeForUser: input?.revokeForUser ?? (() => Effect.succeed(false)),
@@ -663,6 +661,7 @@ describe("relay routing fallback", () => {
       ).pipe(Effect.provideService(HttpRouter.RouterConfig, RELAY_HTTP_ROUTER_CONFIG));
       const threadIds = [
         "b7c8c522-d244-43dc-875f-7224fce79912",
+        "t".repeat(512),
         "thread:delegated-task:command%3Amcp%3Ab7c8c522-d244-43dc-875f-7224fce79912%3Adelegate-task%3Agreet-subagent-20260813",
       ];
       for (const threadId of threadIds) {
