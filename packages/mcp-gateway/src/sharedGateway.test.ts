@@ -10,6 +10,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Queue from "effect/Queue";
 import * as Effect from "effect/Effect";
@@ -347,7 +348,7 @@ describe("shared MCP gateway", () => {
                   environmentId: "local",
                   sequence: 1,
                   type: "thread.started",
-                  occurredAt: "2026-09-17T00:00:00.000Z",
+                  occurredAt: DateTime.formatIso(DateTime.nowUnsafe()),
                   data: {},
                 },
               }),
@@ -679,7 +680,7 @@ describe("shared MCP gateway", () => {
           environmentId: "local",
           sequence: 1,
           type: "thread.started",
-          occurredAt: "2026-09-16T00:00:00.000Z",
+          occurredAt: DateTime.formatIso(DateTime.nowUnsafe()),
           data: {},
         },
       }),
