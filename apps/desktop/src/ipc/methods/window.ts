@@ -104,6 +104,13 @@ export const getMcpGatewayBridgeToken = DesktopIpc.makeSyncIpcMethod({
   }),
 });
 
+/** The machine's hostname, so agents can tell this desktop apart from the user's other devices. */
+export const getClientDeviceName = DesktopIpc.makeSyncIpcMethod({
+  channel: IpcChannels.GET_CLIENT_DEVICE_NAME_CHANNEL,
+  result: Schema.NullOr(Schema.String),
+  handler: () => Effect.sync(() => NodeOS.hostname().trim() || null),
+});
+
 class DesktopWindowUnavailable extends Schema.TaggedError<DesktopWindowUnavailable>()(
   "DesktopWindowUnavailable",
   { message: Schema.String },

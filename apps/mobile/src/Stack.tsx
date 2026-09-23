@@ -25,6 +25,7 @@ import { AppText as Text } from "./components/AppText";
 import { getCompactBrandHeaderOptions } from "./components/CompactBrandTitle";
 import { ArchivedThreadsRouteScreen } from "./features/archive/ArchivedThreadsRouteScreen";
 import { useAgentNotificationNavigation } from "./features/agent-awareness/notificationNavigation";
+import { useClientFocusNavigation } from "./features/client-focus/useClientFocusNavigation";
 import { ConnectOnboardingRouteScreen } from "./features/cloud/ConnectOnboardingRouteScreen";
 import { useConnectOnboardingNavigation } from "./features/cloud/connectOnboardingNavigation";
 import { AttachmentFileScreen } from "./features/files/AttachmentFileScreen";
@@ -505,6 +506,7 @@ function RootStackLayout(props: {
   const { pendingShare } = useIncomingShare();
   const sharePresentationRef = useRef(EMPTY_INCOMING_SHARE_PRESENTATION_STATE);
   useAgentNotificationNavigation();
+  useClientFocusNavigation();
   // Presents the T3 Connect onboarding sheet after an in-session sign-in.
   useConnectOnboardingNavigation();
   // Launcher app shortcuts: routes shortcut taps and tracks opened threads.

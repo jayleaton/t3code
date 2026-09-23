@@ -247,6 +247,20 @@ with the environment and thread IDs to open that chat and bring this desktop win
 The remote machine supplies the chat; the desktop connected to the gateway displays it. Opening a
 chat does not start or stop its agent. The desktop app must already be running and connected.
 
+### Show a chat on another device
+
+Your assistant can also put a chat on a different screen, for example when you talk to an assistant
+on your laptop but watch T3 Code on your desktop. `t3_list_devices` lists the desktop, web, and
+mobile apps connected to an environment, and shows which one you are looking at. `t3_focus_device`
+then opens a chat on one of them by device ID or name. It can also open a file from that chat's
+workspace beside the chat, such as a screenshot, video, PDF, or source file, or open the Agents board.
+Desktop apps come to the front. Browser tabs switch to the chat but stay behind other windows. Phones
+must have T3 Code open. Mobile has no Agents board, so that request does nothing on a phone.
+
+A device appears once it connects to the environment directly, over your network, Tailscale, or T3
+Connect. Desktop apps use the computer's name; browsers show as the browser and OS, such as "Chrome
+on Windows".
+
 ### Organize work by agent
 
 Open **Open agents** in the command palette, or visit `/agents`. Create a named agent, choose its

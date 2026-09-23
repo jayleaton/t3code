@@ -4,6 +4,7 @@ import {
   browserClientOs,
   browserDeviceType,
   browserFamily,
+  clientFocusIdentity,
   clientPresentationMetadata,
 } from "./clientMetadata";
 
@@ -85,6 +86,30 @@ describe("client telemetry metadata", () => {
       os: "macOS",
       surface: "desktop",
       appVersion: "1.2.3",
+    });
+  });
+});
+
+describe("client focus identity", () => {
+  it("names desktops by hostname and browsers by browser and OS", () => {
+    expect(
+      clientFocusIdentity({
+        identity: desktopChrome,
+        desktopBridge: {
+          getClientPlatform: () => "win32",
+          getClientDeviceName: () => "WIN-STUDIO",
+        },
+      }),
+    ).toEqual({ label: "WIN-STUDIO", platform: "Windows" });
+    expect(
+      clientFocusIdentity({
+        identity: desktopChrome,
+        desktopBridge: { getClientPlatform: () => "darwin" },
+      }),
+    ).toEqual({ label: "macOS desktop", platform: "macOS" });
+    expect(clientFocusIdentity({ identity: desktopChrome, desktopBridge: undefined })).toEqual({
+      label: "Chrome on Windows",
+      platform: "Windows",
     });
   });
 });

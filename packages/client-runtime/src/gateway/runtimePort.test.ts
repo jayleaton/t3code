@@ -19,6 +19,7 @@ import {
   resolveGatewayProfileModelSelection,
   gatewayThreadProjection,
   gatewayStatusFromThread,
+  resolveGatewayDevice,
 } from "./runtimePort.ts";
 
 const environmentId = EnvironmentId.make("remote-1");
@@ -821,5 +822,27 @@ it("retains settlement state in the thread list used by agent filters", async ()
     items: [
       { id: "chat", settledAt: "2026-09-07T00:00:00.000Z", profileSnapshot: { profileId: "code" } },
     ],
+  });
+});
+
+describe("resolveGatewayDevice", () => {
+  const device = (deviceId: string, label: string) => ({
+    deviceId,
+    label,
+    kind: "desktop" as const,
+    visible: true,
+    focused: false,
+    connectedAt: "2026-09-23T00:00:00.000Z",
+  });
+  const devices = [device("mac", "Studio Mac"), device("win-1", "PC"), device("win-2", "PC")];
+
+  it("accepts a deviceId or a unique label, ignoring case", () => {
+    expect(resolveGatewayDevice(devices, "win-2").deviceId).toBe("win-2");
+    expect(resolveGatewayDevice(devices, "studio mac").deviceId).toBe("mac");
+  });
+
+  it("names the connected devices when the choice is ambiguous or missing", () => {
+    expect(() => resolveGatewayDevice(devices, "pc")).toThrow(/Several devices.*win-1.*win-2/);
+    expect(() => resolveGatewayDevice(devices, "iPhone")).toThrow(/not connected.*Studio Mac/);
   });
 });

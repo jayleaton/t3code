@@ -6,6 +6,7 @@ import {
   GatewayError,
   GATEWAY_THREAD_EXECUTION_STATES,
   type GatewayApprovalDecision,
+  type GatewayFocusTarget,
   type GatewayProfile,
   type GatewayRuntimePort,
   type GatewayScope,
@@ -199,6 +200,22 @@ function requiredString(input: Record<string, unknown>, key: string): string {
     });
   }
   return value;
+}
+
+function focusTargetFromInput(input: Record<string, unknown>): GatewayFocusTarget {
+  const invalid = (message: string) =>
+    new GatewayError({ code: "invalid_input", message, retryable: false });
+  const threadId = typeof input.threadId === "string" ? input.threadId.trim() : "";
+  const path = typeof input.path === "string" ? input.path.trim() : "";
+  const line = typeof input.line === "number" ? input.line : undefined;
+  if (input.view === "agents") {
+    if (threadId !== "" || path !== "") throw invalid("view=agents takes no threadId or path.");
+    return { type: "agents" };
+  }
+  if (threadId === "") throw invalid("threadId is required unless view=agents.");
+  if (path !== "") return { type: "file", threadId, path, ...(line === undefined ? {} : { line }) };
+  if (line !== undefined) throw invalid("line requires path.");
+  return { type: "thread", threadId };
 }
 
 function environmentWithScopes(
@@ -963,6 +980,22 @@ export async function callGatewayTool(
           );
         }),
       };
+    }
+    case "t3_list_devices": {
+      const environmentId = environmentWithScope(context, input, "read");
+      if (!context.port.listDevices)
+        throw new Error("Device focus is unavailable in this runtime. Update T3.");
+      return { items: await context.port.listDevices(environmentId) };
+    }
+    case "t3_focus_device": {
+      const environmentId = environmentWithScope(context, input, "read");
+      if (!context.port.focusDevice)
+        throw new Error("Device focus is unavailable in this runtime. Update T3.");
+      return context.port.focusDevice(
+        environmentId,
+        requiredString(input, "device"),
+        focusTargetFromInput(input),
+      );
     }
     case "t3_open_thread": {
       const environmentId = environmentWithScope(context, input, "read");

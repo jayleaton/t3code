@@ -45,6 +45,7 @@ import {
 } from "../operations/commands.ts";
 import { request, runStream, subscribe } from "../rpc/client.ts";
 import type {
+  GatewayDevice,
   GatewayProfile,
   GatewayProfileModelSelection,
   GatewayRuntimeEvent,
@@ -113,6 +114,39 @@ const threadSnapshot = (environmentId: EnvironmentId, threadId: ThreadId, turnLi
       )
       .pipe(Effect.timeout("20 seconds"));
   });
+
+const listGatewayDevices = (environmentId: EnvironmentId) =>
+  Effect.gen(function* () {
+    const registry = yield* EnvironmentRegistry;
+    const { clients } = yield* registry.run(environmentId, request(WS_METHODS.clientsList, {}));
+    return clients.map((client): GatewayDevice => ({
+      deviceId: client.clientId,
+      label: client.label,
+      kind: client.clientKind === "desktop-renderer" ? "desktop" : client.clientKind,
+      ...(client.platform === undefined ? {} : { platform: client.platform }),
+      visible: client.visible,
+      focused: client.focused,
+      connectedAt: DateTime.formatIso(client.connectedAt),
+    }));
+  });
+
+/** Accepts a deviceId, or a device label when exactly one connected device carries it. */
+export function resolveGatewayDevice(
+  devices: ReadonlyArray<GatewayDevice>,
+  device: string,
+): GatewayDevice {
+  const byId = devices.find((candidate) => candidate.deviceId === device);
+  if (byId) return byId;
+  const wanted = device.trim().toLowerCase();
+  const byLabel = devices.filter((candidate) => candidate.label.toLowerCase() === wanted);
+  if (byLabel.length === 1) return byLabel[0]!;
+  const available = devices.map((candidate) => `${candidate.label} (${candidate.deviceId})`);
+  throw new Error(
+    byLabel.length > 1
+      ? `Several devices are named "${device}"; pass a deviceId: ${available.join(", ")}.`
+      : `Device "${device}" is not connected. Connected devices: ${available.join(", ") || "none"}.`,
+  );
+}
 
 /**
  * Resolves persisted readable profile labels against a live provider catalog.
@@ -899,6 +933,40 @@ export function createGatewayRuntimePort(
       }
       await openThread(environmentId, threadId);
       return { environmentId, threadId, status: "succeeded" };
+    },
+    listDevices: (environmentId) => run(listGatewayDevices(EnvironmentId.make(environmentId))),
+    focusDevice: async (rawEnvironmentId, device, target) => {
+      const environmentId = EnvironmentId.make(rawEnvironmentId);
+      const resolved = resolveGatewayDevice(await run(listGatewayDevices(environmentId)), device);
+      if (target.type !== "agents") {
+        const snapshot = await run(threadSnapshot(environmentId, ThreadId.make(target.threadId)));
+        if (snapshot.thread.id !== target.threadId || snapshot.thread.deletedAt !== null) {
+          throw new Error(`Thread ${target.threadId} was not found.`);
+        }
+      }
+      const result = await run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          return yield* registry.run(
+            environmentId,
+            request(WS_METHODS.clientsFocus, {
+              clientId: resolved.deviceId,
+              target:
+                target.type === "agents"
+                  ? { _tag: "agents" }
+                  : target.type === "thread"
+                    ? { _tag: "thread", threadId: ThreadId.make(target.threadId) }
+                    : {
+                        _tag: "file",
+                        threadId: ThreadId.make(target.threadId),
+                        path: target.path,
+                        ...(target.line === undefined ? {} : { line: target.line }),
+                      },
+            }),
+          );
+        }),
+      );
+      return { deviceId: result.clientId, label: result.label, status: "delivered" };
     },
     listEnvironments: () =>
       run(

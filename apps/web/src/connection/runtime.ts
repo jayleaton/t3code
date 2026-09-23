@@ -10,6 +10,7 @@ import {
   backgroundActivityObserverLayer,
   backgroundActivityReporterLayer,
 } from "../lib/backgroundActivityReporter";
+import { clientFocusLayer } from "../clientFocus";
 import { connectionPlatformLayer } from "./platform";
 
 const providedConnectionPlatformLayer = connectionPlatformLayer.pipe(
@@ -28,7 +29,8 @@ type ConnectionLayerSource =
   | typeof runtimeContextLayer
   | typeof connectionPlatformLayer
   | typeof backgroundActivityObserverLayer
-  | typeof backgroundActivityReporterLayer;
+  | typeof backgroundActivityReporterLayer
+  | typeof clientFocusLayer;
 
 const providedClientConnectionLayer = snapshotLoaderLayer.pipe(
   Layer.provideMerge(
@@ -47,7 +49,7 @@ const providedClientConnectionLayer = snapshotLoaderLayer.pipe(
   ),
 );
 
-const connectionLayer = backgroundActivityReporterLayer.pipe(
+const connectionLayer = Layer.mergeAll(backgroundActivityReporterLayer, clientFocusLayer).pipe(
   Layer.provideMerge(providedClientConnectionLayer),
 );
 

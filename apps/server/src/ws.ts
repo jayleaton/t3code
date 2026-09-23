@@ -150,6 +150,7 @@ import { importRecentAgentThreads } from "./project/AgentSessionImporter.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as ClientFocusBroker from "./clients/ClientFocusBroker.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { requiredScopeForRpcMethod, requiredScopeForDeviceList } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
@@ -502,6 +503,7 @@ const makeWsRpcLayer = (
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   mcpGatewayBroker: McpGatewayBroker.McpGatewayBroker["Service"],
+  clientFocusBroker: ClientFocusBroker.ClientFocusBroker["Service"],
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -2789,6 +2791,25 @@ const makeWsRpcLayer = (
               ),
             ),
           ),
+        [WS_METHODS.clientsConnectFocus]: (input, metadata) =>
+          observeRpcStreamEffect(
+            WS_METHODS.clientsConnectFocus,
+            clientFocusBroker.connect(
+              { sessionId: currentSessionId, rpcClientId: RpcClientId.make(metadata.client.id) },
+              input,
+            ),
+            { "rpc.aggregate": "clients" },
+          ),
+        [WS_METHODS.clientsList]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.clientsList,
+            Effect.map(clientFocusBroker.list, (clients) => ({ clients })),
+            { "rpc.aggregate": "clients" },
+          ),
+        [WS_METHODS.clientsFocus]: (input) =>
+          observeRpcEffect(WS_METHODS.clientsFocus, clientFocusBroker.focus(input), {
+            "rpc.aggregate": "clients",
+          }),
         [WS_METHODS.serverReportHostPowerState]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverReportHostPowerState,
@@ -3895,6 +3916,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const mcpGatewayBroker = yield* McpGatewayBroker.McpGatewayBroker;
+    const clientFocusBroker = yield* ClientFocusBroker.ClientFocusBroker;
     const baseServerSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const config = yield* ServerConfig.ServerConfig;
     const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
@@ -3962,6 +3984,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               clientAnalyticsProps,
               previewAutomationBroker,
               mcpGatewayBroker,
+              clientFocusBroker,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),

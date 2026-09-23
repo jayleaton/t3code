@@ -41,14 +41,19 @@ export const mobileBackgroundActivityObserverLayer = Layer.succeed(
   }),
 );
 
+/** This install's client id, shared by activity leases and focus requests. */
+export const mobileClientId = Effect.gen(function* () {
+  const storage = yield* MobileStorage.MobileStorage;
+  return yield* storage.loadOrCreateAgentAwarenessDeviceId.pipe(
+    Effect.map((deviceId) => `mobile-${deviceId}`),
+    Effect.orElseSucceed(() => "ephemeral-mobile-client"),
+  );
+});
+
 export const mobileBackgroundActivityReporterLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     const registry = yield* EnvironmentRegistry;
-    const storage = yield* MobileStorage.MobileStorage;
-    const clientId = yield* storage.loadOrCreateAgentAwarenessDeviceId.pipe(
-      Effect.map((deviceId) => `mobile-${deviceId}`),
-      Effect.orElseSucceed(() => "ephemeral-mobile-client"),
-    );
+    const clientId = yield* mobileClientId;
     const reportRequests = yield* Queue.sliding<void>(1);
     const requestReport = () => Queue.offerUnsafe(reportRequests, undefined);
     let appState = AppState.currentState;
