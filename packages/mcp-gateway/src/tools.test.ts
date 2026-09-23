@@ -447,7 +447,7 @@ describe("gateway chat tools", () => {
     });
   });
 
-  it("defers named profile defaults to the server while preserving explicit overrides", async () => {
+  it("defers named profile defaults to the server while keeping the agent's permission mode", async () => {
     const creates: Array<{ model: string; runtimeMode?: string; reasoningEffort?: string }> = [];
     const profiles: ReadonlyArray<GatewayProfile> = [
       {
@@ -504,7 +504,7 @@ describe("gateway chat tools", () => {
       {
         instanceId: "codex",
         model: "gpt-5",
-        runtimeMode: "approval-required",
+        runtimeMode: "full-access",
         reasoningEffort: "medium",
         profileId: "profile-andy",
       },

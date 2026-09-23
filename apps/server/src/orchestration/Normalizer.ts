@@ -17,6 +17,7 @@ import {
   OrchestrationDispatchCommandError,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
 } from "@t3tools/contracts";
+import { getReasoningEffortOptionValue, withReasoningEffortOption } from "@t3tools/shared/model";
 
 import {
   createAttachmentId,
@@ -49,13 +50,17 @@ export function resolveThreadCreateProfile<
   },
 >(
   command: T,
-  profiles: ReadonlyArray<McpGatewayProfile>,
+  library: {
+    readonly mcpGatewayProfiles: ReadonlyArray<McpGatewayProfile>;
+    readonly agentSkills: ReadonlyArray<AgentSkill>;
+  },
   providers: ReadonlyArray<ServerProvider> = [],
-  skills: ReadonlyArray<AgentSkill> = [],
 ): T & { readonly profileSnapshot?: unknown } {
   const selection = command.profileSelection;
   if (selection === undefined) return command;
-  const profile = profiles.find((candidate) => candidate.profileId === selection.profileId);
+  const profile = library.mcpGatewayProfiles.find(
+    (candidate) => candidate.profileId === selection.profileId,
+  );
   if (profile === undefined || profile.revision !== selection.revision) {
     throw new OrchestrationDispatchCommandError({
       message: `Gateway profile '${selection.profileId}' revision ${selection.revision} is stale or missing.`,
@@ -107,17 +112,18 @@ export function resolveThreadCreateProfile<
     overrides.has("modelSelection") && command.modelSelection !== undefined
       ? command.modelSelection
       : profileModelSelection;
-  const inheritedOptions = baseModelSelection.options ?? [];
+  const options = withReasoningEffortOption(
+    baseModelSelection.options,
+    overrides.has("reasoningEffort")
+      ? getReasoningEffortOptionValue(command.modelSelection?.options)
+      : reasoningEffort,
+    providers
+      .find((provider) => provider.instanceId === baseModelSelection.instanceId)
+      ?.models.find((model) => model.slug === baseModelSelection.model)?.capabilities
+      ?.optionDescriptors,
+  );
   const modelSelection =
-    reasoningEffort === undefined || overrides.has("reasoningEffort")
-      ? baseModelSelection
-      : {
-          ...baseModelSelection,
-          options: [
-            ...inheritedOptions.filter((option) => option.id !== "reasoningEffort"),
-            { id: "reasoningEffort", value: reasoningEffort },
-          ],
-        };
+    options === undefined ? baseModelSelection : { ...baseModelSelection, options };
   const runtimeMode = overrides.has("runtimeMode") ? command.runtimeMode : profile.runtimeMode;
   const interactionMode = overrides.has("interactionMode")
     ? command.interactionMode
@@ -136,7 +142,7 @@ export function resolveThreadCreateProfile<
     runtimeMode,
     interactionMode,
     profileSnapshot: {
-      skills: skills.filter((skill) => profile.skillIds?.includes(skill.skillId)),
+      skills: library.agentSkills.filter((skill) => profile.skillIds?.includes(skill.skillId)),
       profileId: profile.profileId,
       profileName: profile.name,
       ...(profile.systemPrompt === undefined ? {} : { systemPrompt: profile.systemPrompt }),
@@ -354,9 +360,8 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
               modelSelection: canonicalCommand.modelSelection,
               profileSelection: canonicalCommand.profileSelection,
             },
-            settings.mcpGatewayProfiles,
+            settings,
             providers,
-            settings.agentSkills,
           ) as OrchestrationCommand,
         catch: (cause) =>
           new OrchestrationDispatchCommandError({

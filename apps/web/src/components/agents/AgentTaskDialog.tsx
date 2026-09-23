@@ -11,6 +11,7 @@ import {
   type McpGatewayProfile,
   type ThreadProfileSelection,
 } from "@t3tools/contracts";
+import { withReasoningEffortOption } from "@t3tools/shared/model";
 import { connectionAtomRuntime } from "../../connection/runtime";
 import { useEnvironments } from "../../state/environments";
 import { useProjects } from "../../state/entities";
@@ -100,22 +101,20 @@ export function AgentTaskDialog({
         interactionMode: profile.interactionMode,
       },
     );
+    const options = withReasoningEffortOption(
+      modelSelection.options,
+      profile.reasoningEffort,
+      target?.serverConfig?.providers
+        .find((provider) => provider.instanceId === modelSelection.instanceId)
+        ?.models.find((model) => model.slug === modelSelection.model)?.capabilities
+        ?.optionDescriptors,
+    );
     store.setModelSelection(
       draftId,
       {
         instanceId: ProviderInstanceId.make(modelSelection.instanceId),
         model: modelSelection.model,
-        ...(modelSelection.options ? { options: modelSelection.options } : {}),
-        ...(profile.reasoningEffort
-          ? {
-              options: [
-                ...(modelSelection.options ?? []).filter(
-                  (option) => option.id !== "reasoningEffort",
-                ),
-                { id: "reasoningEffort", value: profile.reasoningEffort },
-              ],
-            }
-          : {}),
+        ...(options ? { options } : {}),
       },
       { replaceOptions: true },
     );

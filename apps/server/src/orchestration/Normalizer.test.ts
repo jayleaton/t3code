@@ -14,6 +14,11 @@ import {
   resolveThreadCreateProfile,
 } from "./Normalizer.ts";
 
+const library = (
+  mcpGatewayProfiles: ReadonlyArray<unknown>,
+  agentSkills: ReadonlyArray<unknown> = [],
+) => ({ mcpGatewayProfiles, agentSkills }) as never;
+
 const clientCreatedAt = "2031-01-01T00:00:00.000Z";
 const serverReceivedAt = "2026-07-18T00:00:00.000Z";
 
@@ -103,7 +108,7 @@ describe("canonicalizeClientCommandTimestamps", () => {
       updatedAt: serverReceivedAt,
     } as const;
 
-    expect(resolveThreadCreateProfile(command as never, [profile])).toMatchObject({
+    expect(resolveThreadCreateProfile(command as never, library([profile]))).toMatchObject({
       modelSelection: {
         instanceId: "codex",
         model: "gpt-5.4",
@@ -155,9 +160,7 @@ describe("canonicalizeClientCommandTimestamps", () => {
     };
     const first = resolveThreadCreateProfile(
       command,
-      [profile],
-      [],
-      [skill, { ...skill, skillId: "unassigned" }],
+      library([profile], [skill, { ...skill, skillId: "unassigned" }]),
     );
     const updatedSkill = {
       ...skill,
@@ -167,9 +170,7 @@ describe("canonicalizeClientCommandTimestamps", () => {
     };
     const second = resolveThreadCreateProfile(
       { profileSelection: { ...command.profileSelection, revision: 2 } },
-      [{ ...profile, revision: 2, systemPrompt: "Updated prompt" }],
-      [],
-      [updatedSkill],
+      library([{ ...profile, revision: 2, systemPrompt: "Updated prompt" }], [updatedSkill]),
     );
     expect(first.profileSnapshot).toMatchObject({
       systemPrompt: "Original prompt",
@@ -181,9 +182,7 @@ describe("canonicalizeClientCommandTimestamps", () => {
     });
     const unassigned = resolveThreadCreateProfile(
       command,
-      [{ ...profile, skillIds: [] }],
-      [],
-      [skill],
+      library([{ ...profile, skillIds: [] }], [skill]),
     );
     expect(unassigned.profileSnapshot).toMatchObject({ skills: [] });
   });
@@ -227,7 +226,9 @@ describe("canonicalizeClientCommandTimestamps", () => {
       },
     ] as never;
 
-    expect(resolveThreadCreateProfile(command as never, [profile], providers)).toMatchObject({
+    expect(
+      resolveThreadCreateProfile(command as never, library([profile]), providers),
+    ).toMatchObject({
       modelSelection: {
         instanceId: "codex",
         model: "gpt-5.6-sol",
@@ -239,6 +240,77 @@ describe("canonicalizeClientCommandTimestamps", () => {
         revision: 2,
       },
     });
+  });
+
+  it("applies the agent's thinking level under the option id the model reads", () => {
+    const profile = {
+      profileId: "profile-doug",
+      name: "Doug",
+      revision: 1,
+      providerLabel: "Claude",
+      modelLabel: "claude-opus-5-5",
+      reasoningEffort: "high",
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdAt: serverReceivedAt,
+      updatedAt: serverReceivedAt,
+    } as const;
+    const providers = [
+      {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        driver: "claudeAgent",
+        displayName: "Claude",
+        enabled: true,
+        status: "ready",
+        availability: "available",
+        models: [
+          {
+            slug: "claude-opus-5-5",
+            name: "Claude Opus 5.5",
+            capabilities: {
+              optionDescriptors: [
+                {
+                  id: "effort",
+                  label: "Effort",
+                  type: "select",
+                  options: [
+                    { id: "medium", label: "Medium", isDefault: true },
+                    { id: "high", label: "High" },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ] as never;
+    const selection = { profileId: "profile-doug", revision: 1 };
+
+    expect(
+      resolveThreadCreateProfile(
+        { profileSelection: { ...selection, overrideFields: [] } },
+        library([profile]),
+        providers,
+      ),
+    ).toMatchObject({
+      modelSelection: { model: "claude-opus-5-5", options: [{ id: "effort", value: "high" }] },
+      runtimeMode: "full-access",
+    });
+    // Gateway callers send an explicit override under the provider-neutral id.
+    expect(
+      resolveThreadCreateProfile(
+        {
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("claudeAgent"),
+            model: "claude-opus-5-5",
+            options: [{ id: "reasoningEffort", value: "medium" }],
+          },
+          profileSelection: { ...selection, overrideFields: ["reasoningEffort"] },
+        },
+        library([profile]),
+        providers,
+      ).modelSelection?.options,
+    ).toEqual([{ id: "effort", value: "medium" }]);
   });
 
   it("resolves an exact model slug even when display names collide", () => {
@@ -283,7 +355,9 @@ describe("canonicalizeClientCommandTimestamps", () => {
       },
     ] as never;
 
-    expect(resolveThreadCreateProfile(command as never, [profile], providers)).toMatchObject({
+    expect(
+      resolveThreadCreateProfile(command as never, library([profile]), providers),
+    ).toMatchObject({
       modelSelection: {
         instanceId: "codex",
         model: "gpt-5.6-sol",
@@ -324,7 +398,7 @@ describe("canonicalizeClientCommandTimestamps", () => {
     })) as never;
 
     expect(() =>
-      resolveThreadCreateProfile(command as never, [profile], duplicateProviders),
+      resolveThreadCreateProfile(command as never, library([profile]), duplicateProviders),
     ).toThrow(/ambiguous/i);
   });
 
@@ -340,7 +414,9 @@ describe("canonicalizeClientCommandTimestamps", () => {
       revision: 2,
     };
 
-    expect(() => resolveThreadCreateProfile(command, [profile as never])).toThrow("profile-andy");
+    expect(() => resolveThreadCreateProfile(command, library([profile as never]))).toThrow(
+      "profile-andy",
+    );
   });
 
   it("prefers the authoritative project default over the provider default", () => {

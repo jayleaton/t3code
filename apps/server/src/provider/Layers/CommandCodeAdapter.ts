@@ -258,8 +258,11 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
         const turnId = TurnId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie));
         const ready = yield* Deferred.make<string, ProviderAdapterRequestError>();
         const model = input.modelSelection?.model ?? context.session.model ?? "default";
+        // Command Code publishes no effort descriptor, so agent thinking levels
+        // arrive under the provider-neutral id.
         const effort = input.modelSelection
-          ? getModelSelectionStringOptionValue(input.modelSelection, "effort")
+          ? (getModelSelectionStringOptionValue(input.modelSelection, "effort") ??
+            getModelSelectionStringOptionValue(input.modelSelection, "reasoningEffort"))
           : undefined;
         const args = [
           "--print",
