@@ -10991,11 +10991,23 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             serverSettings: {
               getSettings: Effect.succeed({
                 ...DEFAULT_SERVER_SETTINGS,
+                agentSkills: [
+                  {
+                    skillId: "test-skill",
+                    name: "test-skill",
+                    description: "Assigned to the test agent",
+                    content: "Use the test skill.",
+                    revision: 1,
+                    createdAt: "2026-01-01T00:00:00.000Z",
+                    updatedAt: "2026-01-01T00:00:00.000Z",
+                  },
+                ],
                 mcpGatewayProfiles: [
                   {
                     profileId: "test-agent",
                     name: "Test agent",
                     revision: 2,
+                    skillIds: ["test-skill"],
                     modelSelection: defaultModelSelection,
                     runtimeMode: "full-access",
                     interactionMode: "default",
@@ -11086,6 +11098,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           assert.equal(dispatchedCommands[0].projectId, defaultProjectId);
           assert.equal(dispatchedCommands[0].profileSnapshot?.profileId, "test-agent");
           assert.equal(dispatchedCommands[0].profileSnapshot?.profileName, "Test agent");
+          assert.deepEqual(
+            dispatchedCommands[0].profileSnapshot?.skills?.map((skill) => skill.skillId),
+            ["test-skill"],
+          );
         }
         assert.deepEqual(
           dispatchedCommands.map((command) => command.type),

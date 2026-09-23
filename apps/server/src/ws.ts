@@ -1451,7 +1451,7 @@ const makeWsRpcLayer = (
                         try: () =>
                           resolveThreadCreateProfile(
                             createCommand,
-                            settings.mcpGatewayProfiles,
+                            settings,
                             providers,
                           ) as OrchestrationCommand,
                         catch: (cause) =>

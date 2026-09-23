@@ -429,3 +429,38 @@ export function applyClaudePromptEffortPrefix(
   }
   return `Ultrathink:\n${trimmed}`;
 }
+
+// Drivers name their thinking-level option differently (Claude and Command Code
+// `effort`, Codex and Grok `reasoningEffort`, Cursor `reasoning`, OpenCode `variant`).
+const REASONING_EFFORT_OPTION_IDS = new Set(["reasoningEffort", "effort", "reasoning", "variant"]);
+
+/** Reads a thinking level regardless of which driver's option id carries it. */
+export function getReasoningEffortOptionValue(
+  options: ReadonlyArray<ProviderOptionSelection> | undefined,
+): string | undefined {
+  const value = options?.findLast((option) => REASONING_EFFORT_OPTION_IDS.has(option.id))?.value;
+  return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * Applies a provider-neutral thinking level (an agent's `reasoningEffort`) under
+ * the option id the selected model actually reads. Without an explicit effort,
+ * an existing effort-like option is re-keyed so it still reaches the adapter.
+ */
+export function withReasoningEffortOption(
+  options: ReadonlyArray<ProviderOptionSelection> | undefined,
+  effort: string | undefined,
+  descriptors: ReadonlyArray<ProviderOptionDescriptor> | undefined,
+): ReadonlyArray<ProviderOptionSelection> | undefined {
+  const value = effort ?? getReasoningEffortOptionValue(options);
+  if (value === undefined) return options;
+  const id =
+    descriptors?.find(
+      (descriptor) =>
+        descriptor.type === "select" && REASONING_EFFORT_OPTION_IDS.has(descriptor.id),
+    )?.id ?? "reasoningEffort";
+  return [
+    ...(options ?? []).filter((option) => !REASONING_EFFORT_OPTION_IDS.has(option.id)),
+    { id, value },
+  ];
+}
