@@ -64,9 +64,8 @@ export function EnvironmentActionsMenu({
           render={
             <Button
               type="button"
-              variant="ghost"
+              variant="ghost-muted"
               size="icon-xs"
-              className="text-muted-foreground hover:text-foreground"
               disabled={disabled}
               aria-label={`More actions for ${label}`}
             />
