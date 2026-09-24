@@ -1,4 +1,9 @@
-import type { AgentSkill } from "@t3tools/contracts";
+import type {
+  AgentSkill,
+  ScheduledTask,
+  ScheduledTaskCreateInput,
+  ScheduledTaskUpdateInput,
+} from "@t3tools/contracts";
 import type { AgentHandoffInput, AgentHandoffResult } from "./handoff.ts";
 export const GATEWAY_SCOPE_VALUES = [
   "read",
@@ -145,6 +150,25 @@ export type GatewayFocusTarget =
       readonly line?: number;
     }
   | { readonly type: "agents" };
+
+/** One scheduled-task operation; ids are plain strings the runtime brands. */
+export type GatewayScheduledTaskRequest =
+  | { readonly action: "list" }
+  | { readonly action: "create"; readonly input: GatewayScheduledTaskCreate }
+  | {
+      readonly action: "update";
+      readonly taskId: string;
+      readonly patch: GatewayScheduledTaskPatch;
+    }
+  | { readonly action: "delete"; readonly taskId: string }
+  | { readonly action: "run"; readonly taskId: string };
+
+export type GatewayScheduledTaskCreate = Omit<ScheduledTaskCreateInput, "projectId"> & {
+  readonly projectId: string;
+};
+export type GatewayScheduledTaskPatch = Omit<ScheduledTaskUpdateInput["patch"], "projectId"> & {
+  readonly projectId?: string;
+};
 
 export interface GatewayPage<T> {
   readonly items: ReadonlyArray<T>;
@@ -387,6 +411,13 @@ export interface GatewayRuntimePort {
     device: string,
     target: GatewayFocusTarget,
   ): Promise<{ readonly deviceId: string; readonly label: string; readonly status: "delivered" }>;
+  /** List, create, update, delete, or run now the environment's scheduled tasks. */
+  scheduledTask?(
+    environmentId: string,
+    request: GatewayScheduledTaskRequest,
+  ): Promise<
+    { readonly tasks: ReadonlyArray<ScheduledTask> } | ScheduledTask | { readonly deleted: string }
+  >;
   getEnvironmentStatus(environmentId: string): Promise<Record<string, unknown>>;
   listProfiles?(environmentId: string): Promise<ReadonlyArray<GatewayProfile>>;
   /** Resolve readable profile labels against the environment's live provider catalog. */

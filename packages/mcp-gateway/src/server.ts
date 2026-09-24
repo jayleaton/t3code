@@ -17,6 +17,31 @@ import {
 const environmentId = z.string().trim().min(1);
 const threadId = z.string().trim().min(1);
 const idempotencyKey = z.string().trim().min(1).max(200);
+const scheduledTaskFields = {
+  title: z.string().trim().min(1).max(120).optional(),
+  prompt: z.string().trim().min(1).max(20_000),
+  profileId: z.string().trim().min(1).describe("Agent that runs the task, from t3_list_agents."),
+  projectId: z.string().trim().min(1).describe("Project the task's thread works in."),
+  runAt: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe("Run once at this ISO date-time. Pass runAt or cron, not both."),
+  cron: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe('Five-field cron (minute hour day-of-month month weekday), e.g. "0 7 * * 1-5".'),
+  timezone: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe("IANA time zone for cron, e.g. Europe/London. Defaults to this machine's zone."),
+  enabled: z.boolean().optional(),
+};
 const optionalRequestContext = {
   requestId: z.string().trim().min(1).max(200).optional(),
   correlationId: z.string().trim().min(1).max(200).optional(),
@@ -202,6 +227,30 @@ const TOOL_SPECS = {
       line: z.number().int().min(1).optional(),
       view: z.enum(["thread", "agents"]).optional(),
     },
+  ],
+  t3_list_scheduled_tasks: [
+    "List scheduled tasks on an environment: prompts that run on an agent at a set time or on a cron schedule. Each task posts every run into one thread (threadId, null until the first run). Shows enabled, nextRunAt, and the last run's status and error.",
+    { environmentId },
+  ],
+  t3_create_scheduled_task: [
+    "Schedule a prompt to run on an agent, once (runAt) or repeatedly (cron + timezone). The first run creates the task's thread from the agent profile in the project; later runs post into the same thread. Tasks run only while the environment's server is up; a run missed while it was down fires once when it returns. Runs use the agent's permission mode, so an agent that needs approvals will wait for them. Requires create or admin access.",
+    { environmentId, ...scheduledTaskFields },
+  ],
+  t3_update_scheduled_task: [
+    "Change a scheduled task by taskId: prompt, title, schedule (runAt or cron/timezone), agent, project, or enabled to pause/resume. Changing agent or project starts a new thread on the next run. Re-arming a finished one-time task needs a future runAt. Requires create or admin access.",
+    {
+      environmentId,
+      taskId: z.string().trim().min(1),
+      patch: z.object(scheduledTaskFields).partial().strict(),
+    },
+  ],
+  t3_delete_scheduled_task: [
+    "Delete a scheduled task. Its thread and past runs are kept. Requires create or admin access.",
+    { environmentId, taskId: z.string().trim().min(1) },
+  ],
+  t3_run_scheduled_task: [
+    "Run a scheduled task's prompt now, in its thread, without changing its schedule. Requires send access.",
+    { environmentId, taskId: z.string().trim().min(1) },
   ],
   t3_get_thread: [
     "Read one T3 chat and its messages.",

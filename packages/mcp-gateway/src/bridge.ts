@@ -391,6 +391,7 @@ export function createBridgeRuntimePort(input: {
       listDevices: (environmentId) => invoke("listDevices", [environmentId]),
       focusDevice: (environmentId, device, target) =>
         invoke("focusDevice", [environmentId, device, target]),
+      scheduledTask: (environmentId, request) => invoke("scheduledTask", [environmentId, request]),
       listEnvironments: () => invoke("listEnvironments", []),
       getEnvironmentStatus: (environmentId) => invoke("getEnvironmentStatus", [environmentId]),
       listProfiles: (environmentId) => invoke("listProfiles", [environmentId]),

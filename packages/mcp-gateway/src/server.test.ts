@@ -158,7 +158,7 @@ describe("MCP gateway server", () => {
 
     const listedTools = await client.listTools();
     const toolNames = listedTools.tools.map((tool) => tool.name);
-    expect(toolNames).toHaveLength(67);
+    expect(toolNames).toHaveLength(72);
     expect(
       listedTools.tools.find((tool) => tool.name === "t3_update_agent")?.inputSchema.properties
         ?.patch,
@@ -234,6 +234,11 @@ describe("MCP gateway server", () => {
         "t3_open_agents",
         "t3_list_devices",
         "t3_focus_device",
+        "t3_list_scheduled_tasks",
+        "t3_create_scheduled_task",
+        "t3_update_scheduled_task",
+        "t3_delete_scheduled_task",
+        "t3_run_scheduled_task",
         "t3_get_artifact",
         "t3_get_approval_plan",
         "t3_approve_actions",

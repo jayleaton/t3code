@@ -9,11 +9,14 @@ import {
   type GatewayFocusTarget,
   type GatewayProfile,
   type GatewayRuntimePort,
+  type GatewayScheduledTaskCreate,
+  type GatewayScheduledTaskPatch,
   type GatewayScope,
   type GatewayThreadControlAction,
   type GatewayThreadExecutionState,
 } from "./port.ts";
 import type { GatewayEvent, GatewayEventStore } from "./events.ts";
+import type { ScheduledTaskSchedule } from "@t3tools/contracts";
 
 export type GatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
 export type GatewayGrantSource = GatewayGrants | (() => GatewayGrants);
@@ -216,6 +219,41 @@ function focusTargetFromInput(input: Record<string, unknown>): GatewayFocusTarge
   if (path !== "") return { type: "file", threadId, path, ...(line === undefined ? {} : { line }) };
   if (line !== undefined) throw invalid("line requires path.");
   return { type: "thread", threadId };
+}
+
+/** Builds a schedule from runAt or cron input; returns undefined when neither was given. */
+function scheduleFromInput(input: Record<string, unknown>): ScheduledTaskSchedule | undefined {
+  const invalid = (message: string) =>
+    new GatewayError({ code: "invalid_input", message, retryable: false });
+  const runAt = typeof input.runAt === "string" ? input.runAt : undefined;
+  const cron = typeof input.cron === "string" ? input.cron : undefined;
+  if (runAt !== undefined && cron !== undefined) throw invalid("Pass runAt or cron, not both.");
+  if (runAt !== undefined) {
+    if (input.timezone !== undefined) throw invalid("timezone applies to cron only.");
+    return { kind: "once", runAt };
+  }
+  if (cron !== undefined) {
+    const timezone =
+      typeof input.timezone === "string"
+        ? input.timezone
+        : Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return { kind: "cron", expression: cron, timezone };
+  }
+  if (input.timezone !== undefined) throw invalid("timezone requires cron.");
+  return undefined;
+}
+
+/** Tool input minus routing fields, with runAt/cron/timezone folded into a schedule. */
+function scheduledTaskFields(input: Record<string, unknown>): Record<string, unknown> {
+  const {
+    environmentId: _environmentId,
+    runAt: _runAt,
+    cron: _cron,
+    timezone: _timezone,
+    ...rest
+  } = input;
+  const schedule = scheduleFromInput(input);
+  return { ...rest, ...(schedule === undefined ? {} : { schedule }) };
 }
 
 function environmentWithScopes(
@@ -996,6 +1034,61 @@ export async function callGatewayTool(
         requiredString(input, "device"),
         focusTargetFromInput(input),
       );
+    }
+    case "t3_list_scheduled_tasks": {
+      const environmentId = environmentWithScope(context, input, "read");
+      if (!context.port.scheduledTask)
+        throw new Error("Scheduled tasks are unavailable in this runtime. Update T3.");
+      return context.port.scheduledTask(environmentId, { action: "list" });
+    }
+    case "t3_create_scheduled_task": {
+      const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);
+      if (!context.port.scheduledTask)
+        throw new Error("Scheduled tasks are unavailable in this runtime. Update T3.");
+      const fields = scheduledTaskFields(input);
+      if (!("schedule" in fields)) {
+        throw new GatewayError({
+          code: "invalid_input",
+          message: "Pass runAt for a one-time task or cron for a recurring one.",
+          retryable: false,
+        });
+      }
+      return context.port.scheduledTask(environmentId, {
+        action: "create",
+        input: fields as GatewayScheduledTaskCreate,
+      });
+    }
+    case "t3_update_scheduled_task": {
+      const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);
+      if (!context.port.scheduledTask)
+        throw new Error("Scheduled tasks are unavailable in this runtime. Update T3.");
+      const patch =
+        typeof input.patch === "object" && input.patch !== null
+          ? (input.patch as Record<string, unknown>)
+          : {};
+      return context.port.scheduledTask(environmentId, {
+        action: "update",
+        taskId: requiredString(input, "taskId"),
+        patch: scheduledTaskFields(patch) as GatewayScheduledTaskPatch,
+      });
+    }
+    case "t3_delete_scheduled_task": {
+      const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);
+      if (!context.port.scheduledTask)
+        throw new Error("Scheduled tasks are unavailable in this runtime. Update T3.");
+      return context.port.scheduledTask(environmentId, {
+        action: "delete",
+        taskId: requiredString(input, "taskId"),
+      });
+    }
+    case "t3_run_scheduled_task": {
+      const environmentId = environmentWithScope(context, input, "send");
+      if (!context.port.scheduledTask)
+        throw new Error("Scheduled tasks are unavailable in this runtime. Update T3.");
+      return context.port.scheduledTask(environmentId, {
+        action: "run",
+        taskId: requiredString(input, "taskId"),
+      });
     }
     case "t3_open_thread": {
       const environmentId = environmentWithScope(context, input, "read");
