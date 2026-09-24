@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronDownIcon } from "lucide-react";
+import { CheckIcon } from "lucide-react";
 import {
   Combobox,
   ComboboxTrigger,
@@ -8,7 +8,7 @@ import {
   ComboboxItem,
   ComboboxEmpty,
 } from "../ui/combobox";
-import { selectTriggerVariants } from "../ui/select";
+import { SelectButton } from "../ui/select";
 import { agentModelOptions } from "./agentModelCatalog";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import type { AgentSkill, McpGatewayProfile, ServerProvider } from "@t3tools/contracts";
@@ -236,17 +236,14 @@ export function AgentEditor({
                 <ComboboxTrigger
                   ref={skillsTriggerRef}
                   aria-label="Select skills"
-                  className={selectTriggerVariants({ className: "w-full" })}
+                  render={<SelectButton className="w-full" />}
                 >
-                  <span className="min-w-0 truncate">
-                    {skillIds.length === 0
-                      ? "Select skills…"
-                      : skillIds.length === 1
-                        ? (skills.find((skill) => skill.skillId === skillIds[0])?.name ??
-                          "1 skill selected")
-                        : `${skillIds.length} skills selected`}
-                  </span>
-                  <ChevronDownIcon className="size-4 shrink-0 opacity-50" />
+                  {skillIds.length === 0
+                    ? "Select skills…"
+                    : skillIds.length === 1
+                      ? (skills.find((skill) => skill.skillId === skillIds[0])?.name ??
+                        "1 skill selected")
+                      : `${skillIds.length} skills selected`}
                 </ComboboxTrigger>
                 <ComboboxPopup anchor={skillsTriggerRef} className="w-(--anchor-width)">
                   <ComboboxSearchInput placeholder="Search skills…" aria-label="Search skills" />
