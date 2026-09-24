@@ -85,13 +85,7 @@ jobs:
         working-directory: apps/desktop
         run: node -e "require('electron')"
       - name: Validate Agents and packaging
-        env:
-          NODE_ENV: test
-        run: |
-          vp test run apps/web/src/components/agents packages/client-runtime/src/gateway packages/mcp-gateway/src apps/server/src/mcp/toolkits/workspace scripts/build-desktop-artifact.test.ts
-          vp test run apps/server/src/persistence/Migrations/050_ProjectionThreadProfileSnapshot.test.ts apps/server/src/persistence/Migrations/050_ProjectionThreadPullRequests.test.ts apps/server/src/persistence/Migrations/051_ProjectionThreadMessageContext.test.ts apps/server/src/persistence/Migrations/054_ProjectionThreadTitleState.test.ts apps/server/src/persistence/Migrations/055_PullRequestFilesViewed.test.ts
-          vp test run apps/desktop/src/app/SharedSafeStorage.test.ts apps/desktop/src/app/LegacyTokenStorage.test.ts apps/desktop/src/app/DesktopClerk.test.ts apps/desktop/src/app/DesktopConnectionCatalogStore.test.ts
-          vp run --filter @t3tools/web --filter @t3tools/desktop --filter @t3tools/client-runtime --filter @t3tools/mcp-gateway --filter t3 typecheck
+        run: scripts/fork-release-validate.sh
       - run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
       - run: node scripts/update-release-package-versions.ts "$APP_VERSION"
       - run: vp run build:desktop
