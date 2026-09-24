@@ -409,7 +409,6 @@ function DesktopUpdateControl({ className }: { className?: string | undefined } 
         <PopoverPopup
           align="center"
           aria-label="Nightly update release notes"
-          className="text-balance shadow-xl shadow-black/25"
           initialFocus={false}
           onKeyDownCapture={(event) => {
             if (

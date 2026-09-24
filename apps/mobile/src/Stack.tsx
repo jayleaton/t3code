@@ -10,7 +10,7 @@ import {
   createNativeStackScreen,
   type NativeStackNavigationOptions,
 } from "@react-navigation/native-stack";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import {
   Platform,
   Pressable,
@@ -23,6 +23,11 @@ import { useResolveClassNames } from "uniwind";
 
 import { AppText as Text } from "./components/AppText";
 import { getCompactBrandHeaderOptions } from "./components/CompactBrandTitle";
+import {
+  RenderErrorBoundary,
+  RenderFailureView,
+  type RenderFailureProps,
+} from "./components/RenderErrorBoundary";
 import { ArchivedThreadsRouteScreen } from "./features/archive/ArchivedThreadsRouteScreen";
 import { useAgentNotificationNavigation } from "./features/agent-awareness/notificationNavigation";
 import { useClientFocusNavigation } from "./features/client-focus/useClientFocusNavigation";
@@ -67,6 +72,7 @@ import { SettingsAppearanceRouteScreen } from "./features/settings/SettingsAppea
 import { SettingsClientStorageRouteScreen } from "./features/settings/SettingsClientStorageRouteScreen";
 import { SettingsDiagnosticsRouteScreen } from "./features/diagnostics/SettingsDiagnosticsRouteScreen";
 import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteScreen";
+import { SettingsEnvironmentDetailRouteScreen } from "./features/settings/SettingsEnvironmentDetailRouteScreen";
 import { SettingsEnvironmentsRouteScreen } from "./features/settings/SettingsEnvironmentsRouteScreen";
 import {
   SettingsEnvironmentAgentBehaviorRouteScreen,
@@ -188,6 +194,11 @@ const SettingsContentStack = createNativeStackNavigator({
       options: {
         title: "Environments",
       },
+    }),
+    SettingsEnvironmentDetail: createNativeStackScreen({
+      screen: SettingsEnvironmentDetailRouteScreen,
+      linking: "environments/:environmentId",
+      options: { title: "Environment" },
     }),
     SettingsEnvironmentNewThreads: createNativeStackScreen({
       screen: SettingsEnvironmentNewThreadsRouteScreen,
@@ -779,10 +790,13 @@ const RootStackConfig = createNativeStackNavigator({
       // The whole new-task flow (choose project → draft → add project) shares
       // draft state via NewTaskFlowProvider. The expo-router era mounted it in
       // app/new/_layout.tsx; this layout wrapper is the native-stack equivalent.
-      layout: ({ children }) => (
-        <NewTaskFlowProvider>
-          <View className="flex-1 bg-sheet-solid">{children}</View>
-        </NewTaskFlowProvider>
+      // A screen's layout replaces the navigator's screenLayout.
+      layout: ({ children, route }) => (
+        <GuardedScreenLayout route={route}>
+          <NewTaskFlowProvider>
+            <View className="flex-1 bg-sheet-solid">{children}</View>
+          </NewTaskFlowProvider>
+        </GuardedScreenLayout>
       ),
       options: {
         gestureEnabled: true,
@@ -796,6 +810,33 @@ const RootStackConfig = createNativeStackNavigator({
   },
 });
 
+function GuardedScreenLayout(props: {
+  readonly children: ReactNode;
+  readonly route: { readonly name: string; readonly params?: object | undefined };
+}) {
+  return (
+    <RenderErrorBoundary
+      resetKeys={[props.route.params]}
+      renderFallback={(fallback) => (
+        <ScreenRenderFallback {...fallback} routeName={props.route.name} />
+      )}
+    >
+      {props.children}
+    </RenderErrorBoundary>
+  );
+}
+
+function ScreenRenderFallback(props: RenderFailureProps & { readonly routeName: string }) {
+  const navigation = useNavigation();
+  const exit = navigation.canGoBack()
+    ? { label: "Go back", onPress: () => navigation.goBack() }
+    : props.routeName === "Home"
+      ? { label: "Open settings", onPress: () => navigation.navigate("SettingsSheet") }
+      : { label: "Return home", onPress: () => navigation.dispatch(StackActions.replace("Home")) };
+
+  return <RenderFailureView {...props} exit={exit} />;
+}
+
 export const RootStack = RootStackConfig.with(function AdaptiveRootStack({ Navigator }) {
   const { width, height } = useWindowDimensions();
   const usesWorkspaceFlowScreens =
@@ -803,6 +844,7 @@ export const RootStack = RootStackConfig.with(function AdaptiveRootStack({ Navig
 
   return (
     <Navigator
+      screenLayout={GuardedScreenLayout}
       screenOptions={({ route }) => {
         if (route.name !== "SettingsSheet" && route.name !== "NewTaskSheet") {
           return {};
