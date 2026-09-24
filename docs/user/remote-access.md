@@ -288,6 +288,21 @@ then `t3_send_message` to start work, or `t3_create_and_start_thread` to create 
 with lifecycle access to return a settled chat to the active list. `t3_open_agents` opens the
 board in the connected desktop window with read access.
 
+### Schedule prompts for an agent
+
+Open **Scheduled** on the Agents board, or choose **Schedule task** from an agent's menu, to send
+an agent a prompt at a set time (for example a deploy tonight) or on repeat (for example pulling
+the latest changes every weekday at 7:00). Each task has one thread: the first run creates it and
+every later run posts into it. Pause, resume, run now, edit, or delete a task from the same list.
+
+Tasks run on the machine you pick, and only while its T3 server is up. A run missed while it was
+off or asleep happens once when it is back. Runs use the agent's permission mode, so an agent that
+asks for approvals waits for you. Changing a task's agent or project starts a new thread on the next
+run. MCP assistants can manage tasks with `t3_list_scheduled_tasks`, `t3_create_scheduled_task`,
+`t3_update_scheduled_task`, and `t3_delete_scheduled_task` (create or admin access), and run one
+immediately with `t3_run_scheduled_task` (send access). Pass `runAt` for a single run, or `cron`
+with an optional IANA `timezone` for a repeating one.
+
 Ask an assistant connected to the **T3 Agents MCP** to create a shared skill and assign it to
 an agent. For example: “Create a shared skill for reviewing pull requests and assign it to Randy.”
 The MCP can list skills with read access and create, update, or delete them with create or admin

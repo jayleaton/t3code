@@ -247,6 +247,7 @@ export const make = Effect.gen(function* () {
       environmentIcon: true,
       environmentLabel: true,
       projectCloneTracking: true,
+      scheduledTasks: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverSelfUpdate === "boot-service" || desktopAppUpdate
         ? {

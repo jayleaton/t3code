@@ -179,6 +179,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       Absent on older servers, where clients must clone with the blocking
       `sourceControl.cloneRepository` call instead. */
   projectCloneTracking: Schema.optionalKey(Schema.Boolean),
+  /** Server runs scheduled tasks (`scheduledTasks.*`, `subscribeScheduledTasks`). */
+  scheduledTasks: Schema.optionalKey(Schema.Boolean),
   /** Server persists a user-chosen machine name. */
   environmentLabel: Schema.optionalKey(Schema.Boolean),
   /** Server detects `platform.machine` and persists the `environmentIcon`

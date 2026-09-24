@@ -8,7 +8,7 @@ import * as Schema from "effect/Schema";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { Menu, MenuTrigger, MenuPopup, MenuItem } from "../ui/menu";
 import { AgentIcon, agentColorFor } from "./AgentIcon";
-import { Link, Outlet, useLocation } from "@tanstack/react-router";
+import { Link, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState, type CSSProperties } from "react";
 import {
   PlusIcon,
@@ -21,10 +21,12 @@ import {
   SearchIcon,
   XIcon,
   LayoutGridIcon,
+  CalendarClockIcon,
 } from "lucide-react";
 import type { McpGatewayProfile } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { useAgentLibrary } from "../../hooks/useAgentLibrary";
+import { useScheduledTasks, useScheduledTasksSupported } from "../../state/scheduledTasks";
 import { useEnvironments } from "../../state/environments";
 import { useThreadShells, useAllEnvironmentShellsBootstrapped } from "../../state/entities";
 import { AgentSkillsEditor } from "./AgentSkillsEditor";
@@ -119,6 +121,9 @@ export function AgentsBoard() {
     setOrder(ids);
   };
   const { environments } = useEnvironments();
+  const navigate = useNavigate();
+  const scheduledSupported = useScheduledTasksSupported();
+  const scheduledTasks = useScheduledTasks();
   const modelPreferences = useClientSettings((settings) => settings.providerModelPreferences);
   const threads = useThreadShells();
   const ready = useAllEnvironmentShellsBootstrapped();
@@ -235,6 +240,22 @@ export function AgentsBoard() {
             </span>
             <span className="agent-filter-count">{activeCount(allThreads)}</span>
           </button>
+          {scheduledSupported && (
+            <Link
+              to="/agents/scheduled"
+              className="agent-filter"
+              activeProps={{ "aria-current": "page" }}
+              onClick={() => setShowFilters(false)}
+            >
+              <CalendarClockIcon size={22} />
+              <span className="agent-filter-body">
+                <span className="agent-filter-name">Scheduled</span>
+              </span>
+              <span className="agent-filter-count">
+                {scheduledTasks.filter(({ task }) => task.enabled).length}
+              </span>
+            </Link>
+          )}
           {orderedProfiles.map((profile, index) => (
             <div
               key={profile.profileId}
@@ -283,6 +304,17 @@ export function AgentsBoard() {
                     <PencilIcon />
                     Edit agent
                   </MenuItem>
+                  {scheduledSupported && (
+                    <MenuItem
+                      disabled={!available || profile.runtimeMode === "read-only"}
+                      onClick={() =>
+                        navigate({ to: "/agents/scheduled", search: { agent: profile.profileId } })
+                      }
+                    >
+                      <CalendarClockIcon />
+                      Schedule task
+                    </MenuItem>
+                  )}
                   <MenuItem disabled={index === 0} onClick={() => moveAgent(index, -1)}>
                     <ArrowLeftIcon />
                     Move up
