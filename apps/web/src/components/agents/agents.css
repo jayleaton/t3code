@@ -59,6 +59,14 @@
   align-items: center;
   margin-left: auto;
 }
+.agents-topbar-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.agents-topbar-icons {
+  gap: 4px;
+}
 .agents-page button,
 .agent-dialog button {
   cursor: pointer;
