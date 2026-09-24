@@ -143,6 +143,7 @@ import { linkCreatedPullRequest } from "./git/linkCreatedPullRequest.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
+import * as ScheduledTasks from "./scheduledTasks/ScheduledTasks.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
@@ -622,6 +623,7 @@ const makeWsRpcLayer = (
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const worktreeSetupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
       const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
+      const scheduledTasks = yield* ScheduledTasks.ScheduledTasks;
       const repositoryIdentityResolver =
         yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
       // Clone hooks run on the tracker's fiber, outside any RPC, so the
@@ -3146,6 +3148,32 @@ const makeWsRpcLayer = (
         [WS_METHODS.subscribeProjectClones]: () =>
           observeRpcStream(WS_METHODS.subscribeProjectClones, projectCloneTracker.stream, {
             "rpc.aggregate": "source-control",
+          }),
+        [WS_METHODS.scheduledTasksList]: () =>
+          observeRpcEffect(
+            WS_METHODS.scheduledTasksList,
+            Effect.map(scheduledTasks.list, (tasks) => ({ tasks })),
+            { "rpc.aggregate": "scheduled-tasks" },
+          ),
+        [WS_METHODS.scheduledTasksCreate]: (input) =>
+          observeRpcEffect(WS_METHODS.scheduledTasksCreate, scheduledTasks.create(input), {
+            "rpc.aggregate": "scheduled-tasks",
+          }),
+        [WS_METHODS.scheduledTasksUpdate]: (input) =>
+          observeRpcEffect(WS_METHODS.scheduledTasksUpdate, scheduledTasks.update(input), {
+            "rpc.aggregate": "scheduled-tasks",
+          }),
+        [WS_METHODS.scheduledTasksDelete]: (input) =>
+          observeRpcEffect(WS_METHODS.scheduledTasksDelete, scheduledTasks.remove(input.taskId), {
+            "rpc.aggregate": "scheduled-tasks",
+          }),
+        [WS_METHODS.scheduledTasksRunNow]: (input) =>
+          observeRpcEffect(WS_METHODS.scheduledTasksRunNow, scheduledTasks.runNow(input.taskId), {
+            "rpc.aggregate": "scheduled-tasks",
+          }),
+        [WS_METHODS.subscribeScheduledTasks]: () =>
+          observeRpcStream(WS_METHODS.subscribeScheduledTasks, scheduledTasks.stream, {
+            "rpc.aggregate": "scheduled-tasks",
           }),
         [WS_METHODS.sourceControlPublishRepository]: (input) =>
           observeRpcEffect(

@@ -153,6 +153,7 @@ import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
+import * as ScheduledTasks from "./scheduledTasks/ScheduledTasks.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
@@ -791,6 +792,7 @@ const buildAppUnderTest = (options?: {
             refresh: Effect.void,
             ...options?.layers?.usageLimitSources,
           }),
+          ScheduledTasks.layer,
         ),
       ),
       Layer.provide(
@@ -6867,6 +6869,30 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           },
         });
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes websocket rpc scheduled tasks to the environment scheduler", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const [listed, createError] = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.all([
+            client[WS_METHODS.scheduledTasksList]({}),
+            Effect.flip(
+              client[WS_METHODS.scheduledTasksCreate]({
+                prompt: "git pull",
+                profileId: "missing-agent",
+                projectId: ProjectId.make("project-1"),
+                schedule: { kind: "cron", expression: "0 7 * * *", timezone: "UTC" },
+              }),
+            ),
+          ]),
+        ),
+      );
+      assert.deepStrictEqual(listed, { tasks: [] });
+      assert.equal(createError._tag, "ScheduledTaskError");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("routes websocket rpc client focus to connected clients only", () =>
