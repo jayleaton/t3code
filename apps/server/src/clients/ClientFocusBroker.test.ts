@@ -55,7 +55,8 @@ it.effect("delivers to the focused window when a device has several connections"
     ]);
     const broker = yield* makeBroker(leases);
     const focusedWindow = yield* broker.connect(connection(1), windowsDesktop);
-    yield* broker.connect(connection(2), windowsDesktop);
+    // Connecting registers the window; its request stream is never read here.
+    const _backgroundWindow = yield* broker.connect(connection(2), windowsDesktop);
     // One device, active because any of its windows is.
     assert.deepStrictEqual(
       (yield* broker.list).map(({ clientId, visible, focused }) => ({
@@ -74,7 +75,10 @@ it.effect("delivers to the focused window when a device has several connections"
 
     const request = Option.getOrThrow(yield* Fiber.join(received));
     assert.equal(request.requestId, result.requestId);
-    assert.deepStrictEqual(request.target, { _tag: "thread", threadId: "thread-1" });
+    assert.deepStrictEqual(request.target, {
+      _tag: "thread",
+      threadId: ThreadId.make("thread-1"),
+    });
     assert.equal(result.label, "WIN-STUDIO");
   }),
 );
