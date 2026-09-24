@@ -858,6 +858,8 @@
   overflow: hidden;
 }
 .agents-filters {
+  display: flex;
+  flex-direction: column;
   width: 280px;
   flex-shrink: 0;
   overflow-y: auto;
@@ -1122,7 +1124,7 @@
     display: inline-flex;
   }
   .agents-page[data-show-filters="true"] .agents-filters {
-    display: block;
+    display: flex;
   }
   .agents-page[data-show-filters="true"] .agents-threads {
     display: none;
@@ -1180,6 +1182,19 @@
   cursor: default;
 }
 
+.agents-filters > * {
+  flex-shrink: 0;
+}
+/* Pinned under the agent list: pushed down when the list is short, stuck to the bottom when it scrolls. */
+.agents-filters-footer {
+  position: sticky;
+  bottom: -12px;
+  margin: auto -8px -12px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  background: var(--background);
+}
+.agents-filters-footer > .agent-filter[aria-current="page"],
 .agents-filters > .agent-filter[aria-current="page"] {
   background: var(--accent);
   box-shadow: inset 0 0 0 1px var(--ring);

@@ -283,22 +283,6 @@ export function AgentsBoard() {
             </span>
             <span className="agent-filter-count">{activeCount(allThreads)}</span>
           </button>
-          {scheduledSupported && (
-            <Link
-              to="/agents/scheduled"
-              className="agent-filter"
-              activeProps={{ "aria-current": "page" }}
-              onClick={() => setShowFilters(false)}
-            >
-              <CalendarClockIcon size={22} />
-              <span className="agent-filter-body">
-                <span className="agent-filter-name">Scheduled</span>
-              </span>
-              <span className="agent-filter-count">
-                {scheduledTasks.filter(({ task }) => task.enabled).length}
-              </span>
-            </Link>
-          )}
           {orderedProfiles.map((profile, index) => (
             <div
               key={profile.profileId}
@@ -386,6 +370,24 @@ export function AgentsBoard() {
           {profiles.length === 0 && (
             <p className="agent-empty">No agents yet. Create an agent to start a chat.</p>
           )}
+          {scheduledSupported && (
+            <footer className="agents-filters-footer">
+              <Link
+                to="/agents/scheduled"
+                className="agent-filter"
+                activeProps={{ "aria-current": "page" }}
+                onClick={() => setShowFilters(false)}
+              >
+                <CalendarClockIcon size={22} />
+                <span className="agent-filter-body">
+                  <span className="agent-filter-name">Scheduled tasks</span>
+                </span>
+                <span className="agent-filter-count">
+                  {scheduledTasks.filter(({ task }) => task.enabled).length}
+                </span>
+              </Link>
+            </footer>
+          )}
         </aside>
         <section className="agents-threads" aria-label="Threads">
           <header>
@@ -395,6 +397,11 @@ export function AgentsBoard() {
             >
               <ArrowLeftIcon size={14} /> Agents
             </button>
+            {scheduledSupported && (
+              <Link to="/agents/scheduled" className="agent-mobile-filters agent-icon-button">
+                <CalendarClockIcon size={14} /> Scheduled
+              </Link>
+            )}
             <div className="agents-threads-heading">
               <h2>
                 Threads
