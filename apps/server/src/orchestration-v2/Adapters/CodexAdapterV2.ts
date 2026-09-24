@@ -24,7 +24,9 @@ import {
   isOrchestrationV2WorkActive,
   ProviderDriverKind,
 } from "@t3tools/contracts";
+import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import { computerUseToolTitle } from "@t3tools/shared/toolActivity";
 import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import type {
@@ -76,12 +78,13 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
+import { ServerConfig } from "../../config.ts";
+import { expandHomePath } from "../../pathExpansion.ts";
+import { buildCodexDeveloperInstructions } from "../../provider/CodexDeveloperInstructions.ts";
 import {
   describeMcpElicitation,
   toMcpElicitationResponse,
-} from "../../provider/Layers/CodexSessionRuntime.ts";
-import { ServerConfig } from "../../config.ts";
-import { buildCodexDeveloperInstructions } from "../../provider/CodexDeveloperInstructions.ts";
+} from "../../provider/CodexMcpElicitation.ts";
 import {
   materializeCodexShadowHome,
   resolveCodexHomeLayout,
@@ -92,6 +95,10 @@ import {
   shouldPersistProviderEvent,
 } from "../../provider/Layers/EventNdjsonLogger.ts";
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
+import {
+  codexAppServerArgs,
+  resolveCodexLaunchArgs,
+} from "../../provider/Layers/codexLaunchArgs.ts";
 import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
@@ -403,6 +410,15 @@ function codexItemStatus(status: "inProgress" | "completed" | "failed" | "declin
   }
 }
 
+/**
+ * The composers let a skill be typed with any currency sigil (`€review`), but
+ * Codex only parses `$name` as a skill mention. Rewrite the sigil so the skill
+ * runs; currency amounts like `€20` do not match and stay prose.
+ */
+export function codexSkillMentionText(text: string): string {
+  return text.replace(SKILL_MENTION_PATTERN, "$1$$$2");
+}
+
 const BACKGROUND_COMMAND_DETAIL_COMMAND_MAX_LENGTH = 200;
 const BACKGROUND_COMMAND_DETAIL_OUTPUT_TAIL_MAX_LENGTH = 1_000;
 
@@ -428,6 +444,7 @@ export function codexBackgroundCommandDetail(item: {
 
 export interface CodexDynamicToolProjection extends McpToolPresentation {
   readonly toolName: string;
+  readonly title?: string;
   readonly input: unknown;
   readonly output?: unknown;
   readonly status: OrchestrationV2TurnItem["status"];
@@ -469,9 +486,11 @@ export function projectCodexDynamicToolItem(
     item.type === "mcpToolCall"
       ? `${item.server}.${item.tool}`
       : [trimText(item.namespace), item.tool].filter(Boolean).join(".");
+  const title = computerUseToolTitle(toolName, item.arguments);
   const projection: CodexDynamicToolProjection = {
     ...(item.type === "mcpToolCall" ? mcpToolPresentation(item) : {}),
     toolName,
+    ...(title ? { title } : {}),
     input: item.arguments,
     status: codexItemStatus(item.status).turnItem,
   };
@@ -892,8 +911,7 @@ export const resolveCodexForkBoundary = Effect.fn("CodexAdapterV2.resolveForkBou
 
 /**
  * The generated `thread/read` response schema does not surface `historyMode`,
- * so the probe goes through the raw request channel with a permissive decode
- * (mirrors the V1 session runtime's paginated-history detection).
+ * so the probe goes through the raw request channel with a permissive decode.
  */
 const CodexThreadHistoryMetadata = Schema.Struct({
   thread: Schema.Struct({
@@ -1157,6 +1175,13 @@ const decodeCodexResumeMetadata = Schema.decodeUnknownEffect(
   Schema.Struct({ thread: Schema.Struct({ id: Schema.String, updatedAt: Schema.Number }) }),
 );
 
+const decodeCodexChildModel = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    thread: Schema.Struct({ id: Schema.String }),
+    model: Schema.NullOr(Schema.String),
+  }),
+);
+
 export const makeCodexAppServerSpawnCommand = Effect.fn(
   "CodexAdapterV2.makeCodexAppServerSpawnCommand",
 )(function* (input: {
@@ -1314,7 +1339,9 @@ export const codexAppServerClientFactoryFromSettingsLayer: Layer.Layer<
           };
           const command = yield* makeCodexAppServerSpawnCommand({
             command: input.settings.binaryPath || "codex",
-            args: ["app-server"],
+            args: codexAppServerArgs(
+              resolveCodexLaunchArgs(input.settings.launchArgs, input.environment),
+            ),
             env: environment,
           });
           const handle = yield* spawner.spawn(command).pipe(
@@ -1385,6 +1412,7 @@ export const createCodexAdapterV2 = (
     const settings = {
       ...config,
       enabled,
+      binaryPath: expandHomePath(config.binaryPath),
       homePath: homeLayout.effectiveHomePath ?? "",
     } satisfies CodexSettings;
 
@@ -1465,6 +1493,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
     planSelectionTransition: () => Effect.succeed(turnScopedSelectionTransition()),
     openSession: (input) =>
       Effect.gen(function* () {
+        const scope = yield* Scope.Scope;
         const client = yield* clientFactory.open({
           instanceId: adapterOptions.instanceId,
           threadId: input.threadId,
@@ -1531,6 +1560,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
         const pendingRootTurns = yield* Ref.make(new Map<string, ProviderAdapterV2TurnInput>());
         const turnWaiters = yield* Ref.make(new Map<string, Deferred.Deferred<void, never>>());
         const subagentThreads = yield* Ref.make(new Map<string, CodexSubagentThreadContext>());
+        const subagentModels = new Map<string, string>();
         const pendingSubagentTurns = yield* Ref.make(
           new Map<string, ReadonlyArray<PendingCodexSubagentTurnStarted>>(),
         );
@@ -2268,6 +2298,23 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             });
           });
 
+        const updateSubagentModel = Effect.fnUntraced(function* (
+          nativeThreadId: string,
+          value: string | null,
+        ) {
+          const model = value?.trim();
+          if (!model) return;
+          subagentModels.set(nativeThreadId, model);
+          const subagent = (yield* Ref.get(subagentThreads)).get(nativeThreadId);
+          if (subagent === undefined || subagent.task.model === model) return;
+          subagent.task = { ...subagent.task, model, updatedAt: yield* DateTime.now };
+          yield* emitProviderEvent({
+            type: "subagent.updated",
+            driver: CODEX_PROVIDER,
+            subagent: subagent.task,
+          });
+        });
+
         const registerSubagentThread = (input: {
           readonly context: ActiveCodexTurnContext;
           readonly nativeThreadId: string;
@@ -2340,7 +2387,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               nativeTaskRef: codexNativeItemRef(input.nativeItemId),
               prompt: input.prompt,
               title: input.title,
-              model: input.model,
+              model: subagentModels.get(input.nativeThreadId) ?? input.model,
               status: "running",
               result: null,
               startedAt: now,
@@ -2490,6 +2537,22 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             for (const pendingTurn of pendingTurns) {
               yield* emitSubagentProviderTurnStarted(subagent, pendingTurn);
             }
+            if (task.model === null) {
+              yield* client.raw
+                .request("thread/resume", { threadId: input.nativeThreadId, excludeTurns: true })
+                .pipe(
+                  Effect.flatMap(decodeCodexChildModel),
+                  Effect.timeout("5 seconds"),
+                  Effect.flatMap((response) =>
+                    response.thread.id === input.nativeThreadId &&
+                    !subagentModels.has(input.nativeThreadId)
+                      ? updateSubagentModel(input.nativeThreadId, response.model)
+                      : Effect.void,
+                  ),
+                  Effect.catch(() => Effect.void),
+                  Effect.forkIn(scope),
+                );
+            }
           });
 
         const registerSubagentThreads = (input: {
@@ -2636,7 +2699,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           Effect.gen(function* () {
             const inputItems: Array<CodexSchema.V2TurnStartParams__UserInput> = [];
             const text = providerMessageTextWithAttachmentPaths({
-              text: turnInput.message.text,
+              text: codexSkillMentionText(turnInput.message.text),
               attachments: turnInput.message.attachments,
               attachmentsDir: serverConfig.attachmentsDir,
             });
@@ -3168,7 +3231,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               nativeItemRef: codexNativeItemRef(item.id),
               parentItemId: null,
               ordinal,
-              title: null,
+              title: projection.title ?? null,
               startedAt: context.startedAt,
               completedAt,
               updatedAt,
@@ -3674,6 +3737,13 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               },
             });
           }).pipe(Effect.orDie),
+        );
+
+        yield* client.handleServerNotification("thread/settings/updated", (payload) =>
+          updateSubagentModel(payload.threadId, payload.threadSettings.model),
+        );
+        yield* client.handleServerNotification("model/rerouted", (payload) =>
+          updateSubagentModel(payload.threadId, payload.toModel),
         );
 
         yield* client.handleServerNotification("turn/started", (payload) =>

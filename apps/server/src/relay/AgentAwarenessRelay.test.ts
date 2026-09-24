@@ -32,6 +32,7 @@ import { ProjectService } from "../project/ProjectService.ts";
 import {
   make,
   makeAgentAwarenessPublishWorker,
+  resolveAgentAwarenessRelayActiveThreadIds,
   shouldPublishAgentAwarenessEvent,
 } from "./AgentAwarenessRelay.ts";
 
@@ -88,6 +89,47 @@ function shell(overrides: Partial<OrchestrationV2ThreadShell> = {}): Orchestrati
 const PublishPayload = Schema.Struct({ state: Schema.NullOr(RelayAgentActivityState) });
 const decodePublishPayload = Schema.decodeUnknownSync(Schema.fromJsonString(PublishPayload));
 const unused = () => Effect.die("Unexpected test dependency call");
+
+describe("startup agent activity", () => {
+  it("publishes active work and only terminal runs completed after startup", () => {
+    const startedAt = DateTime.toEpochMillis(DateTime.makeUnsafe(NOW));
+    const oldCompleted = ThreadId.make("old-completed");
+    const newCompleted = ThreadId.make("new-completed");
+    const oldFailed = ThreadId.make("old-failed");
+    const newFailed = ThreadId.make("new-failed");
+    const ids = resolveAgentAwarenessRelayActiveThreadIds({
+      environmentId: EnvironmentId.make("relay-env"),
+      startedAt,
+      projects: [{ id: PROJECT_ID, title: "Project" }],
+      threads: [
+        shell(),
+        shell({
+          id: oldCompleted,
+          status: "completed",
+          latestRunCompletedAt: DateTime.makeUnsafe("2026-09-04T11:59:00.000Z"),
+        }),
+        shell({
+          id: newCompleted,
+          status: "completed",
+          latestRunCompletedAt: DateTime.makeUnsafe("2026-09-04T12:00:01.000Z"),
+        }),
+        shell({
+          id: oldFailed,
+          status: "failed",
+          latestRunCompletedAt: DateTime.makeUnsafe("2026-09-04T11:59:00.000Z"),
+        }),
+        shell({
+          id: newFailed,
+          status: "failed",
+          latestRunCompletedAt: DateTime.makeUnsafe("2026-09-04T12:00:01.000Z"),
+        }),
+        shell({ id: ThreadId.make("idle"), status: "idle" }),
+        shell({ id: ThreadId.make("missing-project"), projectId: ProjectId.make("missing") }),
+      ],
+    });
+    assert.deepStrictEqual(ids, [THREAD_ID, newCompleted, newFailed]);
+  });
+});
 
 const makeTestRelay = Effect.fnUntraced(function* (
   options: {
@@ -353,7 +395,13 @@ describe("AgentAwarenessRelay", () => {
             : Response.json({ ok: true, deliveries: [] }),
       });
       yield* relay.publishThread(THREAD_ID);
-      yield* Ref.set(currentShell, shell({ status: "completed" }));
+      yield* Ref.set(
+        currentShell,
+        shell({
+          status: "completed",
+          latestRunCompletedAt: DateTime.add(yield* DateTime.now, { seconds: 1 }),
+        }),
+      );
       yield* relay.publishThread(THREAD_ID);
       assert.equal(publications.length, 2);
       yield* TestClock.adjust("1 second");
@@ -375,7 +423,14 @@ describe("AgentAwarenessRelay", () => {
             : Response.json({ ok: true, deliveries: [] }),
       });
       yield* relay.publishThread(THREAD_ID);
-      yield* Ref.set(currentShell, shell({ status: "completed", title: "Final title" }));
+      yield* Ref.set(
+        currentShell,
+        shell({
+          status: "completed",
+          title: "Final title",
+          latestRunCompletedAt: DateTime.add(yield* DateTime.now, { seconds: 1 }),
+        }),
+      );
       yield* secrets.set(
         RELAY_ENVIRONMENT_CREDENTIAL_SECRET,
         new TextEncoder().encode("credential-2"),
@@ -487,7 +542,13 @@ describe("AgentAwarenessRelay", () => {
             ? new Response("relay unavailable", { status: 503 })
             : Response.json({ ok: true, deliveries: [] }),
       });
-      yield* Ref.set(currentShell, shell({ status: "completed" }));
+      yield* Ref.set(
+        currentShell,
+        shell({
+          status: "completed",
+          latestRunCompletedAt: DateTime.add(yield* DateTime.now, { seconds: 1 }),
+        }),
+      );
       yield* relay.publishThread(THREAD_ID);
       yield* TestClock.adjust("5 seconds");
       yield* relay.drain;
@@ -570,7 +631,13 @@ describe("AgentAwarenessRelay", () => {
   it.effect("confirms a first completed state and respects disabling during confirmation", () =>
     Effect.gen(function* () {
       const { relay, secrets, currentShell, publications } = yield* makeTestRelay();
-      yield* Ref.set(currentShell, shell({ status: "completed" }));
+      yield* Ref.set(
+        currentShell,
+        shell({
+          status: "completed",
+          latestRunCompletedAt: DateTime.add(yield* DateTime.now, { seconds: 1 }),
+        }),
+      );
       yield* relay.publishThread(THREAD_ID);
       assert.equal(publications.length, 0);
       yield* TestClock.adjust("5 seconds");

@@ -451,7 +451,7 @@ describe("OrchestratorMcpService provider resolution", () => {
           reason: "Driver 'forkOnly' is not registered in this build.",
           checkedAt: "2026-09-13T00:00:00.000Z",
         });
-        const providers: ReadonlyArray<ServerProvider> = [
+        let providers: ReadonlyArray<ServerProvider> = [
           providerSnapshot({
             instanceId: codexInstanceId,
             driver: ProviderDriverKind.make("codex"),
@@ -495,7 +495,7 @@ describe("OrchestratorMcpService provider resolution", () => {
           Layer.mock(ThreadManagementService)({
             getThreadRecords: () => Effect.succeed(parentProjection([])),
           }),
-          Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed(providers) }),
+          Layer.mock(ProviderRegistry)({ getProviders: Effect.sync(() => providers) }),
           adapterRegistryLayer([
             codexInstanceId,
             ProviderInstanceId.make("claudeAgent"),
@@ -513,6 +513,34 @@ describe("OrchestratorMcpService provider resolution", () => {
           const byId = new Map(
             capabilities.providers.map((provider) => [provider.providerInstanceId, provider]),
           );
+          for (const provider of providers) {
+            assert.deepEqual(
+              byId.get(provider.instanceId)?.models.map((model) => model.id),
+              provider.models.map((model) => model.slug),
+            );
+          }
+
+          providers = providers.map((provider) => ({
+            ...provider,
+            models: [
+              ...provider.models,
+              {
+                slug: `${provider.driver}/custom-model-after-refresh`,
+                name: "Custom model",
+                isCustom: true,
+                capabilities: null,
+              },
+            ],
+          }));
+          const refreshed = yield* service.capabilities(scope);
+          for (const provider of providers) {
+            assert.deepEqual(
+              refreshed.providers
+                .find((entry) => entry.providerInstanceId === provider.instanceId)
+                ?.models.map((model) => model.id),
+              provider.models.map((model) => model.slug),
+            );
+          }
 
           for (const instanceId of [
             codexInstanceId,

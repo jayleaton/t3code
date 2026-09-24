@@ -1559,7 +1559,7 @@ export function makeCursorAdapterV2(
               },
               prompt: args.prompt,
               title: args.description,
-              model: args.model ?? input.context.input.modelSelection.model,
+              model: args.model?.trim() || null,
               result: null,
               startedAt: now,
             }),

@@ -8,6 +8,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 
 import { ServerConfig } from "../../config.ts";
@@ -44,6 +45,42 @@ export const CodexOrchestratorReplayHarnessError = Schema.Union([
   ProviderAdapterDriverCreateError,
 ]);
 export type CodexOrchestratorReplayHarnessError = typeof CodexOrchestratorReplayHarnessError.Type;
+
+export function withCodexReplayChildMetadata(
+  client: CodexClient.CodexAppServerClient["Service"],
+  transcript: CodexReplay.CodexAppServerReplayTranscript,
+  readMetadata: (threadId: string) => Effect.Effect<unknown> = (threadId) =>
+    Effect.succeed({ thread: { id: threadId }, model: null }),
+): CodexClient.CodexAppServerClient["Service"] {
+  const childThreadIds = new Set(
+    transcript.entries.flatMap((entry) => {
+      if (entry.type !== "emit_inbound" || !Predicate.isObject(entry.frame)) return [];
+      const params = entry.frame.params;
+      if (!Predicate.isObject(params) || !Predicate.isObject(params.item)) return [];
+      const item = params.item;
+      if (item.type === "subAgentActivity" && typeof item.agentThreadId === "string") {
+        return [item.agentThreadId];
+      }
+      return item.type === "collabAgentToolCall" && Array.isArray(item.receiverThreadIds)
+        ? item.receiverThreadIds.filter(Predicate.isString)
+        : [];
+    }),
+  );
+  return {
+    ...client,
+    raw: {
+      ...client.raw,
+      request: (method, params) =>
+        method === "thread/resume" &&
+        Predicate.isObject(params) &&
+        params.excludeTurns === true &&
+        typeof params.threadId === "string" &&
+        childThreadIds.has(params.threadId)
+          ? readMetadata(params.threadId)
+          : client.raw.request(method, params),
+    },
+  };
+}
 
 function metadataFromTranscript(transcript: ProviderReplayTranscript): {
   readonly provider?: string;
@@ -166,6 +203,7 @@ export function makeCodexProviderAdapterRegistryReplayLayer(input: {
           ),
         );
         return yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+          Effect.map((client) => withCodexReplayChildMetadata(client, input.transcript)),
           Effect.provide(context),
         );
       }),

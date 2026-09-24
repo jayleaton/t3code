@@ -578,7 +578,7 @@ const make = Effect.gen(function* () {
       FROM projection_threads AS thread
       WHERE NOT EXISTS (
         SELECT 1
-        FROM orchestration_events AS event
+        FROM orchestration_events AS event INDEXED BY orchestration_events_v2_created_threads_idx
         WHERE event.application_event_version = 2
           AND event.aggregate_kind = 'thread'
           AND event.stream_id = thread.thread_id
@@ -670,7 +670,7 @@ const make = Effect.gen(function* () {
       FROM projection_threads AS thread
       WHERE NOT EXISTS (
         SELECT 1
-        FROM orchestration_events AS event
+        FROM orchestration_events AS event INDEXED BY orchestration_events_v2_created_threads_idx
         WHERE event.application_event_version = 2
           AND event.aggregate_kind = 'thread'
           AND event.stream_id = thread.thread_id

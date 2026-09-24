@@ -266,9 +266,9 @@ it("shows readable models and only differing workspace details in agent tooltips
   expect(text()).not.toContain("Workspace");
 
   for (const [model, expected] of [
-    [null, "My GPT"],
-    ["", "My GPT"],
-    ["   ", "My GPT"],
+    [null, "Not reported"],
+    ["", "Not reported"],
+    ["   ", "Not reported"],
     ["model-alias", "My GPT"],
     ["gpt-5.5", "GPT-5.5"],
     ["custom/model-v1", "custom/model-v1"],
@@ -280,6 +280,26 @@ it("shows readable models and only differing workspace details in agent tooltips
     await act(async () => renderer.update(cloneElement(panel)));
     expect(text()).toContain(expected);
     expect(text()).not.toContain("Unknown");
+    if (!model?.trim()) expect(text()).not.toContain("My GPT");
+  }
+
+  for (const driver of [
+    "codex",
+    "claudeAgent",
+    "cursor",
+    "opencode",
+    "grok",
+    "antigravity",
+    "pi",
+    "acpRegistry",
+  ]) {
+    state.projection = {
+      ...projection,
+      subagents: [{ ...projection.subagents[0], driver, model: null }],
+    };
+    await act(async () => renderer.update(cloneElement(panel)));
+    expect(text()).toContain("Not reported");
+    expect(text()).not.toContain("My GPT");
   }
 
   state.projection = {

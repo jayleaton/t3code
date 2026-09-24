@@ -39,7 +39,7 @@ const mutation = Effect.gen(function* () {
 export const ProjectHandlersLive = ProjectToolkit.toLayer({
   t3_thread_launch: (input) =>
     Effect.gen(function* () {
-      const { caller } = yield* readMutationCaller();
+      const { caller, scope } = yield* readMutationCaller();
       if (caller.runtimeMode !== "full-access" || caller.interactionMode !== "default")
         return yield* new OrchestratorMcpFailure({
           code: "capability_denied",
@@ -68,6 +68,7 @@ export const ProjectHandlersLive = ProjectToolkit.toLayer({
           : {
               initialMessage: {
                 messageId,
+                senderThreadId: scope.threadId,
                 text: input.message ?? "",
                 attachments,
               },

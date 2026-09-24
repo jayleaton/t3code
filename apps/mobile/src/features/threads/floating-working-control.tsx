@@ -15,6 +15,7 @@ import Animated, {
   FadeIn,
   FadeOut,
   ReduceMotion,
+  type SharedValue,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
@@ -72,6 +73,8 @@ export function FloatingWorkingControl(props: {
   readonly onOpenAgents: () => void;
   readonly queuedCount: number;
   readonly onOpenQueue: () => void;
+  /** Extra distance to rise above the anchor, e.g. an overlay card's coverage. */
+  readonly lift?: SharedValue<number>;
 }) {
   const { width: windowWidth } = useWindowDimensions();
   const [overlayWidth, setOverlayWidth] = useState(windowWidth);
@@ -99,6 +102,10 @@ export function FloatingWorkingControl(props: {
     separationProgress.value = withTiming(props.showScrollToEnd ? 1 : 0, CONTROL_TIMING);
   }, [props.showScrollToEnd, separationProgress]);
 
+  const lift = props.lift;
+  const liftStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: -(lift?.value ?? 0) }],
+  }));
   const arrowTransformStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: -CONTROL_SEPARATION * (1 - separationProgress.value) }],
   }));
@@ -231,7 +238,7 @@ export function FloatingWorkingControl(props: {
     <Animated.View
       pointerEvents="box-none"
       className="absolute left-0 right-0 z-20 items-center"
-      style={{ top: -CONTROL_OVERLAY_OFFSET }}
+      style={[{ top: -CONTROL_OVERLAY_OFFSET }, liftStyle]}
       onLayout={(event) => setOverlayWidth(event.nativeEvent.layout.width)}
       entering={NATIVE_LIQUID_GLASS_SUPPORTED ? undefined : CONTROL_ENTERING}
       exiting={NATIVE_LIQUID_GLASS_SUPPORTED ? undefined : CONTROL_EXITING}

@@ -1,3 +1,4 @@
+import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import {
   buildRemoteOpenUrl,
   EditorId,
@@ -16,7 +17,7 @@ import {
 } from "../../remoteOpen";
 import { useEnvironment } from "../../state/environments";
 import { ChevronDownIcon, FolderClosedIcon, SquareArrowOutUpRightIcon } from "lucide-react";
-import { Button } from "../ui/button";
+
 import { Group, GroupSeparator } from "../ui/group";
 import {
   Menu,
@@ -64,8 +65,6 @@ import {
   THREAD_DETAILS_PANEL_ICON_CLASS,
   THREAD_DETAILS_PANEL_ROW_POPUP_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS,
-  THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS,
-  THREAD_DETAILS_PANEL_SPLIT_SECONDARY_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
 } from "./threadDetailsPanelStyles";
 
@@ -372,15 +371,16 @@ export const OpenInPicker = memo(function OpenInPicker({
         ? { className: THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS, ref: panelAnchorRef }
         : {})}
     >
-      <Button
+      <ThreadDetailsControl
         aria-label={compact ? "Open file in preferred editor" : primaryLabel}
         size={isPanel ? "sm" : "xs"}
         variant={isPanel ? "ghost" : "outline"}
-        className={isPanel ? THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS : "ps-[8.5px]"}
+        part="primary"
+        panel={isPanel}
         disabled={!preferredEditor || !openInCwd || remote.mode === "remote-unavailable"}
         onClick={() => openInEditor(preferredEditor)}
       >
-        {primaryOption?.Icon && (
+        {primaryOption?.Icon ? (
           <primaryOption.Icon
             aria-hidden="true"
             className={cn(
@@ -388,18 +388,23 @@ export const OpenInPicker = memo(function OpenInPicker({
               getOpenInIconClass(primaryOption.kind),
             )}
           />
-        )}
+        ) : isPanel ? (
+          <SquareArrowOutUpRightIcon
+            aria-hidden="true"
+            className={THREAD_DETAILS_PANEL_ICON_CLASS}
+          />
+        ) : null}
         <span
           className={cn(
             compact
               ? "sr-only"
               : "sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5",
-            isPanel && "not-sr-only ml-0.5 min-w-0 truncate",
+            isPanel && "not-sr-only ml-0 min-w-0 truncate",
           )}
         >
           {primaryLabel}
         </span>
-      </Button>
+      </ThreadDetailsControl>
       {isPanel ? (
         <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
       ) : (
@@ -408,11 +413,12 @@ export const OpenInPicker = memo(function OpenInPicker({
       <Menu>
         <MenuTrigger
           render={
-            <Button
+            <ThreadDetailsControl
               aria-label="Choose editor"
               size={isPanel ? "sm" : "icon-xs"}
               variant={isPanel ? "ghost" : "outline"}
-              className={isPanel ? THREAD_DETAILS_PANEL_SPLIT_SECONDARY_CLASS : undefined}
+              part="secondary"
+              panel={isPanel}
             />
           }
         >

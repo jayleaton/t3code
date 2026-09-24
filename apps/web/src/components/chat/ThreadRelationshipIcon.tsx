@@ -17,7 +17,7 @@ export function ThreadRelationshipIcon({
 }) {
   const iconClassName = "size-4 shrink-0 text-muted-foreground";
   return (
-    <span className="relative inline-flex shrink-0 items-center justify-center">
+    <span className="relative inline-flex size-4 shrink-0 items-center justify-center">
       {driver ? (
         <ProviderInstanceIcon
           driverKind={driver}
