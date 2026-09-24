@@ -8,8 +8,11 @@ import * as Schema from "effect/Schema";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { Menu, MenuTrigger, MenuPopup, MenuItem } from "../ui/menu";
 import { AgentIcon, agentColorFor } from "./AgentIcon";
-import { Link, Outlet, useLocation } from "@tanstack/react-router";
-import { useMemo, useState, type CSSProperties } from "react";
+import { Link, Outlet, useLocation, useNavigate, type LinkProps } from "@tanstack/react-router";
+import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
+import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import {
   PlusIcon,
   MoreHorizontalIcon,
@@ -21,10 +24,13 @@ import {
   SearchIcon,
   XIcon,
   LayoutGridIcon,
+  CalendarClockIcon,
+  ChartNoAxesColumnIcon,
 } from "lucide-react";
 import type { McpGatewayProfile } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { useAgentLibrary } from "../../hooks/useAgentLibrary";
+import { useScheduledTasks, useScheduledTasksSupported } from "../../state/scheduledTasks";
 import { useEnvironments } from "../../state/environments";
 import { useThreadShells, useAllEnvironmentShellsBootstrapped } from "../../state/entities";
 import { AgentSkillsEditor } from "./AgentSkillsEditor";
@@ -97,6 +103,25 @@ function AgentThreadList({
   );
 }
 
+function TopbarIconLink({
+  label,
+  children,
+  ...link
+}: Pick<LinkProps, "to" | "search"> & { label: string; children: ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Link {...link} aria-label={label} className="agent-icon-button">
+            {children}
+          </Link>
+        }
+      />
+      <TooltipPopup side="bottom">{label}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
 export function AgentsBoard() {
   const { profiles, skills, skillsAvailable, available, updateSettings } = useAgentLibrary();
   const [skillsOpen, setSkillsOpen] = useState(false);
@@ -119,6 +144,9 @@ export function AgentsBoard() {
     setOrder(ids);
   };
   const { environments } = useEnvironments();
+  const navigate = useNavigate();
+  const scheduledSupported = useScheduledTasksSupported();
+  const scheduledTasks = useScheduledTasks();
   const modelPreferences = useClientSettings((settings) => settings.providerModelPreferences);
   const threads = useThreadShells();
   const ready = useAllEnvironmentShellsBootstrapped();
@@ -150,6 +178,10 @@ export function AgentsBoard() {
   const activeCount = (items: readonly EnvironmentThreadShell[]) =>
     items.filter((thread) => thread.settledAt === null).length;
   const online = environments.filter((env) => env.connection.phase === "connected");
+  // The page reads every connected server, so one offering pull requests is enough.
+  const pullRequestsSupported = environments.some(
+    (environment) => environment.serverConfig?.environment.capabilities.pullRequests === true,
+  );
   return (
     <div className="agents-page" data-thread-selected={selected} data-show-filters={showFilters}>
       <header className="agents-topbar">
@@ -183,23 +215,39 @@ export function AgentsBoard() {
         </div>
         <AgentGatewayStatus />
         <div className="agents-topbar-actions">
-          <button
-            className="agent-icon-button"
-            disabled={!skillsAvailable}
-            onClick={() => setSkillsOpen(true)}
-          >
-            Skills
-          </button>
-          <DesktopUpdateButton className="agent-icon-button agent-update-button" />
-          <button
-            className="agent-icon-button"
-            onClick={() => openCommandPalette({ open: "add-project" })}
-          >
-            <PlusIcon size={14} /> Add project
-          </button>
-          <Link to="/settings" aria-label="Settings" className="agent-icon-button">
-            <SettingsIcon size={15} />
-          </Link>
+          <div className="agents-topbar-group">
+            <button
+              className="agent-icon-button"
+              disabled={!skillsAvailable}
+              onClick={() => setSkillsOpen(true)}
+            >
+              Skills
+            </button>
+            <button
+              className="agent-icon-button"
+              onClick={() => openCommandPalette({ open: "add-project" })}
+            >
+              <PlusIcon size={14} /> Add project
+            </button>
+          </div>
+          <div className="agents-topbar-group agents-topbar-icons">
+            <DesktopUpdateButton className="agent-icon-button agent-update-button" />
+            {pullRequestsSupported && (
+              <TopbarIconLink
+                label="Pull Requests"
+                to="/pull-requests"
+                search={readPullRequestListPreferences()}
+              >
+                <PullRequestGlyph.pullRequest className="size-[15px]" />
+              </TopbarIconLink>
+            )}
+            <TopbarIconLink label="Usage" to="/usage">
+              <ChartNoAxesColumnIcon size={15} />
+            </TopbarIconLink>
+            <TopbarIconLink label="Settings" to="/settings">
+              <SettingsIcon size={15} />
+            </TopbarIconLink>
+          </div>
         </div>
       </header>
       {!available && (
@@ -283,6 +331,17 @@ export function AgentsBoard() {
                     <PencilIcon />
                     Edit agent
                   </MenuItem>
+                  {scheduledSupported && (
+                    <MenuItem
+                      disabled={!available || profile.runtimeMode === "read-only"}
+                      onClick={() =>
+                        navigate({ to: "/agents/scheduled", search: { agent: profile.profileId } })
+                      }
+                    >
+                      <CalendarClockIcon />
+                      Schedule task
+                    </MenuItem>
+                  )}
                   <MenuItem disabled={index === 0} onClick={() => moveAgent(index, -1)}>
                     <ArrowLeftIcon />
                     Move up
@@ -311,6 +370,24 @@ export function AgentsBoard() {
           {profiles.length === 0 && (
             <p className="agent-empty">No agents yet. Create an agent to start a chat.</p>
           )}
+          {scheduledSupported && (
+            <footer className="agents-filters-footer">
+              <Link
+                to="/agents/scheduled"
+                className="agent-filter"
+                activeProps={{ "aria-current": "page" }}
+                onClick={() => setShowFilters(false)}
+              >
+                <CalendarClockIcon size={22} />
+                <span className="agent-filter-body">
+                  <span className="agent-filter-name">Scheduled tasks</span>
+                </span>
+                <span className="agent-filter-count">
+                  {scheduledTasks.filter(({ task }) => task.enabled).length}
+                </span>
+              </Link>
+            </footer>
+          )}
         </aside>
         <section className="agents-threads" aria-label="Threads">
           <header>
@@ -320,6 +397,11 @@ export function AgentsBoard() {
             >
               <ArrowLeftIcon size={14} /> Agents
             </button>
+            {scheduledSupported && (
+              <Link to="/agents/scheduled" className="agent-mobile-filters agent-icon-button">
+                <CalendarClockIcon size={14} /> Scheduled
+              </Link>
+            )}
             <div className="agents-threads-heading">
               <h2>
                 Threads

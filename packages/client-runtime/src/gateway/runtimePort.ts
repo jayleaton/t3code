@@ -10,6 +10,7 @@ import {
   MessageId,
   ORCHESTRATION_WS_METHODS,
   ProjectId,
+  ScheduledTaskId,
   ProviderInstanceId,
   ThreadId,
   WS_METHODS,
@@ -935,6 +936,50 @@ export function createGatewayRuntimePort(
       return { environmentId, threadId, status: "succeeded" };
     },
     listDevices: (environmentId) => run(listGatewayDevices(EnvironmentId.make(environmentId))),
+    scheduledTask: (environmentId, scheduled) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          const call = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+            registry.run(EnvironmentId.make(environmentId), effect);
+          switch (scheduled.action) {
+            case "list":
+              return yield* call(request(WS_METHODS.scheduledTasksList, {}));
+            case "create":
+              return yield* call(
+                request(WS_METHODS.scheduledTasksCreate, {
+                  ...scheduled.input,
+                  projectId: ProjectId.make(scheduled.input.projectId),
+                }),
+              );
+            case "update": {
+              const { projectId, ...patch } = scheduled.patch;
+              return yield* call(
+                request(WS_METHODS.scheduledTasksUpdate, {
+                  taskId: ScheduledTaskId.make(scheduled.taskId),
+                  patch: {
+                    ...patch,
+                    ...(projectId === undefined ? {} : { projectId: ProjectId.make(projectId) }),
+                  },
+                }),
+              );
+            }
+            case "delete":
+              yield* call(
+                request(WS_METHODS.scheduledTasksDelete, {
+                  taskId: ScheduledTaskId.make(scheduled.taskId),
+                }),
+              );
+              return { deleted: scheduled.taskId };
+            case "run":
+              return yield* call(
+                request(WS_METHODS.scheduledTasksRunNow, {
+                  taskId: ScheduledTaskId.make(scheduled.taskId),
+                }),
+              );
+          }
+        }),
+      ),
     focusDevice: async (rawEnvironmentId, device, target) => {
       const environmentId = EnvironmentId.make(rawEnvironmentId);
       const resolved = resolveGatewayDevice(await run(listGatewayDevices(environmentId)), device);

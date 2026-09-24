@@ -59,6 +59,14 @@
   align-items: center;
   margin-left: auto;
 }
+.agents-topbar-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.agents-topbar-icons {
+  gap: 4px;
+}
 .agents-page button,
 .agent-dialog button {
   cursor: pointer;
@@ -850,6 +858,8 @@
   overflow: hidden;
 }
 .agents-filters {
+  display: flex;
+  flex-direction: column;
   width: 280px;
   flex-shrink: 0;
   overflow-y: auto;
@@ -1114,7 +1124,7 @@
     display: inline-flex;
   }
   .agents-page[data-show-filters="true"] .agents-filters {
-    display: block;
+    display: flex;
   }
   .agents-page[data-show-filters="true"] .agents-threads {
     display: none;
@@ -1170,4 +1180,137 @@
 .agent-gateway button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.agents-filters > * {
+  flex-shrink: 0;
+}
+/* Pinned under the agent list: pushed down when the list is short, stuck to the bottom when it scrolls. */
+.agents-filters-footer {
+  position: sticky;
+  bottom: -12px;
+  margin: auto -8px -12px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  background: var(--background);
+}
+.agents-filters-footer > .agent-filter[aria-current="page"],
+.agents-filters > .agent-filter[aria-current="page"] {
+  background: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+.agent-checkbox-row {
+  flex-direction: row !important;
+  align-items: center;
+}
+.agent-mobile-back {
+  display: none;
+  gap: 4px;
+}
+@media (max-width: 1023px) {
+  .agent-mobile-back {
+    display: inline-flex;
+  }
+}
+.scheduled-tasks {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px 32px;
+}
+.scheduled-tasks-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.scheduled-tasks-header > div {
+  flex: 1;
+  min-width: 0;
+}
+.scheduled-tasks-header h2 {
+  font-size: 16px;
+  font-weight: 600;
+}
+.scheduled-tasks-header p {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.scheduled-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.scheduled-task {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--agent-color, var(--border));
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.scheduled-task[data-enabled="false"] {
+  opacity: 0.7;
+}
+.scheduled-task-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.scheduled-task-heading .agent-orb,
+.scheduled-task-heading .agent-custom-icon {
+  width: 22px;
+  height: 22px;
+}
+.scheduled-task-title {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.scheduled-task-title strong,
+.scheduled-task-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scheduled-task-title span {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.scheduled-task-prompt {
+  margin-top: 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+}
+.scheduled-task-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+.scheduled-task-facts dt {
+  color: var(--muted-foreground);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.scheduled-task-facts dd[data-status="failed"],
+.scheduled-task-error {
+  color: var(--destructive);
+}
+.scheduled-task-error {
+  margin-top: 8px;
+  font-size: 12px;
+}
+.scheduled-task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
 }

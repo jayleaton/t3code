@@ -277,6 +277,16 @@ import {
   ProjectCloneSubscribeInput,
 } from "./projectClone.ts";
 import {
+  ScheduledTask,
+  ScheduledTaskCreateInput,
+  ScheduledTaskError,
+  ScheduledTaskListEvent,
+  ScheduledTaskListResult,
+  ScheduledTaskSubscribeInput,
+  ScheduledTaskTarget,
+  ScheduledTaskUpdateInput,
+} from "./scheduledTask.ts";
+import {
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
   SourceControlDiscoveryResult,
@@ -448,6 +458,12 @@ export const WS_METHODS = {
   projectCloneCancel: "projectClone.cancel",
   projectCloneRetry: "projectClone.retry",
   subscribeProjectClones: "subscribeProjectClones",
+  scheduledTasksList: "scheduledTasks.list",
+  scheduledTasksCreate: "scheduledTasks.create",
+  scheduledTasksUpdate: "scheduledTasks.update",
+  scheduledTasksDelete: "scheduledTasks.delete",
+  scheduledTasksRunNow: "scheduledTasks.runNow",
+  subscribeScheduledTasks: "subscribeScheduledTasks",
 
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
@@ -933,6 +949,42 @@ const WsSourceControlCloneRepositoryRpc = Rpc.make(WS_METHODS.sourceControlClone
 
 // Clone-backed project creation. `start` returns once the project exists and
 // the clone is running; progress arrives on the subscription.
+const WsScheduledTasksListRpc = Rpc.make(WS_METHODS.scheduledTasksList, {
+  payload: Schema.Struct({}),
+  success: ScheduledTaskListResult,
+  error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
+});
+
+const WsScheduledTasksCreateRpc = Rpc.make(WS_METHODS.scheduledTasksCreate, {
+  payload: ScheduledTaskCreateInput,
+  success: ScheduledTask,
+  error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
+});
+
+const WsScheduledTasksUpdateRpc = Rpc.make(WS_METHODS.scheduledTasksUpdate, {
+  payload: ScheduledTaskUpdateInput,
+  success: ScheduledTask,
+  error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
+});
+
+const WsScheduledTasksDeleteRpc = Rpc.make(WS_METHODS.scheduledTasksDelete, {
+  payload: ScheduledTaskTarget,
+  error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
+});
+
+const WsScheduledTasksRunNowRpc = Rpc.make(WS_METHODS.scheduledTasksRunNow, {
+  payload: ScheduledTaskTarget,
+  success: ScheduledTask,
+  error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
+});
+
+const WsSubscribeScheduledTasksRpc = Rpc.make(WS_METHODS.subscribeScheduledTasks, {
+  payload: ScheduledTaskSubscribeInput,
+  success: ScheduledTaskListEvent,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
 const WsProjectCloneStartRpc = Rpc.make(WS_METHODS.projectCloneStart, {
   payload: ProjectCloneStartInput,
   success: ProjectCloneStartResult,
@@ -1536,6 +1588,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectCloneCancelRpc,
   WsProjectCloneRetryRpc,
   WsSubscribeProjectClonesRpc,
+  WsScheduledTasksListRpc,
+  WsScheduledTasksCreateRpc,
+  WsScheduledTasksUpdateRpc,
+  WsScheduledTasksDeleteRpc,
+  WsScheduledTasksRunNowRpc,
+  WsSubscribeScheduledTasksRpc,
   WsProjectsListEntriesRpc,
   WsProjectsReadFileRpc,
   WsProjectsSearchContentsRpc,

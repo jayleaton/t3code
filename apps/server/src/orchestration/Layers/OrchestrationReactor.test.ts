@@ -1,3 +1,4 @@
+import * as ScheduledTasks from "../../scheduledTasks/ScheduledTasks.ts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -32,6 +33,14 @@ describe("OrchestrationReactor", () => {
 
     runtime = ManagedRuntime.make(
       Layer.effect(OrchestrationReactor, makeOrchestrationReactor).pipe(
+        Layer.provideMerge(
+          Layer.mock(ScheduledTasks.ScheduledTasks)({
+            start: () => {
+              started.push("scheduled-tasks");
+              return Effect.void;
+            },
+          }),
+        ),
         Layer.provideMerge(
           Layer.succeed(StorageCleanup, {
             start: () => {
@@ -131,6 +140,7 @@ describe("OrchestrationReactor", () => {
       "pull-request-sync-reactor",
       "agent-awareness-relay",
       "storage-cleanup",
+      "scheduled-tasks",
     ]);
 
     await Effect.runPromise(Scope.close(scope, Exit.void));

@@ -219,6 +219,10 @@
       "types": "./src/state/shell.ts",
       "default": "./src/state/shell.ts"
     },
+    "./state/scheduled-tasks": {
+      "types": "./src/state/scheduledTasks.ts",
+      "default": "./src/state/scheduledTasks.ts"
+    },
     "./state/source-control": {
       "types": "./src/state/sourceControl.ts",
       "default": "./src/state/sourceControl.ts"
