@@ -295,8 +295,10 @@ an agent a prompt at a set time (for example a deploy tonight) or on repeat (for
 the latest changes every weekday at 7:00). Each task has one thread: the first run creates it and
 every later run posts into it. Pause, resume, run now, edit, or delete a task from the same list.
 
-Tasks run on the machine you pick, and only while its T3 server is up. A run missed while it was
-off or asleep happens once when it is back. Runs use the agent's permission mode, so an agent that
+Tasks run on the machine you pick, and only while its T3 server is up and the machine is awake;
+T3 does not wake a sleeping machine or keep it awake. A run missed while it was off or asleep
+happens once when it is back. For unattended runs, set the machine not to sleep and keep T3 running
+with the desktop app open or as a [background service](./background-service.md). Runs use the agent's permission mode, so an agent that
 asks for approvals waits for you. Changing a task's agent or project starts a new thread on the next
 run. MCP assistants can manage tasks with `t3_list_scheduled_tasks`, `t3_create_scheduled_task`,
 `t3_update_scheduled_task`, and `t3_delete_scheduled_task` (create or admin access), and run one
