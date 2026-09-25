@@ -475,6 +475,7 @@ export interface GatewayRuntimePort {
     readonly interactionMode?: "default" | "plan";
     readonly workspaceMode?: "checkout" | "worktree";
     readonly baseBranch?: string;
+    readonly parentThreadId?: string;
     readonly requestId: string;
     readonly profileSelection?: {
       readonly profileId: string;

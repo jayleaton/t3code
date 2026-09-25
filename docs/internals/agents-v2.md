@@ -30,11 +30,11 @@ permanent frozen copy of its runtime.
 
 ## Data boundary
 
-Fork releases own migrations through 56, including its upgrade repair, title
-state, viewed PR files, and scheduled tasks. V2 is registered as **57**, followed by
-upstream index cleanup as **58**. A preflight guard rejects older draft V2 migration numbers before writes.
+Fork releases own migrations through 58, including its upgrade repair, title
+state, viewed PR files, scheduled tasks, auto-settle, and thread parents. V2 is
+registered as **59**, followed by upstream index cleanup as **60**. A preflight guard rejects older draft V2 migration numbers before writes.
 This is a fork migration history, not interchangeable with an upstream V2 database.
-Fork 56 created a differently shaped `scheduled_tasks`; migration 57 renames it to
+Fork 56 created a differently shaped `scheduled_tasks`; migration 59 renames it to
 `legacy_scheduled_tasks` before upstream's `CREATE TABLE IF NOT EXISTS` would keep the
 wrong columns, and `ScheduledTaskService` imports and drops it at startup, when profiles
 can be resolved. Scheduled tasks otherwise run on upstream's service; the fork adds an

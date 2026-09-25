@@ -1286,6 +1286,9 @@ export function threadShellFromProjection(
     ...(projection.thread.profileSnapshot === undefined
       ? {}
       : { profileSnapshot: shellProfileSnapshot(projection.thread.profileSnapshot) }),
+    ...(projection.thread.parentThreadId == null
+      ? {}
+      : { parentThreadId: projection.thread.parentThreadId }),
     title: projection.thread.title,
     providerInstanceId: projection.thread.providerInstanceId,
     modelSelection: projection.thread.modelSelection,
@@ -1521,6 +1524,9 @@ function shellFromState(input: {
     ...(input.state.thread.profileSnapshot === undefined
       ? {}
       : { profileSnapshot: shellProfileSnapshot(input.state.thread.profileSnapshot) }),
+    ...(input.state.thread.parentThreadId == null
+      ? {}
+      : { parentThreadId: input.state.thread.parentThreadId }),
     title: input.state.thread.title,
     providerInstanceId: input.state.thread.providerInstanceId,
     modelSelection: input.state.thread.modelSelection,

@@ -355,6 +355,11 @@ export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitReco
 
 export const OrchestrationV2AppThread = Schema.Struct({
   profileSnapshot: Schema.optional(ThreadProfileSnapshot),
+  /**
+   * Chat that owns this one's work on the Agents board, such as the chat whose agent created it.
+   * Organizational only and same-environment; unlike `lineage` it can be changed or cleared.
+   */
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
@@ -1502,6 +1507,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   profileSnapshot: Schema.optional(
     ThreadProfileSnapshot.mapFields(({ skills: _skills, ...fields }) => fields),
   ),
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
@@ -2250,6 +2256,7 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.create"),
     profileSelection: Schema.optional(ThreadProfileSelection),
     profileSnapshot: Schema.optional(ThreadProfileSnapshot),
+    parentThreadId: Schema.optional(ThreadId),
     ...OrchestrationV2CreationFields,
     commandId: CommandId,
     threadId: ThreadId,
@@ -2390,6 +2397,8 @@ export const OrchestrationV2Command = Schema.Union([
     limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecoveryUpdate)),
     /** Link (object) or unlink (null) a pull request (#8160); absent leaves it unchanged. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+    /** Nest under another chat on the Agents board, or detach with null. */
+    parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.pull-request.link"),
@@ -2728,6 +2737,7 @@ export type OrchestrationV2ThreadLaunchWorkspaceStrategy =
 
 export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
   profileSelection: Schema.optional(ThreadProfileSelection),
+  parentThreadId: Schema.optional(ThreadId),
   commandId: CommandId,
   creationSource: Schema.optional(OrchestrationV2CreationSource),
   threadId: Schema.optional(ThreadId),

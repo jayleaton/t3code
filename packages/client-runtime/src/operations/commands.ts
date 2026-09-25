@@ -133,6 +133,8 @@ export interface UpdateThreadMetadataInput extends ThreadCommandInput {
   readonly regenerateTitle?: boolean;
   /** Link (object) or unlink (null) a pull request (#8160). */
   readonly linkedPullRequest?: ThreadLinkedPullRequest | null;
+  /** Nest under another chat on the Agents board, or detach with null. */
+  readonly parentThreadId?: ThreadId | null;
 }
 
 export interface SetThreadRuntimeModeInput extends ThreadCommandInput {
@@ -578,7 +580,8 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
       input.worktreePath !== undefined ||
       input.regenerateTitle !== undefined ||
       input.linkedPullRequest !== undefined ||
-      input.limitRecovery !== undefined
+      input.limitRecovery !== undefined ||
+      input.parentThreadId !== undefined
     ) {
       result = yield* dispatch({
         type: "thread.metadata.update",
@@ -592,6 +595,7 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
         ...(input.linkedPullRequest === undefined
           ? {}
           : { linkedPullRequest: input.linkedPullRequest }),
+        ...(input.parentThreadId === undefined ? {} : { parentThreadId: input.parentThreadId }),
       });
     }
     if (input.modelSelection !== undefined) {

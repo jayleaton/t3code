@@ -68,6 +68,7 @@ export interface ThreadLaunchInitialMessage {
 
 export interface ThreadLaunchInput {
   readonly profileSelection?: ThreadProfileSelection;
+  readonly parentThreadId?: ThreadId;
   readonly commandId: CommandId;
   readonly threadId?: ThreadId;
   readonly reuseExistingThread?: boolean;
@@ -691,6 +692,9 @@ const make = Effect.gen(function* () {
                 ...(input.profileSelection === undefined
                   ? {}
                   : { profileSelection: input.profileSelection }),
+                ...(input.parentThreadId === undefined
+                  ? {}
+                  : { parentThreadId: input.parentThreadId }),
                 commandId: input.commandId,
                 threadId: candidateThreadId,
                 projectId: input.projectId,

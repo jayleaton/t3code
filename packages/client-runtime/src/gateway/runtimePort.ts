@@ -260,6 +260,7 @@ function gatewayThreadShellProjection(thread: OrchestrationV2ThreadShell) {
     projectId: thread.projectId,
     title: thread.title,
     profileSnapshot: profileAssociation(thread.profileSnapshot),
+    parentThreadId: thread.parentThreadId ?? null,
     settledAt: iso(thread.settledAt),
     status: gatewayStatusFromThread(thread),
     hasPendingApprovals:
@@ -289,6 +290,7 @@ export function gatewayThreadProjection(projection: OrchestrationV2ThreadProject
     hasPendingUserInput: pending?.kind === "user_input",
     modelSelection: thread.modelSelection,
     profileSnapshot: profileAssociation(thread.profileSnapshot),
+    parentThreadId: thread.parentThreadId ?? null,
     settledAt: iso(thread.settledAt),
     runtimeMode: thread.runtimeMode,
     interactionMode: thread.interactionMode,
@@ -964,6 +966,9 @@ export function createGatewayRuntimePort(
           yield* registry.run(
             EnvironmentId.make(input.environmentId),
             request(ORCHESTRATION_V2_WS_METHODS.launchThread, {
+              ...(input.parentThreadId === undefined
+                ? {}
+                : { parentThreadId: ThreadId.make(input.parentThreadId) }),
               commandId: CommandId.make(input.requestId),
               threadId: ThreadId.make(input.threadId),
               projectId: ProjectId.make(input.projectId),

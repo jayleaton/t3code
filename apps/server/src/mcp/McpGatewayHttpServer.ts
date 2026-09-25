@@ -24,7 +24,10 @@ export const handler = Effect.gen(function* () {
     const initializing = message.method === "initialize";
     if (initializing) {
       if (sessionId !== undefined) return HttpServerResponse.empty({ status: 400 });
-      sessionId = yield* broker.open(scope.providerSessionId, scope.threadId);
+      sessionId = yield* broker.open(scope.providerSessionId, {
+        environmentId: scope.environmentId,
+        threadId: scope.threadId,
+      });
     }
     if (!sessionId || !broker.lookup(sessionId, scope.providerSessionId))
       return HttpServerResponse.empty({ status: 404 });

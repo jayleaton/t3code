@@ -1885,6 +1885,9 @@ const makeWsRpcLayer = (
                   ...(input.profileSelection === undefined
                     ? {}
                     : { profileSelection: input.profileSelection }),
+                  ...(input.parentThreadId === undefined
+                    ? {}
+                    : { parentThreadId: input.parentThreadId }),
                   commandId: input.commandId,
                   ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
                   ...(input.reuseExistingThread === undefined

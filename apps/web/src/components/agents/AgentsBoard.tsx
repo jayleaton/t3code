@@ -1,5 +1,5 @@
 import { AgentGatewayStatus } from "./AgentGatewayStatus";
-import { SortableAgentThreads } from "./SortableAgentThreads";
+import { AgentRunDragArea, LinkableAgentCard, SortableAgentThreads } from "./SortableAgentThreads";
 import { useClientSettings } from "../../hooks/useSettings";
 import { visibleAgentProviders } from "./agentModelCatalog";
 import { ThreadCard } from "./ThreadCard";
@@ -40,8 +40,11 @@ import { AgentsLoadingNotice } from "./AgentsLoadingNotice";
 import {
   excludePinnedAgentThreads,
   groupAgentThreads,
+  nestAgentRuns,
   selectAgentWorkspaceThreads,
   selectPinnedAgentThreads,
+  type AgentCardChildren,
+  type AgentRunContextMenu,
 } from "./agents.logic";
 import { DesktopUpdateButton } from "../sidebar/SidebarUpdatePill";
 import { BrandMark } from "../BrandMark";
@@ -57,14 +60,15 @@ function AgentThreadList({
   pinned,
   onContextMenu,
   profiles,
+  childrenByKey,
+  runByKey,
 }: {
   profiles: readonly McpGatewayProfile[];
   threads: readonly EnvironmentThreadShell[];
   pinned: readonly EnvironmentThreadShell[];
-  onContextMenu: (
-    thread: EnvironmentThreadShell,
-    position: { x: number; y: number },
-  ) => Promise<void>;
+  childrenByKey: ReadonlyMap<string, AgentCardChildren<EnvironmentThreadShell>>;
+  runByKey: ReadonlyMap<string, EnvironmentThreadShell>;
+  onContextMenu: AgentRunContextMenu;
 }) {
   const [settledOpen, setSettledOpen] = useState(false);
   const active = threads.filter((thread) => thread.settledAt === null);
@@ -75,31 +79,43 @@ function AgentThreadList({
       thread={thread}
       dragging={dragging}
       profile={profiles.find((profile) => profile.profileId === thread.profileSnapshot?.profileId)}
+      profiles={profiles}
+      childRuns={childrenByKey.get(`${thread.environmentId}:${thread.id}`)}
+      parentRun={
+        thread.parentThreadId == null
+          ? null
+          : runByKey.get(`${thread.environmentId}:${thread.parentThreadId}`)
+      }
       onContextMenu={onContextMenu}
     />
   );
+  const linkableCard = (thread: EnvironmentThreadShell) => (
+    <LinkableAgentCard key={`${thread.environmentId}:${thread.id}`} thread={thread}>
+      {renderCard(thread)}
+    </LinkableAgentCard>
+  );
   return (
-    <div className="agent-thread-list">
-      {pinned.length > 0 && (
-        <div className="agent-pinned" aria-label="Pinned chats">
-          <div className="agent-pinned-label">Pinned</div>
-          {pinned.map((thread) => renderCard(thread))}
-        </div>
-      )}
-      <SortableAgentThreads threads={active}>{renderCard}</SortableAgentThreads>
-      {settled.length > 0 && (
-        <details
-          className="agent-settled"
-          open={settledOpen}
-          onToggle={(event) => setSettledOpen(event.currentTarget.open)}
-        >
-          <summary>Settled · {settled.length}</summary>
-          {settledOpen && (
-            <div className="agent-thread-list">{settled.map((thread) => renderCard(thread))}</div>
-          )}
-        </details>
-      )}
-    </div>
+    <AgentRunDragArea active={active}>
+      <div className="agent-thread-list">
+        {pinned.length > 0 && (
+          <div className="agent-pinned" aria-label="Pinned chats">
+            <div className="agent-pinned-label">Pinned</div>
+            {pinned.map(linkableCard)}
+          </div>
+        )}
+        <SortableAgentThreads threads={active}>{renderCard}</SortableAgentThreads>
+        {settled.length > 0 && (
+          <details
+            className="agent-settled"
+            open={settledOpen}
+            onToggle={(event) => setSettledOpen(event.currentTarget.open)}
+          >
+            <summary>Settled · {settled.length}</summary>
+            {settledOpen && <div className="agent-thread-list">{settled.map(linkableCard)}</div>}
+          </details>
+        )}
+      </div>
+    </AgentRunDragArea>
   );
 }
 
@@ -169,11 +185,28 @@ export function AgentsBoard() {
   const allThreads = useMemo(() => [...groups.values(), orphaned].flat(), [groups, orphaned]);
   // Pinned chats stay at the top of the list no matter which agent filter or
   // search is active, so they are selected outside the filtered set.
-  const pinned = useMemo(() => selectPinnedAgentThreads(allThreads), [allThreads]);
-  const visible = useMemo(() => {
+  const allPinned = useMemo(() => selectPinnedAgentThreads(allThreads), [allThreads]);
+  // Runs another run created fold into that run's card (see nestAgentRuns).
+  const { lists: nestedLists, childrenByKey } = useMemo(() => {
     const { active, settled } = selectAgentWorkspaceThreads(threads, filter, query);
-    return excludePinnedAgentThreads([...active, ...settled], pinned);
-  }, [threads, filter, query, pinned]);
+    return nestAgentRuns({
+      lists: {
+        pinned: allPinned,
+        active: excludePinnedAgentThreads(active, allPinned),
+        settled: excludePinnedAgentThreads(settled, allPinned),
+      },
+      all: threads,
+    });
+  }, [threads, filter, query, allPinned]);
+  const pinned = nestedLists.pinned;
+  const visible = useMemo(
+    () => [...nestedLists.active, ...nestedLists.settled],
+    [nestedLists.active, nestedLists.settled],
+  );
+  const runByKey = useMemo(
+    () => new Map(threads.map((thread) => [`${thread.environmentId}:${thread.id}`, thread])),
+    [threads],
+  );
   const onThreadContextMenu = useAgentThreadContextMenu(visible);
   const activeCount = (items: readonly EnvironmentThreadShell[]) =>
     items.filter((thread) => thread.settledAt === null).length;
@@ -455,6 +488,8 @@ export function AgentsBoard() {
             threads={visible}
             pinned={pinned}
             profiles={profiles}
+            childrenByKey={childrenByKey}
+            runByKey={runByKey}
             onContextMenu={onThreadContextMenu}
           />
         </section>

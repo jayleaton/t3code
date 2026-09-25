@@ -13,8 +13,8 @@ import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import Migration0057 from "./Migrations/057_ForkOrchestrationV2.ts";
-import Migration0058 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
+import Migration0059 from "./Migrations/059_ForkOrchestrationV2.ts";
+import Migration0060 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -73,6 +73,8 @@ import Migration0053 from "./Migrations/053_RepairAgentUpgradeSchema.ts";
 import Migration0054 from "./Migrations/054_ProjectionThreadTitleState.ts";
 import Migration0055 from "./Migrations/055_PullRequestFilesViewed.ts";
 import Migration0056 from "./Migrations/056_ScheduledTasks.ts";
+import Migration0057 from "./Migrations/057_ProjectionThreadsAutoSettleDisabledAt.ts";
+import Migration0058 from "./Migrations/058_ProjectionThreadsParentThreadId.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -141,8 +143,10 @@ export const migrationEntries = [
   [54, "ProjectionThreadTitleState", Migration0054],
   [55, "PullRequestFilesViewed", Migration0055],
   [56, "ScheduledTasks", Migration0056],
-  [57, "OrchestrationV2", Migration0057],
-  [58, "RemoveRedundantProjectionIndexes", Migration0058],
+  [57, "ProjectionThreadsAutoSettleDisabledAt", Migration0057],
+  [58, "ProjectionThreadsParentThreadId", Migration0058],
+  [59, "OrchestrationV2", Migration0059],
+  [60, "RemoveRedundantProjectionIndexes", Migration0060],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

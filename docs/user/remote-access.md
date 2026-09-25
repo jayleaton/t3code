@@ -294,6 +294,26 @@ then `t3_send_message` to start work, or `t3_create_and_start_thread` to create 
 with lifecycle access to return a settled chat to the active list. `t3_open_agents` opens the
 board in the connected desktop window with read access.
 
+### Sub-agent runs
+
+When an agent's chat creates chats through the MCP gateway (`t3_create_thread` or
+`t3_create_and_start_thread`), each new chat is recorded as a sub-run of the chat that created
+it. This happens without the agent doing anything extra. Pass `parentThreadId` to attach a
+new chat to another chat in the same environment, or `parentThreadId: null` for a standalone
+chat. `t3_list_threads` accepts `parentThreadId` to list a chat's sub-runs.
+
+On the Agents board, sub-runs appear inside the card of the run that created them, including
+runs by other agents. Each one shows its agent, title, and status; click it to open that chat.
+Right-click a sub-run for the same actions as a card. **Pin to top of parent** keeps it first in
+its parent's list, **Move up** and **Move down** arrange it among its siblings, and settling moves
+it into its parent's collapsed **Settled** group. A live sub-run whose parent is settled keeps its
+own card, which names its parent's agent and chat; click that name to open the parent.
+
+To link runs yourself on web and desktop, drag a card onto another card's title to make it a
+sub-run, or drag a sub-run out of its card to make it independent. Dragging a sub-run onto
+another card moves it there. Links stay within one environment, and a run cannot go under its
+own sub-runs. You can also right-click a card and choose **Detach from parent run**.
+
 ### Schedule prompts for an agent
 
 Open **Scheduled** on the Agents board, or choose **Schedule task** from an agent's menu, to send

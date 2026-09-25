@@ -8,6 +8,7 @@ import { z } from "zod";
 import { GatewayError, GATEWAY_THREAD_EXECUTION_STATES, type GatewayRuntimePort } from "./port.ts";
 import {
   callGatewayTool,
+  gatewayCaller,
   handoffInputSchema,
   type GatewayGrantSource,
   type GatewayProfileSource,
@@ -108,6 +109,15 @@ const createThreadFields = {
   interactionMode: z.enum(["default", "plan"]).optional(),
   workspaceMode: z.enum(["checkout", "worktree"]).optional(),
   baseBranch: z.string().trim().min(1).optional(),
+  parentThreadId: z
+    .string()
+    .trim()
+    .min(1)
+    .nullable()
+    .optional()
+    .describe(
+      "Chat to show this one under, in the same environment. When a T3 chat calls this tool, omitting it makes the calling chat the parent; pass null for a standalone chat.",
+    ),
   idempotencyKey,
   correlationId: optionalRequestContext.correlationId,
 };
@@ -199,13 +209,19 @@ const TOOL_SPECS = {
     { environmentId, ...optionalRequestContext },
   ],
   t3_list_threads: [
-    "List chats in one T3 environment, optionally filtered by agent profileId, project, active/settled state, and executionState. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly.",
+    "List chats in one T3 environment, optionally filtered by agent profileId, project, parentThreadId, active/settled state, and executionState. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly.",
     {
       environmentId,
       state: z.enum(["all", "active", "settled"]).optional(),
       executionState: executionState.optional(),
       projectId: z.string().trim().min(1).optional(),
       profileId: z.string().trim().min(1).optional(),
+      parentThreadId: z
+        .string()
+        .trim()
+        .min(1)
+        .optional()
+        .describe("Only chats created under this chat."),
       ...optionalRequestContext,
     },
   ],
@@ -806,15 +822,16 @@ export function createMcpGateway(input: {
     server.registerTool(
       name,
       { description, inputSchema: z.strictObject(inputSchema) },
-      async (rawArgs) => {
+      async (rawArgs, extra) => {
         const args = rawArgs as Record<string, unknown>;
+        const caller = gatewayCaller(extra._meta);
         const responseContext = requestContext(args);
         try {
           const aliasAction = LIFECYCLE_ALIASES[name];
           const toolName = aliasAction === undefined ? name : "t3_control_thread";
           const normalizedArgs =
             aliasAction === undefined ? args : { ...args, action: aliasAction };
-          const value = await callGatewayTool(context, toolName, normalizedArgs);
+          const value = await callGatewayTool(context, toolName, normalizedArgs, { caller });
           if (
             (name === "t3_subscribe_events" || name === "t3_replay_events") &&
             input.events !== undefined

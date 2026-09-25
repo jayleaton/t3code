@@ -59,6 +59,7 @@ interface LegacyThreadRow {
   readonly pin_order_key: string | null;
   readonly pull_requests_json: string;
   readonly profile_snapshot_json: string | null;
+  readonly parent_thread_id: string | null;
   readonly linked_pull_request_json: string | null;
   readonly branch_pull_request_json: string | null;
   readonly active_order_key: string | null;
@@ -212,6 +213,9 @@ function importedThread(row: LegacyThreadRow): OrchestrationV2AppThread {
       : {
           profileSnapshot: decodeProfileSnapshot(parseJson(row.profile_snapshot_json)),
         }),
+    ...(row.parent_thread_id === null
+      ? {}
+      : { parentThreadId: ThreadId.make(row.parent_thread_id) }),
     createdBy: "system",
     creationSource: "server",
     id: threadId,
@@ -456,6 +460,7 @@ const make = Effect.gen(function* () {
         thread.thread_id,
         thread.project_id,
         thread.profile_snapshot_json,
+        thread.parent_thread_id,
         thread.title,
         thread.model_selection_json,
         thread.runtime_mode,
@@ -561,6 +566,7 @@ const make = Effect.gen(function* () {
         thread.thread_id,
         thread.project_id,
         thread.profile_snapshot_json,
+        thread.parent_thread_id,
         thread.title,
         thread.model_selection_json,
         thread.runtime_mode,

@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-// Fork releases own migrations 1–56. Earlier V2 drafts used conflicting numbers.
+// Fork releases own migrations 1–58. Earlier V2 drafts used conflicting numbers.
 // Refuse before any schema writes: recreate disposable preview state from a V1 snapshot.
 export const reconcileV2PreviewMigration = Effect.fn("reconcileV2PreviewMigration")(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -10,7 +10,7 @@ export const reconcileV2PreviewMigration = Effect.fn("reconcileV2PreviewMigratio
     yield* sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'`;
   if (tables.length === 0) return;
   const previews =
-    yield* sql`SELECT migration_id FROM effect_sql_migrations WHERE name = 'OrchestrationV2' AND migration_id != 57`;
+    yield* sql`SELECT migration_id FROM effect_sql_migrations WHERE name = 'OrchestrationV2' AND migration_id != 59`;
   if (previews.length > 0) {
     return yield* new Migrator.MigrationError({
       kind: "BadState",
