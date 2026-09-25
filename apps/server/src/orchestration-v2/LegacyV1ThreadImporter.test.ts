@@ -246,6 +246,7 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
         },
       } as const;
       yield* sql`UPDATE projection_threads SET profile_snapshot_json = ${yield* encodeProfileSnapshot(profileSnapshot)} WHERE thread_id = ${threadId}`;
+      yield* sql`UPDATE projection_threads SET parent_thread_id = 'thread:coordinator' WHERE thread_id = ${threadId}`;
       const shellImport = yield* importer.reconcileShells;
       assert.equal(yield* importer.pendingThreadCount, 1);
       assert.deepStrictEqual(shellImport, {
@@ -263,6 +264,7 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
 
       const visibleBeforeReplay = yield* projections.getThreadProjection(threadId);
       assert.equal(visibleBeforeReplay.thread.profileSnapshot?.profileId, "review");
+      assert.equal(visibleBeforeReplay.thread.parentThreadId, "thread:coordinator");
       const rebuilt = yield* maintenance.rebuild;
       assert.isTrue(rebuilt.valid);
       assert.isTrue((yield* maintenance.verify).valid);
@@ -338,6 +340,7 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
       });
       const projection = yield* projections.getThreadProjection(threadId);
       assert.deepStrictEqual(projection.thread.profileSnapshot, profileSnapshot);
+      assert.equal(projection.thread.parentThreadId, "thread:coordinator");
       assert.equal(projection.thread.title, "Renamed after shell import");
       assert.equal(projection.thread.runtimeMode, "approval-required");
       assert.equal(projection.thread.interactionMode, "plan");
