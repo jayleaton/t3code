@@ -330,7 +330,7 @@ function DesktopUpdateControl({ className }: { className?: string | undefined } 
                 !isInteractionDisabled && "hover:bg-sidebar-row-hover",
               )
             : cn(
-                "text-[var(--sidebar-icon-color)]",
+                "text-(--sidebar-icon-color)",
                 !isInteractionDisabled &&
                   "hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
               ),
