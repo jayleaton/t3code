@@ -1112,25 +1112,41 @@
     width: 300px;
   }
 }
+/* Narrow windows fold the agent filters behind the Agents button; the chat
+   list stays beside the chat so a selected chat always keeps a sidebar. */
 @media (max-width: 1023px) {
   .agents-filters,
   .agents-threads {
-    width: 100%;
-    border-right: 0;
+    width: 300px;
   }
   .agents-filters {
-    display: none;
-  }
-  .agents-chat-pane {
     display: none;
   }
   .agent-mobile-filters {
     display: inline-flex;
   }
+  .agents-threads > header {
+    flex-wrap: wrap;
+  }
+  .agents-threads-heading {
+    order: -1;
+    flex-basis: 100%;
+  }
   .agents-page[data-show-filters="true"] .agents-filters {
     display: flex;
   }
   .agents-page[data-show-filters="true"] .agents-threads {
+    display: none;
+  }
+}
+/* Phone widths: one pane at a time. */
+@media (max-width: 767px) {
+  .agents-filters,
+  .agents-threads {
+    width: 100%;
+    border-right: 0;
+  }
+  .agents-chat-pane {
     display: none;
   }
   .agents-page[data-thread-selected="true"] .agents-filters,
@@ -1211,7 +1227,7 @@
   display: none;
   gap: 4px;
 }
-@media (max-width: 1023px) {
+@media (max-width: 767px) {
   .agent-mobile-back {
     display: inline-flex;
   }
