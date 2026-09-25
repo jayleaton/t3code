@@ -1,3 +1,4 @@
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { type ProviderReplayTranscript } from "@t3tools/contracts";
@@ -136,6 +137,7 @@ export function makeReplayServerConfig(
       traceBatchWindowMs: 200,
       traceMaxBytes: 10 * 1024 * 1024,
       traceMaxFiles: 10,
+      otelEnvironment: OtelEnvironment.none,
       otlpTracesUrl: undefined,
       otlpMetricsUrl: undefined,
       otlpLogsUrl: undefined,

@@ -14,7 +14,7 @@ import {
   assertTurnItemTypes,
   assertUserMessagesInclude,
   projectionFor,
-  SUBAGENT_V2_PROMPT,
+  SUBAGENT_V2_NESTED_PROMPT,
 } from "../shared.ts";
 
 function projectionById(
@@ -26,9 +26,13 @@ function projectionById(
   return projection;
 }
 
+/**
+ * Codex names each v2 agent by its path from the root. The model picks the
+ * leaf names, so the check is that each path extends its parent's by one segment.
+ */
 function assertCompletedProviderNativeSubagent(input: {
   readonly projection: OrchestrationV2ThreadProjection;
-  readonly title: string;
+  readonly parentPath: string;
   readonly result: string;
 }) {
   assert.lengthOf(input.projection.subagents, 1);
@@ -42,7 +46,7 @@ function assertCompletedProviderNativeSubagent(input: {
   assert.equal(subagent.origin, "provider_native");
   assert.equal(subagent.createdBy, "agent");
   assert.equal(subagent.driver, "codex");
-  assert.equal(subagent.title, input.title);
+  assert.match(subagent.title ?? "", new RegExp(`^${input.parentPath}/[^/]+$`, "u"));
   assert.equal(subagent.status, "completed");
   assert.equal(subagent.result, input.result);
   assert.isNotNull(subagent.childThreadId);
@@ -68,13 +72,13 @@ export function assertSubagentV2NestedOutput(
   assertTurnItemTypes(rootProjection, ["user_message", "subagent", "assistant_message"]);
   assertRunProviderTurnCardinality({ projection: rootProjection, rootRunCount: 1 });
   assertNoExtraAppRunsForProviderChildren({ projection: rootProjection, expectedAppRuns: 1 });
-  assertUserMessagesInclude(rootProjection, [SUBAGENT_V2_PROMPT]);
+  assertUserMessagesInclude(rootProjection, [SUBAGENT_V2_NESTED_PROMPT]);
   assert.lengthOf(result.shellSnapshot.threads, 4);
 
   const first = assertCompletedProviderNativeSubagent({
     projection: rootProjection,
-    title: "/root/hello_agent",
-    result: "Subagent says: “Hello.”",
+    parentPath: "/root",
+    result: "Hello.",
   });
   if (first.childThreadId === null) {
     throw new Error("first nested fixture subagent is missing its child thread");
@@ -90,8 +94,8 @@ export function assertSubagentV2NestedOutput(
 
   const second = assertCompletedProviderNativeSubagent({
     projection: firstProjection,
-    title: "/root/hello_agent/hello_agent",
-    result: "Subagent says: “Hello.”",
+    parentPath: first.title ?? "",
+    result: "Hello.",
   });
   if (second.childThreadId === null) {
     throw new Error("second nested fixture subagent is missing its child thread");
@@ -107,7 +111,7 @@ export function assertSubagentV2NestedOutput(
 
   const third = assertCompletedProviderNativeSubagent({
     projection: secondProjection,
-    title: "/root/hello_agent/hello_agent/hello_agent",
+    parentPath: second.title ?? "",
     result: "Hello.",
   });
   if (third.childThreadId === null) {

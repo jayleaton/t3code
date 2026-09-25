@@ -321,11 +321,9 @@ const resolveStartupBrowserTarget = Effect.gen(function* () {
       ? `http://${formatHostForUrl(serverConfig.host)}:${serverConfig.port}`
       : localUrl;
   const baseTarget = serverConfig.devUrl?.toString() ?? bindUrl;
-  return yield* Effect.succeed(serverConfig.mode === "desktop" ? baseTarget : undefined).pipe(
-    Effect.flatMap((target) =>
-      target ? Effect.succeed(target) : serverAuth.issueStartupPairingUrl(baseTarget),
-    ),
-  );
+  return serverConfig.mode === "desktop"
+    ? baseTarget
+    : yield* serverAuth.issueStartupPairingUrl(baseTarget);
 });
 
 const maybeOpenBrowser = (target: string) =>

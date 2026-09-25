@@ -1,3 +1,4 @@
+import { ComputerUseAppIcon } from "~/components/Icons";
 import { useChatCanvas } from "./ChatCanvasContext";
 import { WorkLogBlock, WorkLogButton, WorkLogDetails, WorkLogList, WorkLogRow } from "./WorkLog";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
@@ -61,7 +62,6 @@ import {
   use,
   useCallback,
   useEffect,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -295,6 +295,7 @@ interface TimelineRowSharedState {
   activeThreadEnvironmentId: EnvironmentId;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
+  onRunShellCommand: ((command: string) => void) | undefined;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   displayThreadKey?: string;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
@@ -400,6 +401,8 @@ interface MessagesTimelineProps {
     sourceAnchor: AssistantCitationSourceAnchor,
   ) => boolean;
   isWorking: boolean;
+  /** The live work belongs to a runless root turn (a provider-native subagent). */
+  runlessWorkActive?: boolean;
   activeTurnInProgress: boolean;
   activeTurnStartedAt?: string | null;
   worktreeSetup?: WorktreeSetupSnapshot | null;
@@ -433,6 +436,7 @@ interface MessagesTimelineProps {
   supportsConversationRollback: boolean;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
   onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
+  onRunShellCommand?: (command: string) => void;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onFileOpen?: (attachment: ChatFileAttachment) => void;
@@ -481,6 +485,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   citationHistoryLoading = false,
   onCiteAssistantText,
   isWorking,
+  runlessWorkActive = false,
   activeTurnInProgress,
   activeTurnStartedAt = null,
   worktreeSetup = null,
@@ -504,6 +509,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   supportsConversationRollback,
   onRevertToTurnCount,
   onUseArtifactTemplate = NOOP_USE_ARTIFACT_TEMPLATE,
+  onRunShellCommand,
   isRevertingCheckpoint,
   onImageExpand,
   onFileOpen = NOOP_OPEN_ATTACHMENT,
@@ -738,6 +744,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         expandedAttemptIds,
         expandedWorkGroupIds,
         isWorking,
+        runlessWorkActive,
         activeTurnStartedAt,
         turnDiffSummaries,
         supportsConversationRollback,
@@ -760,6 +767,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     expandedAttemptIds,
     expandedWorkGroupIds,
     isWorking,
+    runlessWorkActive,
     activeTurnStartedAt,
     turnDiffSummaries,
     supportsConversationRollback,
@@ -1122,6 +1130,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       runs,
       activeThreadEnvironmentId,
       onRevertToTurnCount,
+      onRunShellCommand,
       onImageExpand,
       onFileOpen,
       onUseArtifactTemplate,
@@ -1154,6 +1163,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       runs,
       activeThreadEnvironmentId,
       onRevertToTurnCount,
+      onRunShellCommand,
       onImageExpand,
       onFileOpen,
       onUseArtifactTemplate,
@@ -1855,7 +1865,7 @@ function UserVideoAttachment({ file }: { readonly file: ChatFileAttachment }) {
 
   if (asset === null && src === null) {
     return (
-      <div className="flex aspect-[4/3] w-full items-center justify-center rounded-lg border border-border/80 bg-black px-2 py-3 text-center text-[11px] text-white/70">
+      <div className="flex aspect-[4/3] w-full items-center justify-center rounded-lg border border-border/80 bg-black px-2 py-3 text-center text-2xs text-white/70">
         {file.name}
       </div>
     );
@@ -2054,7 +2064,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
     <div className="group flex flex-col items-end gap-1">
       {userMessage.isAutomation ? (
         <p
-          className="me-1 text-[11px] text-muted-foreground/70"
+          className="me-1 text-2xs text-muted-foreground/70"
           data-user-message-attribution="automation"
         >
           {userMessage.scheduledTaskId ? (
@@ -2073,10 +2083,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           )}
         </p>
       ) : row.message.createdBy === "agent" ? (
-        <p
-          className="me-1 text-[11px] text-muted-foreground/70"
-          data-user-message-attribution="agent"
-        >
+        <p className="me-1 text-2xs text-muted-foreground/70" data-user-message-attribution="agent">
           {senderThreadId ? (
             <InlineButton
               onClick={() => ctx.onOpenThread(senderThreadId)}
@@ -2125,7 +2132,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                     />
                   </button>
                 ) : (
-                  <div className="flex min-h-[72px] items-center justify-center px-2 py-3 text-center text-[11px] text-muted-foreground/70">
+                  <div className="flex min-h-[72px] items-center justify-center px-2 py-3 text-center text-2xs text-muted-foreground/70">
                     {image.name}
                   </div>
                 )}
@@ -2211,7 +2218,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       row.projectedItem.item.status !== "pending" &&
       row.projectedItem.item.status !== "waiting" ? (
         <div className="me-1 flex items-center gap-1.5">
-          <span className="rounded-full border border-destructive/25 bg-destructive/8 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
+          <span className="rounded-full border border-destructive/25 bg-destructive/8 px-1.5 py-0.5 text-3xs font-medium text-destructive">
             {row.projectedItem.item.status}
           </span>
         </div>
@@ -2434,7 +2441,7 @@ function AttemptFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "at
     >
       <Icon className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="text-xs font-medium text-foreground/80">{row.label}</span>
-      <span className="text-[11px] text-muted-foreground">Partial output retained</span>
+      <span className="text-2xs text-muted-foreground">Partial output retained</span>
     </button>
   );
 }
@@ -2463,6 +2470,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             skills={ctx.skills}
             headingLevelOffset={MESSAGE_HEADING_LEVEL}
             onUseArtifactTemplate={ctx.onUseArtifactTemplate}
+            onRunShellCommand={ctx.onRunShellCommand}
             onImageExpand={ctx.onImageExpand}
           />
         </AssistantCitationSource>
@@ -2582,7 +2590,7 @@ function AssistantMessageMeta({
         <AssistantForkButton projectedItem={projectedItem} />
       ) : null}
       {projectedItem && projectedItem.item.status !== "completed" ? (
-        <span className="rounded-full border border-border/70 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+        <span className="rounded-full border border-border/70 px-1.5 py-0.5 font-mono text-3xs text-muted-foreground">
           {projectedItem.item.status}
         </span>
       ) : null}
@@ -2733,7 +2741,7 @@ function v2EventPresentation(item: OrchestrationV2TurnItem): {
 function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event" }> }) {
   const ctx = use(TimelineRowCtx);
   const { item, visibility, sourceThreadId } = row.projectedItem;
-  if (item.type === "subagent") {
+  if (item.type === "subagent" && (row.subagents?.length ?? 1) > 1) {
     return <V2SubagentGroup key={row.id} row={row} />;
   }
   if (isV2LifecycleItem(item)) {
@@ -2757,9 +2765,9 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
       <details
         className={cn(
           "group rounded-md border",
-          presentation.tone === "warning" && "border-amber-500/25 bg-amber-500/5",
+          presentation.tone === "warning" && "border-warning/25 bg-warning/5",
           presentation.tone === "danger" && "border-destructive/25 bg-destructive/5",
-          presentation.tone === "success" && "border-emerald-500/20 bg-emerald-500/5",
+          presentation.tone === "success" && "border-success/20 bg-success/5",
         )}
         data-v2-item-type={item.type}
         data-v2-item-visibility={visibility}
@@ -2769,16 +2777,16 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
           <Icon
             className={cn(
               "size-3.5 shrink-0",
-              presentation.tone === "warning" && "text-amber-600 dark:text-amber-400",
+              presentation.tone === "warning" && "text-warning",
               presentation.tone === "danger" && "text-destructive",
-              presentation.tone === "success" && "text-emerald-600 dark:text-emerald-400",
+              presentation.tone === "success" && "text-success",
             )}
           />
           <span className="shrink-0 font-medium text-foreground/90">{presentation.label}</span>
           {item.status !== "completed" ? (
             <span
               className={cn(
-                "shrink-0 rounded-full border px-1.5 py-0.5 font-mono text-[10px]",
+                "shrink-0 rounded-full border px-1.5 py-0.5 font-mono text-3xs",
                 item.status === "failed"
                   ? "border-destructive/40 text-destructive"
                   : "border-border/70 text-muted-foreground",
@@ -2793,7 +2801,7 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
             </span>
           ) : null}
           {visibility !== "local" ? (
-            <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-3xs text-muted-foreground">
               {visibility === "inherited" ? "Inherited" : "Synthetic"}
             </span>
           ) : null}
@@ -2812,7 +2820,7 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
             </div>
           ) : null}
           {visibility === "inherited" ? (
-            <p className="mt-1 font-mono text-[10px] text-muted-foreground/65">
+            <p className="mt-1 font-mono text-3xs text-muted-foreground/65">
               From {sourceThreadId}
             </p>
           ) : null}
@@ -2835,9 +2843,9 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
     <section
       className={cn(
         "rounded-lg border px-3 py-2",
-        presentation.tone === "warning" && "border-amber-500/25 bg-amber-500/5",
+        presentation.tone === "warning" && "border-warning/25 bg-warning/5",
         presentation.tone === "danger" && "border-destructive/25 bg-destructive/5",
-        presentation.tone === "success" && "border-emerald-500/20 bg-emerald-500/5",
+        presentation.tone === "success" && "border-success/20 bg-success/5",
         presentation.tone === "muted" && "border-border/60 bg-card/30",
       )}
       data-v2-item-type={item.type}
@@ -2847,9 +2855,9 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
         <Icon
           className={cn(
             "mt-0.5 size-3.5 shrink-0",
-            presentation.tone === "warning" && "text-amber-600 dark:text-amber-400",
+            presentation.tone === "warning" && "text-warning",
             presentation.tone === "danger" && "text-destructive",
-            presentation.tone === "success" && "text-emerald-600 dark:text-emerald-400",
+            presentation.tone === "success" && "text-success",
             presentation.tone === "muted" && "text-muted-foreground",
           )}
         />
@@ -2859,7 +2867,7 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
             {item.status !== "completed" ? (
               <span
                 className={cn(
-                  "rounded-full border px-1.5 py-0.5 font-mono text-[10px]",
+                  "rounded-full border px-1.5 py-0.5 font-mono text-3xs",
                   item.status === "failed"
                     ? "border-destructive/40 text-destructive"
                     : "border-border/70 text-muted-foreground",
@@ -2869,7 +2877,7 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
               </span>
             ) : null}
             {visibility !== "local" ? (
-              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-3xs text-muted-foreground">
                 {visibility === "inherited" ? "Inherited" : "Synthetic"}
               </span>
             ) : null}
@@ -2886,7 +2894,7 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
             </div>
           ) : null}
           {visibility === "inherited" ? (
-            <p className="mt-1 font-mono text-[10px] text-muted-foreground/65">
+            <p className="mt-1 font-mono text-3xs text-muted-foreground/65">
               From {sourceThreadId}
             </p>
           ) : null}
@@ -3006,7 +3014,7 @@ const V2SubagentGroup = memo(function V2SubagentGroup({
               />
             ))}
             {agents.length > 3 ? (
-              <span className="inline-flex size-6 items-center justify-center rounded-full bg-muted text-[9px] font-medium text-muted-foreground ring-2 ring-background">
+              <span className="inline-flex size-6 items-center justify-center rounded-full bg-muted text-3xs font-medium text-muted-foreground ring-2 ring-background">
                 +{agents.length - 3}
               </span>
             ) : null}
@@ -3015,14 +3023,14 @@ const V2SubagentGroup = memo(function V2SubagentGroup({
             <span className="block text-xs font-semibold">{label}</span>
             <span
               className={cn(
-                "block truncate text-[10px] text-muted-foreground",
+                "block truncate text-3xs text-muted-foreground",
                 summary.active ? "text-info" : summary.failed && "text-destructive",
               )}
             >
               {statusSummary}
             </span>
           </span>
-          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+          <span className="shrink-0 font-mono text-3xs text-muted-foreground">
             <SubagentElapsed agent={subagentGroupTiming(agents)} />
           </span>
           <ChevronDownIcon
@@ -3033,7 +3041,8 @@ const V2SubagentGroup = memo(function V2SubagentGroup({
             )}
           />
         </CollapsibleTrigger>
-        <CollapsiblePanel>
+        {/* Virtualized rows must settle before disclosure scroll anchoring resumes. */}
+        <CollapsiblePanel animate={false}>
           {expanded ? (
             <div className="mt-1 mb-1 rounded-lg border border-border/60 bg-card/30 p-1">
               {members.map((item) => (
@@ -3496,7 +3505,7 @@ function LiveActivityContent({
             <ToolActivityIconView
               icon={toolIcon}
               fallbackName={iconName}
-              className="block size-4 shrink-0 stroke-[1.8]"
+              className="block size-4 shrink-0 stroke-2"
               muted={!highlighted}
             />
           </span>
@@ -3655,7 +3664,7 @@ function WorkGroupHeader(props: {
         <ToolActivityIconView
           icon={props.toolIcon}
           fallbackName={props.iconName}
-          className="size-4 shrink-0 stroke-[1.8] text-icon-muted"
+          className="size-4 shrink-0 stroke-2 text-icon-muted"
           muted
         />
       }
@@ -3876,7 +3885,7 @@ function UserMessagePreviewAnnotationDetails(props: {
             {props.record.comment}
           </div>
         ) : null}
-        <div className="mt-1 flex items-center gap-2 text-secondary-label text-[10px]">
+        <div className="mt-1 flex items-center gap-2 text-secondary-label text-3xs">
           {props.record.targetSummary ? (
             <span className="truncate">{props.record.targetSummary}</span>
           ) : null}
@@ -3908,7 +3917,7 @@ function UserMessagePreviewAnnotationDetails(props: {
                     ) : null}
                   </div>
                   {element.htmlPreview?.trim() ? (
-                    <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap rounded bg-muted/60 px-2 py-1.5 text-[10px] leading-relaxed">
+                    <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap rounded bg-muted/60 px-2 py-1.5 text-3xs leading-relaxed">
                       {element.htmlPreview.trim()}
                     </pre>
                   ) : null}
@@ -3916,7 +3925,7 @@ function UserMessagePreviewAnnotationDetails(props: {
               );
             })}
             {(props.record.elements?.length ?? 0) > visibleElements.length ? (
-              <div className="text-secondary-label text-[10px]">
+              <div className="text-secondary-label text-3xs">
                 {(props.record.elements?.length ?? 0) - visibleElements.length} more selected
                 elements
               </div>
@@ -3942,7 +3951,7 @@ function UserMessageElementDetails({
         <div className="truncate text-message-foreground text-xs font-medium">
           {record.pageTitle?.trim() || record.pageUrl}
         </div>
-        <div className="mt-0.5 truncate text-secondary-label text-[10px]">{record.pageUrl}</div>
+        <div className="mt-0.5 truncate text-secondary-label text-3xs">{record.pageUrl}</div>
       </div>
       <div className="space-y-2 px-3 py-2.5">
         <div className="flex min-w-0 items-center gap-2 text-xs">
@@ -4354,7 +4363,7 @@ function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentConte
         <div className="text-xs font-medium text-foreground">
           {formatWorkspaceRelativePath(comment.filePath, ctx.workspaceRoot)}
         </div>
-        <div className="text-[11px] text-muted-foreground">
+        <div className="text-2xs text-muted-foreground">
           {comment.sectionTitle} · {comment.rangeLabel}
         </div>
       </div>
@@ -4500,30 +4509,6 @@ function BrowserAppIcon({ className }: { className: string }) {
   );
 }
 
-function ComputerUseAppIcon({ className }: { className: string }) {
-  const gradientId = `${useId().replaceAll(":", "")}-computer-use-app-gradient`;
-  return (
-    <svg viewBox="0 0 24 24" className={className} aria-hidden>
-      <defs>
-        <linearGradient id={gradientId} x1="2" y1="2" x2="22" y2="22">
-          <stop offset="0" stopColor="#00dff0" />
-          <stop offset="0.42" stopColor="#3b9cff" />
-          <stop offset="0.72" stopColor="#b044f5" />
-          <stop offset="1" stopColor="#ff78b6" />
-        </linearGradient>
-      </defs>
-      <rect x="1" y="1" width="22" height="22" rx="5" fill={`url(#${gradientId})`} />
-      <path
-        d="m7.2 6.2 10.5 4.1-4.2 2.1-2 4.7z"
-        fill="white"
-        stroke="#315cff"
-        strokeWidth="1.1"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
 function ToolActivityIconView(props: {
   icon: ToolActivityIcon | undefined;
   fallbackName: WorkEntryIconName;
@@ -4531,7 +4516,7 @@ function ToolActivityIconView(props: {
   muted: boolean;
 }) {
   const { resolvedTheme } = use(TimelineRowCtx);
-  const fallbackClassName = cn(props.className, props.muted && "opacity-70 light:brightness-[.6]");
+  const fallbackClassName = cn(props.className, props.muted && "opacity-70 light:brightness-60");
   if (!props.icon) {
     return <WorkEntryIcon name={props.fallbackName} className={fallbackClassName} />;
   }
@@ -4591,7 +4576,7 @@ function NativeAppToolActivityIcon(props: {
     return (
       <WorkEntryIcon
         name={props.fallbackName}
-        className={cn(props.className, props.muted && "opacity-70 light:brightness-[.6]")}
+        className={cn(props.className, props.muted && "opacity-70 light:brightness-60")}
       />
     );
   }
@@ -4636,14 +4621,14 @@ function ToolActivityImageIcon(props: {
       {displayedSrc === null ? (
         <WorkEntryIcon
           name={props.fallbackName}
-          className={cn(props.className, props.muted && "opacity-70 light:brightness-[.6]")}
+          className={cn(props.className, props.muted && "opacity-70 light:brightness-60")}
         />
       ) : null}
       {displayedSrc ? (
         <span
           className={cn(
             props.className,
-            "inline-block overflow-hidden rounded-[3px] bg-background",
+            "inline-block overflow-hidden rounded-xs bg-background",
             props.muted && "opacity-70",
           )}
         >
@@ -4653,7 +4638,7 @@ function ToolActivityImageIcon(props: {
             aria-hidden
             decoding="async"
             referrerPolicy="no-referrer"
-            className={cn("block size-full object-contain", props.muted && "light:brightness-[.6]")}
+            className={cn("block size-full object-contain", props.muted && "light:brightness-60")}
             onError={() => handleLoadError(displayedSrc)}
           />
         </span>
@@ -4815,7 +4800,7 @@ function buildToolCallExpandedBody(
 }
 
 const toolCallExpandedBodyClassName =
-  "max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-secondary-label text-[length:var(--font-size-code,0.6875rem)] leading-relaxed select-text";
+  "max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-secondary-label text-(length:--font-size-code,var(--text-2xs)) leading-relaxed select-text";
 
 function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
   if (workEntry.structuredPayload?.type === "notification") {
@@ -5065,7 +5050,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           <ToolActivityIconView
             icon={entryToolIcon}
             fallbackName={entryIconName}
-            className="block size-4 shrink-0 stroke-[1.8]"
+            className="block size-4 shrink-0 stroke-2"
             muted
           />
         </span>

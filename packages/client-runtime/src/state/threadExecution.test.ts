@@ -3,6 +3,7 @@ import {
   NodeId,
   MessageId,
   RunId,
+  type OrchestrationV2ExecutionNode,
   type OrchestrationV2RunStatus,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -11,6 +12,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { v2Projection } from "./orchestrationV2TestFixtures.ts";
 import {
   deriveLatestThreadRun,
+  deriveRunlessWorkStartedAt,
   deriveThreadActivityRun,
   deriveThreadRuntime,
   threadRuntimeHasInterruptibleRun,
@@ -164,6 +166,49 @@ describe("thread execution presentation", () => {
     };
 
     expect(threadRuntimeHasInterruptibleRun(runtime)).toBe(true);
+  });
+});
+
+describe("deriveRunlessWorkStartedAt", () => {
+  const later = DateTime.makeUnsafe("2026-07-28T10:05:00.000Z");
+  const rootTurn = (
+    status: OrchestrationV2ExecutionNode["status"],
+    startedAt = now,
+  ): OrchestrationV2ExecutionNode => ({
+    id: NodeId.make("child-root"),
+    threadId: v2Projection.thread.id,
+    runId: null,
+    parentNodeId: null,
+    rootNodeId: NodeId.make("child-root"),
+    kind: "root_turn",
+    status,
+    countsForRun: false,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    runtimeRequestId: null,
+    checkpointScopeId: null,
+    startedAt,
+    completedAt: null,
+  });
+
+  it("times a provider-native subagent from its runless root turn while it works", () => {
+    const projection = { ...v2Projection, nodes: [rootTurn("running", later)] };
+    expect(deriveRunlessWorkStartedAt(projection)).toBe("2026-07-28T10:05:00.000Z");
+    // The subagent has no run, so it stays unstoppable and unqueueable.
+    expect(deriveThreadRuntime(projection)).toBeNull();
+  });
+
+  it.each(["completed", "cancelled", "failed", "interrupted", "idle"] as const)(
+    "is idle once the subagent is %s",
+    (status) => {
+      expect(deriveRunlessWorkStartedAt({ ...v2Projection, nodes: [rootTurn(status)] })).toBe(null);
+    },
+  );
+
+  it("ignores root turns that belong to a run", () => {
+    const owned = { ...rootTurn("running"), runId: RunId.make("run-1") };
+    expect(deriveRunlessWorkStartedAt({ ...v2Projection, nodes: [owned] })).toBeNull();
   });
 });
 

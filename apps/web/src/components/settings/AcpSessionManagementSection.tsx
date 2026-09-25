@@ -360,7 +360,7 @@ export function AcpSessionManagementSection(props: {
                       <p className="truncate text-xs text-foreground">
                         {session.title ?? session.sessionId}
                       </p>
-                      <code className="block truncate text-[10px] text-muted-foreground">
+                      <code className="block truncate text-3xs text-muted-foreground">
                         {session.sessionId}
                       </code>
                     </div>
@@ -486,7 +486,7 @@ export function AcpSessionManagementSection(props: {
                         <p className="truncate text-xs font-medium text-foreground">
                           {provider.providerId}
                         </p>
-                        <p className="text-[10px] text-muted-foreground">
+                        <p className="text-3xs text-muted-foreground">
                           {provider.current === null ? "Disabled" : "Configured"}
                           {provider.required ? " · Required" : ""}
                         </p>

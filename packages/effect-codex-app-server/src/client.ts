@@ -88,6 +88,9 @@ type ServerNotificationHandler = (
 const V2TurnStartParamsWithCollaborationMode = CodexSchema.V2TurnStartParams.pipe(
   Schema.fieldsAssign({
     collaborationMode: Schema.optionalKey(CodexSchema.ClientRequest__CollaborationMode),
+    additionalContext: Schema.optionalKey(
+      Schema.Record(Schema.String, CodexSchema.V2TurnStartParams__AdditionalContextEntry),
+    ),
   }),
 );
 
@@ -163,14 +166,12 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
         Effect.flatMap((decoded) =>
           Effect.forEach(handlers, (handler) => handler(decoded), { discard: true }),
         ),
-        Effect.catch(() => Effect.void),
+        Effect.ignore,
       );
     }
 
     return unknownNotificationHandler
-      ? unknownNotificationHandler(notification.method, notification.params).pipe(
-          Effect.catch(() => Effect.void),
-        )
+      ? unknownNotificationHandler(notification.method, notification.params).pipe(Effect.ignore)
       : Effect.void;
   };
 

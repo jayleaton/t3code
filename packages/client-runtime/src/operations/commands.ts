@@ -471,6 +471,20 @@ export const pinThread = Effect.fn("EnvironmentCommands.pinThread")(function* (
   });
 });
 
+export interface SetThreadAutoSettleInput extends ThreadCommandInput {
+  readonly enabled: boolean;
+}
+export const setThreadAutoSettle = Effect.fn("EnvironmentCommands.setThreadAutoSettle")(function* (
+  input: SetThreadAutoSettleInput,
+) {
+  return yield* dispatch({
+    type: "thread.auto-settle.set",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    enabled: input.enabled,
+  });
+});
+
 export const reorderPinnedThread = Effect.fn("EnvironmentCommands.reorderPinnedThread")(function* (
   input: ReorderPinnedThreadInput,
 ) {

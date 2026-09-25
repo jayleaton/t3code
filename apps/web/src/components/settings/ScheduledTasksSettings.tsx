@@ -132,7 +132,7 @@ function Field({
       <Label className="flex items-baseline justify-between" htmlFor={htmlFor}>
         <span>{label}</span>
         {hint ? (
-          <span className="font-normal text-[11px] text-muted-foreground/80">{hint}</span>
+          <span className="font-normal text-2xs text-muted-foreground/80">{hint}</span>
         ) : null}
       </Label>
       {children}

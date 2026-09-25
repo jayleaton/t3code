@@ -35,6 +35,7 @@ import {
   ClaudeAdapterV2Driver,
   ClaudeAgentSdkQueryRunner,
   ClaudeAgentSdkQueryRunnerError,
+  claudePromptUuid,
   makeClaudeUserMessage,
   makeClaudeQueryOptions,
   type ClaudeAgentSdkSessionForkInput,
@@ -54,8 +55,12 @@ import {
 import type { ProviderReplayGate } from "../testkit/ProviderReplayGate.testkit.ts";
 
 export const CLAUDE_AGENT_SDK_REPLAY_PROTOCOL = "claude-agent-sdk.query" as const;
-/** Replay label of the result that ends a recorded background wake turn. */
-export const CLAUDE_BACKGROUND_WAKE_RESULT_LABEL = "result:background-wake";
+/**
+ * Replay label of the result that ends the Nth (1-based) background wake turn
+ * of a recording, so a replay gate can hold it.
+ */
+export const claudeBackgroundWakeResultLabel = (wakeNumber: number) =>
+  `result:background-wake:${wakeNumber}`;
 
 const ClaudeAgentSdkReplayTranscript = Schema.Struct({
   provider: Schema.Literal(CLAUDE_PROVIDER),
@@ -306,7 +311,10 @@ function isClaudeSdkReplayMessage(frame: unknown): frame is SDKMessage {
     type === "result" ||
     type === "system" ||
     type === "stream_event" ||
-    type === "rate_limit_event"
+    type === "rate_limit_event" ||
+    // Undeclared in the SDK types: queued/started/completed for each prompt
+    // that carries a uuid.
+    type === "command_lifecycle"
   );
 }
 
@@ -455,7 +463,7 @@ function makeClaudeSessionForkFrame(
   };
 }
 
-export function makeReplayQueryRunner(
+function makeReplayQueryRunner(
   transcript: ClaudeAgentSdkReplayTranscript,
   replayOptions: { readonly replayGate?: ProviderReplayGate } = {},
 ): ClaudeQueryRunner {
@@ -562,7 +570,7 @@ export function makeReplayQueryRunner(
           continue;
         }
         advance();
-        yield sdkMessageFromReplayFrame(entry.frame);
+        yield sdkMessageFromReplayFrame(withReplayedPromptUuids(entry.frame));
         continue;
       }
 
@@ -625,6 +633,54 @@ export function makeReplayQueryRunner(
     },
   });
 
+  // Prompt uuids are derived from ids that differ between the recording and
+  // a replay run, so a matched prompt offer maps the recorded uuid to the
+  // replayed one, and inbound frames echoing it are rewritten to match.
+  const promptUuidReplacements = new Map<string, string>();
+  const replayedPromptUuid = (value: string): string => promptUuidReplacements.get(value) ?? value;
+  const withReplayedPromptUuids = (frame: unknown): unknown => {
+    if (promptUuidReplacements.size === 0 || typeof frame !== "object" || frame === null) {
+      return frame;
+    }
+    const uuid: unknown = Reflect.get(frame, "user_message_uuid");
+    const uuids: unknown = Reflect.get(frame, "user_message_uuids");
+    if (typeof uuid !== "string" && !Array.isArray(uuids)) {
+      return frame;
+    }
+    return {
+      ...frame,
+      ...(typeof uuid === "string" ? { user_message_uuid: replayedPromptUuid(uuid) } : {}),
+      ...(Array.isArray(uuids)
+        ? {
+            user_message_uuids: uuids.map((entry) =>
+              typeof entry === "string" ? replayedPromptUuid(entry) : entry,
+            ),
+          }
+        : {}),
+    };
+  };
+  const promptOfferUuid = (frame: unknown): string | undefined => {
+    if (
+      typeof frame !== "object" ||
+      frame === null ||
+      Reflect.get(frame, "type") !== "prompt.offer"
+    ) {
+      return undefined;
+    }
+    const message: unknown = Reflect.get(frame, "message");
+    const uuid: unknown =
+      typeof message === "object" && message !== null ? Reflect.get(message, "uuid") : undefined;
+    return typeof uuid === "string" ? uuid : undefined;
+  };
+  const withoutPromptOfferUuid = (frame: unknown): unknown => {
+    if (promptOfferUuid(frame) === undefined || typeof frame !== "object" || frame === null) {
+      return frame;
+    }
+    const message = Reflect.get(frame, "message") as Record<string, unknown>;
+    const { uuid: _uuid, ...rest } = message;
+    return { ...frame, message: rest };
+  };
+
   const assertNextOutboundFrame = (actual: ClaudeOutboundFrame) => {
     if (failure !== null) {
       throw failure;
@@ -651,7 +707,13 @@ export function makeReplayQueryRunner(
     }
 
     const expected = entry.frame;
-    if (!sameFrame(expected, actual)) {
+    const expectedUuid = promptOfferUuid(expected);
+    const actualUuid = promptOfferUuid(actual);
+    // Recordings made before prompts carried a uuid simply lack one.
+    if (
+      !sameFrame(withoutPromptOfferUuid(expected), withoutPromptOfferUuid(actual)) ||
+      (expectedUuid !== undefined && actualUuid === undefined)
+    ) {
       fail(
         new ClaudeReplayFrameMismatchError({
           scenario: transcript.scenario,
@@ -661,6 +723,9 @@ export function makeReplayQueryRunner(
           actual,
         }),
       );
+    }
+    if (expectedUuid !== undefined && actualUuid !== undefined) {
+      promptUuidReplacements.set(expectedUuid, actualUuid);
     }
 
     advance();
@@ -1044,6 +1109,37 @@ function sanitizeSdkMessageForReplay(input: {
   return message;
 }
 
+// Lets a recording wait a bounded time for the next frame without losing it
+// when the wait times out: the pending read is handed to the next reader.
+class RecordingMessageReader implements AsyncIterator<SDKMessage> {
+  private pending: Promise<IteratorResult<SDKMessage>> | undefined;
+  private readonly iterator: AsyncIterator<SDKMessage>;
+
+  constructor(iterator: AsyncIterator<SDKMessage>) {
+    this.iterator = iterator;
+  }
+
+  next(): Promise<IteratorResult<SDKMessage>> {
+    const pending = this.pending ?? this.iterator.next();
+    this.pending = undefined;
+    return pending;
+  }
+
+  // The next frame if it arrives within `ms`, left unread for next().
+  async peekWithin(ms: number): Promise<SDKMessage | undefined> {
+    const pending = this.pending ?? this.iterator.next();
+    this.pending = pending;
+    return Promise.race([
+      // A failed read stays pending for next() to surface.
+      pending.then(
+        (result) => (result.done === true ? undefined : result.value),
+        () => undefined,
+      ),
+      Effect.runPromise(Effect.sleep(Duration.millis(ms))).then(() => undefined),
+    ]);
+  }
+}
+
 class RecordingPromptQueue implements AsyncIterable<SDKUserMessage> {
   private readonly pending: Array<IteratorResult<SDKUserMessage>> = [];
   private readonly waiters: Array<(result: IteratorResult<SDKUserMessage>) => void> = [];
@@ -1119,7 +1215,7 @@ async function recordMessagesUntilTurnResult(input: {
   }
 }
 
-export async function recordMessagesUntilTurnResultAndFinalize(input: {
+async function recordMessagesUntilTurnResultAndFinalize(input: {
   readonly iterator: AsyncIterator<SDKMessage>;
   readonly entries: Array<ProviderReplayEntry>;
   readonly scenario: string;
@@ -1229,17 +1325,41 @@ async function recordMessagesUntilIteratorDone(input: {
   }
 }
 
-function sdkMessageHasToolUse(message: SDKMessage): boolean {
+// A queued wake turn starts right after the turn before it settles.
+const CLAUDE_RECORDING_WAKE_QUIET_MS = 5_000;
+
+function isSystemInitFrame(message: SDKMessage | undefined): boolean {
+  return message?.type === "system" && message.subtype === "init";
+}
+
+function isTaskNotificationOriginResultFrame(frame: unknown): boolean {
+  if (typeof frame !== "object" || frame === null || Reflect.get(frame, "type") !== "result") {
+    return false;
+  }
+  const origin: unknown = Reflect.get(frame, "origin");
   return (
-    message.type === "assistant" && message.message.content.some((part) => part.type === "tool_use")
+    typeof origin === "object" &&
+    origin !== null &&
+    Reflect.get(origin, "kind") === "task-notification"
   );
 }
 
-async function recordMessagesUntilFirstToolUse(input: {
+function sdkMessageHasRootToolUse(message: SDKMessage): boolean {
+  return (
+    message.type === "assistant" &&
+    message.parent_tool_use_id === null &&
+    message.message.content.some((part) => part.type === "tool_use")
+  );
+}
+
+async function recordMessagesUntilToolUse(input: {
   readonly iterator: AsyncIterator<SDKMessage>;
   readonly entries: Array<ProviderReplayEntry>;
   readonly scenario: string;
+  // Returns after the assistant frame carrying this many root tool uses.
+  readonly toolUseCount: number;
 }): Promise<void> {
+  let toolUses = 0;
   while (true) {
     const next = await input.iterator.next();
     if (next.done === true) {
@@ -1257,8 +1377,11 @@ async function recordMessagesUntilFirstToolUse(input: {
     if (replayMessage.type === "result") {
       throw new Error(`Claude query completed before ${input.scenario} started a tool use.`);
     }
-    if (sdkMessageHasToolUse(replayMessage)) {
-      return;
+    if (sdkMessageHasRootToolUse(replayMessage)) {
+      toolUses += 1;
+      if (toolUses >= input.toolUseCount) {
+        return;
+      }
     }
   }
 }
@@ -1269,21 +1392,21 @@ async function recordMessagesUntilFirstToolUse(input: {
 // executable discovery in place. A Windows launcher shim (`claude.cmd` and
 // friends) is not directly spawnable, so it only counts when
 // resolveClaudeSdkExecutablePath can follow it to a real package entry.
-export const resolveClaudeRecordingExecutablePath = Effect.fn(
-  "resolveClaudeRecordingExecutablePath",
-)(function* (environment: NodeJS.ProcessEnv) {
-  const resolveExecutable = yield* SpawnExecutableResolution;
-  const platform = yield* HostProcessPlatform;
-  const resolved = resolveExecutable("claude", platform, environment);
-  if (resolved === undefined) {
-    return undefined;
-  }
-  const executablePath = yield* resolveClaudeSdkExecutablePath(resolved, environment);
-  if (platform === "win32" && isWindowsClaudeLauncherShimPath(executablePath)) {
-    return undefined;
-  }
-  return executablePath;
-});
+const resolveClaudeRecordingExecutablePath = Effect.fn("resolveClaudeRecordingExecutablePath")(
+  function* (environment: NodeJS.ProcessEnv) {
+    const resolveExecutable = yield* SpawnExecutableResolution;
+    const platform = yield* HostProcessPlatform;
+    const resolved = resolveExecutable("claude", platform, environment);
+    if (resolved === undefined) {
+      return undefined;
+    }
+    const executablePath = yield* resolveClaudeSdkExecutablePath(resolved, environment);
+    if (platform === "win32" && isWindowsClaudeLauncherShimPath(executablePath)) {
+      return undefined;
+    }
+    return executablePath;
+  },
+);
 
 async function openRecordingQuery(input: Parameters<typeof query>[0]) {
   const executablePath = await Effect.runPromise(resolveClaudeRecordingExecutablePath(process.env));
@@ -1311,9 +1434,14 @@ async function recordClaudeStreamingQuery(input: {
   readonly allowDangerouslySkipPermissions?: boolean;
   readonly enablePermissionCallback?: boolean;
   readonly permissionDecision?: ProviderApprovalDecision;
-  // Keep recording through the turn Claude starts on its own when background
-  // work launched by the last prompt finishes after that prompt settled.
-  readonly awaitBackgroundWake?: boolean;
+  // Per prompt, how many turns Claude starts on its own for background work
+  // (task-notification-origin results) to wait for before the next prompt.
+  // Setting it also records any further wake turn that starts within a short
+  // quiet window, so the next prompt is not offered while one is queued.
+  readonly backgroundWakeCounts?: ReadonlyArray<number>;
+  // Skip that quiet window: offer the next prompt while a wake may still be
+  // queued in the CLI, which then runs the wake turn first.
+  readonly offerNextPromptImmediately?: boolean;
 }): Promise<void> {
   const promptQueue = new RecordingPromptQueue();
   const canUseTool: CanUseTool | undefined =
@@ -1374,42 +1502,67 @@ async function recordClaudeStreamingQuery(input: {
     prompt: promptQueue,
     options,
   });
-  const iterator = queryRuntime[Symbol.asyncIterator]();
+  const iterator = new RecordingMessageReader(queryRuntime[Symbol.asyncIterator]());
+  let wakeNumber = 0;
+  // Records one turn and labels it when Claude started it for background work.
+  const recordTurn = async (promptNumber: number): Promise<"prompt" | "wake"> => {
+    const completed = await recordMessagesUntilTurnResult({
+      iterator,
+      entries: input.entries,
+      scenario: input.scenario,
+    });
+    if (!completed) {
+      throw new Error(
+        `Claude streaming query ended before prompt ${promptNumber} and its background wakes completed.`,
+      );
+    }
+    const resultEntry = input.entries.at(-1);
+    const resultFrame = resultEntry?.type === "emit_inbound" ? resultEntry.frame : undefined;
+    if (!isTaskNotificationOriginResultFrame(resultFrame)) {
+      return "prompt";
+    }
+    wakeNumber += 1;
+    // A distinct label lets a replay gate hold the wake result until the
+    // continuation run that ingests it has started.
+    input.entries[input.entries.length - 1] = {
+      type: "emit_inbound",
+      label: claudeBackgroundWakeResultLabel(wakeNumber),
+      frame: resultFrame,
+    };
+    return "wake";
+  };
   try {
     for (const [index, prompt] of input.prompts.entries()) {
-      const message = makeClaudeUserMessage({ text: prompt });
+      // Like the adapter, give each prompt a uuid Claude echoes on its turn.
+      const message = makeClaudeUserMessage({
+        text: prompt,
+        uuid: claudePromptUuid(`${input.sessionId}:prompt:${index + 1}`),
+      });
       input.entries.push({
         type: "expect_outbound",
         label: `prompt.offer:${index + 1}`,
         frame: makeClaudePromptOfferFrame(message),
       });
       promptQueue.offer(message);
-      const completed = await recordMessagesUntilTurnResult({
-        iterator,
-        entries: input.entries,
-        scenario: input.scenario,
-      });
-      if (!completed) {
-        throw new Error(`Claude streaming query ended before prompt ${index + 1} completed.`);
+      // A task notification that lands during a turn queues a wake turn the
+      // CLI can run before this prompt's turn, so results are told apart by
+      // origin rather than by arrival order.
+      let promptSettled = false;
+      let wakes = 0;
+      const expectedWakes = input.backgroundWakeCounts?.[index] ?? 0;
+      while (!promptSettled || wakes < expectedWakes) {
+        if ((await recordTurn(index + 1)) === "prompt") {
+          promptSettled = true;
+        } else {
+          wakes += 1;
+        }
       }
-    }
-    if (input.awaitBackgroundWake === true) {
-      const woke = await recordMessagesUntilTurnResult({
-        iterator,
-        entries: input.entries,
-        scenario: input.scenario,
-      });
-      if (!woke) {
-        throw new Error("Claude streaming query ended before its background wake turn completed.");
-      }
-      // A distinct label lets a replay gate hold the wake result until the
-      // continuation run that ingests it has started.
-      const wakeResult = input.entries.at(-1);
-      if (wakeResult?.type === "emit_inbound") {
-        input.entries[input.entries.length - 1] = {
-          ...wakeResult,
-          label: CLAUDE_BACKGROUND_WAKE_RESULT_LABEL,
-        };
+      if (input.backgroundWakeCounts !== undefined && input.offerNextPromptImmediately !== true) {
+        // Every turn opens with system:init; frames from still-running
+        // subagents are left for the next prompt's recording.
+        while (isSystemInitFrame(await iterator.peekWithin(CLAUDE_RECORDING_WAKE_QUIET_MS))) {
+          await recordTurn(index + 1);
+        }
       }
     }
     promptQueue.close();
@@ -2092,7 +2245,7 @@ async function recordClaudeForkSessionQuery(input: {
   }
 }
 
-export async function recordInterruptedClaudeQuery(input: {
+async function recordInterruptedClaudeQuery(input: {
   readonly scenario: string;
   readonly prompt: string;
   readonly modelSelection: ModelSelection;
@@ -2104,6 +2257,8 @@ export async function recordInterruptedClaudeQuery(input: {
   readonly promptOfferLabel: string;
   readonly interruptLabel: string;
   readonly interruptAfter?: "prompt_offer" | "tool_use";
+  // With interruptAfter "tool_use": interrupt after this many root tool uses.
+  readonly interruptAfterToolUses?: number;
   readonly enableTools?: boolean;
   readonly tools?: ClaudeAgentSdkQueryTools;
   readonly permissionMode?: ClaudeAgentSdkQueryOptions["permissionMode"];
@@ -2151,10 +2306,11 @@ export async function recordInterruptedClaudeQuery(input: {
 
   try {
     if (input.interruptAfter === "tool_use") {
-      await recordMessagesUntilFirstToolUse({
+      await recordMessagesUntilToolUse({
         iterator,
         entries: input.entries,
         scenario: input.scenario,
+        toolUseCount: input.interruptAfterToolUses ?? 1,
       });
       await Effect.runPromise(Effect.sleep(Duration.millis(250)));
     }
@@ -2214,6 +2370,7 @@ async function recordClaudeInterruptQuery(input: {
   readonly disallowedTools?: ReadonlyArray<string>;
   readonly allowDangerouslySkipPermissions?: boolean;
   readonly interruptAfter?: "prompt_offer" | "tool_use";
+  readonly interruptAfterToolUses?: number;
 }): Promise<void> {
   if (input.prompts.length !== 1) {
     throw new Error(
@@ -2233,6 +2390,9 @@ async function recordClaudeInterruptQuery(input: {
     promptOfferLabel: "prompt.offer:1",
     interruptLabel: "query.interrupt:1",
     ...(input.interruptAfter === undefined ? {} : { interruptAfter: input.interruptAfter }),
+    ...(input.interruptAfterToolUses === undefined
+      ? {}
+      : { interruptAfterToolUses: input.interruptAfterToolUses }),
     ...(input.enableTools === undefined ? {} : { enableTools: input.enableTools }),
     ...(input.tools === undefined ? {} : { tools: input.tools }),
     ...(input.permissionMode === undefined ? {} : { permissionMode: input.permissionMode }),
@@ -2375,8 +2535,10 @@ export async function recordClaudeAgentSdkReplayTranscript(input: {
   readonly allowDangerouslySkipPermissions?: boolean;
   readonly enablePermissionCallback?: boolean;
   readonly permissionDecision?: ProviderApprovalDecision;
-  readonly awaitBackgroundWake?: boolean;
+  readonly backgroundWakeCounts?: ReadonlyArray<number>;
+  readonly offerNextPromptImmediately?: boolean;
   readonly interruptAfter?: "prompt_offer" | "tool_use";
+  readonly interruptAfterToolUses?: number;
 }): Promise<ClaudeAgentSdkReplayTranscript> {
   if (input.prompts.length === 0) {
     throw new Error(
@@ -2407,9 +2569,12 @@ export async function recordClaudeAgentSdkReplayTranscript(input: {
       ...(input.enablePermissionCallback === undefined
         ? {}
         : { enablePermissionCallback: input.enablePermissionCallback }),
-      ...(input.awaitBackgroundWake === undefined
+      ...(input.backgroundWakeCounts === undefined
         ? {}
-        : { awaitBackgroundWake: input.awaitBackgroundWake }),
+        : { backgroundWakeCounts: input.backgroundWakeCounts }),
+      ...(input.offerNextPromptImmediately === undefined
+        ? {}
+        : { offerNextPromptImmediately: input.offerNextPromptImmediately }),
       ...(input.permissionDecision === undefined
         ? {}
         : { permissionDecision: input.permissionDecision }),
@@ -2536,6 +2701,9 @@ export async function recordClaudeAgentSdkReplayTranscript(input: {
         ? {}
         : { allowDangerouslySkipPermissions: input.allowDangerouslySkipPermissions }),
       ...(input.interruptAfter === undefined ? {} : { interruptAfter: input.interruptAfter }),
+      ...(input.interruptAfterToolUses === undefined
+        ? {}
+        : { interruptAfterToolUses: input.interruptAfterToolUses }),
     });
   } else {
     await recordClaudeInterruptRestartQuery({
@@ -2577,8 +2745,14 @@ export async function recordClaudeAgentSdkReplayTranscript(input: {
       ...(input.permissionDecision === undefined
         ? {}
         : { permissionDecision: input.permissionDecision }),
-      ...(input.awaitBackgroundWake === true ? { awaitBackgroundWake: true } : {}),
+      ...(input.backgroundWakeCounts === undefined
+        ? {}
+        : { backgroundWakeCounts: [...input.backgroundWakeCounts] }),
+      ...(input.offerNextPromptImmediately === true ? { offerNextPromptImmediately: true } : {}),
       ...(input.interruptAfter === undefined ? {} : { interruptAfter: input.interruptAfter }),
+      ...(input.interruptAfterToolUses === undefined
+        ? {}
+        : { interruptAfterToolUses: input.interruptAfterToolUses }),
       generatedBy: "recordClaudeAgentSdkReplayTranscript",
       ...recordingMetadata,
     },

@@ -86,6 +86,7 @@ import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useDelayedStatus } from "../../lib/useDelayedStatus";
 import type {
   PendingApproval,
   PendingUserInput,
@@ -135,6 +136,8 @@ export interface ThreadDetailScreenProps {
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
   readonly activityRun: ThreadFeedLatestRun | null;
   readonly activeWorkStartedAt: string | null;
+  /** The live work is a provider-native subagent's runless root turn. */
+  readonly runlessWorkActive?: boolean;
   readonly isCompacting: boolean;
   /**
    * The server has not created this thread yet. "preparing" runs while the
@@ -395,7 +398,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   // The raw sync status enters "synchronizing" on every full fetch, cached or
   // not. Whether messages are already on screen decides the pill label: no
   // data yet → "Loading messages", cached data reconciling → "Syncing".
-  const threadSyncLabel = (() => {
+  const realThreadSyncLabel = (() => {
     switch (props.threadSyncStatus) {
       case "empty":
       case "cached":
@@ -408,6 +411,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
         return null;
     }
   })();
+  // Opening a running thread resyncs for a few frames. The pill shows the
+  // sync label only when the sync lasts, so it does not flash before the timer.
+  const threadSyncLabel = useDelayedStatus(selectedThreadKey, realThreadSyncLabel);
   // One floating pill above the composer: it reads the connection phase while
   // disconnected, the sync state while messages load, then the working timer
   // once the feed is settled.
@@ -1027,6 +1033,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               threadTitle={props.selectedThread.title}
               latestRun={props.activityRun}
               activeWorkStartedAt={props.activeWorkStartedAt}
+              runlessWorkActive={props.runlessWorkActive ?? false}
               listRef={listRef}
               freeze={freeze}
               anchorMessageId={anchorMessageId}

@@ -25,7 +25,7 @@ export function ComposerContextLabel({
         className={cn(
           "block w-full min-w-0 truncate",
           displayMode === "toolbar" &&
-            "max-w-[240px] transition-opacity duration-180 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[compact]/composer-context:opacity-0 motion-reduce:transition-none",
+            "max-w-[240px] transition-opacity duration-180 ease-drawer group-data-[compact]/composer-context:opacity-0 motion-reduce:transition-none",
         )}
       >
         {children}

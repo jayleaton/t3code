@@ -13,7 +13,7 @@ import {
   THREAD_DETAILS_PANEL_SPLIT_SECONDARY_CLASS,
   THREAD_DETAILS_PANEL_LINK_SPLIT_ACTION_CLASS,
   THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS,
-  THREAD_DETAILS_PANEL_SPLIT_BUTTON_SURFACE_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_CHECKS_CLASS,
   THREAD_DETAILS_PANEL_ICON_ACTION_CLASS,
   THREAD_DETAILS_PANEL_CHEVRON_CLASS,
 } from "./threadDetailsPanelStyles";
@@ -26,7 +26,7 @@ const parts = {
   secondary: THREAD_DETAILS_PANEL_SPLIT_SECONDARY_CLASS,
   action: THREAD_DETAILS_PANEL_LINK_SPLIT_ACTION_CLASS,
   "link-primary": THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS,
-  checks: `h-8 gap-1.5 rounded-[var(--control-radius)] border-transparent px-[calc(--spacing(2.5)-1px)] text-[13px] font-medium text-foreground/80 sm:h-7 ${THREAD_DETAILS_PANEL_SPLIT_BUTTON_SURFACE_CLASS}`,
+  checks: THREAD_DETAILS_PANEL_SPLIT_CHECKS_CLASS,
   icon: THREAD_DETAILS_PANEL_ICON_ACTION_CLASS,
 };
 
@@ -56,7 +56,7 @@ export function ThreadDetailsControl({
         className: cn(
           "relative inline-flex shrink-0 cursor-pointer items-center whitespace-nowrap border outline-none transition-[box-shadow,scale] [&:active:not([aria-haspopup])]:scale-[0.97] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background pointer-coarse:after:absolute pointer-coarse:after:size-full pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 disabled:pointer-events-none disabled:opacity-64 aria-disabled:cursor-not-allowed aria-disabled:opacity-64 [&_svg]:shrink-0",
           parts[part],
-          multiline && "h-auto min-h-9 py-[calc(--spacing(1)-1px)] disabled:opacity-100 sm:h-auto",
+          multiline && "h-auto min-h-9 py-0.75 disabled:opacity-100 sm:h-auto",
           tone === "muted" && "text-muted-foreground/70 hover:text-foreground/80",
           tone === "destructive" &&
             "text-destructive hover:text-destructive data-pressed:text-destructive",

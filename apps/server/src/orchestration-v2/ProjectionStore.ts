@@ -164,6 +164,7 @@ export type ProjectionSettlementCandidate = Pick<
   | "archivedAt"
   | "settledOverride"
   | "pinnedAt"
+  | "autoSettleDisabledAt"
   | "snoozedUntil"
   | "snoozedAt"
   | "latestRunId"
@@ -613,6 +614,7 @@ export function applyToProjection(
     case "thread.unsettled":
     case "thread.snoozed":
     case "thread.unsnoozed":
+    case "thread.auto-settle-set":
     case "thread.pinned":
     case "thread.unpinned":
     case "thread.pin-reordered":
@@ -1350,6 +1352,8 @@ export function threadShellFromProjection(
     snoozedUntil: projection.thread.snoozedUntil ?? null,
     snoozedAt: projection.thread.snoozedAt ?? null,
     pinnedAt: projection.thread.pinnedAt ?? null,
+
+    autoSettleDisabledAt: projection.thread.autoSettleDisabledAt ?? null,
     pinOrderKey: projection.thread.pinOrderKey ?? null,
     lastVisitedAt: projection.thread.lastVisitedAt,
     titleRegeneration: projection.thread.titleRegeneration ?? null,
@@ -1575,6 +1579,8 @@ function shellFromState(input: {
     snoozedUntil: input.state.thread.snoozedUntil ?? null,
     snoozedAt: input.state.thread.snoozedAt ?? null,
     pinnedAt: input.state.thread.pinnedAt ?? null,
+
+    autoSettleDisabledAt: input.state.thread.autoSettleDisabledAt ?? null,
     pinOrderKey: input.state.thread.pinOrderKey ?? null,
     lastVisitedAt: input.state.thread.lastVisitedAt,
     titleRegeneration: input.state.thread.titleRegeneration ?? null,
@@ -1599,6 +1605,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           case "thread.unsettled":
           case "thread.snoozed":
           case "thread.unsnoozed":
+          case "thread.auto-settle-set":
           case "thread.pinned":
           case "thread.unpinned":
           case "thread.pin-reordered":
@@ -2423,6 +2430,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           event.type !== "thread.unsettled" &&
           event.type !== "thread.snoozed" &&
           event.type !== "thread.unsnoozed" &&
+          event.type !== "thread.auto-settle-set" &&
           event.type !== "thread.pinned" &&
           event.type !== "thread.unpinned" &&
           event.type !== "thread.pin-reordered" &&
@@ -3361,6 +3369,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 CROSS JOIN orchestration_v2_projection_subagents AS subagents
                   ON subagents.provider_thread_id = pending_provider_threads.provider_thread_id
                 UNION
+                SELECT subagents.child_thread_id FROM orchestration_v2_projection_subagents AS subagents
+                WHERE subagents.child_thread_id IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1 FROM orchestration_v2_projection_nodes AS node
+                    WHERE node.thread_id = subagents.child_thread_id
+                      AND node.run_id IS NULL
+                      AND node.kind = 'root_turn'
+                      AND node.status IN ('pending', 'running', 'waiting')
+                  )
+                UNION
                 SELECT item.thread_id FROM orchestration_v2_projection_turn_items AS item
                 WHERE NOT EXISTS (
                     SELECT 1 FROM orchestration_v2_projection_runs AS run
@@ -3728,7 +3746,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               WHERE node.thread_id = ${threadId}
                 AND node.status IN ('pending', 'starting', 'running', 'waiting')
                 AND (
-                  node.run_id IN (
+                  (node.run_id IS NULL AND node.kind = 'root_turn')
+                  OR node.run_id IN (
                     SELECT run_id FROM orchestration_v2_projection_runs
                     WHERE thread_id = ${threadId}
                       AND status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
@@ -3865,6 +3884,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                       AND status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
                   )
                   OR item.type IN ('command_execution', 'dynamic_tool', 'subagent')
+                  OR (
+                    item.run_id IS NULL
+                    AND item.node_id IN (
+                      SELECT node_id FROM orchestration_v2_projection_nodes
+                      WHERE thread_id = ${threadId}
+                        AND run_id IS NULL
+                        AND kind = 'root_turn'
+                        AND status IN ('pending', 'running', 'waiting')
+                    )
+                  )
                 )
               ORDER BY item.ordinal ASC, item.turn_item_id ASC
             `,
@@ -4936,6 +4965,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               AND json_extract(t.payload_json, '$.archivedAt') IS NULL
               AND json_extract(t.payload_json, '$.settledOverride') IS NULL
               AND json_extract(t.payload_json, '$.pinnedAt') IS NULL
+              AND json_extract(t.payload_json, '$.autoSettleDisabledAt') IS NULL
               AND NOT EXISTS (
                 SELECT 1 FROM orchestration_v2_projection_runs active
                 WHERE active.thread_id = t.thread_id
@@ -4963,6 +4993,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 return {
                   ...thread,
                   pinnedAt: thread.pinnedAt ?? null,
+
+                  autoSettleDisabledAt: thread.autoSettleDisabledAt ?? null,
                   snoozedUntil: thread.snoozedUntil ?? null,
                   snoozedAt: thread.snoozedAt ?? null,
                   status,
@@ -5376,6 +5408,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 thread.archivedAt === null &&
                 thread.settledOverride === null &&
                 thread.pinnedAt == null &&
+                thread.autoSettleDisabledAt == null &&
                 !runs.some(isActivityRunForShell) &&
                 !runtimeRequests.some((request) => request.status === "pending"),
             )

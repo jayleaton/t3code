@@ -121,7 +121,6 @@ import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import {
   THREAD_DETAILS_PANEL_CHEVRON_CLASS,
   THREAD_DETAILS_PANEL_ICON_CLASS,
-  THREAD_DETAILS_PANEL_ROW_POPUP_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
 } from "./chat/threadDetailsPanelStyles";
@@ -451,7 +450,7 @@ function GitActionProgressButtonContent({
       {!isPanel ? (
         <GitActionElapsedTime
           startedAtMs={progress.startedAtMs}
-          className="row-start-1 text-[11px] font-normal tabular-nums text-muted-foreground"
+          className="row-start-1 text-2xs font-normal tabular-nums text-muted-foreground"
         />
       ) : null}
       <div
@@ -465,7 +464,7 @@ function GitActionProgressButtonContent({
           <Tooltip>
             <TooltipTrigger
               render={
-                <p className="truncate pt-0.5 text-left text-[11px] font-normal text-muted-foreground" />
+                <p className="truncate pt-0.5 text-left text-2xs font-normal text-muted-foreground" />
               }
             >
               {progress.output}
@@ -501,7 +500,7 @@ function GitActionSuccessButtonContent({ success }: { success: InlineGitActionSu
           <Tooltip>
             <TooltipTrigger
               render={
-                <p className="truncate pt-0.5 text-left text-[11px] font-normal text-muted-foreground" />
+                <p className="truncate pt-0.5 text-left text-2xs font-normal text-muted-foreground" />
               }
             >
               {success.description}
@@ -747,7 +746,7 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
                   return (
                     <div
                       key={option.value}
-                      className="relative flex cursor-not-allowed items-center gap-3 rounded-lg border border-border bg-background px-3 py-3 text-left opacity-55 dark:border-transparent dark:bg-white/[0.035]"
+                      className="relative flex cursor-not-allowed items-center gap-3 rounded-lg border border-border bg-background px-3 py-3 text-left opacity-64 dark:border-transparent dark:bg-white/[0.035]"
                     >
                       <option.Icon className="size-5 shrink-0 text-muted-foreground" aria-hidden />
                       <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
@@ -1879,7 +1878,7 @@ export default function GitActionsControl({
             // the output row expands below.
             <GitActionElapsedTime
               startedAtMs={gitActionProgress.startedAtMs}
-              className="flex h-9 shrink-0 items-center self-start pe-2.5 text-[11px] font-normal tabular-nums text-muted-foreground"
+              className="flex h-9 shrink-0 items-center self-start pe-2.5 text-2xs font-normal tabular-nums text-muted-foreground"
             />
           ) : (
             <>
@@ -1915,7 +1914,7 @@ export default function GitActionsControl({
                 <MenuPopup
                   align="end"
                   {...(isPanel ? { anchor: panelAnchorRef } : {})}
-                  className={isPanel ? THREAD_DETAILS_PANEL_ROW_POPUP_CLASS : "w-full"}
+                  className={isPanel ? "w-(--anchor-width)" : "w-full"}
                 >
                   {gitItems}
                 </MenuPopup>
@@ -1936,7 +1935,7 @@ export default function GitActionsControl({
         >
           <FileDiffIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} aria-hidden />
           <span className="flex-1 text-left">Changes</span>
-          <span className="flex items-center gap-1 font-mono text-[11px] tabular-nums">
+          <span className="flex items-center gap-1 font-mono text-2xs tabular-nums">
             <span className="text-success">
               +{gitStatusForActions?.workingTree.insertions ?? 0}
             </span>

@@ -8,7 +8,6 @@ import { cn } from "../lib/utils";
 import {
   THREAD_DETAILS_PANEL_ICON_CLASS,
   THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS,
-  THREAD_DETAILS_PANEL_ROW_POPUP_CLASS,
 } from "./chat/threadDetailsPanelStyles";
 
 import {
@@ -123,7 +122,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
     const lockedRow = (
       <span
         className={cn(
-          "inline-flex h-7 min-w-0 items-center gap-1 border border-transparent px-[calc(--spacing(2)-1px)] font-normal text-muted-foreground/70 text-xs sm:h-6",
+          "inline-flex h-7 min-w-0 items-center gap-1 border border-transparent px-1.75 font-normal text-muted-foreground/70 text-xs sm:h-6",
           displayMode === "panel" && THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS,
         )}
         data-composer-context-control
@@ -148,7 +147,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
             : (workspaceDisplayName ?? resolveLockedWorkspaceLabel(activeWorktreePath))}
         </ComposerContextLabel>
         {displayMode === "panel" ? (
-          <span className="shrink-0 text-[10px] font-normal text-muted-foreground/70">
+          <span className="shrink-0 text-3xs font-normal text-muted-foreground/70">
             {forceNewWorktree ? "Worktree" : workspaceKind}
           </span>
         ) : null}
@@ -211,7 +210,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
             <SelectValue />
           </ComposerContextLabel>
           {displayMode === "panel" ? (
-            <span className="shrink-0 text-[10px] font-normal text-muted-foreground/70">
+            <span className="shrink-0 text-3xs font-normal text-muted-foreground/70">
               {effectiveEnvMode === "worktree" && !activeWorktreePath ? "Create" : workspaceKind}
             </span>
           ) : null}
@@ -228,7 +227,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
         {...(displayMode === "toolbar" ? composerFloatingLayerProps : {})}
         className={
           displayMode === "panel"
-            ? THREAD_DETAILS_PANEL_ROW_POPUP_CLASS
+            ? "w-(--anchor-width)"
             : showPreviousWorktree
               ? "w-[min(21rem,calc(100vw-2rem))]"
               : undefined

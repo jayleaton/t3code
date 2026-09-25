@@ -84,7 +84,7 @@ export function V2LifecycleRow(props: {
             ·
           </span>
           <span className="font-medium">{item.message}</span>
-          <span className="text-[10px] text-muted-foreground">
+          <span className="text-3xs text-muted-foreground">
             {formatShortTimestamp(props.createdAt, props.timestampFormat)}
           </span>
         </div>
@@ -370,7 +370,7 @@ function SubagentTimelineLink(props: {
           {detail !== null && status !== "completed" ? (
             <span
               className={cn(
-                "shrink-0 text-[10px]",
+                "shrink-0 text-3xs",
                 failed ? "text-destructive" : "text-muted-foreground",
               )}
             >
@@ -380,7 +380,7 @@ function SubagentTimelineLink(props: {
         </span>
         <span
           className={cn(
-            "block text-[11px] leading-relaxed",
+            "block text-2xs leading-relaxed",
             failed ? "text-destructive" : "text-muted-foreground",
           )}
         >
@@ -393,7 +393,7 @@ function SubagentTimelineLink(props: {
           )}
         </span>
       </span>
-      <span className="shrink-0 font-mono text-[10px] text-muted-foreground/80">
+      <span className="shrink-0 font-mono text-3xs text-muted-foreground/80">
         <SubagentElapsed agent={timing} />
       </span>
       {threadId !== null ? (

@@ -380,7 +380,7 @@ export function AddProviderInstanceDialog({
                         <RadioPrimitive.Root
                           key={option.value}
                           value={option.value}
-                          className="relative flex cursor-pointer items-center gap-3 rounded-lg bg-card px-3 py-3 text-left text-muted-foreground outline-none ring-1 ring-black/5 hover:bg-zinc-50 focus-visible:ring-2 focus-visible:ring-ring data-checked:bg-primary/8 data-checked:text-foreground data-checked:ring-2 data-checked:ring-primary data-checked:hover:bg-primary/8 dark:bg-white/3 dark:ring-white/5 dark:hover:bg-white/5 dark:data-checked:bg-primary/15 dark:data-checked:ring-primary dark:data-checked:hover:bg-primary/15"
+                          className="relative flex cursor-pointer items-center gap-3 rounded-lg bg-card px-3 py-3 text-left text-muted-foreground outline-none ring-1 ring-black/5 hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring data-checked:bg-primary/8 data-checked:text-foreground data-checked:ring-2 data-checked:ring-primary data-checked:hover:bg-primary/8 dark:bg-white/3 dark:ring-white/5 dark:hover:bg-white/5 dark:data-checked:bg-primary/15 dark:data-checked:ring-primary dark:data-checked:hover:bg-primary/15"
                         >
                           <ProviderInstanceIcon
                             driverKind={option.value}
@@ -445,7 +445,7 @@ export function AddProviderInstanceDialog({
                         />
                       </SettingsGroup>
                       {isAcpRegistry && hasAttemptedSubmit && acpSelectionError ? (
-                        <p className="text-[11px] text-destructive">{acpSelectionError}</p>
+                        <p className="text-2xs text-destructive">{acpSelectionError}</p>
                       ) : null}
                     </div>
                   ) : (
@@ -459,7 +459,7 @@ export function AddProviderInstanceDialog({
                         onPreparingChange={setIsPreparingRegistryAgent}
                       />
                       {isAcpRegistry && hasAttemptedSubmit && acpSelectionError ? (
-                        <p className="mt-2 text-[11px] text-destructive">{acpSelectionError}</p>
+                        <p className="mt-2 text-2xs text-destructive">{acpSelectionError}</p>
                       ) : null}
                     </>
                   )}
@@ -476,7 +476,7 @@ export function AddProviderInstanceDialog({
                       v{selectedAcp.version} · {selectedAcp.distribution}
                     </p>
                   </div>
-                  <div className="flex shrink-0 gap-2 text-[11px]">
+                  <div className="flex shrink-0 gap-2 text-2xs">
                     {selectedAcp.website ? (
                       <a
                         aria-label={`Open documentation for ${selectedAcp.name} (${selectedAcp.id})`}

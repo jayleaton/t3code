@@ -30,7 +30,7 @@ function StructuredValue({ value }: { readonly value: unknown }) {
   const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   if (!text) return null;
   return (
-    <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/50 bg-background/60 p-2 font-mono text-[11px] leading-relaxed text-muted-foreground select-text">
+    <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/50 bg-background/60 p-2 font-mono text-2xs leading-relaxed text-muted-foreground select-text">
       {text}
     </pre>
   );
@@ -63,7 +63,7 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
         <div className="space-y-2">
           <StructuredValue value={item.input} />
           {item.exitCode !== undefined ? (
-            <p className={item.exitCode === 0 ? "text-emerald-600" : "text-destructive"}>
+            <p className={item.exitCode === 0 ? "text-success" : "text-destructive"}>
               Process exited with code {item.exitCode}
             </p>
           ) : null}
@@ -78,7 +78,7 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
             </span>
             {item.additions !== undefined || item.deletions !== undefined ? (
               <span>
-                <span className="text-emerald-600">+{item.additions ?? 0}</span>{" "}
+                <span className="text-success">+{item.additions ?? 0}</span>{" "}
                 <span className="text-destructive">-{item.deletions ?? 0}</span>
               </span>
             ) : null}
@@ -155,7 +155,7 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
 
       {item.type === "dynamic_tool" ? (
         <div>
-          <p className="mb-1 text-[10px] font-medium tracking-wide uppercase text-muted-foreground">
+          <p className="mb-1 text-3xs font-medium tracking-wide uppercase text-muted-foreground">
             Input
           </p>
           <StructuredValue value={item.input} />

@@ -63,7 +63,6 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import {
   THREAD_DETAILS_PANEL_CHEVRON_CLASS,
   THREAD_DETAILS_PANEL_ICON_CLASS,
-  THREAD_DETAILS_PANEL_ROW_POPUP_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
 } from "./threadDetailsPanelStyles";
@@ -430,7 +429,7 @@ export const OpenInPicker = memo(function OpenInPicker({
         <MenuPopup
           align="end"
           {...(isPanel ? { anchor: panelAnchorRef } : {})}
-          className={isPanel ? THREAD_DETAILS_PANEL_ROW_POPUP_CLASS : undefined}
+          className={isPanel ? "w-(--anchor-width)" : undefined}
         >
           {editorItems}
         </MenuPopup>

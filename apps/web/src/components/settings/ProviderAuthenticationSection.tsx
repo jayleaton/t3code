@@ -328,7 +328,7 @@ export function ProviderAuthenticationSection({
       query.error ? (
         <>
           {interaction?.type === "deviceCode" ? (
-            <p className="py-2 text-[13px] text-muted-foreground">
+            <p className="py-2 text-sm text-muted-foreground">
               Enter code{" "}
               <code className="select-all font-mono text-foreground">{interaction.userCode}</code>{" "}
               in your browser.
@@ -390,7 +390,7 @@ export function ProviderAuthenticationSection({
           ) : null}
           {interaction?.type === "credentials" ? (
             <form
-              className="grid gap-2 py-2 text-[13px] leading-[1.45]"
+              className="grid gap-2 py-2 text-sm leading-normal"
               onSubmit={(event) => {
                 event.preventDefault();
                 void send({ type: "credentials", values }).then((sent) => {
@@ -425,7 +425,7 @@ export function ProviderAuthenticationSection({
           ) : null}
           {url && (interaction?.type === "browser" ? interaction.acceptsCallback : !interaction) ? (
             <form
-              className="grid gap-2 py-2 text-[13px] leading-[1.45]"
+              className="grid gap-2 py-2 text-sm leading-normal"
               onSubmit={(event) => {
                 event.preventDefault();
                 if (!auth?.flowId || !values.callback?.trim()) return;

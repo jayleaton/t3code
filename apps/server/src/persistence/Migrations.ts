@@ -14,7 +14,7 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import Migration0057 from "./Migrations/057_ForkOrchestrationV2.ts";
-import Migration0058 from "./Migrations/055_RemoveRedundantProjectionIndexes.ts";
+import Migration0058 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";

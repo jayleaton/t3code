@@ -1005,6 +1005,7 @@ function ThreadRouteContent(
               : composer.activeWorkStartedAt
           }
           isCompacting={composer.isCompacting}
+          runlessWorkActive={composer.runlessWorkActive}
           creationState={creationState}
           setupWorkingStartedAt={
             composer.activeWorkStartedAt !== null &&

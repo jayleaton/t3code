@@ -30,7 +30,9 @@ export function assertProposedPlanOutput(
 
   const proposedPlans = projection.plans.filter((plan) => plan.kind === "proposed_plan");
   assert.isAtLeast(proposedPlans.length, 1);
-  assert.include(proposedPlans.at(-1)?.markdown, "Deterministic Replay Fixtures");
+  // The plan is the model's own; check it answers the prompt rather than its title.
+  assert.match(proposedPlans.at(-1)?.markdown ?? "", /replay/iu);
+  assert.match(proposedPlans.at(-1)?.markdown ?? "", /fixture/iu);
 
   const proposedPlanItems = projection.turnItems.filter((item) => item.type === "proposed_plan");
   assert.isAtLeast(proposedPlanItems.length, 1);

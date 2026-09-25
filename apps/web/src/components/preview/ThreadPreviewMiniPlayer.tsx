@@ -405,14 +405,16 @@ function MiniPlayerShell({
               <span
                 className={cn(
                   "block size-2 rounded-full shadow-sm ring-1 ring-background/70",
-                  recording ? "bg-red-500 motion-safe:animate-status-pulse" : "bg-foreground/25",
+                  recording
+                    ? "bg-destructive motion-safe:animate-status-pulse"
+                    : "bg-foreground/25",
                 )}
               />
             </div>
             <div className="pointer-events-none absolute right-0 top-0 flex h-8 cursor-grab items-center gap-0.5 rounded-lg border border-border/80 bg-popover/92 p-0.5 opacity-0 shadow-lg/20 backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 active:cursor-grabbing">
               {recording ? (
                 <span aria-hidden className="flex size-6 shrink-0 items-center justify-center">
-                  <span className="size-2 rounded-full bg-red-500 motion-safe:animate-status-pulse" />
+                  <span className="size-2 rounded-full bg-destructive motion-safe:animate-status-pulse" />
                 </span>
               ) : null}
               <Tooltip>

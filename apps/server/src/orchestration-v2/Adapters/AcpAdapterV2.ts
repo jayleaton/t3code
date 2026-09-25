@@ -33,6 +33,7 @@ import {
 } from "@t3tools/contracts";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { type SelfInvocation, selfInvocationArgs } from "@t3tools/shared/nodeRuntime";
+import { FILE_HEADERS_ONLY, formatPatch, structuredPatch } from "diff";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -174,12 +175,15 @@ export interface AcpAdapterV2ExtensionContext {
   /**
    * Session-scoped background-task lifecycle reported via extension
    * notifications (e.g. Grok `x.ai/task_backgrounded`; older builds use the
-   * underscore alias). Mutations for non-root sessions are ignored.
+   * underscore alias). Mutations for non-root sessions are ignored. A terminal
+   * mutation also finishes the tool that registered the task in a settled turn
+   * still held open for it, with `output` as its final text when given.
    */
   readonly applyBackgroundTaskMutation: (mutation: {
     readonly sessionId: string;
     readonly taskId: string;
     readonly status: "running" | "completed" | "failed";
+    readonly output?: string;
   }) => Effect.Effect<void>;
   readonly requestUserInput: (
     input: AcpAdapterV2UserInputRequest,
@@ -869,15 +873,45 @@ function structuredFileChanges(toolCall: AcpToolCallState) {
   });
 }
 
-function structuredDiffPatch(toolCall: AcpToolCallState): string | undefined {
-  const content = toolCall.data.content;
+// Past this edit distance an edit keeps no patch text, so projecting a large
+// rewrite cannot stall the event loop in the diff search. A created or emptied
+// file has one empty side and needs no search, so it is never capped.
+const ACP_V1_DIFF_MAX_EDITS = 1_000;
+
+/**
+ * Patch text for a tool call's diff content. ACP v2 diffs carry it as
+ * `patch.text`. ACP v1 diffs carry `oldText`/`newText` instead (`oldText`
+ * null or absent for a new file), and agents that negotiate v1 still send
+ * that shape, so the patch is built from the two sides.
+ */
+export function acpToolCallDiffPatch(content: unknown): string | undefined {
   if (!Array.isArray(content)) return undefined;
-  for (const entry of content) {
+  const diffs = content.flatMap((entry) => {
     const diff = unknownRecord(entry);
-    const patch = unknownRecord(diff?.patch);
-    if (diff?.type === "diff" && typeof patch?.text === "string") return patch.text;
+    return diff?.type === "diff" ? [diff] : [];
+  });
+  for (const diff of diffs) {
+    const patch = unknownRecord(diff.patch);
+    if (typeof patch?.text === "string") return patch.text;
   }
-  return undefined;
+  const v1Patches = diffs.flatMap((diff) => {
+    if (typeof diff.path !== "string" || typeof diff.newText !== "string") return [];
+    const oldText = typeof diff.oldText === "string" ? diff.oldText : undefined;
+    const patch = structuredPatch(
+      oldText === undefined ? "/dev/null" : diff.path,
+      diff.path,
+      oldText ?? "",
+      diff.newText,
+      undefined,
+      undefined,
+      {
+        context: 3,
+        maxEditLength: oldText && diff.newText ? ACP_V1_DIFF_MAX_EDITS : Number.POSITIVE_INFINITY,
+      },
+    );
+    return patch === undefined || patch.hunks.length === 0 ? [] : [patch];
+  });
+  return v1Patches.length === 0 ? undefined : formatPatch(v1Patches, FILE_HEADERS_ONLY);
 }
 
 function pathFromToolCall(toolCall: AcpToolCallState): string | undefined {
@@ -3067,7 +3101,8 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           const rawOutput = toolCall.data.rawOutput ?? toolCall.data.content;
           const changes = structuredFileChanges(toolCall);
           const path = changes[0]?.path ?? pathFromToolCall(toolCall);
-          const diffText = structuredDiffPatch(toolCall) ?? textFromUnknown(rawOutput);
+          const diffText =
+            acpToolCallDiffPatch(toolCall.data.content) ?? textFromUnknown(rawOutput);
           const rawInputRecord = unknownRecord(rawInput);
           const inputVariant =
             typeof rawInputRecord?.variant === "string"
@@ -3576,6 +3611,34 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           ) {
             yield* offerContinuationRun(sessionId);
           }
+        });
+
+        // A structured task end (Grok `task_completed`) is authoritative for the
+        // tool that registered the task: its own updates only ever say running.
+        // Finish the row while deferred finalize holds a settled root turn open
+        // for it, so the turn can settle. While the prompt is still open the
+        // agent reports the end itself (TaskOutput hydration), and an unreported
+        // end must keep its post-finalize continuation offer.
+        const finishRegisteredBackgroundTool = Effect.fnUntraced(function* (mutation: {
+          readonly taskId: string;
+          readonly status: "completed" | "failed";
+          readonly output?: string;
+        }) {
+          const context = yield* Ref.get(activeTurn);
+          if (context === null || context.finalized || !context.promptSettled) return;
+          const toolCallId = context.toolCallIdsByBackgroundTaskId.get(mutation.taskId);
+          const tool = toolCallId === undefined ? undefined : context.tools.get(toolCallId);
+          if (tool === undefined) return;
+          const status = toolStatus(tool.status);
+          if (status !== "pending" && status !== "running") return;
+          context.awaitingBackgroundHydration.delete(mutation.taskId);
+          const finished = { ...tool, status: mutation.status };
+          yield* emitTool(
+            context,
+            mutation.output === undefined ? finished : setToolOutputText(finished, mutation.output),
+            mutation.status,
+          );
+          yield* rearmDeferredFinalize(context);
         });
 
         const bufferPostSettleWake = Effect.fnUntraced(function* (
@@ -5154,17 +5217,11 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
 
         const guardClientFsRead = (path: string) =>
           clientPolicyContext.pipe(
-            Effect.flatMap(({ policy, turnKey }) => {
-              const disposition = acpClientReadDisposition(policy, path);
-              if (
-                disposition === "allow" ||
-                (disposition === "ask" &&
-                  clientPolicyGrants.allowsRead({ path, cwd: policy.cwd, turnKey }))
-              ) {
-                return Effect.void;
-              }
-              return denyClientRequest(`fs/read_text_file for '${path}'`, disposition);
-            }),
+            Effect.flatMap(({ policy }) =>
+              acpClientReadDisposition(policy) === "allow"
+                ? Effect.void
+                : denyClientRequest(`fs/read_text_file for '${path}'`, "deny"),
+            ),
           );
 
         const guardClientTerminalCreate = clientPolicyContext.pipe(
@@ -5569,6 +5626,13 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                     // its child session must not gate root wake machinery.
                     if ((yield* Ref.get(activeSessionId)) !== mutation.sessionId) return;
                     yield* applyLateBackgroundMutation(mutation.sessionId, mutation);
+                    if (mutation.status !== "running") {
+                      yield* finishRegisteredBackgroundTool({
+                        taskId: mutation.taskId,
+                        status: mutation.status,
+                        ...(mutation.output === undefined ? {} : { output: mutation.output }),
+                      });
+                    }
                   }),
                 ).pipe(Effect.asVoid),
             });

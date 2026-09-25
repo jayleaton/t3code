@@ -128,7 +128,7 @@ export function ThreadAutomationsPanel(props: {
       }
     >
       {tasksQuery.error !== null ? (
-        <p className="px-2.5 py-1.5 text-[11px] text-destructive">
+        <p className="px-2.5 py-1.5 text-2xs text-destructive">
           Could not load automations: {tasksQuery.error}
         </p>
       ) : null}
@@ -153,10 +153,10 @@ export function ThreadAutomationsPanel(props: {
               />
             </span>
             <div className="min-w-0 flex-1">
-              <span className="block truncate text-[13px] font-medium text-foreground/80">
+              <span className="block truncate text-sm font-medium text-foreground/80">
                 {task.title}
               </span>
-              <p className="truncate text-[11px] text-muted-foreground">
+              <p className="truncate text-2xs text-muted-foreground">
                 {scheduleLabel(task.schedule)}
                 {task.enabled && task.nextRunAt !== null
                   ? ` · next ${relativeLabel(task.nextRunAt)}`

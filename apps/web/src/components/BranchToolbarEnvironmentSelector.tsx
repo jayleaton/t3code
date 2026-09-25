@@ -10,7 +10,6 @@ import { cn } from "../lib/utils";
 import {
   THREAD_DETAILS_PANEL_ICON_CLASS,
   THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS,
-  THREAD_DETAILS_PANEL_ROW_POPUP_CLASS,
 } from "./chat/threadDetailsPanelStyles";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { useComposerMenuProps } from "./chat/composerEventScope";
@@ -69,7 +68,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
     const lockedRow = (
       <span
         className={cn(
-          "inline-flex h-7 min-w-0 max-w-full items-center gap-1 border border-transparent px-[calc(--spacing(2)-1px)] font-normal text-muted-foreground/70 text-xs sm:h-6",
+          "inline-flex h-7 min-w-0 max-w-full items-center gap-1 border border-transparent px-1.75 font-normal text-muted-foreground/70 text-xs sm:h-6",
           displayMode === "panel" && THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS,
         )}
         data-composer-context-control
@@ -138,7 +137,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
         {...(displayMode === "toolbar" ? composerFloatingLayerProps : {})}
         {...(displayMode === "panel"
           ? {
-              className: THREAD_DETAILS_PANEL_ROW_POPUP_CLASS,
+              className: "w-(--anchor-width)",
             }
           : {})}
       >

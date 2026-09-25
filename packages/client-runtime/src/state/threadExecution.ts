@@ -2,7 +2,10 @@ import {
   latestRootProviderFailure,
   threadErrorSummary,
 } from "@t3tools/shared/orchestrationV2ThreadError";
-import type { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
+import {
+  isOrchestrationV2WorkActive,
+  type OrchestrationV2ThreadProjection,
+} from "@t3tools/contracts";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as DateTime from "effect/DateTime";
 
@@ -65,6 +68,24 @@ export function deriveThreadActivityRun(
     latestMatchingRun(projection, (candidate) => ACTIVITY_RUN_STATUSES.has(candidate.status)) ??
     latestMatchingRun(projection, () => true);
   return run === null ? null : summarizeThreadRun(projection, run);
+}
+
+/**
+ * Provider-native subagent threads never get app runs: their work is a runless
+ * root turn whose status follows the subagent. Returns when that work started
+ * while it is still active, so clients can show the same working state (and
+ * timer) as a run. Stop, queue, and steer stay run-only.
+ */
+export function deriveRunlessWorkStartedAt(
+  projection: OrchestrationV2ThreadProjection,
+): string | null {
+  const node = projection.nodes.findLast(
+    (candidate) =>
+      candidate.kind === "root_turn" &&
+      candidate.runId === null &&
+      isOrchestrationV2WorkActive(candidate.status),
+  );
+  return node?.startedAt == null ? null : DateTime.formatIso(node.startedAt);
 }
 
 export function deriveThreadRuntime(

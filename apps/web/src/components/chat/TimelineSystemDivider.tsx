@@ -35,7 +35,7 @@ export function TimelineSystemDivider(props: {
   return (
     <div
       className={cn(
-        "flex min-w-0 items-center gap-2 py-2 text-[11px] text-muted-foreground",
+        "flex min-w-0 items-center gap-2 py-2 text-2xs text-muted-foreground",
         props.tone === "danger" && "text-destructive",
       )}
     >

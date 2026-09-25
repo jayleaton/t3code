@@ -43,7 +43,6 @@ import { cn } from "~/lib/utils";
 import {
   THREAD_DETAILS_PANEL_CHEVRON_CLASS,
   THREAD_DETAILS_PANEL_ICON_CLASS,
-  THREAD_DETAILS_PANEL_ROW_POPUP_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
 } from "./chat/threadDetailsPanelStyles";
@@ -348,7 +347,7 @@ export default function ProjectScriptsControl({
             <MenuPopup
               align="end"
               {...(isPanel ? { anchor: panelAnchorRef } : {})}
-              className={isPanel ? THREAD_DETAILS_PANEL_ROW_POPUP_CLASS : undefined}
+              className={isPanel ? "w-(--anchor-width)" : undefined}
             >
               {scriptItems}
             </MenuPopup>
@@ -392,11 +391,7 @@ export default function ProjectScriptsControl({
               >
                 <ChevronDownIcon className={THREAD_DETAILS_PANEL_CHEVRON_CLASS} />
               </MenuTrigger>
-              <MenuPopup
-                align="end"
-                anchor={panelAnchorRef}
-                className={THREAD_DETAILS_PANEL_ROW_POPUP_CLASS}
-              >
+              <MenuPopup align="end" anchor={panelAnchorRef} className="w-(--anchor-width)">
                 {importMenuItems}
                 <MenuItem onClick={openAddDialog}>
                   <PlusIcon className="size-4" />

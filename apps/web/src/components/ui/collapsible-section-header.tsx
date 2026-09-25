@@ -44,8 +44,6 @@ export function CollapsibleSectionHeader({
 
 export function SectionHeaderStatus({ children }: { children: ReactNode }) {
   return (
-    <span className="shrink-0 text-[10px] leading-none text-destructive-foreground">
-      {children}
-    </span>
+    <span className="shrink-0 text-3xs leading-none text-destructive-foreground">{children}</span>
   );
 }
