@@ -36,7 +36,12 @@ import LegacyThreadSidebar from "./LegacySidebar";
 import ThreadSidebar from "./Sidebar";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
-import { MainAppLocationTracker } from "./sidebar/mainAppLocation";
+import {
+  isAgentsPage,
+  MainAppLocationTracker,
+  readWorkspaceView,
+  useToggleWorkspaceView,
+} from "./sidebar/mainAppLocation";
 import { useSidebarStageBackdropVariant } from "./SidebarStageBackdrop";
 import { useProjects } from "../state/entities";
 import {
@@ -150,9 +155,11 @@ function SidebarControl() {
   );
 }
 
-// Moves through the app's route history like a browser's back/forward buttons.
+// Moves through the app's route history like a browser's back/forward buttons,
+// and switches between the Agents board and the threads view.
 function NavigationHistoryShortcuts() {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const toggleWorkspaceView = useToggleWorkspaceView();
   const routeThreadRef = useParams({
     strict: false,
     select: (params) => resolveThreadRouteRef(params),
@@ -185,17 +192,23 @@ function NavigationHistoryShortcuts() {
           modelPickerOpen: isModelPickerOpen(),
         },
       });
-      if (command !== "navigation.back" && command !== "navigation.forward") return;
+      if (
+        command !== "navigation.back" &&
+        command !== "navigation.forward" &&
+        command !== "workspace.toggleView"
+      )
+        return;
 
       event.preventDefault();
       event.stopPropagation();
-      if (command === "navigation.back") window.history.back();
+      if (command === "workspace.toggleView") void toggleWorkspaceView();
+      else if (command === "navigation.back") window.history.back();
       else window.history.forward();
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [keybindings, routeThreadRef]);
+  }, [keybindings, routeThreadRef, toggleWorkspaceView]);
 
   return null;
 }
@@ -220,10 +233,11 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const routePanelAnimationsActive = panelAnimationsActive && !panelAnimationsSuppressed;
   const routeRef = useParams({ strict: false, select: resolveThreadRouteRef });
   const routeThread = useThreadShell(routeRef);
+  // An agent chat on the thread route is about to move to the Agents board
+  // (see ThreadRouteView); skip the thread sidebar for that one frame.
   const isOnAgents =
-    pathname === "/agents" ||
-    pathname.startsWith("/agents/") ||
-    Boolean(routeThread?.profileSnapshot);
+    isAgentsPage(pathname) ||
+    (Boolean(routeThread?.profileSnapshot) && readWorkspaceView() === "agents");
   const isOnSettings = pathname === "/settings" || pathname.startsWith("/settings/");
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
   const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
