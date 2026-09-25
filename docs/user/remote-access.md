@@ -306,7 +306,10 @@ On the Agents board, sub-runs appear inside the card of the run that created the
 runs by other agents. Each one shows its agent, title, and status; click it to open that chat.
 A sub-run that is pinned keeps its own card, as does a live sub-run whose parent is settled.
 A sub-run on its own card names its parent's agent and chat; click that name to open the parent.
-To make a sub-run independent, right-click it and choose **Detach from parent run**.
+To link runs yourself on web and desktop, drag a card onto another card's title to make it a
+sub-run, or drag a sub-run out of its card to make it independent. Dragging a sub-run onto
+another card moves it there. Links stay within one environment, and a run cannot go under its
+own sub-runs. You can also right-click a card and choose **Detach from parent run**.
 
 ### Schedule prompts for an agent
 

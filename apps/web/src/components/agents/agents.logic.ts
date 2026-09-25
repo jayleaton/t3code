@@ -248,3 +248,45 @@ export function nestAgentRuns<T extends AgentRun>(input: {
     childrenByKey,
   };
 }
+
+export type AgentRunLinkCheck =
+  | "ok"
+  | "same-run"
+  | "already-parent"
+  | "other-environment"
+  | "cycle";
+
+/**
+ * Whether `child` may become a sub-run of `parent`. Links stay within one
+ * environment, and a run cannot move under itself or one of its own sub-runs.
+ */
+export function checkAgentRunLink(
+  child: Pick<AgentRun, "environmentId" | "id" | "parentThreadId">,
+  parent: Pick<AgentRun, "environmentId" | "id" | "parentThreadId">,
+  all: readonly Pick<AgentRun, "environmentId" | "id" | "parentThreadId">[],
+): AgentRunLinkCheck {
+  if (child.environmentId !== parent.environmentId) return "other-environment";
+  if (child.id === parent.id) return "same-run";
+  if (child.parentThreadId === parent.id) return "already-parent";
+  const byId = new Map(
+    all.filter((run) => run.environmentId === parent.environmentId).map((run) => [run.id, run]),
+  );
+  const seen = new Set<string>();
+  for (
+    let ancestor: Pick<AgentRun, "id" | "parentThreadId"> | undefined = parent;
+    ancestor !== undefined && !seen.has(ancestor.id);
+    ancestor = ancestor.parentThreadId == null ? undefined : byId.get(ancestor.parentThreadId)
+  ) {
+    if (ancestor.id === child.id) return "cycle";
+    seen.add(ancestor.id);
+  }
+  return "ok";
+}
+
+/**
+ * Dropping on a card's header links under that run; its top edge and the area
+ * below the header keep reordering, so both gestures share one drag.
+ */
+export function isAgentRunNestDrop(pointerY: number, header: { top: number; bottom: number }) {
+  return pointerY >= header.top + (header.bottom - header.top) * 0.3 && pointerY <= header.bottom;
+}

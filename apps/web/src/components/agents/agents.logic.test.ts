@@ -16,6 +16,8 @@ import {
   excludePinnedAgentThreads,
   resolveAgentTaskProject,
   nestAgentRuns,
+  checkAgentRunLink,
+  isAgentRunNestDrop,
 } from "./agents.logic";
 const profile: McpGatewayProfile = {
   profileId: "write",
@@ -347,5 +349,38 @@ describe("nestAgentRuns", () => {
     });
     expect(ids(nested.lists.active)).toEqual(["tests"]);
     expect(nested.childrenByKey.size).toBe(0);
+  });
+});
+
+describe("checkAgentRunLink", () => {
+  const run = (id: string, parentThreadId: string | null, environmentId = "local") => ({
+    environmentId: EnvironmentId.make(environmentId),
+    id: ThreadId.make(id),
+    parentThreadId: parentThreadId === null ? null : ThreadId.make(parentThreadId),
+  });
+  const root = run("root", null);
+  const child = run("child", "root");
+  const grandchild = run("grandchild", "child");
+  const all = [root, child, grandchild];
+
+  it("allows linking a run under another run in the same environment", () => {
+    expect(checkAgentRunLink(run("loose", null), child, all)).toBe("ok");
+    expect(checkAgentRunLink(grandchild, root, all)).toBe("ok");
+  });
+
+  it("rejects links the server would refuse or that change nothing", () => {
+    expect(checkAgentRunLink(root, grandchild, all)).toBe("cycle");
+    expect(checkAgentRunLink(child, child, all)).toBe("same-run");
+    expect(checkAgentRunLink(child, root, all)).toBe("already-parent");
+    expect(checkAgentRunLink(run("remote", null, "remote"), root, all)).toBe("other-environment");
+  });
+});
+
+describe("isAgentRunNestDrop", () => {
+  it("nests on the header body and reorders at its top edge", () => {
+    const header = { top: 100, bottom: 200 };
+    expect(isAgentRunNestDrop(110, header)).toBe(false);
+    expect(isAgentRunNestDrop(150, header)).toBe(true);
+    expect(isAgentRunNestDrop(210, header)).toBe(false);
   });
 });

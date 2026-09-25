@@ -5,7 +5,16 @@ import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { CornerLeftUpIcon, PinIcon } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
-import { useState, useRef, useEffect, type CSSProperties } from "react";
+import {
+  useContext,
+  useState,
+  useRef,
+  useEffect,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+import { useDraggable } from "@dnd-kit/core";
+import { AgentRunDragContext, agentChildDragId } from "./agentRunDrag";
 import { Link, useLocation } from "@tanstack/react-router";
 import { PreviewCard, PreviewCardTrigger, PreviewCardPopup } from "../ui/preview-card";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
@@ -38,44 +47,98 @@ function runAgentName(
   };
 }
 
+function AgentChildRunLink({
+  run,
+  depth,
+  profiles,
+  onPointerDown,
+}: {
+  run: EnvironmentThreadShell;
+  depth: number;
+  profiles: readonly McpGatewayProfile[] | undefined;
+  onPointerDown?: (event: ReactPointerEvent<HTMLAnchorElement>) => void;
+}) {
+  const pathname = useLocation({ select: (location) => location.pathname });
+  const status = agentThreadStatus(run);
+  const agent = runAgentName(run, profiles);
+  return (
+    <Link
+      to="/agents/$environmentId/$threadId"
+      params={{ environmentId: run.environmentId, threadId: run.id }}
+      className="agent-thread-child"
+      data-current={pathname === `/agents/${run.environmentId}/${run.id}`}
+      style={
+        {
+          "--agent-color": agent.profile?.color ?? "var(--muted-foreground)",
+          paddingInlineStart: `${6 + depth * 12}px`,
+        } as CSSProperties
+      }
+      {...(onPointerDown ? { onPointerDown } : {})}
+    >
+      <AgentIcon icon={agent.profile?.icon} />
+      <span className="agent-thread-child-agent">{agent.name}</span>
+      <span className="agent-thread-child-title">{run.title}</span>
+      <span className={`agent-status agent-status-${status}`}>
+        {agentThreadStatusLabel(status)}
+      </span>
+    </Link>
+  );
+}
+
+/** A sub-run row that can be dragged onto another card or out of this one. */
+function DraggableAgentChildRun(props: {
+  run: EnvironmentThreadShell;
+  depth: number;
+  anchorKey: string;
+  profiles: readonly McpGatewayProfile[] | undefined;
+}) {
+  const key = `${props.run.environmentId}:${props.run.id}`;
+  const { setNodeRef, listeners, isDragging } = useDraggable({
+    id: agentChildDragId(key),
+    data: { anchorKey: props.anchorKey },
+  });
+  return (
+    <li ref={setNodeRef} data-dragging={isDragging || undefined}>
+      <AgentChildRunLink
+        {...props}
+        // The row starts its own drag, not the card's.
+        onPointerDown={(event) => {
+          listeners?.onPointerDown?.(event);
+          event.stopPropagation();
+        }}
+      />
+    </li>
+  );
+}
+
 /** Runs this card's run created, each linking to its own chat with live status. */
 function AgentChildRuns({
   runs,
+  anchorKey,
   profiles,
 }: {
   runs: readonly AgentChildRun<EnvironmentThreadShell>[];
+  anchorKey: string;
   profiles: readonly McpGatewayProfile[] | undefined;
 }) {
-  const pathname = useLocation({ select: (location) => location.pathname });
+  const { childDragEnabled } = useContext(AgentRunDragContext);
   return (
     <ul className="agent-thread-children" aria-label="Sub-agent runs">
-      {runs.map(({ thread: run, depth }) => {
-        const status = agentThreadStatus(run);
-        const agent = runAgentName(run, profiles);
-        return (
+      {runs.map(({ thread: run, depth }) =>
+        childDragEnabled ? (
+          <DraggableAgentChildRun
+            key={`${run.environmentId}:${run.id}`}
+            run={run}
+            depth={depth}
+            anchorKey={anchorKey}
+            profiles={profiles}
+          />
+        ) : (
           <li key={`${run.environmentId}:${run.id}`}>
-            <Link
-              to="/agents/$environmentId/$threadId"
-              params={{ environmentId: run.environmentId, threadId: run.id }}
-              className="agent-thread-child"
-              data-current={pathname === `/agents/${run.environmentId}/${run.id}`}
-              style={
-                {
-                  "--agent-color": agent.profile?.color ?? "var(--muted-foreground)",
-                  paddingInlineStart: `${6 + depth * 12}px`,
-                } as CSSProperties
-              }
-            >
-              <AgentIcon icon={agent.profile?.icon} />
-              <span className="agent-thread-child-agent">{agent.name}</span>
-              <span className="agent-thread-child-title">{run.title}</span>
-              <span className={`agent-status agent-status-${status}`}>
-                {agentThreadStatusLabel(status)}
-              </span>
-            </Link>
+            <AgentChildRunLink run={run} depth={depth} profiles={profiles} />
           </li>
-        );
-      })}
+        ),
+      )}
     </ul>
   );
 }
@@ -104,6 +167,7 @@ export function ThreadCard({
   ) => Promise<void>;
 }) {
   const pathname = useLocation({ select: (location) => location.pathname });
+  const { nestTargetKey } = useContext(AgentRunDragContext);
   const environment = useEnvironment(thread.environmentId);
   useNowMinute();
   const timestamp = thread.latestUserMessageAt ?? thread.updatedAt;
@@ -167,6 +231,7 @@ export function ThreadCard({
     <div
       className="agent-thread-container"
       data-current={pathname === `/agents/${thread.environmentId}/${thread.id}`}
+      data-nest-target={nestTargetKey === `${thread.environmentId}:${thread.id}` || undefined}
       style={{ "--agent-color": profile?.color ?? "var(--muted-foreground)" } as CSSProperties}
     >
       <PreviewCard
@@ -298,7 +363,13 @@ export function ThreadCard({
           </Link>
         </div>
       )}
-      {childRuns && childRuns.length > 0 && <AgentChildRuns runs={childRuns} profiles={profiles} />}
+      {childRuns && childRuns.length > 0 && (
+        <AgentChildRuns
+          runs={childRuns}
+          anchorKey={`${thread.environmentId}:${thread.id}`}
+          profiles={profiles}
+        />
+      )}
       {badges.length > 0 && (
         <div className="agent-thread-prs" aria-label="Pull requests">
           {badges.map(({ reference, status }) => (
