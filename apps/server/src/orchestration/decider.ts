@@ -42,6 +42,7 @@ import {
   requireThread,
   requireThreadArchived,
   requireThreadAbsent,
+  requireValidParentThread,
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
@@ -397,6 +398,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (command.parentThreadId !== undefined) {
+        yield* requireValidParentThread({
+          readModel,
+          command,
+          threadId: command.threadId,
+          parentThreadId: command.parentThreadId,
+        });
+      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -416,6 +425,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.profileSnapshot === undefined
             ? {}
             : { profileSnapshot: command.profileSnapshot }),
+          ...(command.parentThreadId === undefined
+            ? {}
+            : { parentThreadId: command.parentThreadId }),
           branch: command.branch,
           worktreePath: command.worktreePath,
           createdAt: command.createdAt,
@@ -1012,6 +1024,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ],
         });
       }
+      if (command.parentThreadId != null) {
+        yield* requireValidParentThread({
+          readModel,
+          command,
+          threadId: command.threadId,
+          parentThreadId: command.parentThreadId,
+        });
+      }
       const branch =
         command.branch !== undefined &&
         command.expectedBranch !== undefined &&
@@ -1064,6 +1084,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
           ...(command.linkedPullRequest !== undefined
             ? { linkedPullRequest: command.linkedPullRequest }
+            : {}),
+          ...(command.parentThreadId !== undefined
+            ? { parentThreadId: command.parentThreadId }
             : {}),
           updatedAt: occurredAt,
         },

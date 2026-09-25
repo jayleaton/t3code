@@ -421,6 +421,56 @@ describe("gateway chat tools", () => {
     expect(read.items[0]).toMatchObject({ text: `hello from ${environmentId}` });
   });
 
+  it("parents chats created by a T3 chat in its own environment", async () => {
+    const base = makePort();
+    const parents: Array<string | undefined> = [];
+    const context = {
+      port: {
+        ...base,
+        createThread: async (request: Parameters<typeof base.createThread>[0]) => {
+          parents.push(request.parentThreadId);
+          return base.createThread(request);
+        },
+      },
+      grants,
+    };
+    const invocation = { caller: { environmentId: "local", threadId: "coordinator" } };
+    const create = (input: Record<string, unknown>, key: string) =>
+      callGatewayTool(
+        context,
+        "t3_create_thread",
+        {
+          environmentId: "local",
+          projectId: "local-project",
+          title: "Child",
+          modelSelection: { instanceId: "codex", model: "gpt-5" },
+          idempotencyKey: key,
+          ...input,
+        },
+        invocation,
+      );
+
+    await create({}, "child-default");
+    await create({ parentThreadId: "other-parent" }, "child-explicit");
+    await create({ parentThreadId: null }, "child-standalone");
+    await create({ environmentId: "remote", projectId: "remote-project" }, "child-remote");
+    await callGatewayTool(
+      context,
+      "t3_create_and_start_thread",
+      {
+        environmentId: "local",
+        projectId: "local-project",
+        title: "Started child",
+        text: "Go",
+        modelSelection: { instanceId: "codex", model: "gpt-5" },
+        idempotencyKey: "child-started",
+      },
+      invocation,
+    );
+
+    expect(parents).toEqual(["coordinator", "other-parent", undefined, undefined, "coordinator"]);
+  });
+
   it.each(["constructor", "toString", "__proto__"])(
     "does not inherit a grant for %s",
     async (environmentId) => {

@@ -213,6 +213,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           pinned_at,
           pin_order_key,
           active_order_key,
+          parent_thread_id,
           created_at,
           updated_at,
           deleted_at
@@ -236,6 +237,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           '2026-02-24T00:00:01.000Z',
           'gm',
           'hq',
+          'thread-parent',
           '2026-02-24T00:00:02.000Z',
           '2026-02-24T00:00:03.000Z',
           NULL
@@ -490,6 +492,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           pinOrderKey: "gm",
           activeOrderKey: "hq",
           autoSettleDisabledAt: null,
+          parentThreadId: ThreadId.make("thread-parent"),
           titleRegeneration: null,
           titleState: null,
           deletedAt: null,
@@ -628,6 +631,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           pinOrderKey: "gm",
           activeOrderKey: "hq",
           autoSettleDisabledAt: null,
+          parentThreadId: ThreadId.make("thread-parent"),
           titleRegeneration: null,
           titleState: null,
           session: {

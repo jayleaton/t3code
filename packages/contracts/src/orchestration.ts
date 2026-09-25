@@ -880,6 +880,10 @@ export const OrchestrationThread = Schema.Struct({
   // Survives manual settle, un-settle, and activity: only the user clears it.
   // Optional so payloads from older servers still decode.
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  // Thread that spawned this one (for example an agent creating sub-threads
+  // over MCP). Same environment; may be missing or deleted, so clients treat
+  // it as a hint. Optional so payloads from older servers still decode.
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   // Pending-only state. Optional so older servers remain compatible.
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
@@ -954,6 +958,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
   session: Schema.NullOr(OrchestrationSession),
@@ -1178,6 +1183,7 @@ const ThreadCreateCommand = Schema.Struct({
   profileSelection: Schema.optional(ThreadProfileSelection),
   useServerDefaults: Schema.optional(Schema.Boolean),
   profileSnapshot: Schema.optional(ThreadProfileSnapshot),
+  parentThreadId: Schema.optional(ThreadId),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
@@ -1300,6 +1306,8 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   expectedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  // Null detaches the thread from its parent.
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
 }).check(
   Schema.makeFilter(
     (input) =>
@@ -1858,6 +1866,7 @@ export const ThreadCreatedPayload = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   profileSnapshot: Schema.optional(ThreadProfileSnapshot),
+  parentThreadId: Schema.optional(ThreadId),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
@@ -1957,6 +1966,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   // thread.pull-request-linked still decode and replay into the link table.
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   updatedAt: IsoDateTime,
 });
 

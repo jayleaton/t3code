@@ -445,6 +445,7 @@ export function projectEvent(
             unsettledAt: null,
             activeOrderKey: null,
             autoSettleDisabledAt: null,
+            parentThreadId: payload.parentThreadId ?? null,
             snoozedUntil: null,
             snoozedAt: null,
             deletedAt: null,
@@ -645,6 +646,9 @@ export function projectEvent(
                 : {}),
               ...(payload.branchPullRequest !== undefined
                 ? { branchPullRequest: payload.branchPullRequest }
+                : {}),
+              ...(payload.parentThreadId !== undefined
+                ? { parentThreadId: payload.parentThreadId }
                 : {}),
               ...legacyLinkPatch,
               updatedAt: payload.updatedAt,

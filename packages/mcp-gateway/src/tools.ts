@@ -36,6 +36,29 @@ export interface GatewayToolContext {
   };
 }
 
+/** The T3 chat whose agent made a relayed tool call, as stamped by its server. */
+export interface GatewayCaller {
+  readonly environmentId: string;
+  readonly threadId: string;
+}
+
+export interface GatewayInvocation {
+  readonly caller?: GatewayCaller | undefined;
+}
+
+/** Reads the caller the environment server stamps into `_meta` of relayed tool calls. */
+export function gatewayCaller(meta: unknown): GatewayCaller | undefined {
+  const caller =
+    typeof meta === "object" && meta !== null
+      ? (meta as Record<string, unknown>)["t3code/caller"]
+      : undefined;
+  if (typeof caller !== "object" || caller === null) return undefined;
+  const { environmentId, threadId } = caller as Record<string, unknown>;
+  return typeof environmentId === "string" && typeof threadId === "string"
+    ? { environmentId, threadId }
+    : undefined;
+}
+
 export const handoffInputSchema = z.object({
   sourceEnvironmentId: z.string().min(1),
   sourceThreadId: z.string().min(1),
@@ -787,6 +810,7 @@ export async function callGatewayTool(
   context: GatewayToolContext,
   name: string,
   rawInput: unknown,
+  invocation: GatewayInvocation = {},
 ): Promise<any> {
   const input = record(rawInput);
   switch (name) {
@@ -1005,12 +1029,15 @@ export async function callGatewayTool(
       const page = await context.port.listThreads(environmentId);
       const projectId = typeof input.projectId === "string" ? input.projectId : undefined;
       const profileId = typeof input.profileId === "string" ? input.profileId : undefined;
+      const parentThreadId =
+        typeof input.parentThreadId === "string" ? input.parentThreadId : undefined;
       return {
         ...page,
         items: page.items.filter((thread) => {
           const snapshot = thread.profileSnapshot as { profileId?: string } | undefined;
           return (
             (projectId === undefined || thread.projectId === projectId) &&
+            (parentThreadId === undefined || thread.parentThreadId === parentThreadId) &&
             (profileId === undefined || snapshot?.profileId === profileId) &&
             (state === "all" ||
               (state === "settled" ? thread.settledAt != null : thread.settledAt == null)) &&
@@ -1618,6 +1645,15 @@ export async function callGatewayTool(
     case "t3_create_thread": {
       const environmentId = environmentWithScope(context, input, "create");
       const idempotencyKey = requiredIdempotencyKey(input);
+      // Explicit null opts out; otherwise a chat creating chats in its own environment parents them.
+      const parentThreadId =
+        input.parentThreadId === null
+          ? undefined
+          : typeof input.parentThreadId === "string"
+            ? input.parentThreadId.trim()
+            : invocation.caller?.environmentId === environmentId
+              ? invocation.caller.threadId
+              : undefined;
       const profileName = typeof input.profile === "string" ? input.profile.trim() : "";
       const profileIdInput = typeof input.profileId === "string" ? input.profileId.trim() : "";
       const legacyIdentity = {
@@ -1773,6 +1809,7 @@ export async function callGatewayTool(
           ...(input.baseBranch === undefined
             ? {}
             : { baseBranch: requiredString(input, "baseBranch") }),
+          ...(parentThreadId === undefined ? {} : { parentThreadId }),
           ...(authoritativeProfileRef === undefined
             ? {}
             : {
@@ -1844,7 +1881,7 @@ export async function callGatewayTool(
       const createInput = Object.fromEntries(
         Object.entries(input).filter(([key]) => key !== "text"),
       );
-      const creation = await callGatewayTool(context, "t3_create_thread", createInput);
+      const creation = await callGatewayTool(context, "t3_create_thread", createInput, invocation);
       const threadId =
         typeof creation?.threadId === "string" ? (creation.threadId as string) : undefined;
       if (threadId === undefined) {
