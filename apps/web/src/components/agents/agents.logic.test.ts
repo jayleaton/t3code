@@ -295,7 +295,7 @@ describe("nestAgentRuns", () => {
   const run = (
     id: string,
     parentThreadId: string | null,
-    options: { settled?: boolean; pinned?: boolean; minute?: number } = {},
+    options: { settled?: boolean; pinned?: boolean; minute?: number; orderKey?: string } = {},
   ) => ({
     environmentId: EnvironmentId.make("local"),
     id: ThreadId.make(id),
@@ -304,8 +304,12 @@ describe("nestAgentRuns", () => {
     settledAt: options.settled ? "2026-09-25T01:00:00.000Z" : null,
     pinnedAt: options.pinned ? "2026-09-25T01:00:00.000Z" : null,
     archivedAt: null,
+    activeOrderKey: options.orderKey ?? null,
+    unsettledAt: null,
   });
   const ids = (runs: readonly { id: string }[]) => runs.map((item) => item.id);
+  const entries = (runs: readonly { thread: { id: string }; depth: number }[] | undefined) =>
+    runs?.map((child) => [child.thread.id, child.depth]);
   const coordinator = run("coordinator", null);
   const tests = run("tests", "coordinator", { minute: 1 });
   const docs = run("docs", "coordinator", { minute: 2, settled: true });
@@ -318,28 +322,42 @@ describe("nestAgentRuns", () => {
     });
     expect(ids(nested.lists.active)).toEqual(["coordinator"]);
     expect(nested.lists.settled).toEqual([]);
-    expect(
-      nested.childrenByKey.get("local:coordinator")?.map((child) => [child.thread.id, child.depth]),
-    ).toEqual([
+    const children = nested.childrenByKey.get("local:coordinator");
+    expect(entries(children?.live)).toEqual([
       ["tests", 0],
       ["deps", 1],
-      ["docs", 0],
     ]);
+    expect(entries(children?.settled)).toEqual([["docs", 0]]);
   });
 
-  it("keeps pinned sub-runs and live sub-runs of a settled run on their own cards", () => {
-    const settledCoordinator = run("coordinator", null, { settled: true });
-    const pinnedChild = run("pinned", "coordinator", { pinned: true });
+  it("orders sub-runs like the board: pinned on top, then arranged, then settled last", () => {
+    const pinned = run("pinned", "coordinator", { pinned: true, minute: 5 });
+    const first = run("first", "coordinator", { minute: 6, orderKey: "a" });
+    const second = run("second", "coordinator", { minute: 7, orderKey: "b" });
     const nested = nestAgentRuns({
-      lists: { pinned: [pinnedChild], active: [tests], settled: [settledCoordinator, docs] },
-      all: [settledCoordinator, pinnedChild, tests, docs],
+      lists: { pinned: [pinned], active: [coordinator, second, first], settled: [docs] },
+      all: [coordinator, pinned, first, second, docs],
     });
-    expect(ids(nested.lists.pinned)).toEqual(["pinned"]);
+    expect(nested.lists.pinned).toEqual([]);
+    const children = nested.childrenByKey.get("local:coordinator");
+    expect(entries(children?.live)).toEqual([
+      ["pinned", 0],
+      ["first", 0],
+      ["second", 0],
+    ]);
+    expect(ids(children!.live[1]!.siblings)).toEqual(["pinned", "first", "second", "docs"]);
+    expect(entries(children?.settled)).toEqual([["docs", 0]]);
+  });
+
+  it("keeps live sub-runs of a settled run on their own cards", () => {
+    const settledCoordinator = run("coordinator", null, { settled: true });
+    const nested = nestAgentRuns({
+      lists: { pinned: [], active: [tests], settled: [settledCoordinator, docs] },
+      all: [settledCoordinator, tests, docs],
+    });
     expect(ids(nested.lists.active)).toEqual(["tests"]);
     expect(ids(nested.lists.settled)).toEqual(["coordinator"]);
-    expect(nested.childrenByKey.get("local:coordinator")?.map((child) => child.thread.id)).toEqual([
-      "docs",
-    ]);
+    expect(entries(nested.childrenByKey.get("local:coordinator")?.settled)).toEqual([["docs", 0]]);
   });
 
   it("leaves a sub-run whose parent is not on the board as its own card", () => {

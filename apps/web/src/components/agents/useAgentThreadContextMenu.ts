@@ -25,7 +25,7 @@ import { useUiStateStore } from "../../uiStateStore";
 import { useClientSettings } from "../../hooks/useSettings";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 
-import { planAgentThreadMove } from "./agents.logic";
+import { planAgentThreadMove, type AgentRunContextMenu } from "./agents.logic";
 
 type AgentThreadMenuId =
   | "move-up"
@@ -58,7 +58,9 @@ function failureToast(title: string, error: unknown) {
  * (not per card) so a board with many chat cards does not subscribe each card
  * to projects, settings, and the thread action commands.
  */
-export function useAgentThreadContextMenu(visible: readonly EnvironmentThreadShell[]) {
+export function useAgentThreadContextMenu(
+  visible: readonly EnvironmentThreadShell[],
+): AgentRunContextMenu {
   const threads = useThreadShells();
   const router = useRouter();
   const projects = useProjects();
@@ -97,7 +99,11 @@ export function useAgentThreadContextMenu(visible: readonly EnvironmentThreadShe
   });
 
   return useCallback(
-    async (thread: EnvironmentThreadShell, position: { x: number; y: number }) => {
+    async (
+      thread: EnvironmentThreadShell,
+      position: { x: number; y: number },
+      siblings?: readonly EnvironmentThreadShell[],
+    ) => {
       const api = readLocalApi();
       const ref = scopeThreadRef(thread.environmentId, thread.id);
       const current = readThreadShell(ref);
@@ -118,7 +124,13 @@ export function useAgentThreadContextMenu(visible: readonly EnvironmentThreadShe
             const shell = readThreadShell(scopeThreadRef(item.environmentId, item.id));
             return shell ? [shell] : [];
           });
-        const plan = planAgentThreadMove(refresh(visible), refresh(threads), current, direction);
+        // A sub-run moves among its parent's sub-runs; a card moves on the board.
+        const plan = planAgentThreadMove(
+          refresh(siblings ?? visible),
+          refresh(threads),
+          current,
+          direction,
+        );
         return plan?.every(({ thread }) =>
           readEnvironmentSupportsActiveReorder(thread.environmentId),
         )
@@ -130,7 +142,11 @@ export function useAgentThreadContextMenu(visible: readonly EnvironmentThreadShe
           ? [
               pinned
                 ? { id: "unpin" as const, label: "Unpin chat", icon: "pin-off" }
-                : { id: "pin" as const, label: "Pin chat to top", icon: "pin" },
+                : {
+                    id: "pin" as const,
+                    label: siblings ? "Pin to top of parent" : "Pin chat to top",
+                    icon: "pin",
+                  },
             ]
           : []),
         ...(!pinned && !settled

@@ -304,8 +304,11 @@ chat. `t3_list_threads` accepts `parentThreadId` to list a chat's sub-runs.
 
 On the Agents board, sub-runs appear inside the card of the run that created them, including
 runs by other agents. Each one shows its agent, title, and status; click it to open that chat.
-A sub-run that is pinned keeps its own card, as does a live sub-run whose parent is settled.
-A sub-run on its own card names its parent's agent and chat; click that name to open the parent.
+Right-click a sub-run for the same actions as a card. **Pin to top of parent** keeps it first in
+its parent's list, **Move up** and **Move down** arrange it among its siblings, and settling moves
+it into its parent's collapsed **Settled** group. A live sub-run whose parent is settled keeps its
+own card, which names its parent's agent and chat; click that name to open the parent.
+
 To link runs yourself on web and desktop, drag a card onto another card's title to make it a
 sub-run, or drag a sub-run out of its card to make it independent. Dragging a sub-run onto
 another card moves it there. Links stay within one environment, and a run cannot go under its

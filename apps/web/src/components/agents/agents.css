@@ -1410,3 +1410,24 @@
   flex-shrink: 0;
   color: var(--muted-foreground);
 }
+.agent-thread-child-pin {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+}
+.agent-thread-children-settled {
+  display: block;
+  width: 100%;
+  margin-top: 2px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  text-align: left;
+  font:
+    9px ui-monospace,
+    monospace;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.agent-thread-children-settled:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}

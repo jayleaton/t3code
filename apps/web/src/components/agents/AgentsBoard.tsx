@@ -43,7 +43,8 @@ import {
   nestAgentRuns,
   selectAgentWorkspaceThreads,
   selectPinnedAgentThreads,
-  type AgentChildRun,
+  type AgentCardChildren,
+  type AgentRunContextMenu,
 } from "./agents.logic";
 import { DesktopUpdateButton } from "../sidebar/SidebarUpdatePill";
 import { BrandMark } from "../BrandMark";
@@ -65,12 +66,9 @@ function AgentThreadList({
   profiles: readonly McpGatewayProfile[];
   threads: readonly EnvironmentThreadShell[];
   pinned: readonly EnvironmentThreadShell[];
-  childrenByKey: ReadonlyMap<string, readonly AgentChildRun<EnvironmentThreadShell>[]>;
+  childrenByKey: ReadonlyMap<string, AgentCardChildren<EnvironmentThreadShell>>;
   runByKey: ReadonlyMap<string, EnvironmentThreadShell>;
-  onContextMenu: (
-    thread: EnvironmentThreadShell,
-    position: { x: number; y: number },
-  ) => Promise<void>;
+  onContextMenu: AgentRunContextMenu;
 }) {
   const [settledOpen, setSettledOpen] = useState(false);
   const active = threads.filter((thread) => thread.settledAt === null);
