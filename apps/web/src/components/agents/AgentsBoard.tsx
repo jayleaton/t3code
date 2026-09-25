@@ -40,8 +40,10 @@ import { AgentsLoadingNotice } from "./AgentsLoadingNotice";
 import {
   excludePinnedAgentThreads,
   groupAgentThreads,
+  nestAgentRuns,
   selectAgentWorkspaceThreads,
   selectPinnedAgentThreads,
+  type AgentChildRun,
 } from "./agents.logic";
 import { DesktopUpdateButton } from "../sidebar/SidebarUpdatePill";
 import { BrandMark } from "../BrandMark";
@@ -57,10 +59,14 @@ function AgentThreadList({
   pinned,
   onContextMenu,
   profiles,
+  childrenByKey,
+  runByKey,
 }: {
   profiles: readonly McpGatewayProfile[];
   threads: readonly EnvironmentThreadShell[];
   pinned: readonly EnvironmentThreadShell[];
+  childrenByKey: ReadonlyMap<string, readonly AgentChildRun<EnvironmentThreadShell>[]>;
+  runByKey: ReadonlyMap<string, EnvironmentThreadShell>;
   onContextMenu: (
     thread: EnvironmentThreadShell,
     position: { x: number; y: number },
@@ -75,6 +81,13 @@ function AgentThreadList({
       thread={thread}
       dragging={dragging}
       profile={profiles.find((profile) => profile.profileId === thread.profileSnapshot?.profileId)}
+      profiles={profiles}
+      childRuns={childrenByKey.get(`${thread.environmentId}:${thread.id}`)}
+      parentRun={
+        thread.parentThreadId == null
+          ? null
+          : runByKey.get(`${thread.environmentId}:${thread.parentThreadId}`)
+      }
       onContextMenu={onContextMenu}
     />
   );
@@ -169,11 +182,28 @@ export function AgentsBoard() {
   const allThreads = useMemo(() => [...groups.values(), orphaned].flat(), [groups, orphaned]);
   // Pinned chats stay at the top of the list no matter which agent filter or
   // search is active, so they are selected outside the filtered set.
-  const pinned = useMemo(() => selectPinnedAgentThreads(allThreads), [allThreads]);
-  const visible = useMemo(() => {
+  const allPinned = useMemo(() => selectPinnedAgentThreads(allThreads), [allThreads]);
+  // Runs another run created fold into that run's card (see nestAgentRuns).
+  const { lists: nestedLists, childrenByKey } = useMemo(() => {
     const { active, settled } = selectAgentWorkspaceThreads(threads, filter, query);
-    return excludePinnedAgentThreads([...active, ...settled], pinned);
-  }, [threads, filter, query, pinned]);
+    return nestAgentRuns({
+      lists: {
+        pinned: allPinned,
+        active: excludePinnedAgentThreads(active, allPinned),
+        settled: excludePinnedAgentThreads(settled, allPinned),
+      },
+      all: threads,
+    });
+  }, [threads, filter, query, allPinned]);
+  const pinned = nestedLists.pinned;
+  const visible = useMemo(
+    () => [...nestedLists.active, ...nestedLists.settled],
+    [nestedLists.active, nestedLists.settled],
+  );
+  const runByKey = useMemo(
+    () => new Map(threads.map((thread) => [`${thread.environmentId}:${thread.id}`, thread])),
+    [threads],
+  );
   const onThreadContextMenu = useAgentThreadContextMenu(visible);
   const activeCount = (items: readonly EnvironmentThreadShell[]) =>
     items.filter((thread) => thread.settledAt === null).length;
@@ -455,6 +485,8 @@ export function AgentsBoard() {
             threads={visible}
             pinned={pinned}
             profiles={profiles}
+            childrenByKey={childrenByKey}
+            runByKey={runByKey}
             onContextMenu={onThreadContextMenu}
           />
         </section>

@@ -4,7 +4,7 @@ import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environ
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useThreadShells } from "../../state/entities";
 import { useUiStateStore } from "../../uiStateStore";
-import { isAgentChatInFocus } from "./agents.logic";
+import { isAgentChatInFocus, nestAgentRuns } from "./agents.logic";
 import { ThreadCard } from "./ThreadCard";
 import { useAgentThreadContextMenu } from "./useAgentThreadContextMenu";
 
@@ -12,12 +12,23 @@ export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
   const threads = useThreadShells();
   const visited = useUiStateStore((state) => state.threadLastVisitedAtById);
   const currentKey = scopedThreadKey(current);
-  const visible = sortActiveThreadsByOrderKey(
+  const inFocus = sortActiveThreadsByOrderKey(
     threads.filter((thread) => {
       if (!thread.profileSnapshot) return false;
       const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
       return isAgentChatInFocus(thread, visited[key], key === currentKey);
     }),
+  );
+  const { lists, childrenByKey } = nestAgentRuns({
+    lists: { pinned: [], active: inFocus, settled: [] },
+    all: threads,
+  });
+  const visible = lists.active;
+  const runByKey = new Map(
+    threads.map((thread) => [
+      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      thread,
+    ]),
   );
   const onContextMenu = useAgentThreadContextMenu(visible);
   return (
@@ -26,7 +37,19 @@ export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
       <div className="agent-chat-rail-list">
         <SortableAgentThreads threads={visible}>
           {(thread, dragging) => (
-            <ThreadCard thread={thread} dragging={dragging} onContextMenu={onContextMenu} />
+            <ThreadCard
+              thread={thread}
+              dragging={dragging}
+              childRuns={childrenByKey.get(`${thread.environmentId}:${thread.id}`)}
+              parentRun={
+                thread.parentThreadId == null
+                  ? null
+                  : runByKey.get(
+                      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.parentThreadId)),
+                    )
+              }
+              onContextMenu={onContextMenu}
+            />
           )}
         </SortableAgentThreads>
       </div>

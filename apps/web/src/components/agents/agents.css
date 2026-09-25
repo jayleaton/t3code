@@ -1314,3 +1314,60 @@
   gap: 6px;
   margin-top: 12px;
 }
+.agent-thread-children {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 5px 6px 6px;
+  border-top: 1px solid var(--border);
+  list-style: none;
+}
+.agent-thread-child {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted-foreground);
+}
+.agent-thread-child:hover,
+.agent-thread-child[data-current="true"] {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.agent-thread-child:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.agent-thread-child svg {
+  flex-shrink: 0;
+  color: var(--agent-color);
+}
+.agent-thread-child-agent {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.agent-thread-child-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-thread-parent {
+  color: var(--muted-foreground);
+}
+.agent-thread-child .agent-orb,
+.agent-thread-child .agent-custom-icon {
+  width: 12px;
+  height: 12px;
+}
+.agent-thread-child .agent-custom-icon svg {
+  width: 12px;
+  height: 12px;
+}

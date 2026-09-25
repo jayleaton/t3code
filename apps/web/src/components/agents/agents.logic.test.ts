@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   EnvironmentId,
   OrchestrationThreadShell,
+  ThreadId,
   type McpGatewayProfile,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -14,6 +15,7 @@ import {
   selectPinnedAgentThreads,
   excludePinnedAgentThreads,
   resolveAgentTaskProject,
+  nestAgentRuns,
 } from "./agents.logic";
 const profile: McpGatewayProfile = {
   profileId: "write",
@@ -284,5 +286,66 @@ describe("agent active card order", () => {
         .map((item) => item.environmentId),
     ).toEqual(["remote", "local"]);
     expect(planAgentThreadMove(items, items, pinned, "down")).toBeNull();
+  });
+});
+
+describe("nestAgentRuns", () => {
+  const run = (
+    id: string,
+    parentThreadId: string | null,
+    options: { settled?: boolean; pinned?: boolean; minute?: number } = {},
+  ) => ({
+    environmentId: EnvironmentId.make("local"),
+    id: ThreadId.make(id),
+    parentThreadId: parentThreadId === null ? null : ThreadId.make(parentThreadId),
+    createdAt: `2026-09-25T00:${String(options.minute ?? 0).padStart(2, "0")}:00.000Z`,
+    settledAt: options.settled ? "2026-09-25T01:00:00.000Z" : null,
+    pinnedAt: options.pinned ? "2026-09-25T01:00:00.000Z" : null,
+    archivedAt: null,
+  });
+  const ids = (runs: readonly { id: string }[]) => runs.map((item) => item.id);
+  const coordinator = run("coordinator", null);
+  const tests = run("tests", "coordinator", { minute: 1 });
+  const docs = run("docs", "coordinator", { minute: 2, settled: true });
+  const deps = run("deps", "tests", { minute: 3 });
+
+  it("folds sub-runs, including settled and filtered-out ones, into the parent's card", () => {
+    const nested = nestAgentRuns({
+      lists: { pinned: [], active: [coordinator, tests], settled: [docs] },
+      all: [coordinator, tests, docs, deps],
+    });
+    expect(ids(nested.lists.active)).toEqual(["coordinator"]);
+    expect(nested.lists.settled).toEqual([]);
+    expect(
+      nested.childrenByKey.get("local:coordinator")?.map((child) => [child.thread.id, child.depth]),
+    ).toEqual([
+      ["tests", 0],
+      ["deps", 1],
+      ["docs", 0],
+    ]);
+  });
+
+  it("keeps pinned sub-runs and live sub-runs of a settled run on their own cards", () => {
+    const settledCoordinator = run("coordinator", null, { settled: true });
+    const pinnedChild = run("pinned", "coordinator", { pinned: true });
+    const nested = nestAgentRuns({
+      lists: { pinned: [pinnedChild], active: [tests], settled: [settledCoordinator, docs] },
+      all: [settledCoordinator, pinnedChild, tests, docs],
+    });
+    expect(ids(nested.lists.pinned)).toEqual(["pinned"]);
+    expect(ids(nested.lists.active)).toEqual(["tests"]);
+    expect(ids(nested.lists.settled)).toEqual(["coordinator"]);
+    expect(nested.childrenByKey.get("local:coordinator")?.map((child) => child.thread.id)).toEqual([
+      "docs",
+    ]);
+  });
+
+  it("leaves a sub-run whose parent is not on the board as its own card", () => {
+    const nested = nestAgentRuns({
+      lists: { pinned: [], active: [tests], settled: [] },
+      all: [tests],
+    });
+    expect(ids(nested.lists.active)).toEqual(["tests"]);
+    expect(nested.childrenByKey.size).toBe(0);
   });
 });

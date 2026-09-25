@@ -151,3 +151,100 @@ export function planAgentThreadMove(
   });
   return plan?.map(({ id, orderKey }) => ({ thread: byId.get(id)!, orderKey })) ?? null;
 }
+
+type AgentRun = Pick<
+  EnvironmentThreadShell,
+  "environmentId" | "id" | "parentThreadId" | "createdAt" | "settledAt" | "pinnedAt" | "archivedAt"
+>;
+
+export interface AgentChildRun<T> {
+  readonly thread: T;
+  /** 0 for runs the card's own run created, 1 for theirs, and so on. */
+  readonly depth: number;
+}
+
+type AgentRunList = "pinned" | "active" | "settled";
+
+/**
+ * Folds runs that another run created into the card of their nearest ancestor
+ * on the board. Children come from every run, so a parent's card also shows
+ * sub-runs of other agents and ones hidden by the current filter. A live card
+ * holds children in any state; a settled card holds only settled children, so
+ * live work never disappears into the collapsed settled shelf. Pinned runs
+ * keep their own card.
+ */
+export function nestAgentRuns<T extends AgentRun>(input: {
+  readonly lists: Readonly<Record<AgentRunList, readonly T[]>>;
+  readonly all: readonly T[];
+}): {
+  readonly lists: Readonly<Record<AgentRunList, readonly T[]>>;
+  readonly childrenByKey: ReadonlyMap<string, readonly AgentChildRun<T>[]>;
+} {
+  const listByKey = new Map<string, AgentRunList>();
+  for (const list of ["pinned", "active", "settled"] as const) {
+    for (const run of input.lists[list]) listByKey.set(threadKey(run), list);
+  }
+  const runByKey = new Map<string, T>();
+  for (const run of [...input.all, ...input.lists.pinned, ...input.lists.active]) {
+    if (run.archivedAt === null) runByKey.set(threadKey(run), run);
+  }
+  const parentKeyOf = (run: T) =>
+    run.parentThreadId == null || run.parentThreadId === run.id
+      ? null
+      : threadKey({ environmentId: run.environmentId, id: run.parentThreadId });
+  const anchorByKey = new Map<string, string | null>();
+  const resolveAnchor = (run: T, visiting: Set<string>): string | null => {
+    const key = threadKey(run);
+    const cached = anchorByKey.get(key);
+    if (cached !== undefined) return cached;
+    const parentKey = parentKeyOf(run);
+    const parent = parentKey === null ? undefined : runByKey.get(parentKey);
+    let anchor: string | null = null;
+    if (parent && parentKey !== null && run.pinnedAt == null && !visiting.has(parentKey)) {
+      visiting.add(key);
+      const candidate =
+        resolveAnchor(parent, visiting) ?? (listByKey.has(parentKey) ? parentKey : null);
+      visiting.delete(key);
+      if (
+        candidate !== null &&
+        (listByKey.get(candidate) !== "settled" || run.settledAt !== null)
+      ) {
+        anchor = candidate;
+      }
+    }
+    anchorByKey.set(key, anchor);
+    return anchor;
+  };
+  const childrenByParent = new Map<string, T[]>();
+  for (const run of runByKey.values()) {
+    if (resolveAnchor(run, new Set()) === null) continue;
+    const parentKey = parentKeyOf(run)!;
+    childrenByParent.set(parentKey, [...(childrenByParent.get(parentKey) ?? []), run]);
+  }
+  const childrenByKey = new Map<string, AgentChildRun<T>[]>();
+  const collect = (parentKey: string, depth: number, into: AgentChildRun<T>[]) => {
+    const children = (childrenByParent.get(parentKey) ?? []).toSorted((a, b) =>
+      a.createdAt.localeCompare(b.createdAt),
+    );
+    for (const child of children) {
+      into.push({ thread: child, depth });
+      collect(threadKey(child), depth + 1, into);
+    }
+  };
+  for (const anchor of new Set(anchorByKey.values())) {
+    if (anchor === null) continue;
+    const descendants: AgentChildRun<T>[] = [];
+    collect(anchor, 0, descendants);
+    childrenByKey.set(anchor, descendants);
+  }
+  const keep = (runs: readonly T[]) =>
+    runs.filter((run) => anchorByKey.get(threadKey(run)) == null);
+  return {
+    lists: {
+      pinned: keep(input.lists.pinned),
+      active: keep(input.lists.active),
+      settled: keep(input.lists.settled),
+    },
+    childrenByKey,
+  };
+}

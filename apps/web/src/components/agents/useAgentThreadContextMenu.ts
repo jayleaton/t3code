@@ -36,6 +36,7 @@ type AgentThreadMenuId =
   | "unsettle"
   | "regenerate-title"
   | "mark-unread"
+  | "detach-parent"
   | "copy-path"
   | "copy-branch"
   | "copy-thread-id"
@@ -168,6 +169,9 @@ export function useAgentThreadContextMenu(visible: readonly EnvironmentThreadShe
             ]
           : []),
         { id: "mark-unread", label: "Mark unread", icon: "mail-open", separatorBefore: true },
+        ...(current.parentThreadId != null
+          ? [{ id: "detach-parent" as const, label: "Detach from parent run", icon: "unlink" }]
+          : []),
         {
           id: "copy-path",
           label: "Copy path",
@@ -239,6 +243,14 @@ export function useAgentThreadContextMenu(visible: readonly EnvironmentThreadShe
           return;
         case "mark-unread":
           markThreadUnread(scopedThreadKey(ref), current.latestTurn?.completedAt);
+          return;
+        case "detach-parent":
+          await reportFailure("Failed to detach chat", () =>
+            updateThreadMetadata({
+              environmentId: ref.environmentId,
+              input: { threadId: ref.threadId, parentThreadId: null },
+            }),
+          );
           return;
         case "copy-path":
           if (workspacePath) copyPathToClipboard(workspacePath, { path: workspacePath });
