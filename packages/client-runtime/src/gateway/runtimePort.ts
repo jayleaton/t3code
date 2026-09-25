@@ -40,6 +40,7 @@ import {
   startThreadTurn,
   settleThread,
   unsettleThread,
+  updateThreadMetadata,
 } from "../operations/commands.ts";
 import { request, runStream, subscribe } from "../rpc/client.ts";
 import type {
@@ -556,6 +557,22 @@ export function createGatewayRuntimePort(
             EnvironmentId.make(environmentId),
             settleThread({
               threadId: ThreadId.make(threadId),
+              commandId: CommandId.make(yield* crypto.randomUUIDv4),
+            }),
+          );
+          return { status: "succeeded" as const };
+        }),
+      ),
+    setThreadParent: (environmentId, threadId, parentThreadId) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          const crypto = yield* Crypto.Crypto;
+          yield* registry.run(
+            EnvironmentId.make(environmentId),
+            updateThreadMetadata({
+              threadId: ThreadId.make(threadId),
+              parentThreadId: parentThreadId === null ? null : ThreadId.make(parentThreadId),
               commandId: CommandId.make(yield* crypto.randomUUIDv4),
             }),
           );

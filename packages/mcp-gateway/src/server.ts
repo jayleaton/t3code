@@ -187,6 +187,19 @@ const TOOL_SPECS = {
     "Return a settled chat to active work in its agent column. Requires lifecycle scope. Does not send a message or start a turn.",
     { environmentId, threadId },
   ],
+  t3_set_thread_parent: [
+    "Make a chat a sub-run of another chat in the same environment, or pass parentThreadId null to detach it. Sub-runs show inside their parent's card on the Agents board. Requires lifecycle scope. A chat cannot move under itself or one of its own sub-runs. Does not start or stop a turn.",
+    {
+      environmentId,
+      threadId,
+      parentThreadId: z
+        .string()
+        .trim()
+        .min(1)
+        .nullable()
+        .describe("The chat to nest under, or null to detach."),
+    },
+  ],
   t3_open_agents: [
     "Open the Agents board in the connected desktop app and reveal its window.",
     { environmentId },

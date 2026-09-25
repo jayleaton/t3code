@@ -300,7 +300,9 @@ When an agent's chat creates chats through the MCP gateway (`t3_create_thread` o
 `t3_create_and_start_thread`), each new chat is recorded as a sub-run of the chat that created
 it. This happens without the agent doing anything extra. Pass `parentThreadId` to attach a
 new chat to another chat in the same environment, or `parentThreadId: null` for a standalone
-chat. `t3_list_threads` accepts `parentThreadId` to list a chat's sub-runs.
+chat. `t3_list_threads` accepts `parentThreadId` to list a chat's sub-runs. To regroup existing
+chats, `t3_set_thread_parent` moves a chat under another chat, or detaches it with
+`parentThreadId: null`; it needs lifecycle access.
 
 On the Agents board, sub-runs appear inside the card of the run that created them, including
 runs by other agents. Each one shows its agent, title, and status; click it to open that chat.

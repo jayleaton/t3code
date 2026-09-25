@@ -1,5 +1,6 @@
 "use client";
 
+import { isAgentsPage, useToggleWorkspaceView } from "./sidebar/mainAppLocation";
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 
@@ -672,6 +673,7 @@ function OpenCommandPaletteDialog(props: {
 }) {
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
+  const toggleWorkspaceView = useToggleWorkspaceView();
   const { clearOpenIntent, openIntent, openOverlayMode, setOpen } = props;
   const [query, setQuery] = useState(openIntent?.kind === "search" ? openIntent.query : "");
   const [linkedThreadSearch, setLinkedThreadSearch] = useState(
@@ -2036,14 +2038,18 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
+  const onAgents = isAgentsPage(pathname);
   actionItems.push({
     kind: "action",
     value: "action:agents",
-    searchTerms: ["Open agents", "board", "profiles", "specialists"],
-    title: "Open agents",
+    searchTerms: onAgents
+      ? ["Open threads", "switch", "view", "sidebar", "chats"]
+      : ["Open agents", "switch", "view", "board", "profiles", "specialists"],
+    title: onAgents ? "Switch to threads" : "Switch to agents",
     icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
+    shortcutCommand: "workspace.toggleView",
     run: async () => {
-      await navigate({ to: "/agents" });
+      await toggleWorkspaceView(onAgents ? "threads" : "agents");
     },
   });
 

@@ -59,6 +59,9 @@ export class SidebarPointerSensor {
     this.document.removeEventListener("pointerdown", this.clearClickSuppression, { capture: true });
   };
   private suppressClick = (event: Event) => {
+    // A drop over a link must not follow it: stopping propagation hides the
+    // click from the router, which leaves the browser to load the href itself.
+    event.preventDefault();
     event.stopPropagation();
     this.clearClickSuppression();
   };

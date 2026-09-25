@@ -6,6 +6,7 @@ import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { CornerLeftUpIcon, PinIcon } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import {
+  memo,
   useContext,
   useState,
   useRef,
@@ -67,7 +68,9 @@ function AgentChildRunLink({
 }: ChildRunRowProps & {
   onPointerDown?: (event: ReactPointerEvent<HTMLAnchorElement>) => void;
 }) {
-  const pathname = useLocation({ select: (location) => location.pathname });
+  const isCurrent = useLocation({
+    select: (location) => location.pathname === `/agents/${run.environmentId}/${run.id}`,
+  });
   const status = agentThreadStatus(run);
   const agent = runAgentName(run, profiles);
   return (
@@ -75,7 +78,7 @@ function AgentChildRunLink({
       to="/agents/$environmentId/$threadId"
       params={{ environmentId: run.environmentId, threadId: run.id }}
       className="agent-thread-child"
-      data-current={pathname === `/agents/${run.environmentId}/${run.id}`}
+      data-current={isCurrent}
       style={
         {
           "--agent-color": agent.profile?.color ?? "var(--muted-foreground)",
@@ -177,7 +180,11 @@ function AgentChildRuns({
   );
 }
 
-export function ThreadCard({
+/**
+ * Memoized: a drag re-renders every sortable wrapper on each hover change, and
+ * the cards themselves only need to render when their run changes.
+ */
+export const ThreadCard = memo(function ThreadCard({
   thread,
   profile,
   profiles,
@@ -197,8 +204,9 @@ export function ThreadCard({
   thread: EnvironmentThreadShell;
   onContextMenu: AgentRunContextMenu;
 }) {
-  const pathname = useLocation({ select: (location) => location.pathname });
-  const { nestTargetKey } = useContext(AgentRunDragContext);
+  const isCurrent = useLocation({
+    select: (location) => location.pathname === `/agents/${thread.environmentId}/${thread.id}`,
+  });
   const environment = useEnvironment(thread.environmentId);
   useNowMinute();
   const timestamp = thread.latestUserMessageAt ?? thread.updatedAt;
@@ -237,6 +245,9 @@ export function ThreadCard({
   const openPrLink = useOpenPrLink();
   const [previewOpen, setPreviewOpen] = useState(false);
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
+  // The open chat needs no preview, and a second composer on its draft would
+  // render on every keystroke typed into the chat pane.
+  const showPreview = !dragging && !contextMenuOpen && !isCurrent && previewOpen;
   const status = agentThreadStatus(thread);
   const popupRef = useRef<HTMLDivElement>(null);
   const editing = useRef(false);
@@ -261,12 +272,11 @@ export function ThreadCard({
   return (
     <div
       className="agent-thread-container"
-      data-current={pathname === `/agents/${thread.environmentId}/${thread.id}`}
-      data-nest-target={nestTargetKey === `${thread.environmentId}:${thread.id}` || undefined}
+      data-current={isCurrent}
       style={{ "--agent-color": profile?.color ?? "var(--muted-foreground)" } as CSSProperties}
     >
       <PreviewCard
-        open={!dragging && !contextMenuOpen && previewOpen}
+        open={showPreview}
         onOpenChange={(open, details) => {
           if (
             !open &&
@@ -370,7 +380,7 @@ export function ThreadCard({
           positionerClassName="z-[120]"
           className="agent-chat-preview bg-background text-foreground"
         >
-          {previewOpen && (
+          {showPreview && (
             <AgentChatPreview
               thread={thread}
               project={project?.title ?? "Project unavailable"}
@@ -434,4 +444,4 @@ export function ThreadCard({
       )}
     </div>
   );
-}
+});
