@@ -1,4 +1,4 @@
-import { SortableAgentThreads } from "./SortableAgentThreads";
+import { AgentRunDragArea, SortableAgentThreads } from "./SortableAgentThreads";
 import { sortActiveThreadsByOrderKey } from "@t3tools/client-runtime/state/thread-sort";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
@@ -34,25 +34,29 @@ export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
   return (
     <nav className="agent-chat-rail" aria-label="Active and unread agent chats">
       <div className="agent-chat-rail-label">Active & unread</div>
-      <div className="agent-chat-rail-list">
-        <SortableAgentThreads threads={visible}>
-          {(thread, dragging) => (
-            <ThreadCard
-              thread={thread}
-              dragging={dragging}
-              childRuns={childrenByKey.get(`${thread.environmentId}:${thread.id}`)}
-              parentRun={
-                thread.parentThreadId == null
-                  ? null
-                  : runByKey.get(
-                      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.parentThreadId)),
-                    )
-              }
-              onContextMenu={onContextMenu}
-            />
-          )}
-        </SortableAgentThreads>
-      </div>
+      <AgentRunDragArea active={visible}>
+        <div className="agent-chat-rail-list">
+          <SortableAgentThreads threads={visible}>
+            {(thread, dragging) => (
+              <ThreadCard
+                thread={thread}
+                dragging={dragging}
+                childRuns={childrenByKey.get(`${thread.environmentId}:${thread.id}`)}
+                parentRun={
+                  thread.parentThreadId == null
+                    ? null
+                    : runByKey.get(
+                        scopedThreadKey(
+                          scopeThreadRef(thread.environmentId, thread.parentThreadId),
+                        ),
+                      )
+                }
+                onContextMenu={onContextMenu}
+              />
+            )}
+          </SortableAgentThreads>
+        </div>
+      </AgentRunDragArea>
     </nav>
   );
 }

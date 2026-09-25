@@ -1,8 +1,9 @@
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import { useCallback, useContext, useRef, useState, type ReactNode } from "react";
 import {
   closestCenter,
   DndContext,
   DragOverlay,
+  useDraggable,
   useDroppable,
   useSensor,
   useSensors,
@@ -31,12 +32,14 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { checkAgentRunLink, isAgentRunNestDrop } from "./agents.logic";
 import {
   AGENT_CHILD_DRAG_PREFIX,
+  AGENT_LINK_DRAG_PREFIX,
   AGENT_NEST_DROP_PREFIX,
   AgentRunDragContext,
 } from "./agentRunDrag";
 
 const NEST_PREFIX = AGENT_NEST_DROP_PREFIX;
 const CHILD_PREFIX = AGENT_CHILD_DRAG_PREFIX;
+const LINK_PREFIX = AGENT_LINK_DRAG_PREFIX;
 
 function NestTarget({
   id,
@@ -56,13 +59,18 @@ type ChildDrop = { kind: "none" } | { kind: "detach" };
 const keyOf = (thread: EnvironmentThreadShell) =>
   scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
 
-/** Agents use the sidebar's pointer lifecycle, sortable rows, and persisted drop planner. */
-export function SortableAgentThreads({
-  threads,
+/**
+ * One drag surface for a list of agent chats: active cards reorder (the
+ * sidebar's pointer lifecycle and persisted drop planner), and any card or
+ * sub-run row can be linked under another run or detached from its parent.
+ * `active` is the reorderable list rendered by SortableAgentThreads inside.
+ */
+export function AgentRunDragArea({
+  active: activeThreads,
   children,
 }: {
-  threads: readonly EnvironmentThreadShell[];
-  children: (thread: EnvironmentThreadShell, dragging: boolean) => ReactNode;
+  active: readonly EnvironmentThreadShell[];
+  children: ReactNode;
 }) {
   const all = useThreadShells();
   const { reorderActiveThread } = useThreadActions();
@@ -99,11 +107,17 @@ export function SortableAgentThreads({
       onFinish: finish,
     }),
   );
-  const active = threads.filter((thread) => thread.pinnedAt == null && thread.settledAt === null);
-  const ids = active.map(keyOf);
+  const ids = activeThreads
+    .filter((thread) => thread.pinnedAt == null && thread.settledAt === null)
+    .map(keyOf);
   const runByKey = new Map(all.map((thread) => [keyOf(thread), thread]));
-  const draggedKey = (id: string | number) =>
-    String(id).startsWith(CHILD_PREFIX) ? String(id).slice(CHILD_PREFIX.length) : String(id);
+  const draggedKey = (id: string | number) => {
+    const value = String(id);
+    for (const prefix of [CHILD_PREFIX, LINK_PREFIX]) {
+      if (value.startsWith(prefix)) return value.slice(prefix.length);
+    }
+    return value;
+  };
 
   // A pointer on another card's header links under it; anywhere else a card
   // reorders as before and a sub-run row detaches once it leaves its card.
@@ -151,6 +165,7 @@ export function SortableAgentThreads({
       childDrop.current = outside ? { kind: "detach" } : { kind: "none" };
       return [];
     }
+    if (activeId.startsWith(LINK_PREFIX)) return [];
     return closestCenter({
       ...args,
       droppableContainers: args.droppableContainers.filter(
@@ -188,6 +203,7 @@ export function SortableAgentThreads({
       if (run && drop.kind === "detach") await linkRun(run, null);
       return;
     }
+    if (String(dragged.id).startsWith(LINK_PREFIX)) return;
     if (!over || dragged.id === over.id) return;
     const from = ids.indexOf(String(dragged.id));
     const to = ids.indexOf(String(over.id));
@@ -256,6 +272,8 @@ export function SortableAgentThreads({
         const anchorKey = (started.data.current as { anchorKey?: string } | undefined)?.anchorKey;
         if (String(started.id).startsWith(CHILD_PREFIX) && anchorKey) {
           setDraggedChild({ key: draggedKey(started.id), anchorKey });
+        } else if (String(started.id).startsWith(LINK_PREFIX)) {
+          setDraggedChild({ key: draggedKey(started.id), anchorKey: "" });
         }
       }}
       onDragMove={() => setChildDropHint(childDrop.current.kind)}
@@ -273,43 +291,10 @@ export function SortableAgentThreads({
       }}
     >
       <SidebarDragLifecycle onUnmount={cancel} />
-      <AgentRunDragContext.Provider value={{ childDragEnabled: !saving, nestTargetKey }}>
-        <SortableContext items={ids} strategy={verticalListSortingStrategy}>
-          {threads.map((thread) =>
-            thread.pinnedAt != null || thread.settledAt !== null ? (
-              <div key={keyOf(thread)}>{children(thread, dragging)}</div>
-            ) : (
-              <NestTarget key={keyOf(thread)} id={keyOf(thread)} disabled={saving}>
-                {(setNestRef) => (
-                  <SortableThreadRow
-                    id={keyOf(thread)}
-                    disabled={saving || !readEnvironmentSupportsActiveReorder(thread.environmentId)}
-                  >
-                    {({ setNodeRef, listeners, transform, transition, isDragging }) => (
-                      <div
-                        ref={(element) => {
-                          setNodeRef(element);
-                          setNestRef(element);
-                        }}
-                        {...listeners}
-                        style={{
-                          transform: CSS.Transform.toString(transform),
-                          transition,
-                          position: "relative",
-                          zIndex: isDragging ? 1 : undefined,
-                          touchAction: "pan-x",
-                          userSelect: dragging ? "none" : undefined,
-                        }}
-                      >
-                        {children(thread, dragging)}
-                      </div>
-                    )}
-                  </SortableThreadRow>
-                )}
-              </NestTarget>
-            ),
-          )}
-        </SortableContext>
+      <AgentRunDragContext.Provider
+        value={{ childDragEnabled: !saving, nestTargetKey, dragging, saving }}
+      >
+        {children}
       </AgentRunDragContext.Provider>
       <DragOverlay dropAnimation={null}>
         {draggedChildRun ? (
@@ -323,13 +308,102 @@ export function SortableAgentThreads({
             <span className="agent-child-drag-hint">
               {nestTarget
                 ? `Link under ${nestTarget.title}`
-                : childDropHint === "detach"
-                  ? "Detach"
-                  : "Drag out to detach"}
+                : draggedChild?.anchorKey === ""
+                  ? "Drop on a chat to link"
+                  : childDropHint === "detach"
+                    ? "Detach"
+                    : "Drag out to detach"}
             </span>
           </div>
         ) : null}
       </DragOverlay>
     </DndContext>
+  );
+}
+
+/** The reorderable active cards; must render inside an AgentRunDragArea. */
+export function SortableAgentThreads({
+  threads,
+  children,
+}: {
+  threads: readonly EnvironmentThreadShell[];
+  children: (thread: EnvironmentThreadShell, dragging: boolean) => ReactNode;
+}) {
+  const { dragging, saving } = useContext(AgentRunDragContext);
+  const ids = threads
+    .filter((thread) => thread.pinnedAt == null && thread.settledAt === null)
+    .map(keyOf);
+  return (
+    <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+      {threads.map((thread) =>
+        thread.pinnedAt != null || thread.settledAt !== null ? (
+          <LinkableAgentCard key={keyOf(thread)} thread={thread}>
+            {children(thread, dragging)}
+          </LinkableAgentCard>
+        ) : (
+          <NestTarget key={keyOf(thread)} id={keyOf(thread)} disabled={saving}>
+            {(setNestRef) => (
+              <SortableThreadRow
+                id={keyOf(thread)}
+                disabled={saving || !readEnvironmentSupportsActiveReorder(thread.environmentId)}
+              >
+                {({ setNodeRef, listeners, transform, transition, isDragging }) => (
+                  <div
+                    ref={(element) => {
+                      setNodeRef(element);
+                      setNestRef(element);
+                    }}
+                    {...listeners}
+                    style={{
+                      transform: CSS.Transform.toString(transform),
+                      transition,
+                      position: "relative",
+                      zIndex: isDragging ? 1 : undefined,
+                      touchAction: "pan-x",
+                      userSelect: dragging ? "none" : undefined,
+                    }}
+                  >
+                    {children(thread, dragging)}
+                  </div>
+                )}
+              </SortableThreadRow>
+            )}
+          </NestTarget>
+        ),
+      )}
+    </SortableContext>
+  );
+}
+
+/**
+ * A pinned or settled card: it keeps its place, but other runs can be linked
+ * under it and it can be dragged onto another card to link under that run.
+ */
+export function LinkableAgentCard({
+  thread,
+  children,
+}: {
+  thread: EnvironmentThreadShell;
+  children: ReactNode;
+}) {
+  const { dragging, saving } = useContext(AgentRunDragContext);
+  const key = keyOf(thread);
+  const { setNodeRef: setNestRef } = useDroppable({ id: `${NEST_PREFIX}${key}`, disabled: saving });
+  const { setNodeRef, listeners, isDragging } = useDraggable({
+    id: `${LINK_PREFIX}${key}`,
+    disabled: saving,
+  });
+  return (
+    <div
+      ref={(element) => {
+        setNodeRef(element);
+        setNestRef(element);
+      }}
+      {...listeners}
+      data-dragging={isDragging || undefined}
+      style={{ touchAction: "pan-x", userSelect: dragging ? "none" : undefined }}
+    >
+      {children}
+    </div>
   );
 }

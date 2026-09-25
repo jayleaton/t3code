@@ -1,5 +1,5 @@
 import { AgentGatewayStatus } from "./AgentGatewayStatus";
-import { SortableAgentThreads } from "./SortableAgentThreads";
+import { AgentRunDragArea, LinkableAgentCard, SortableAgentThreads } from "./SortableAgentThreads";
 import { useClientSettings } from "../../hooks/useSettings";
 import { visibleAgentProviders } from "./agentModelCatalog";
 import { ThreadCard } from "./ThreadCard";
@@ -89,28 +89,33 @@ function AgentThreadList({
       onContextMenu={onContextMenu}
     />
   );
+  const linkableCard = (thread: EnvironmentThreadShell) => (
+    <LinkableAgentCard key={`${thread.environmentId}:${thread.id}`} thread={thread}>
+      {renderCard(thread)}
+    </LinkableAgentCard>
+  );
   return (
-    <div className="agent-thread-list">
-      {pinned.length > 0 && (
-        <div className="agent-pinned" aria-label="Pinned chats">
-          <div className="agent-pinned-label">Pinned</div>
-          {pinned.map((thread) => renderCard(thread))}
-        </div>
-      )}
-      <SortableAgentThreads threads={active}>{renderCard}</SortableAgentThreads>
-      {settled.length > 0 && (
-        <details
-          className="agent-settled"
-          open={settledOpen}
-          onToggle={(event) => setSettledOpen(event.currentTarget.open)}
-        >
-          <summary>Settled · {settled.length}</summary>
-          {settledOpen && (
-            <div className="agent-thread-list">{settled.map((thread) => renderCard(thread))}</div>
-          )}
-        </details>
-      )}
-    </div>
+    <AgentRunDragArea active={active}>
+      <div className="agent-thread-list">
+        {pinned.length > 0 && (
+          <div className="agent-pinned" aria-label="Pinned chats">
+            <div className="agent-pinned-label">Pinned</div>
+            {pinned.map(linkableCard)}
+          </div>
+        )}
+        <SortableAgentThreads threads={active}>{renderCard}</SortableAgentThreads>
+        {settled.length > 0 && (
+          <details
+            className="agent-settled"
+            open={settledOpen}
+            onToggle={(event) => setSettledOpen(event.currentTarget.open)}
+          >
+            <summary>Settled · {settled.length}</summary>
+            {settledOpen && <div className="agent-thread-list">{settled.map(linkableCard)}</div>}
+          </details>
+        )}
+      </div>
+    </AgentRunDragArea>
   );
 }
 
