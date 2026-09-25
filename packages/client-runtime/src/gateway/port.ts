@@ -380,6 +380,12 @@ export interface GatewayRuntimePort {
   handoffThread?(input: AgentHandoffInput): Promise<AgentHandoffResult>;
   unsettleThread?(environmentId: string, threadId: string): Promise<{ status: "succeeded" }>;
   settleThread?(environmentId: string, threadId: string): Promise<{ status: "succeeded" }>;
+  /** Links a chat under the chat that owns its work, or unlinks it with null. */
+  setThreadParent?(
+    environmentId: string,
+    threadId: string,
+    parentThreadId: string | null,
+  ): Promise<{ status: "succeeded" }>;
   openAgents?(environmentId: string): Promise<{ status: "succeeded" }>;
   createProfile?(environmentId: string, profile: GatewayProfileInput): Promise<GatewayProfile>;
   updateProfile?(

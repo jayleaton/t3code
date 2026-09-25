@@ -2773,6 +2773,22 @@ describe("agent chat lifecycle", () => {
     ).resolves.toEqual({ status: "succeeded" });
     expect(port.unsettleThread).toHaveBeenCalledWith("remote", "done");
   });
+  it("links and detaches chats with lifecycle access", async () => {
+    const port = makePort();
+    port.setThreadParent = vi.fn(async () => ({ status: "succeeded" as const }));
+    const link = { environmentId: "remote", threadId: "child", parentThreadId: "parent" };
+    await expect(
+      callGatewayTool({ port, grants: { remote: ["read"] } }, "t3_set_thread_parent", link),
+    ).rejects.toThrow();
+    expect(port.setThreadParent).not.toHaveBeenCalled();
+    const context = { port, grants: { remote: ["lifecycle"] as const } };
+    await expect(callGatewayTool(context, "t3_set_thread_parent", link)).resolves.toEqual({
+      status: "succeeded",
+    });
+    await callGatewayTool(context, "t3_set_thread_parent", { ...link, parentThreadId: null });
+    expect(port.setThreadParent).toHaveBeenNthCalledWith(1, "remote", "child", "parent");
+    expect(port.setThreadParent).toHaveBeenNthCalledWith(2, "remote", "child", null);
+  });
 });
 
 describe("MCP Agents board", () => {

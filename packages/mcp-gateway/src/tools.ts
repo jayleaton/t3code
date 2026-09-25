@@ -920,6 +920,18 @@ export async function callGatewayTool(
         throw new Error("Thread un-settlement is unavailable in this runtime.");
       return context.port.unsettleThread(environmentId, requiredString(input, "threadId"));
     }
+    case "t3_set_thread_parent": {
+      const environmentId = environmentWithScope(context, input, "lifecycle");
+      if (!context.port.setThreadParent)
+        throw new Error("Linking chats is unavailable in this runtime.");
+      const parentThreadId =
+        input.parentThreadId === null ? null : requiredString(input, "parentThreadId");
+      return context.port.setThreadParent(
+        environmentId,
+        requiredString(input, "threadId"),
+        parentThreadId,
+      );
+    }
     case "t3_list_skills": {
       const environmentId = environmentWithScope(context, input, "read");
       if (!context.port.listSkills)
