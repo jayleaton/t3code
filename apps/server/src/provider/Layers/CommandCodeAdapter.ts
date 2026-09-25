@@ -56,6 +56,10 @@ const encodeMcpServers = Schema.encodeEffect(
 const encodeAttachmentPaths = Schema.encodeEffect(
   Schema.fromJsonString(Schema.Array(Schema.String)),
 );
+// Command Code caps --print runs at 100 model requests, a tenth of its
+// interactive loop. Agents that build, test, and wait on CI exceed that in one
+// turn, so use the interactive budget; it still stops a runaway tool loop.
+const MAX_MODEL_REQUESTS_PER_TURN = "1000";
 
 const DRIVER = ProviderDriverKind.make("commandcode");
 const CommandCodeCapabilities = {
@@ -309,6 +313,8 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
                 "json",
                 "--no-auto-update",
                 "--skip-onboarding",
+                "--max-turns",
+                MAX_MODEL_REQUESTS_PER_TURN,
                 "--add-dir",
                 options.attachmentsDir,
                 ...commandCodePermissionArgs(

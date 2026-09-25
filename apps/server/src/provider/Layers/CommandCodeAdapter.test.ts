@@ -71,7 +71,10 @@ emit({type:'event',event:{type:'text_delta',delta:'Hello'}});
 emit({type:'event',event:{type:'tool_queued',toolCallId:'t1',toolName:'read_file',input:{path:'README.md'}}});
 emit({type:'event',event:{type:'tool_completed',toolCallId:'t1',toolName:'read_file',result:[{type:'text',text:'contents'}]}});
 emit({type:'event',event:{type:'text_delta',delta:'Done'}});
-emit({type:'result',subtype:prompt.endsWith('limit')?'max_turns':'success',sessionId,finalText:'HelloDone',stopReason:'end_turn',usage:{inputTokens:10,outputTokens:2,cacheReadTokens:0,cacheWriteTokens:0}});
+// Mirrors the CLI: --print defaults to 100 model requests unless --max-turns raises it.
+const requestBudget = args.includes('--max-turns') ? Number(args[args.indexOf('--max-turns') + 1]) : 100;
+const requestsNeeded = prompt.endsWith('limit') ? Infinity : prompt.endsWith('long-run') ? 150 : 1;
+emit({type:'result',subtype:requestsNeeded > requestBudget ? 'max_turns' : 'success',sessionId,finalText:'HelloDone',stopReason:'end_turn',usage:{inputTokens:10,outputTokens:2,cacheReadTokens:0,cacheWriteTokens:0}});
 `;
 const threadId = ThreadId.make("thread-commandcode");
 const setup = Effect.gen(function* () {
@@ -223,6 +226,14 @@ it.effect(
       assert.include(calls[1]!.args, "native-one");
       assert.equal(calls[0]!.cwd, yield* h.fs.realPath(h.cwd));
     }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
+it.effect("completes a turn that needs more model requests than the headless default", () =>
+  Effect.gen(function* () {
+    const h = yield* harness;
+    const events = yield* h.run("long-run");
+    assert.ok(events.some((e) => e.type === "turn.terminal" && e.status === "completed"));
+  }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
 for (const prompt of ["early-error", "bad-json", "limit"]) {
