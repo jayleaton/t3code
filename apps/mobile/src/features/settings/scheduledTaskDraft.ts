@@ -4,6 +4,7 @@ import type {
   ProjectId,
   RuntimeMode,
   ScheduledTask,
+  ScheduledTaskSchedule,
   ScheduledTaskUpsertSchedule,
 } from "@t3tools/contracts";
 
@@ -37,7 +38,9 @@ export function scheduledTaskDefaultModel(
 }
 
 export type ScheduleDraft = {
-  readonly mode: "fixed_time" | "interval";
+  /** "kept" leaves a cron or one-time schedule (set from the Agents board or MCP) unchanged. */
+  readonly mode: "fixed_time" | "interval" | "kept";
+  readonly kept: ScheduledTaskSchedule | null;
   readonly timeOfDay: string;
   readonly weekdays: ReadonlyArray<number>;
   readonly intervalMinutes: string;
@@ -48,9 +51,13 @@ export const DEFAULT_SCHEDULE: ScheduleDraft = {
   timeOfDay: "09:00",
   weekdays: [1, 2, 3, 4, 5],
   intervalMinutes: "15",
+  kept: null,
 };
 
 export function scheduleDraftForTask(task: Pick<ScheduledTask, "schedule">): ScheduleDraft {
+  if (task.schedule.type === "cron" || task.schedule.type === "once") {
+    return { ...DEFAULT_SCHEDULE, mode: "kept", kept: task.schedule };
+  }
   return task.schedule.type === "fixed_time"
     ? {
         ...DEFAULT_SCHEDULE,
@@ -67,6 +74,7 @@ export function scheduleDraftForTask(task: Pick<ScheduledTask, "schedule">): Sch
 }
 
 export function scheduleFromDraft(draft: ScheduleDraft): ScheduledTaskUpsertSchedule | null {
+  if (draft.mode === "kept") return draft.kept;
   if (draft.mode === "interval") {
     const minutes = Number(draft.intervalMinutes);
     // Undo floating-point noise from displaying existing millisecond intervals as minutes.

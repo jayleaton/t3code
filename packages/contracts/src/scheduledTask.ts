@@ -54,6 +54,23 @@ const ScheduledTaskFixedTimeSchedule = Schema.Struct({
   description: "Run at a fixed local wall-clock time on selected weekdays.",
 });
 
+/** Five-field cron evaluated in an IANA time zone. Missed runs fire once on restart. */
+const ScheduledTaskCronSchedule = Schema.Struct({
+  type: Schema.Literal("cron").annotate({ description: "Select cron scheduling." }),
+  expression: TrimmedNonEmptyString.annotate({
+    description: "Five-field cron: minute hour day-of-month month weekday, such as 0 7 * * 1-5.",
+  }),
+  timezone: TrimmedNonEmptyString.annotate({
+    description: "IANA time zone the expression is evaluated in, such as Europe/London.",
+  }),
+}).annotate({ description: "Run on a cron schedule." });
+
+/** Runs once at `runAt` (or as soon as it is re-armed after that time), then disables itself. */
+const ScheduledTaskOnceSchedule = Schema.Struct({
+  type: Schema.Literal("once").annotate({ description: "Select a single run." }),
+  runAt: IsoDateTime,
+}).annotate({ description: "Run once at an ISO date-time, then disable the task." });
+
 /**
  * Read model for persisted schedules. Keep accepting legacy sub-minute rows so
  * users can list, disable, edit, or delete them after the write minimum changes.
@@ -61,9 +78,11 @@ const ScheduledTaskFixedTimeSchedule = Schema.Struct({
 export const ScheduledTaskSchedule = Schema.Union([
   ScheduledTaskIntervalSchedule,
   ScheduledTaskFixedTimeSchedule,
+  ScheduledTaskCronSchedule,
+  ScheduledTaskOnceSchedule,
 ]).annotate({
   description:
-    "Structured recurring schedule. Pass an object with type 'interval' or 'fixed_time'.",
+    "Structured schedule. Pass an object with type 'interval', 'fixed_time', 'cron', or 'once'.",
 });
 export type ScheduledTaskSchedule = typeof ScheduledTaskSchedule.Type;
 
@@ -82,8 +101,11 @@ export const ScheduledTaskUpsertSchedule = Schema.Union([
     description: "Run repeatedly after a fixed number of milliseconds.",
   }),
   ScheduledTaskFixedTimeSchedule,
+  ScheduledTaskCronSchedule,
+  ScheduledTaskOnceSchedule,
 ]).annotate({
-  description: "Writable recurring schedule. Pass an object with type 'interval' or 'fixed_time'.",
+  description:
+    "Writable schedule. Pass an object with type 'interval', 'fixed_time', 'cron', or 'once'.",
 });
 export type ScheduledTaskUpsertSchedule = typeof ScheduledTaskUpsertSchedule.Type;
 
@@ -98,6 +120,8 @@ export const ScheduledTask = Schema.Struct({
   schedule: ScheduledTaskSchedule,
   projectId: ProjectId,
   threadId: Schema.NullOr(ThreadId),
+  /** Agent profile each run launches with; its thread is then reused by later runs. */
+  profileId: Schema.optional(TrimmedNonEmptyString),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -134,6 +158,12 @@ export const ScheduledTaskUpsertInput = Schema.Struct({
   schedule: ScheduledTaskUpsertSchedule,
   projectId: ProjectId,
   threadId: Schema.optional(Schema.NullOr(ThreadId)),
+  profileId: Schema.optional(
+    Schema.NullOr(TrimmedNonEmptyString).annotate({
+      description:
+        "Agent profile to launch with. Omit to keep the current profile; null clears it.",
+    }),
+  ),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,

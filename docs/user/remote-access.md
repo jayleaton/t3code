@@ -247,6 +247,20 @@ with the environment and thread IDs to open that chat and bring this desktop win
 The remote machine supplies the chat; the desktop connected to the gateway displays it. Opening a
 chat does not start or stop its agent. The desktop app must already be running and connected.
 
+### Show a chat on another device
+
+Your assistant can also put a chat on a different screen, for example when you talk to an assistant
+on your laptop but watch T3 Code on your desktop. `t3_list_devices` lists the desktop, web, and
+mobile apps connected to an environment, and shows which one you are looking at. `t3_focus_device`
+then opens a chat on one of them by device ID or name. It can also open a file from that chat's
+workspace beside the chat, such as a screenshot, video, PDF, or source file, or open the Agents board.
+Desktop apps come to the front. Browser tabs switch to the chat but stay behind other windows. Phones
+must have T3 Code open. Mobile has no Agents board, so that request does nothing on a phone.
+
+A device appears once it connects to the environment directly, over your network, Tailscale, or T3
+Connect. Desktop apps use the computer's name; browsers show as the browser and OS, such as "Chrome
+on Windows".
+
 ### Organize work by agent
 
 Open **Open agents** in the command palette, or visit `/agents`. Create a named agent, choose its
@@ -273,6 +287,23 @@ check the returned sync failures. Use `profileId` with `t3_create_thread` to sel
 then `t3_send_message` to start work, or `t3_create_and_start_thread` to create the chat and send its opening task in one idempotent call. The environment-local `/mcp/workspace` endpoint exposes `list_agents` and `get_agents_view` with the same profile and state filters, using runs from its hosting machine. Agent listings include specializations without exposing system prompts. Use `t3_get_agents_view` with an `environmentId` to list agents alongside their chats and run status. Filter by `profileId`, `state` (`active`, `settled`, or `all`; active is the default and includes completed chats that have not been settled), and `executionState` (`running`, `queued`, `waiting-approval`, `waiting-input`, `completed`, `failed`, `interrupted`, `stopped`, or `idle`). Chats belonging to deleted agents appear under `orphanedRuns`. To follow one chat without polling, use `t3_wait_for_thread_status`, which returns the new status and a resume cursor when it changes or the bounded timeout elapses. Use `t3_unsettle_thread`
 with lifecycle access to return a settled chat to the active list. `t3_open_agents` opens the
 board in the connected desktop window with read access.
+
+### Schedule prompts for an agent
+
+Open **Scheduled** on the Agents board, or choose **Schedule task** from an agent's menu, to send
+an agent a prompt at a set time (for example a deploy tonight) or on repeat (for example pulling
+the latest changes every weekday at 7:00). Each task has one thread: the first run creates it and
+every later run posts into it. Pause, resume, run now, edit, or delete a task from the same list.
+
+Tasks run on the machine you pick, and only while its T3 server is up and the machine is awake;
+T3 does not wake a sleeping machine or keep it awake. A run missed while it was off or asleep
+happens once when it is back. For unattended runs, set the machine not to sleep and keep T3 running
+with the desktop app open or as a [background service](./background-service.md). Runs use the agent's permission mode, so an agent that
+asks for approvals waits for you. Changing a task's agent or project starts a new thread on the next
+run. MCP assistants can manage tasks with `t3_list_scheduled_tasks`, `t3_create_scheduled_task`,
+`t3_update_scheduled_task`, and `t3_delete_scheduled_task` (create or admin access), and run one
+immediately with `t3_run_scheduled_task` (send access). Pass `runAt` for a single run, or `cron`
+with an optional IANA `timezone` for a repeating one.
 
 Ask an assistant connected to the **T3 Agents MCP** to create a shared skill and assign it to
 an agent. For example: “Create a shared skill for reviewing pull requests and assign it to Randy.”

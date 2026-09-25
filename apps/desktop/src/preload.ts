@@ -94,6 +94,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   },
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   getClientPlatform: () => clientPlatform,
+  getClientDeviceName: () => {
+    const result = ipcRenderer.sendSync(IpcChannels.GET_CLIENT_DEVICE_NAME_CHANNEL);
+    return typeof result === "string" ? result : null;
+  },
   setNotificationBadge: (badge) =>
     ipcRenderer.invoke(IpcChannels.SET_NOTIFICATION_BADGE_CHANNEL, badge),
   onNotificationBadgeClear: (listener) => {

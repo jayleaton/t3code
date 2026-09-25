@@ -17,6 +17,31 @@ import {
 const environmentId = z.string().trim().min(1);
 const threadId = z.string().trim().min(1);
 const idempotencyKey = z.string().trim().min(1).max(200);
+const scheduledTaskFields = {
+  title: z.string().trim().min(1).max(120).optional(),
+  prompt: z.string().trim().min(1).max(20_000),
+  profileId: z.string().trim().min(1).describe("Agent that runs the task, from t3_list_agents."),
+  projectId: z.string().trim().min(1).describe("Project the task's thread works in."),
+  runAt: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe("Run once at this ISO date-time. Pass runAt or cron, not both."),
+  cron: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe('Five-field cron (minute hour day-of-month month weekday), e.g. "0 7 * * 1-5".'),
+  timezone: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe("IANA time zone for cron, e.g. Europe/London. Defaults to this machine's zone."),
+  enabled: z.boolean().optional(),
+};
 const optionalRequestContext = {
   requestId: z.string().trim().min(1).max(200).optional(),
   correlationId: z.string().trim().min(1).max(200).optional(),
@@ -187,6 +212,45 @@ const TOOL_SPECS = {
   t3_open_thread: [
     "Open a local or remote chat in the connected desktop app and reveal its window. Requires read access; does not start or stop a turn.",
     { environmentId, threadId },
+  ],
+  t3_list_devices: [
+    "List T3 apps (desktop, web, mobile) connected to an environment that you can bring content on screen for with t3_focus_device. focused/visible show which device the user is looking at now. A device connected to several environments appears once per environment.",
+    { environmentId },
+  ],
+  t3_focus_device: [
+    "Bring a chat, a file, or the Agents board on screen on one connected device, e.g. pull a chat into focus on the user's other computer or phone. Pass device as a deviceId or exact label from t3_list_devices. With threadId alone the chat opens; add path to also preview a file from that chat's workspace (images, video, PDF, code; absolute paths may point anywhere the environment host can read) and line to reveal a line. view=agents opens the Agents board instead. Does not start or stop a turn.",
+    {
+      environmentId,
+      device: z.string().trim().min(1),
+      threadId: threadId.optional(),
+      path: z.string().trim().min(1).max(1024).optional(),
+      line: z.number().int().min(1).optional(),
+      view: z.enum(["thread", "agents"]).optional(),
+    },
+  ],
+  t3_list_scheduled_tasks: [
+    "List scheduled tasks on an environment: prompts that run on an agent at a set time or on a cron schedule. Each task posts every run into one thread (threadId, null until the first run). Shows enabled, nextRunAt, and the last run's status and error.",
+    { environmentId },
+  ],
+  t3_create_scheduled_task: [
+    "Schedule a prompt to run on an agent, once (runAt) or repeatedly (cron + timezone). The first run creates the task's thread from the agent profile in the project; later runs post into the same thread. Tasks run only while the environment's server is up; a run missed while it was down fires once when it returns. Runs use the agent's permission mode, so an agent that needs approvals will wait for them. Requires create or admin access.",
+    { environmentId, ...scheduledTaskFields },
+  ],
+  t3_update_scheduled_task: [
+    "Change a scheduled task by taskId: prompt, title, schedule (runAt or cron/timezone), agent, project, or enabled to pause/resume. Changing agent or project starts a new thread on the next run. Re-arming a finished one-time task needs a future runAt. Requires create or admin access.",
+    {
+      environmentId,
+      taskId: z.string().trim().min(1),
+      patch: z.object(scheduledTaskFields).partial().strict(),
+    },
+  ],
+  t3_delete_scheduled_task: [
+    "Delete a scheduled task. Its thread and past runs are kept. Requires create or admin access.",
+    { environmentId, taskId: z.string().trim().min(1) },
+  ],
+  t3_run_scheduled_task: [
+    "Run a scheduled task's prompt now, in its thread, without changing its schedule. Requires send access.",
+    { environmentId, taskId: z.string().trim().min(1) },
   ],
   t3_get_thread: [
     "Read one T3 chat and its messages.",

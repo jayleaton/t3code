@@ -31,7 +31,15 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
-import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
+import { importLegacyScheduledTasks } from "./LegacyScheduledTasks.ts";
+import {
+  isMissedFixedTimeRun,
+  isOneTimeSchedule,
+  isSameSchedule,
+  nextScheduledRunAt,
+  scheduleProblem,
+} from "./Schedule.ts";
 
 const decodeTask = Schema.decodeUnknownEffect(ScheduledTask);
 const decodeTaskId = Schema.decodeUnknownOption(ScheduledTaskId);
@@ -53,6 +61,7 @@ interface ScheduledTaskRow {
   readonly schedule_json: string;
   readonly project_id: string;
   readonly thread_id: string | null;
+  readonly profile_id: string | null;
   readonly workspace_strategy_json: string;
   readonly model_selection_json: string;
   readonly runtime_mode: string;
@@ -140,6 +149,7 @@ const decodeRow = (row: ScheduledTaskRow) =>
       schedule,
       projectId: row.project_id,
       threadId: row.thread_id,
+      ...(row.profile_id === null ? {} : { profileId: row.profile_id }),
       workspaceStrategy,
       modelSelection,
       runtimeMode: row.runtime_mode,
@@ -210,6 +220,7 @@ export const layer = Layer.effect(
     const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const scheduler = yield* Scheduler.Scheduler;
+    const settings = yield* Effect.serviceOption(ServerSettingsService);
     const activeRuns = yield* Ref.make<ReadonlySet<ScheduledTaskId>>(new Set());
     // Sliding(1) coalesces the dirty-signal: every notification triggers a
     // full list() re-emit anyway, so a slow subscriber only ever needs the
@@ -226,6 +237,7 @@ export const layer = Layer.effect(
         schedule_json,
         project_id,
         thread_id,
+        profile_id,
         workspace_strategy_json,
         model_selection_json,
         runtime_mode,
@@ -258,6 +270,7 @@ export const layer = Layer.effect(
         schedule_json,
         project_id,
         thread_id,
+        profile_id,
         workspace_strategy_json,
         model_selection_json,
         runtime_mode,
@@ -310,6 +323,7 @@ export const layer = Layer.effect(
           schedule_json,
           project_id,
           thread_id,
+          profile_id,
           workspace_strategy_json,
           model_selection_json,
           runtime_mode,
@@ -332,6 +346,7 @@ export const layer = Layer.effect(
           ${JSON.stringify(task.schedule)},
           ${task.projectId},
           ${task.threadId},
+          ${task.profileId ?? null},
           ${JSON.stringify(task.workspaceStrategy)},
           ${JSON.stringify(task.modelSelection)},
           ${task.runtimeMode},
@@ -355,6 +370,7 @@ export const layer = Layer.effect(
           schedule_json = excluded.schedule_json,
           project_id = excluded.project_id,
           thread_id = excluded.thread_id,
+          profile_id = excluded.profile_id,
           workspace_strategy_json = excluded.workspace_strategy_json,
           model_selection_json = excluded.model_selection_json,
           runtime_mode = excluded.runtime_mode,
@@ -405,10 +421,12 @@ export const layer = Layer.effect(
       readonly status: "succeeded" | "failed";
       readonly error: string | null;
       readonly startedAtIso: string;
+      readonly disable: boolean;
     }) =>
       sql`
         UPDATE scheduled_tasks
         SET updated_at = ${input.completedAtIso},
+            enabled = CASE WHEN ${input.disable ? 1 : 0} = 1 THEN 0 ELSE enabled END,
             next_run_at = ${input.nextRunAtIso},
             last_run_status = ${input.status},
             last_run_error = ${input.error},
@@ -440,7 +458,8 @@ export const layer = Layer.effect(
           UPDATE scheduled_tasks
           SET last_run_status = 'failed',
               last_run_error = ${message},
-              next_run_at = ${nextRunAt(source, now)},
+              enabled = CASE WHEN ${isOneTimeSchedule(source.schedule) ? 1 : 0} = 1 THEN 0 ELSE enabled END,
+              next_run_at = ${isOneTimeSchedule(source.schedule) ? null : nextRunAt(source, now)},
               updated_at = ${iso(now)},
               run_count = run_count + 1
           WHERE task_id = ${task.id} AND last_run_status = 'running'
@@ -454,6 +473,87 @@ export const layer = Layer.effect(
           }),
         ),
       );
+
+    /** Current revision of the task's agent profile; runs always launch with the latest revision. */
+    const profileSelection = Effect.fn("ScheduledTaskService.profileSelection")(function* (
+      profileId: string,
+    ) {
+      if (Option.isNone(settings)) {
+        return yield* taskError("Agent profile settings are unavailable.");
+      }
+      const library = yield* settings.value.getSettings.pipe(
+        Effect.mapError((cause) => taskError("Could not read agent profiles.", { cause })),
+      );
+      const profile = library.mcpGatewayProfiles.find(
+        (candidate) => candidate.profileId === profileId,
+      );
+      if (profile === undefined) {
+        return yield* taskError(`Agent profile '${profileId}' no longer exists.`);
+      }
+      return { profileId, revision: profile.revision, overrideFields: [] };
+    });
+
+    /**
+     * Profile tasks keep posting to the thread their first run created, launching a new
+     * one when that thread is gone or archived. Other tasks follow their thread binding.
+     */
+    const dispatchRun = Effect.fn("ScheduledTaskService.dispatchRun")(function* (
+      task: ScheduledTask,
+      ids: {
+        readonly commandId: CommandId;
+        readonly messageId: MessageId;
+        readonly prompt: string;
+      },
+    ) {
+      const send = (threadId: ThreadId) =>
+        threadManagement.sendToThread({
+          projectId: task.projectId,
+          commandId: ids.commandId,
+          threadId,
+          messageId: ids.messageId,
+          scheduledTaskId: task.id,
+          text: ids.prompt,
+          attachments: [],
+          // A profile thread keeps the model its profile resolved.
+          ...(task.profileId === undefined ? { modelSelection: task.modelSelection } : {}),
+          mode: "auto",
+          createdBy: task.createdBy,
+          creationSource: task.creationSource,
+        });
+      if (task.threadId !== null) {
+        const threadId = ThreadId.make(task.threadId);
+        if (task.profileId === undefined) return yield* send(threadId);
+        const shell = yield* threadManagement.getThreadShell(threadId);
+        if (shell !== null && shell.archivedAt === null) return yield* send(threadId);
+      }
+      const selection =
+        task.profileId === undefined ? undefined : yield* profileSelection(task.profileId);
+      const launched = yield* threadLaunch.launch({
+        ...(selection === undefined ? {} : { profileSelection: selection }),
+        commandId: ids.commandId,
+        projectId: task.projectId,
+        title: task.title,
+        modelSelection: task.modelSelection,
+        runtimeMode: task.runtimeMode,
+        interactionMode: task.interactionMode,
+        workspaceStrategy: task.workspaceStrategy,
+        initialMessage: {
+          messageId: ids.messageId,
+          scheduledTaskId: task.id,
+          text: ids.prompt,
+          attachments: [],
+        },
+        createdBy: task.createdBy,
+        creationSource: task.creationSource,
+      });
+      if (selection !== undefined) {
+        yield* sql`
+          UPDATE scheduled_tasks SET thread_id = ${launched.threadId}
+          WHERE task_id = ${task.id} AND profile_id = ${selection.profileId}
+        `;
+      }
+      return launched;
+    });
 
     const runTask = Effect.fn("ScheduledTaskService.runTask")(function* (
       task: ScheduledTask,
@@ -514,42 +614,7 @@ export const layer = Layer.effect(
         // Effect.exit (not Effect.result) so defects and interruptions in the
         // dispatch are also captured and recorded as a failed run instead of
         // aborting before markCompleted.
-        const result =
-          active.threadId === null
-            ? yield* Effect.exit(
-                threadLaunch.launch({
-                  commandId,
-                  projectId: active.projectId,
-                  title: active.title,
-                  modelSelection: active.modelSelection,
-                  runtimeMode: active.runtimeMode,
-                  interactionMode: active.interactionMode,
-                  workspaceStrategy: active.workspaceStrategy,
-                  initialMessage: {
-                    messageId,
-                    scheduledTaskId: active.id,
-                    text: prompt,
-                    attachments: [],
-                  },
-                  createdBy: active.createdBy,
-                  creationSource: active.creationSource,
-                }),
-              )
-            : yield* Effect.exit(
-                threadManagement.sendToThread({
-                  projectId: active.projectId,
-                  commandId,
-                  threadId: ThreadId.make(active.threadId),
-                  messageId,
-                  scheduledTaskId: active.id,
-                  text: prompt,
-                  attachments: [],
-                  modelSelection: active.modelSelection,
-                  mode: "auto",
-                  createdBy: active.createdBy,
-                  creationSource: active.creationSource,
-                }),
-              );
+        const result = yield* Effect.exit(dispatchRun(active, { commandId, messageId, prompt }));
 
         const completedAt = yield* localNow;
         const runSucceeded = result._tag === "Success";
@@ -559,11 +624,13 @@ export const layer = Layer.effect(
         // is *now* (the user may have edited or deleted it while we ran).
         const current = yield* findTask(task.id);
         const scheduleSource = current ?? task;
+        const oneTime = isOneTimeSchedule(scheduleSource.schedule);
         const completed: ScheduledTask = {
           ...scheduleSource,
+          ...(oneTime ? { enabled: false } : {}),
           updatedAt: iso(completedAt),
           lastRunAt: startedAtIso,
-          nextRunAt: nextRunAt(scheduleSource, completedAt),
+          nextRunAt: oneTime ? null : nextRunAt(scheduleSource, completedAt),
           lastRunStatus,
           lastRunError,
           runCount: scheduleSource.runCount + 1,
@@ -579,6 +646,7 @@ export const layer = Layer.effect(
             status: lastRunStatus,
             error: lastRunError,
             startedAtIso,
+            disable: oneTime,
           });
           yield* notifyChanged;
         }
@@ -643,6 +711,16 @@ export const layer = Layer.effect(
       );
     });
 
+    yield* Effect.gen(function* () {
+      const library = Option.isSome(settings) ? yield* settings.value.getSettings : null;
+      const imported = yield* importLegacyScheduledTasks(library);
+      if (imported > 0) yield* Effect.logInfo("Imported legacy scheduled tasks", { imported });
+    }).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not import legacy scheduled tasks", { cause }),
+      ),
+    );
+
     // Recover from a crash or hard shutdown mid-run: rows stuck in 'running'
     // would otherwise be skipped by the due-task filter forever. The dispatch
     // may already have gone out before the crash, so next_run_at must advance
@@ -665,7 +743,8 @@ export const layer = Layer.effect(
                 UPDATE scheduled_tasks
                 SET last_run_status = 'failed',
                     last_run_error = 'Run was interrupted by a server restart.',
-                    next_run_at = ${nextRunAt(decoded.success, now)},
+                    enabled = CASE WHEN ${isOneTimeSchedule(decoded.success.schedule) ? 1 : 0} = 1 THEN 0 ELSE enabled END,
+                    next_run_at = ${isOneTimeSchedule(decoded.success.schedule) ? null : nextRunAt(decoded.success, now)},
                     updated_at = ${iso(now)},
                     run_count = run_count + 1
                 WHERE task_id IS ${row.task_id} AND last_run_status = 'running'
@@ -720,6 +799,13 @@ export const layer = Layer.effect(
 
     const upsert: ScheduledTaskService["Service"]["upsert"] = (input) =>
       Effect.gen(function* () {
+        const problem = scheduleProblem(input.schedule);
+        if (problem !== null) {
+          return yield* taskError(
+            problem,
+            input.id === undefined ? undefined : { taskId: input.id },
+          );
+        }
         const now = yield* localNow;
         const uuid =
           input.commandId === undefined
@@ -741,6 +827,16 @@ export const layer = Layer.effect(
         // Keep the existing next_run_at when the schedule itself is untouched:
         // editing a title or prompt must not postpone (or resurrect) a due
         // run — only schedule/enabled changes restart the clock.
+        // Clients that do not know about profiles omit the field, which keeps the profile.
+        const profileId =
+          input.profileId === undefined ? existingTask?.profileId : (input.profileId ?? undefined);
+        // A profile task owns its thread: changing the profile or project starts a new one.
+        const threadId =
+          profileId !== undefined &&
+          existingTask !== null &&
+          (existingTask.profileId !== profileId || existingTask.projectId !== input.projectId)
+            ? null
+            : (input.threadId ?? null);
         const scheduleUnchanged =
           existingTask !== null &&
           existingTask.enabled === input.enabled &&
@@ -752,7 +848,8 @@ export const layer = Layer.effect(
           enabled: input.enabled,
           schedule: input.schedule,
           projectId: input.projectId,
-          threadId: input.threadId ?? null,
+          threadId,
+          ...(profileId === undefined ? {} : { profileId }),
           workspaceStrategy: input.workspaceStrategy,
           modelSelection: input.modelSelection,
           runtimeMode: input.runtimeMode,

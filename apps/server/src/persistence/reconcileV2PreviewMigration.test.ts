@@ -6,7 +6,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { runMigrations } from "./Migrations.ts";
 
 describe("fork V2 preview migration boundary", () => {
-  for (const previewId of [53, 54, 55]) {
+  for (const previewId of [53, 54, 55, 56]) {
     it.effect(`refuses preview ${previewId} without changing schema, history, or data`, () =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;

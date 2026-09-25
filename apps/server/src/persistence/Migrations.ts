@@ -11,9 +11,10 @@ import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Effect from "effect/Effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import Migration0056 from "./Migrations/054_OrchestrationV2.ts";
-import Migration0057 from "./Migrations/055_RemoveRedundantProjectionIndexes.ts";
+import Migration0057 from "./Migrations/057_ForkOrchestrationV2.ts";
+import Migration0058 from "./Migrations/055_RemoveRedundantProjectionIndexes.ts";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -71,6 +72,7 @@ import Migration0051 from "./Migrations/051_ProjectionThreadMessageContext.ts";
 import Migration0053 from "./Migrations/053_RepairAgentUpgradeSchema.ts";
 import Migration0054 from "./Migrations/054_ProjectionThreadTitleState.ts";
 import Migration0055 from "./Migrations/055_PullRequestFilesViewed.ts";
+import Migration0056 from "./Migrations/056_ScheduledTasks.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -138,8 +140,9 @@ export const migrationEntries = [
   [53, "RepairAgentUpgradeSchema", Migration0053],
   [54, "ProjectionThreadTitleState", Migration0054],
   [55, "PullRequestFilesViewed", Migration0055],
-  [56, "OrchestrationV2", Migration0056],
-  [57, "RemoveRedundantProjectionIndexes", Migration0057],
+  [56, "ScheduledTasks", Migration0056],
+  [57, "OrchestrationV2", Migration0057],
+  [58, "RemoveRedundantProjectionIndexes", Migration0058],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -182,5 +185,30 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")
     : Effect.log("Migrations ran successfully").pipe(Effect.annotateLogs({ migrations }));
+
+  // The migrator keys on migration_id: a database that recorded a different
+  // migration under a shared id (local or fork builds) keeps that id and
+  // silently skips this build's migration at it. Surface the divergence so the
+  // skipped schema change is diagnosable.
+  const sql = yield* SqlClient.SqlClient;
+  const recorded = yield* sql<{
+    readonly migration_id: number;
+    readonly name: string;
+  }>`SELECT migration_id, name FROM effect_sql_migrations`;
+  const manifestNames = new Map<number, string>(migrationEntries.map(([id, name]) => [id, name]));
+  const divergent = recorded.flatMap((row) => {
+    const expected = manifestNames.get(row.migration_id);
+    if (expected === undefined) {
+      return [`${row.migration_id}:${row.name} (unknown to this build)`];
+    }
+    return expected === row.name
+      ? []
+      : [`${row.migration_id}:${row.name} (this build: ${expected})`];
+  });
+  if (divergent.length > 0) {
+    yield* Effect.logWarning(
+      "Database migration history diverges from this build; recorded migration ids are skipped, not reconciled by name.",
+    ).pipe(Effect.annotateLogs({ divergent }));
+  }
   return executedMigrations;
 });

@@ -1,4 +1,4 @@
-import type { AgentSkill } from "@t3tools/contracts";
+import type { AgentSkill, ScheduledTask, ScheduledTaskSchedule } from "@t3tools/contracts";
 import type { AgentHandoffInput, AgentHandoffResult } from "./handoff.ts";
 export const GATEWAY_SCOPE_VALUES = [
   "read",
@@ -125,6 +125,50 @@ export interface GatewayEnvironmentSummary {
   readonly serverVersion?: string;
   readonly grantedScopes?: ReadonlyArray<string>;
 }
+
+export interface GatewayDevice {
+  readonly deviceId: string;
+  readonly label: string;
+  readonly kind: "web" | "desktop" | "mobile" | "unknown";
+  readonly platform?: string;
+  readonly visible: boolean;
+  readonly focused: boolean;
+  readonly connectedAt: string;
+}
+
+export type GatewayFocusTarget =
+  | { readonly type: "thread"; readonly threadId: string }
+  | {
+      readonly type: "file";
+      readonly threadId: string;
+      readonly path: string;
+      readonly line?: number;
+    }
+  | { readonly type: "agents" };
+
+/** One scheduled-task operation; ids are plain strings the runtime brands. */
+export type GatewayScheduledTaskRequest =
+  | { readonly action: "list" }
+  | { readonly action: "create"; readonly input: GatewayScheduledTaskCreate }
+  | {
+      readonly action: "update";
+      readonly taskId: string;
+      readonly patch: GatewayScheduledTaskPatch;
+    }
+  | { readonly action: "delete"; readonly taskId: string }
+  | { readonly action: "run"; readonly taskId: string };
+
+/** Agent-facing task fields; the runtime resolves the profile's model and modes. */
+export interface GatewayScheduledTaskCreate {
+  /** Defaults to the first line of the prompt. */
+  readonly title?: string;
+  readonly prompt: string;
+  readonly profileId: string;
+  readonly projectId: string;
+  readonly schedule: ScheduledTaskSchedule;
+  readonly enabled?: boolean;
+}
+export type GatewayScheduledTaskPatch = Partial<GatewayScheduledTaskCreate>;
 
 export interface GatewayPage<T> {
   readonly items: ReadonlyArray<T>;
@@ -359,6 +403,21 @@ export interface GatewayRuntimePort {
     threadId: string,
   ): Promise<{ environmentId: string; threadId: string; status: "succeeded" }>;
   listEnvironments(): Promise<ReadonlyArray<GatewayEnvironmentSummary>>;
+  /** Clients (desktop, web, mobile) connected to the environment that can be focused. */
+  listDevices?(environmentId: string): Promise<ReadonlyArray<GatewayDevice>>;
+  /** Bring a thread, file, or the Agents board on screen on one connected client. */
+  focusDevice?(
+    environmentId: string,
+    device: string,
+    target: GatewayFocusTarget,
+  ): Promise<{ readonly deviceId: string; readonly label: string; readonly status: "delivered" }>;
+  /** List, create, update, delete, or run now the environment's scheduled tasks. */
+  scheduledTask?(
+    environmentId: string,
+    request: GatewayScheduledTaskRequest,
+  ): Promise<
+    { readonly tasks: ReadonlyArray<ScheduledTask> } | ScheduledTask | { readonly deleted: string }
+  >;
   getEnvironmentStatus(environmentId: string): Promise<Record<string, unknown>>;
   listProfiles?(environmentId: string): Promise<ReadonlyArray<GatewayProfile>>;
   /** Resolve readable profile labels against the environment's live provider catalog. */

@@ -9,6 +9,8 @@ import {
   MessageId,
   ORCHESTRATION_V2_WS_METHODS,
   ProjectId,
+  ScheduledTaskError,
+  ScheduledTaskId,
   ProviderInstanceId,
   ThreadId,
   WS_METHODS,
@@ -41,6 +43,7 @@ import {
 } from "../operations/commands.ts";
 import { request, runStream, subscribe } from "../rpc/client.ts";
 import type {
+  GatewayDevice,
   GatewayProfile,
   GatewayProfileModelSelection,
   GatewayRuntimeEvent,
@@ -107,6 +110,80 @@ const threadSnapshot = (environmentId: EnvironmentId, threadId: ThreadId) =>
       .pipe(Effect.timeout("20 seconds"));
   });
 
+const listGatewayDevices = (environmentId: EnvironmentId) =>
+  Effect.gen(function* () {
+    const registry = yield* EnvironmentRegistry;
+    const { clients } = yield* registry.run(environmentId, request(WS_METHODS.clientsList, {}));
+    return clients.map((client): GatewayDevice => ({
+      deviceId: client.clientId,
+      label: client.label,
+      kind: client.clientKind === "desktop-renderer" ? "desktop" : client.clientKind,
+      ...(client.platform === undefined ? {} : { platform: client.platform }),
+      visible: client.visible,
+      focused: client.focused,
+      connectedAt: DateTime.formatIso(client.connectedAt),
+    }));
+  });
+
+/**
+ * The model and modes a scheduled task stores for its agent profile, or why the profile cannot
+ * run tasks. Runs still relaunch with the profile's latest revision; this is the task's snapshot.
+ */
+export function resolveScheduledTaskProfileRouting(
+  profiles: ReadonlyArray<McpGatewayProfile>,
+  profileId: string,
+  providers: ReadonlyArray<ServerProvider>,
+) {
+  const profile = profiles.find((candidate) => candidate.profileId === profileId);
+  if (profile === undefined) return `Agent ${profileId} was not found.`;
+  if (profile.runtimeMode === "read-only") {
+    return `Agent ${profile.name} is read-only and cannot run scheduled tasks.`;
+  }
+  const selection = resolveGatewayProfileModelSelection(profile, providers);
+  if (selection === undefined) return `Agent ${profile.name} has no available provider and model.`;
+  return {
+    profileId,
+    modelSelection: {
+      model: selection.model,
+      instanceId: ProviderInstanceId.make(selection.instanceId),
+      ...(selection.options === undefined ? {} : { options: selection.options }),
+    },
+    runtimeMode: profile.runtimeMode,
+    interactionMode: profile.interactionMode,
+  };
+}
+
+/** A task created without a title is named after the first line of its prompt. */
+export function defaultScheduledTaskTitle(prompt: string): string {
+  const firstLine = prompt.trim().split("\n", 1)[0]!.trim();
+  return firstLine.length > 120 ? `${firstLine.slice(0, 119)}…` : firstLine;
+}
+
+/** Accepts a deviceId, or a device label when exactly one connected device carries it. */
+export function resolveGatewayDevice(
+  devices: ReadonlyArray<GatewayDevice>,
+  device: string,
+): GatewayDevice {
+  const byId = devices.find((candidate) => candidate.deviceId === device);
+  if (byId) return byId;
+  const wanted = device.trim().toLowerCase();
+  const byLabel = devices.filter((candidate) => candidate.label.toLowerCase() === wanted);
+  if (byLabel.length === 1) return byLabel[0]!;
+  const available = devices.map((candidate) => `${candidate.label} (${candidate.deviceId})`);
+  throw new Error(
+    byLabel.length > 1
+      ? `Several devices are named "${device}"; pass a deviceId: ${available.join(", ")}.`
+      : `Device "${device}" is not connected. Connected devices: ${available.join(", ") || "none"}.`,
+  );
+}
+
+/**
+ * Resolves persisted readable profile labels against a live provider catalog.
+ * Exactly one enabled/available provider + model pair must match; duplicate
+ * labels stay unresolved rather than routing a thread ambiguously. Legacy
+ * profiles without labels validate their persisted routing snapshot against
+ * the same live catalog.
+ */
 export function resolveGatewayProfileModelSelection(
   profile: Pick<GatewayProfile, "providerLabel" | "modelLabel" | "modelSelection">,
   providers: ReadonlyArray<ServerProvider>,
@@ -600,6 +677,137 @@ export function createGatewayRuntimePort(
       }
       await openThread(environmentId, threadId);
       return { environmentId, threadId, status: "succeeded" };
+    },
+    listDevices: (environmentId) => run(listGatewayDevices(EnvironmentId.make(environmentId))),
+    scheduledTask: (environmentId, scheduled) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          const call = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+            registry.run(EnvironmentId.make(environmentId), effect);
+          const profileRouting = Effect.fn("gateway.scheduledTask.profileRouting")(function* (
+            profileId: string,
+          ) {
+            const [settings, config] = yield* Effect.all([
+              call(request(WS_METHODS.serverGetSettings, {})),
+              call(request(WS_METHODS.serverGetConfig, {})),
+            ]);
+            const routing = resolveScheduledTaskProfileRouting(
+              settings.mcpGatewayProfiles,
+              profileId,
+              config.providers,
+            );
+            return typeof routing === "string"
+              ? yield* new ScheduledTaskError({ message: routing })
+              : routing;
+          });
+          switch (scheduled.action) {
+            case "list":
+              return yield* call(request(WS_METHODS.scheduledTasksList, {}));
+            case "create": {
+              const { input } = scheduled;
+              const routing = yield* profileRouting(input.profileId);
+              const { task } = yield* call(
+                request(WS_METHODS.scheduledTasksUpsert, {
+                  title: input.title ?? defaultScheduledTaskTitle(input.prompt),
+                  prompt: input.prompt,
+                  enabled: input.enabled ?? true,
+                  schedule: input.schedule,
+                  projectId: ProjectId.make(input.projectId),
+                  workspaceStrategy: { type: "root" },
+                  ...routing,
+                  createdBy: "agent",
+                  creationSource: "mcp",
+                }),
+              );
+              return task;
+            }
+            case "update": {
+              const { patch } = scheduled;
+              const { tasks } = yield* call(request(WS_METHODS.scheduledTasksList, {}));
+              const existing = tasks.find((task) => task.id === scheduled.taskId);
+              if (existing === undefined) {
+                return yield* new ScheduledTaskError({
+                  message: `Scheduled task ${scheduled.taskId} was not found.`,
+                });
+              }
+              const routing =
+                patch.profileId !== undefined && patch.profileId !== existing.profileId
+                  ? yield* profileRouting(patch.profileId)
+                  : {};
+              const { task } = yield* call(
+                request(WS_METHODS.scheduledTasksUpsert, {
+                  id: existing.id,
+                  requireExisting: true,
+                  title: patch.title ?? existing.title,
+                  prompt: patch.prompt ?? existing.prompt,
+                  enabled: patch.enabled ?? existing.enabled,
+                  schedule: patch.schedule ?? existing.schedule,
+                  projectId:
+                    patch.projectId === undefined
+                      ? existing.projectId
+                      : ProjectId.make(patch.projectId),
+                  threadId: existing.threadId,
+                  workspaceStrategy: existing.workspaceStrategy,
+                  modelSelection: existing.modelSelection,
+                  runtimeMode: existing.runtimeMode,
+                  interactionMode: existing.interactionMode,
+                  creationSource: existing.creationSource,
+                  ...routing,
+                }),
+              );
+              return task;
+            }
+            case "delete":
+              yield* call(
+                request(WS_METHODS.scheduledTasksDelete, {
+                  id: ScheduledTaskId.make(scheduled.taskId),
+                }),
+              );
+              return { deleted: scheduled.taskId };
+            case "run": {
+              const { task } = yield* call(
+                request(WS_METHODS.scheduledTasksRunNow, {
+                  id: ScheduledTaskId.make(scheduled.taskId),
+                }),
+              );
+              return task;
+            }
+          }
+        }),
+      ),
+    focusDevice: async (rawEnvironmentId, device, target) => {
+      const environmentId = EnvironmentId.make(rawEnvironmentId);
+      const resolved = resolveGatewayDevice(await run(listGatewayDevices(environmentId)), device);
+      if (target.type !== "agents") {
+        const snapshot = await run(threadSnapshot(environmentId, ThreadId.make(target.threadId)));
+        if (snapshot.thread.id !== target.threadId || snapshot.thread.deletedAt !== null) {
+          throw new Error(`Thread ${target.threadId} was not found.`);
+        }
+      }
+      const result = await run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          return yield* registry.run(
+            environmentId,
+            request(WS_METHODS.clientsFocus, {
+              clientId: resolved.deviceId,
+              target:
+                target.type === "agents"
+                  ? { _tag: "agents" }
+                  : target.type === "thread"
+                    ? { _tag: "thread", threadId: ThreadId.make(target.threadId) }
+                    : {
+                        _tag: "file",
+                        threadId: ThreadId.make(target.threadId),
+                        path: target.path,
+                        ...(target.line === undefined ? {} : { line: target.line }),
+                      },
+            }),
+          );
+        }),
+      );
+      return { deviceId: result.clientId, label: result.label, status: "delivered" };
     },
     listEnvironments: () =>
       run(

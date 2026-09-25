@@ -31,6 +31,9 @@ export interface GatewayBridgeSocket {
 const METHODS = new Set<keyof GatewayRuntimePort>([
   "openThread",
   "openAgents",
+  "listDevices",
+  "focusDevice",
+  "scheduledTask",
   "handoffThread",
   "settleThread",
   "unsettleThread",
