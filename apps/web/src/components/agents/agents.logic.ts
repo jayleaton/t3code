@@ -35,6 +35,10 @@ export function agentThreadStatus(thread: EnvironmentThreadShell) {
   if (thread.session?.status === "starting") return "queued";
   if (thread.session?.status === "error" || thread.latestTurn?.state === "error") return "error";
   if (thread.hasPendingApprovals || thread.hasPendingUserInput) return "attention";
+  // A turn can settle while native background work runs on, as in the thread
+  // sidebar: sub-agent fleets still count as work, watch loops as monitoring.
+  if (thread.backgroundLiveness === "working") return "running";
+  if (thread.backgroundLiveness === "monitoring") return "monitoring";
   if (thread.latestTurn?.state === "completed") return "done";
   return "idle";
 }
@@ -43,6 +47,7 @@ export function agentThreadStatusLabel(status: ReturnType<typeof agentThreadStat
   return {
     done: "Done",
     running: "In progress",
+    monitoring: "Monitoring",
     queued: "Queued",
     idle: "Idle",
     error: "Error",

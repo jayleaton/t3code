@@ -115,6 +115,14 @@ describe("agent chat focus", () => {
     expect(isAgentChatInFocus(settled, undefined, false)).toBe(false);
     expect(isAgentChatInFocus(settled, undefined, true)).toBe(true);
   });
+  it("keeps a chat with background work live after its turn completes", () => {
+    const watching = { ...completed(), backgroundLiveness: "monitoring" as const };
+    expect(agentThreadStatus(watching)).toBe("monitoring");
+    expect(isAgentChatInFocus(watching, "2026-09-06T00:03:00.000Z", false)).toBe(true);
+    expect(agentThreadStatus({ ...completed(), backgroundLiveness: "working" as const })).toBe(
+      "running",
+    );
+  });
 });
 
 describe("agent workspace selection", () => {

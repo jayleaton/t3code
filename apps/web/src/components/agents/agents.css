@@ -258,6 +258,10 @@
   color: #f5d577;
   background: #3b3421;
 }
+.agent-status-monitoring {
+  color: var(--foreground);
+  background: color-mix(in srgb, #a8cfff 18%, transparent);
+}
 .agent-status-idle {
   color: #a8cfff;
   background: #223145;
