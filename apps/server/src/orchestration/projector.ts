@@ -42,6 +42,7 @@ import {
   ThreadSettledPayload,
   ThreadPinnedPayload,
   ThreadPinReorderedPayload,
+  ThreadAutoSettleSetPayload,
   ThreadPullRequestLinkedPayload,
   ThreadPullRequestSyncedPayload,
   ThreadPullRequestUnlinkedPayload,
@@ -443,6 +444,8 @@ export function projectEvent(
             settledAt: null,
             unsettledAt: null,
             activeOrderKey: null,
+            autoSettleDisabledAt: null,
+            parentThreadId: payload.parentThreadId ?? null,
             snoozedUntil: null,
             snoozedAt: null,
             deletedAt: null,
@@ -584,6 +587,17 @@ export function projectEvent(
         })),
       );
 
+    case "thread.auto-settle-set":
+      return decodeForEvent(ThreadAutoSettleSetPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            autoSettleDisabledAt: payload.autoSettleDisabledAt,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
     case "thread.pin-reordered":
       return decodeForEvent(ThreadPinReorderedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => ({
@@ -632,6 +646,9 @@ export function projectEvent(
                 : {}),
               ...(payload.branchPullRequest !== undefined
                 ? { branchPullRequest: payload.branchPullRequest }
+                : {}),
+              ...(payload.parentThreadId !== undefined
+                ? { parentThreadId: payload.parentThreadId }
                 : {}),
               ...legacyLinkPatch,
               updatedAt: payload.updatedAt,

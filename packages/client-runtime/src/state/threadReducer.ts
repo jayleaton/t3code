@@ -134,6 +134,8 @@ export function applyThreadDetailEvent(
           settledAt: null,
           unsettledAt: null,
           activeOrderKey: null,
+          autoSettleDisabledAt: null,
+          parentThreadId: event.payload.parentThreadId ?? null,
           snoozedUntil: null,
           snoozedAt: null,
           deletedAt: null,
@@ -252,6 +254,16 @@ export function applyThreadDetailEvent(
         },
       };
 
+    case "thread.auto-settle-set":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          autoSettleDisabledAt: event.payload.autoSettleDisabledAt,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
     // ── Thread metadata ─────────────────────────────────────────────
     case "thread.meta-updated":
       return {
@@ -280,6 +292,9 @@ export function applyThreadDetailEvent(
             : {}),
           ...(event.payload.activeOrderKey !== undefined
             ? { activeOrderKey: event.payload.activeOrderKey }
+            : {}),
+          ...(event.payload.parentThreadId !== undefined
+            ? { parentThreadId: event.payload.parentThreadId }
             : {}),
           updatedAt: event.payload.updatedAt,
         },

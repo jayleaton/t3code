@@ -119,15 +119,13 @@ export function requireThreadArchived(input: {
   readonly threadId: ThreadId;
 }): Effect.Effect<OrchestrationThread, OrchestrationCommandInvariantError> {
   return requireThread(input).pipe(
-    Effect.flatMap((thread) =>
-      thread.archivedAt !== null
-        ? Effect.succeed(thread)
-        : Effect.fail(
-            invariantError(
-              input.command.type,
-              `Thread '${input.threadId}' is not archived for command '${input.command.type}'.`,
-            ),
-          ),
+    Effect.filterOrFail(
+      (thread) => thread.archivedAt !== null,
+      () =>
+        invariantError(
+          input.command.type,
+          `Thread '${input.threadId}' is not archived for command '${input.command.type}'.`,
+        ),
     ),
   );
 }
@@ -138,15 +136,13 @@ export function requireThreadNotArchived(input: {
   readonly threadId: ThreadId;
 }): Effect.Effect<OrchestrationThread, OrchestrationCommandInvariantError> {
   return requireThread(input).pipe(
-    Effect.flatMap((thread) =>
-      thread.archivedAt === null
-        ? Effect.succeed(thread)
-        : Effect.fail(
-            invariantError(
-              input.command.type,
-              `Thread '${input.threadId}' is already archived and cannot handle command '${input.command.type}'.`,
-            ),
-          ),
+    Effect.filterOrFail(
+      (thread) => thread.archivedAt === null,
+      () =>
+        invariantError(
+          input.command.type,
+          `Thread '${input.threadId}' is already archived and cannot handle command '${input.command.type}'.`,
+        ),
     ),
   );
 }
@@ -169,4 +165,41 @@ export function requireThreadAbsent(input: {
       `Thread '${input.threadId}' already exists and cannot be created twice.`,
     ),
   );
+}
+
+/** A parent must be a live thread that is not the child itself or one of its descendants. */
+export function requireValidParentThread(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly threadId: ThreadId;
+  readonly parentThreadId: ThreadId;
+}): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  const parent = findThreadById(input.readModel, input.parentThreadId);
+  if (parent === undefined || parent.deletedAt !== null) {
+    return Effect.fail(
+      invariantError(
+        input.command.type,
+        `Parent thread '${input.parentThreadId}' does not exist for command '${input.command.type}'.`,
+      ),
+    );
+  }
+  const visited = new Set<ThreadId>();
+  for (
+    let ancestor: OrchestrationThread | undefined = parent;
+    ancestor !== undefined && !visited.has(ancestor.id);
+    ancestor = ancestor.parentThreadId
+      ? findThreadById(input.readModel, ancestor.parentThreadId)
+      : undefined
+  ) {
+    if (ancestor.id === input.threadId) {
+      return Effect.fail(
+        invariantError(
+          input.command.type,
+          `Thread '${input.threadId}' cannot be its own ancestor.`,
+        ),
+      );
+    }
+    visited.add(ancestor.id);
+  }
+  return Effect.void;
 }

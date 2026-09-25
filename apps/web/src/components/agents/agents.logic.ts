@@ -151,3 +151,186 @@ export function planAgentThreadMove(
   });
   return plan?.map(({ id, orderKey }) => ({ thread: byId.get(id)!, orderKey })) ?? null;
 }
+
+type AgentRun = Pick<
+  EnvironmentThreadShell,
+  | "environmentId"
+  | "id"
+  | "parentThreadId"
+  | "createdAt"
+  | "settledAt"
+  | "pinnedAt"
+  | "archivedAt"
+  | "activeOrderKey"
+  | "unsettledAt"
+>;
+
+export interface AgentChildRun<T> {
+  readonly thread: T;
+  /** 0 for runs the card's own run created, 1 for theirs, and so on. */
+  readonly depth: number;
+  /** Runs sharing this run's parent, for Move up/down within that parent. */
+  readonly siblings: readonly T[];
+}
+
+export interface AgentCardChildren<T> {
+  /** Pinned first, then active in their arranged order, each with its own sub-runs. */
+  readonly live: readonly AgentChildRun<T>[];
+  /** Settled direct sub-runs (and theirs), shown last like the board's Settled shelf. */
+  readonly settled: readonly AgentChildRun<T>[];
+}
+
+type AgentRunList = "pinned" | "active" | "settled";
+
+/** Pinned first (latest pin on top), then active by arranged order, then settled. */
+function sortSiblingRuns<T extends AgentRun>(runs: readonly T[]): T[] {
+  const pinned = runs
+    .filter((run) => run.pinnedAt != null && run.settledAt === null)
+    .toSorted((a, b) => (b.pinnedAt ?? "").localeCompare(a.pinnedAt ?? ""));
+  const active = sortActiveThreadsByOrderKey(
+    runs.filter((run) => run.pinnedAt == null && run.settledAt === null),
+  );
+  const settled = runs
+    .filter((run) => run.settledAt !== null)
+    .toSorted((a, b) => (b.settledAt ?? "").localeCompare(a.settledAt ?? ""));
+  return [...pinned, ...active, ...settled];
+}
+
+/**
+ * Folds runs that another run created into the card of their nearest ancestor
+ * on the board. Children come from every run, so a parent's card also shows
+ * sub-runs of other agents and ones hidden by the current filter. A live card
+ * holds children in any state; a settled card holds only settled children, so
+ * live work never disappears into the collapsed settled shelf.
+ */
+export function nestAgentRuns<T extends AgentRun>(input: {
+  readonly lists: Readonly<Record<AgentRunList, readonly T[]>>;
+  readonly all: readonly T[];
+}): {
+  readonly lists: Readonly<Record<AgentRunList, readonly T[]>>;
+  readonly childrenByKey: ReadonlyMap<string, AgentCardChildren<T>>;
+} {
+  const listByKey = new Map<string, AgentRunList>();
+  for (const list of ["pinned", "active", "settled"] as const) {
+    for (const run of input.lists[list]) listByKey.set(threadKey(run), list);
+  }
+  const runByKey = new Map<string, T>();
+  for (const run of [...input.all, ...input.lists.pinned, ...input.lists.active]) {
+    if (run.archivedAt === null) runByKey.set(threadKey(run), run);
+  }
+  const parentKeyOf = (run: T) =>
+    run.parentThreadId == null || run.parentThreadId === run.id
+      ? null
+      : threadKey({ environmentId: run.environmentId, id: run.parentThreadId });
+  const anchorByKey = new Map<string, string | null>();
+  const resolveAnchor = (run: T, visiting: Set<string>): string | null => {
+    const key = threadKey(run);
+    const cached = anchorByKey.get(key);
+    if (cached !== undefined) return cached;
+    const parentKey = parentKeyOf(run);
+    const parent = parentKey === null ? undefined : runByKey.get(parentKey);
+    let anchor: string | null = null;
+    if (parent && parentKey !== null && !visiting.has(parentKey)) {
+      visiting.add(key);
+      const candidate =
+        resolveAnchor(parent, visiting) ?? (listByKey.has(parentKey) ? parentKey : null);
+      visiting.delete(key);
+      if (
+        candidate !== null &&
+        (listByKey.get(candidate) !== "settled" || run.settledAt !== null)
+      ) {
+        anchor = candidate;
+      }
+    }
+    anchorByKey.set(key, anchor);
+    return anchor;
+  };
+  const childrenByParent = new Map<string, T[]>();
+  for (const run of runByKey.values()) {
+    if (resolveAnchor(run, new Set()) === null) continue;
+    const parentKey = parentKeyOf(run)!;
+    childrenByParent.set(parentKey, [...(childrenByParent.get(parentKey) ?? []), run]);
+  }
+  const collect = (parentKey: string, depth: number, into: AgentChildRun<T>[]) => {
+    const siblings = sortSiblingRuns(childrenByParent.get(parentKey) ?? []);
+    for (const child of siblings) {
+      into.push({ thread: child, depth, siblings });
+      collect(threadKey(child), depth + 1, into);
+    }
+  };
+  const childrenByKey = new Map<string, AgentCardChildren<T>>();
+  for (const anchor of new Set(anchorByKey.values())) {
+    if (anchor === null) continue;
+    const live: AgentChildRun<T>[] = [];
+    const settled: AgentChildRun<T>[] = [];
+    const siblings = sortSiblingRuns(childrenByParent.get(anchor) ?? []);
+    for (const child of siblings) {
+      const into = child.settledAt === null ? live : settled;
+      into.push({ thread: child, depth: 0, siblings });
+      collect(threadKey(child), 1, into);
+    }
+    childrenByKey.set(anchor, { live, settled });
+  }
+  const keep = (runs: readonly T[]) =>
+    runs.filter((run) => anchorByKey.get(threadKey(run)) == null);
+  return {
+    lists: {
+      pinned: keep(input.lists.pinned),
+      active: keep(input.lists.active),
+      settled: keep(input.lists.settled),
+    },
+    childrenByKey,
+  };
+}
+
+export type AgentRunLinkCheck =
+  | "ok"
+  | "same-run"
+  | "already-parent"
+  | "other-environment"
+  | "cycle";
+
+/**
+ * Whether `child` may become a sub-run of `parent`. Links stay within one
+ * environment, and a run cannot move under itself or one of its own sub-runs.
+ */
+export function checkAgentRunLink(
+  child: Pick<AgentRun, "environmentId" | "id" | "parentThreadId">,
+  parent: Pick<AgentRun, "environmentId" | "id" | "parentThreadId">,
+  all: readonly Pick<AgentRun, "environmentId" | "id" | "parentThreadId">[],
+): AgentRunLinkCheck {
+  if (child.environmentId !== parent.environmentId) return "other-environment";
+  if (child.id === parent.id) return "same-run";
+  if (child.parentThreadId === parent.id) return "already-parent";
+  const byId = new Map(
+    all.filter((run) => run.environmentId === parent.environmentId).map((run) => [run.id, run]),
+  );
+  const seen = new Set<string>();
+  for (
+    let ancestor: Pick<AgentRun, "id" | "parentThreadId"> | undefined = parent;
+    ancestor !== undefined && !seen.has(ancestor.id);
+    ancestor = ancestor.parentThreadId == null ? undefined : byId.get(ancestor.parentThreadId)
+  ) {
+    if (ancestor.id === child.id) return "cycle";
+    seen.add(ancestor.id);
+  }
+  return "ok";
+}
+
+/**
+ * Dropping on a card's header links under that run; its top edge and the area
+ * below the header keep reordering, so both gestures share one drag.
+ */
+export function isAgentRunNestDrop(pointerY: number, header: { top: number; bottom: number }) {
+  return pointerY >= header.top + (header.bottom - header.top) * 0.3 && pointerY <= header.bottom;
+}
+
+/**
+ * Opens a run's menu. Sub-runs pass their siblings so Move up/down arranges
+ * them within their parent instead of the board.
+ */
+export type AgentRunContextMenu = (
+  thread: EnvironmentThreadShell,
+  position: { x: number; y: number },
+  siblings?: readonly EnvironmentThreadShell[],
+) => Promise<void>;

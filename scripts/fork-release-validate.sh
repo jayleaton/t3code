@@ -17,7 +17,9 @@ NODE_ENV=test vp test run \
   apps/server/src/persistence/Migrations/050_ProjectionThreadPullRequests.test.ts \
   apps/server/src/persistence/Migrations/051_ProjectionThreadMessageContext.test.ts \
   apps/server/src/persistence/Migrations/054_ProjectionThreadTitleState.test.ts \
-  apps/server/src/persistence/Migrations/055_PullRequestFilesViewed.test.ts
+  apps/server/src/persistence/Migrations/055_PullRequestFilesViewed.test.ts \
+  apps/server/src/persistence/Migrations/057_ProjectionThreadsAutoSettleDisabledAt.test.ts \
+  apps/server/src/persistence/Migrations/058_ProjectionThreadsParentThreadId.test.ts
 NODE_ENV=test vp test run \
   apps/desktop/src/app/SharedSafeStorage.test.ts \
   apps/desktop/src/app/LegacyTokenStorage.test.ts \

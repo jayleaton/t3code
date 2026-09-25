@@ -162,6 +162,12 @@ page, or **Settings → T3 Connect** on mobile, and choose **Deregister**. This
 revokes its cloud access and frees its host space even when the environment is
 offline or has been wiped.
 
+When idle tunnel cleanup is enabled, T3 Connect removes a linked environment's
+tunnel after it stays offline for several minutes. The environment stays linked
+and keeps the same address. When the host starts again or wakes, T3 Connect
+creates a replacement tunnel on its own. You do not need to pair again. Cleanup
+usually runs five to ten minutes after the tunnel goes down.
+
 On a command-line host, `t3 connect unlink` disables exposure while retaining
 your login; `t3 connect logout` also clears that login. Background-service
 [removal](./background-service.md#manage-the-service) is separate.
@@ -287,6 +293,26 @@ check the returned sync failures. Use `profileId` with `t3_create_thread` to sel
 then `t3_send_message` to start work, or `t3_create_and_start_thread` to create the chat and send its opening task in one idempotent call. The environment-local `/mcp/workspace` endpoint exposes `list_agents` and `get_agents_view` with the same profile and state filters, using runs from its hosting machine. Agent listings include specializations without exposing system prompts. Use `t3_get_agents_view` with an `environmentId` to list agents alongside their chats and run status. Filter by `profileId`, `state` (`active`, `settled`, or `all`; active is the default and includes completed chats that have not been settled), and `executionState` (`running`, `queued`, `waiting-approval`, `waiting-input`, `completed`, `failed`, `interrupted`, `stopped`, or `idle`). Chats belonging to deleted agents appear under `orphanedRuns`. To follow one chat without polling, use `t3_wait_for_thread_status`, which returns the new status and a resume cursor when it changes or the bounded timeout elapses. Use `t3_unsettle_thread`
 with lifecycle access to return a settled chat to the active list. `t3_open_agents` opens the
 board in the connected desktop window with read access.
+
+### Sub-agent runs
+
+When an agent's chat creates chats through the MCP gateway (`t3_create_thread` or
+`t3_create_and_start_thread`), each new chat is recorded as a sub-run of the chat that created
+it. This happens without the agent doing anything extra. Pass `parentThreadId` to attach a
+new chat to another chat in the same environment, or `parentThreadId: null` for a standalone
+chat. `t3_list_threads` accepts `parentThreadId` to list a chat's sub-runs.
+
+On the Agents board, sub-runs appear inside the card of the run that created them, including
+runs by other agents. Each one shows its agent, title, and status; click it to open that chat.
+Right-click a sub-run for the same actions as a card. **Pin to top of parent** keeps it first in
+its parent's list, **Move up** and **Move down** arrange it among its siblings, and settling moves
+it into its parent's collapsed **Settled** group. A live sub-run whose parent is settled keeps its
+own card, which names its parent's agent and chat; click that name to open the parent.
+
+To link runs yourself on web and desktop, drag a card onto another card's title to make it a
+sub-run, or drag a sub-run out of its card to make it independent. Dragging a sub-run onto
+another card moves it there. Links stay within one environment, and a run cannot go under its
+own sub-runs. You can also right-click a card and choose **Detach from parent run**.
 
 ### Schedule prompts for an agent
 

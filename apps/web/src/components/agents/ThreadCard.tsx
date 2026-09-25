@@ -3,9 +3,18 @@ import { formatRelativeTime } from "../../timestampFormat";
 import { PROVIDER_ICON_BY_PROVIDER } from "../chat/providerIconUtils";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
-import { PinIcon } from "lucide-react";
+import { CornerLeftUpIcon, PinIcon } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
-import { useState, useRef, useEffect, type CSSProperties } from "react";
+import {
+  useContext,
+  useState,
+  useRef,
+  useEffect,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+import { useDraggable } from "@dnd-kit/core";
+import { AgentRunDragContext, agentChildDragId } from "./agentRunDrag";
 import { Link, useLocation } from "@tanstack/react-router";
 import { PreviewCard, PreviewCardTrigger, PreviewCardPopup } from "../ui/preview-card";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
@@ -16,7 +25,13 @@ import { AgentIcon } from "./AgentIcon";
 import { useEnvironment } from "../../state/environments";
 import { AgentChatPreview } from "./AgentChatPreview";
 import { isInsideComposerFloatingLayer } from "../chat/composerEventScope";
-import { agentThreadStatus, agentThreadStatusLabel } from "./agents.logic";
+import {
+  agentThreadStatus,
+  agentThreadStatusLabel,
+  type AgentCardChildren,
+  type AgentChildRun,
+  type AgentRunContextMenu,
+} from "./agents.logic";
 import {
   useLinkedThreadPullRequest,
   prStatusIndicator,
@@ -25,21 +40,165 @@ import {
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import { useOpenPrLink } from "../../lib/openPullRequestLink";
 
+function runAgentName(
+  run: EnvironmentThreadShell,
+  profiles: readonly McpGatewayProfile[] | undefined,
+) {
+  const profile = profiles?.find(
+    (candidate) => candidate.profileId === run.profileSnapshot?.profileId,
+  );
+  return {
+    profile,
+    name: profile?.name ?? run.profileSnapshot?.profileName ?? "Chat",
+  };
+}
+
+interface ChildRunRowProps {
+  child: AgentChildRun<EnvironmentThreadShell>;
+  profiles: readonly McpGatewayProfile[] | undefined;
+  onContextMenu: AgentRunContextMenu;
+}
+
+function AgentChildRunLink({
+  child: { thread: run, depth, siblings },
+  profiles,
+  onContextMenu,
+  onPointerDown,
+}: ChildRunRowProps & {
+  onPointerDown?: (event: ReactPointerEvent<HTMLAnchorElement>) => void;
+}) {
+  const pathname = useLocation({ select: (location) => location.pathname });
+  const status = agentThreadStatus(run);
+  const agent = runAgentName(run, profiles);
+  return (
+    <Link
+      to="/agents/$environmentId/$threadId"
+      params={{ environmentId: run.environmentId, threadId: run.id }}
+      className="agent-thread-child"
+      data-current={pathname === `/agents/${run.environmentId}/${run.id}`}
+      style={
+        {
+          "--agent-color": agent.profile?.color ?? "var(--muted-foreground)",
+          paddingInlineStart: `${6 + depth * 12}px`,
+        } as CSSProperties
+      }
+      {...(onPointerDown ? { onPointerDown } : {})}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void onContextMenu(run, { x: event.clientX, y: event.clientY }, siblings);
+      }}
+    >
+      <AgentIcon icon={agent.profile?.icon} />
+      {run.pinnedAt != null && run.settledAt === null && (
+        <PinIcon aria-label="Pinned" className="agent-thread-child-pin" size={10} />
+      )}
+      <span className="agent-thread-child-agent">{agent.name}</span>
+      <span className="agent-thread-child-title">{run.title}</span>
+      <span className={`agent-status agent-status-${status}`}>
+        {agentThreadStatusLabel(status)}
+      </span>
+    </Link>
+  );
+}
+
+/** A sub-run row that can be dragged onto another card or out of this one. */
+function DraggableAgentChildRun(props: ChildRunRowProps & { anchorKey: string }) {
+  const key = `${props.child.thread.environmentId}:${props.child.thread.id}`;
+  const { setNodeRef, listeners, isDragging } = useDraggable({
+    id: agentChildDragId(key),
+    data: { anchorKey: props.anchorKey },
+  });
+  return (
+    <li ref={setNodeRef} data-dragging={isDragging || undefined}>
+      <AgentChildRunLink
+        {...props}
+        // The row starts its own drag, not the card's.
+        onPointerDown={(event) => {
+          listeners?.onPointerDown?.(event);
+          event.stopPropagation();
+        }}
+      />
+    </li>
+  );
+}
+
+/**
+ * Runs this card's run created, each linking to its own chat with live status
+ * and the same menu as a card. Settled sub-runs collapse at the bottom.
+ */
+function AgentChildRuns({
+  runs,
+  anchorKey,
+  profiles,
+  onContextMenu,
+}: {
+  runs: AgentCardChildren<EnvironmentThreadShell>;
+  anchorKey: string;
+  profiles: readonly McpGatewayProfile[] | undefined;
+  onContextMenu: AgentRunContextMenu;
+}) {
+  const { childDragEnabled } = useContext(AgentRunDragContext);
+  const [settledOpen, setSettledOpen] = useState(false);
+  const row = (child: AgentChildRun<EnvironmentThreadShell>) => {
+    const key = `${child.thread.environmentId}:${child.thread.id}`;
+    return childDragEnabled ? (
+      <DraggableAgentChildRun
+        key={key}
+        child={child}
+        anchorKey={anchorKey}
+        profiles={profiles}
+        onContextMenu={onContextMenu}
+      />
+    ) : (
+      <li key={key}>
+        <AgentChildRunLink child={child} profiles={profiles} onContextMenu={onContextMenu} />
+      </li>
+    );
+  };
+  const settledCount = runs.settled.filter((child) => child.depth === 0).length;
+  return (
+    <ul className="agent-thread-children" aria-label="Sub-agent runs">
+      {runs.live.map(row)}
+      {runs.settled.length > 0 && (
+        <li>
+          <button
+            type="button"
+            className="agent-thread-children-settled"
+            aria-expanded={settledOpen}
+            onClick={() => setSettledOpen((open) => !open)}
+          >
+            Settled · {settledCount}
+          </button>
+        </li>
+      )}
+      {settledOpen && runs.settled.map(row)}
+    </ul>
+  );
+}
+
 export function ThreadCard({
   thread,
   profile,
+  profiles,
+  childRuns,
+  parentRun,
   dragging = false,
   onContextMenu,
 }: {
   profile?: McpGatewayProfile | undefined;
+  /** Resolves the agents of related runs; falls back to their snapshot names. */
+  profiles?: readonly McpGatewayProfile[] | undefined;
+  /** Runs folded into this card by nestAgentRuns. */
+  childRuns?: AgentCardChildren<EnvironmentThreadShell> | undefined;
+  /** The run that created this one, when this card stands on its own. */
+  parentRun?: EnvironmentThreadShell | null | undefined;
   dragging?: boolean;
   thread: EnvironmentThreadShell;
-  onContextMenu: (
-    thread: EnvironmentThreadShell,
-    position: { x: number; y: number },
-  ) => Promise<void>;
+  onContextMenu: AgentRunContextMenu;
 }) {
   const pathname = useLocation({ select: (location) => location.pathname });
+  const { nestTargetKey } = useContext(AgentRunDragContext);
   const environment = useEnvironment(thread.environmentId);
   useNowMinute();
   const timestamp = thread.latestUserMessageAt ?? thread.updatedAt;
@@ -103,6 +262,7 @@ export function ThreadCard({
     <div
       className="agent-thread-container"
       data-current={pathname === `/agents/${thread.environmentId}/${thread.id}`}
+      data-nest-target={nestTargetKey === `${thread.environmentId}:${thread.id}` || undefined}
       style={{ "--agent-color": profile?.color ?? "var(--muted-foreground)" } as CSSProperties}
     >
       <PreviewCard
@@ -219,6 +379,29 @@ export function ThreadCard({
           )}
         </PreviewCardPopup>
       </PreviewCard>
+      {parentRun && (
+        <div className="agent-thread-prs">
+          <Link
+            to="/agents/$environmentId/$threadId"
+            params={{ environmentId: parentRun.environmentId, threadId: parentRun.id }}
+            className="agent-thread-pr agent-thread-parent"
+            aria-label={`Created by ${runAgentName(parentRun, profiles).name}: ${parentRun.title}`}
+          >
+            <CornerLeftUpIcon size={12} aria-hidden="true" />
+            <span className="agent-thread-pr-repository">
+              {runAgentName(parentRun, profiles).name} · {parentRun.title}
+            </span>
+          </Link>
+        </div>
+      )}
+      {childRuns && childRuns.live.length + childRuns.settled.length > 0 && (
+        <AgentChildRuns
+          runs={childRuns}
+          anchorKey={`${thread.environmentId}:${thread.id}`}
+          profiles={profiles}
+          onContextMenu={onContextMenu}
+        />
+      )}
       {badges.length > 0 && (
         <div className="agent-thread-prs" aria-label="Pull requests">
           {badges.map(({ reference, status }) => (

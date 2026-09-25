@@ -876,6 +876,14 @@ export const OrchestrationThread = Schema.Struct({
   // Manual Active placement. Keyless threads retain their creation/re-entry
   // order above the arranged run. Settling clears this slot.
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // Set while the user has turned automatic settlement off for this thread.
+  // Survives manual settle, un-settle, and activity: only the user clears it.
+  // Optional so payloads from older servers still decode.
+  autoSettleDisabledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  // Thread that spawned this one (for example an agent creating sub-threads
+  // over MCP). Same environment; may be missing or deleted, so clients treat
+  // it as a hint. Optional so payloads from older servers still decode.
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   // Pending-only state. Optional so older servers remain compatible.
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
@@ -949,6 +957,8 @@ export const OrchestrationThreadShell = Schema.Struct({
   pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  autoSettleDisabledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
   session: Schema.NullOr(OrchestrationSession),
@@ -1173,6 +1183,7 @@ const ThreadCreateCommand = Schema.Struct({
   profileSelection: Schema.optional(ThreadProfileSelection),
   useServerDefaults: Schema.optional(Schema.Boolean),
   profileSnapshot: Schema.optional(ThreadProfileSnapshot),
+  parentThreadId: Schema.optional(ThreadId),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
@@ -1269,6 +1280,14 @@ const ThreadPinReorderCommand = Schema.Struct({
   orderKey: TrimmedNonEmptyString,
 });
 
+const ThreadAutoSettleSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.auto-settle.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  // false turns automatic settlement off for this thread, true turns it back on.
+  enabled: Schema.Boolean,
+});
+
 const ThreadActiveReorderCommand = Schema.Struct({
   type: Schema.Literal("thread.active.reorder"),
   commandId: CommandId,
@@ -1287,6 +1306,8 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   expectedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  // Null detaches the thread from its parent.
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
 }).check(
   Schema.makeFilter(
     (input) =>
@@ -1509,6 +1530,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadPinCommand,
   ThreadUnpinCommand,
   ThreadPinReorderCommand,
+  ThreadAutoSettleSetCommand,
   ThreadActiveReorderCommand,
   ThreadMetaUpdateCommand,
   ThreadPullRequestLinkCommand,
@@ -1544,6 +1566,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadPinCommand,
   ThreadUnpinCommand,
   ThreadPinReorderCommand,
+  ThreadAutoSettleSetCommand,
   ThreadActiveReorderCommand,
   ThreadMetaUpdateCommand,
   ThreadPullRequestLinkCommand,
@@ -1774,6 +1797,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.pinned",
   "thread.unpinned",
   "thread.pin-reordered",
+  "thread.auto-settle-set",
   "thread.meta-updated",
   "thread.pull-request-linked",
   "thread.pull-request-unlinked",
@@ -1842,6 +1866,7 @@ export const ThreadCreatedPayload = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   profileSnapshot: Schema.optional(ThreadProfileSnapshot),
+  parentThreadId: Schema.optional(ThreadId),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
@@ -1913,6 +1938,13 @@ export const ThreadPinReorderedPayload = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 
+export const ThreadAutoSettleSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  // Null re-enables automatic settlement.
+  autoSettleDisabledAt: Schema.NullOr(IsoDateTime),
+  updatedAt: IsoDateTime,
+});
+
 export const ThreadMetaUpdatedPayload = Schema.Struct({
   threadId: ThreadId,
   // Order updates use this existing event so older clients can ignore the
@@ -1934,6 +1966,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   // thread.pull-request-linked still decode and replay into the link table.
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   updatedAt: IsoDateTime,
 });
 
@@ -2176,6 +2209,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.pin-reordered"),
     payload: ThreadPinReorderedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.auto-settle-set"),
+    payload: ThreadAutoSettleSetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

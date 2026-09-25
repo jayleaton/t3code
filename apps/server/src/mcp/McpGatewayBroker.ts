@@ -14,6 +14,34 @@ import type * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 type Message = typeof Schema.JsonObject.Type;
+
+/** `_meta` key the desktop gateway reads to learn which thread made a tool call. */
+export const MCP_GATEWAY_CALLER_META_KEY = "t3code/caller";
+
+// The server owns caller identity: it overwrites anything the agent put under this key,
+// so the gateway can trust it (for example to parent threads an agent creates).
+const withCaller = (
+  message: Message,
+  session: { readonly environmentId: string; readonly threadId: string },
+): Message => {
+  const asObject = (value: unknown): Message =>
+    typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Message) : {};
+  const params = asObject(message.params);
+  const meta = asObject(params._meta);
+  return {
+    ...message,
+    params: {
+      ...params,
+      _meta: {
+        ...meta,
+        [MCP_GATEWAY_CALLER_META_KEY]: {
+          environmentId: session.environmentId,
+          threadId: session.threadId,
+        },
+      },
+    },
+  };
+};
 const unavailable = (message: string) => new McpGatewayUnavailableError({ message });
 interface Host {
   readonly owner: string;
@@ -22,6 +50,7 @@ interface Host {
 }
 interface Session {
   readonly providerSessionId: string;
+  readonly environmentId: string;
   readonly threadId: string;
   readonly host: Host;
   readonly notifications: Queue.Queue<Message, Cause.Done>;
@@ -76,7 +105,7 @@ export const make = Effect.gen(function* () {
     );
   const open = Effect.fn("McpGatewayBroker.open")(function* (
     providerSessionId: string,
-    threadId: string,
+    caller: { readonly environmentId: string; readonly threadId: string },
   ) {
     // Pin the session to one desktop; disconnects must not move it to another desktop's grants.
     const host = hosts.values().next().value;
@@ -90,7 +119,8 @@ export const make = Effect.gen(function* () {
     const notifications = yield* Queue.unbounded<Message, Cause.Done>();
     sessions.set(sessionId, {
       providerSessionId,
-      threadId,
+      environmentId: caller.environmentId,
+      threadId: caller.threadId,
       host,
       notifications,
       pending: new Map(),
@@ -122,6 +152,7 @@ export const make = Effect.gen(function* () {
       return undefined;
     }
     const key = `${typeof message.id}:${message.id}`;
+    const stamped = message.method === "tools/call" ? withCaller(message, session) : message;
     if (session.pending.has(key))
       return yield* Effect.fail(unavailable("Duplicate MCP request ID."));
     const deferred = yield* Deferred.make<Message, McpGatewayUnavailableError>();
@@ -131,7 +162,7 @@ export const make = Effect.gen(function* () {
         type: "message",
         connectionId: session.host.connectionId,
         sessionId,
-        message,
+        message: stamped,
       });
       return yield* Deferred.await(deferred);
     }).pipe(

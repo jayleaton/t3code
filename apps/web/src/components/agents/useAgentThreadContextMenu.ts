@@ -25,7 +25,7 @@ import { useUiStateStore } from "../../uiStateStore";
 import { useClientSettings } from "../../hooks/useSettings";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 
-import { planAgentThreadMove } from "./agents.logic";
+import { planAgentThreadMove, type AgentRunContextMenu } from "./agents.logic";
 
 type AgentThreadMenuId =
   | "move-up"
@@ -36,6 +36,7 @@ type AgentThreadMenuId =
   | "unsettle"
   | "regenerate-title"
   | "mark-unread"
+  | "detach-parent"
   | "copy-path"
   | "copy-branch"
   | "copy-thread-id"
@@ -57,7 +58,9 @@ function failureToast(title: string, error: unknown) {
  * (not per card) so a board with many chat cards does not subscribe each card
  * to projects, settings, and the thread action commands.
  */
-export function useAgentThreadContextMenu(visible: readonly EnvironmentThreadShell[]) {
+export function useAgentThreadContextMenu(
+  visible: readonly EnvironmentThreadShell[],
+): AgentRunContextMenu {
   const threads = useThreadShells();
   const router = useRouter();
   const projects = useProjects();
@@ -96,7 +99,11 @@ export function useAgentThreadContextMenu(visible: readonly EnvironmentThreadShe
   });
 
   return useCallback(
-    async (thread: EnvironmentThreadShell, position: { x: number; y: number }) => {
+    async (
+      thread: EnvironmentThreadShell,
+      position: { x: number; y: number },
+      siblings?: readonly EnvironmentThreadShell[],
+    ) => {
       const api = readLocalApi();
       const ref = scopeThreadRef(thread.environmentId, thread.id);
       const current = readThreadShell(ref);
@@ -117,7 +124,13 @@ export function useAgentThreadContextMenu(visible: readonly EnvironmentThreadShe
             const shell = readThreadShell(scopeThreadRef(item.environmentId, item.id));
             return shell ? [shell] : [];
           });
-        const plan = planAgentThreadMove(refresh(visible), refresh(threads), current, direction);
+        // A sub-run moves among its parent's sub-runs; a card moves on the board.
+        const plan = planAgentThreadMove(
+          refresh(siblings ?? visible),
+          refresh(threads),
+          current,
+          direction,
+        );
         return plan?.every(({ thread }) =>
           readEnvironmentSupportsActiveReorder(thread.environmentId),
         )
@@ -129,7 +142,11 @@ export function useAgentThreadContextMenu(visible: readonly EnvironmentThreadShe
           ? [
               pinned
                 ? { id: "unpin" as const, label: "Unpin chat", icon: "pin-off" }
-                : { id: "pin" as const, label: "Pin chat to top", icon: "pin" },
+                : {
+                    id: "pin" as const,
+                    label: siblings ? "Pin to top of parent" : "Pin chat to top",
+                    icon: "pin",
+                  },
             ]
           : []),
         ...(!pinned && !settled
@@ -168,6 +185,9 @@ export function useAgentThreadContextMenu(visible: readonly EnvironmentThreadShe
             ]
           : []),
         { id: "mark-unread", label: "Mark unread", icon: "mail-open", separatorBefore: true },
+        ...(current.parentThreadId != null
+          ? [{ id: "detach-parent" as const, label: "Detach from parent run", icon: "unlink" }]
+          : []),
         {
           id: "copy-path",
           label: "Copy path",
@@ -239,6 +259,14 @@ export function useAgentThreadContextMenu(visible: readonly EnvironmentThreadShe
           return;
         case "mark-unread":
           markThreadUnread(scopedThreadKey(ref), current.latestTurn?.completedAt);
+          return;
+        case "detach-parent":
+          await reportFailure("Failed to detach chat", () =>
+            updateThreadMetadata({
+              environmentId: ref.environmentId,
+              input: { threadId: ref.threadId, parentThreadId: null },
+            }),
+          );
           return;
         case "copy-path":
           if (workspacePath) copyPathToClipboard(workspacePath, { path: workspacePath });

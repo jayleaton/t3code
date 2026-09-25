@@ -375,6 +375,7 @@ function gatewayThreadShellProjection(thread: OrchestrationShellSnapshot["thread
     id: thread.id,
     projectId: thread.projectId,
     profileSnapshot: thread.profileSnapshot,
+    parentThreadId: thread.parentThreadId ?? null,
     settledAt: thread.settledAt,
     title: thread.title,
     status: gatewayStatusFromThread(thread),
@@ -465,6 +466,7 @@ export function gatewayThreadProjection(thread: OrchestrationThreadDetailSnapsho
     hasPendingUserInput: pending.hasPendingUserInput,
     modelSelection: thread.modelSelection,
     profileSnapshot: thread.profileSnapshot,
+    parentThreadId: thread.parentThreadId ?? null,
     settledAt: thread.settledAt,
     runtimeMode: thread.runtimeMode,
     interactionMode: thread.interactionMode,
@@ -1162,6 +1164,9 @@ export function createGatewayRuntimePort(
               ...(input.profileSelection === undefined
                 ? {}
                 : { profileSelection: input.profileSelection }),
+              ...(input.parentThreadId === undefined
+                ? {}
+                : { parentThreadId: ThreadId.make(input.parentThreadId) }),
               branch: null,
               worktreePath: null,
             }),
