@@ -418,10 +418,10 @@ describe("agentRunDropZone", () => {
   const both = { nest: true, reorder: true };
 
   it("links in the middle of the card and reorders at its edges", () => {
-    expect(agentRunDropZone(110, card, both)).toBe("before");
-    expect(agentRunDropZone(130, card, both)).toBe("nest");
-    expect(agentRunDropZone(270, card, both)).toBe("nest");
-    expect(agentRunDropZone(290, card, both)).toBe("after");
+    expect(agentRunDropZone(140, card, both)).toBe("before");
+    expect(agentRunDropZone(160, card, both)).toBe("nest");
+    expect(agentRunDropZone(240, card, both)).toBe("nest");
+    expect(agentRunDropZone(260, card, both)).toBe("after");
     expect(agentRunDropZone(310, card, both)).toBeNull();
   });
 

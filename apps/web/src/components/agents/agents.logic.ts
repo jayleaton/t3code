@@ -326,7 +326,7 @@ export function agentRunLinkTargets(
 export type AgentRunDropZone = "before" | "nest" | "after";
 
 /** Share of a card's height, at each end, that reorders instead of linking. */
-const AGENT_RUN_REORDER_EDGE = 0.125;
+const AGENT_RUN_REORDER_EDGE = 0.25;
 
 /**
  * Where a pointer over a card drops: the middle of the card links under that
