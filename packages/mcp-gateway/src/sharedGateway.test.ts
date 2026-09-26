@@ -7,6 +7,7 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import * as Crypto from "effect/Crypto";
@@ -772,6 +773,76 @@ describe("shared MCP gateway", () => {
     });
     await transport.close();
   });
+
+  it("retires an owner from another build so the new build serves the session", async () => {
+    const input = await config();
+    const retired = Promise.withResolvers<void>();
+    await owner({ ...input, build: "old" }, { onRetire: retired.resolve });
+    const launch = vi.fn(async () => {
+      await owner({ ...input, build: "new" });
+    });
+    const client = await mcp({ ...input, build: "new" }, launch);
+    await retired.promise;
+    expect(launch).toHaveBeenCalled();
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toContain(
+      "t3_set_thread_parent",
+    );
+  });
+
+  it("keeps using an owner too old to report its build", async () => {
+    const input = await config();
+    await owner(input);
+    const launch = vi.fn(async () => undefined);
+    const client = await mcp({ ...input, build: "new" }, launch);
+    expect(launch).not.toHaveBeenCalled();
+    expect((await client.listTools()).tools.length).toBeGreaterThan(0);
+  });
+
+  it("moves a running stdio session to the next owner and announces the tool change", async () => {
+    const input = await config();
+    const entryPoint =
+      process.env.T3_MCP_TEST_ENTRYPOINT ??
+      NodeURL.fileURLToPath(new URL("./bin.ts", import.meta.url));
+    const build = NodeCrypto.createHash("sha256")
+      .update(NodeFS.readFileSync(entryPoint))
+      .digest("hex");
+    const first = await owner({ ...input, build });
+    const client = new Client({ name: "owner-handover", version: "1.0.0" });
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [entryPoint],
+      stderr: "pipe",
+      env: {
+        T3_MCP_BRIDGE_PORT: String(input.port),
+        T3_MCP_BRIDGE_TOKEN: input.token,
+        T3_MCP_STATE_FILE: input.stateFile,
+        T3_MCP_EVENT_RETENTION: String(input.retentionEvents),
+        T3_MCP_REPOSITORY_ALLOWLIST: input.repositoryAllowlist.join(","),
+        T3_MCP_GRANTS: "{}",
+      },
+    });
+    cleanup.push(async () => {
+      await client.close();
+      // The session launched a detached owner; a session from another build
+      // retires it at once, so nothing is found or killed by PID.
+      await connectMcpSession({
+        port: input.port,
+        token: input.token,
+        configuration: sharedGatewayConfiguration(input),
+        build: "cleanup",
+      }).catch(() => undefined);
+    });
+    await client.connect(transport);
+    const changed = Promise.withResolvers<void>();
+    client.setNotificationHandler(ToolListChangedNotificationSchema, () => changed.resolve());
+    expect((await client.listTools()).tools.length).toBeGreaterThan(0);
+
+    await first!.close();
+    await changed.promise;
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toContain(
+      "t3_set_thread_parent",
+    );
+  }, 30_000);
 });
 
 it("shares lifecycle grant updates and chat focus across already-connected MCP sessions", async () => {
