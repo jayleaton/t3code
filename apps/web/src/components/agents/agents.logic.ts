@@ -323,12 +323,49 @@ export function agentRunLinkTargets(
   );
 }
 
+export type AgentRunDropZone = "before" | "nest" | "after";
+
+/** Share of a card's height, at each end, that reorders instead of linking. */
+const AGENT_RUN_REORDER_EDGE = 0.125;
+
 /**
- * Dropping on a card's header links under that run; its top edge and the area
- * below the header keep reordering, so both gestures share one drag.
+ * Where a pointer over a card drops: the middle of the card links under that
+ * run and its top and bottom edges reorder around it, so both gestures share
+ * one drag. A card the run cannot link under reorders by halves, and a drag
+ * that cannot reorder links anywhere on the card.
  */
-export function isAgentRunNestDrop(pointerY: number, header: { top: number; bottom: number }) {
-  return pointerY >= header.top + (header.bottom - header.top) * 0.3 && pointerY <= header.bottom;
+export function agentRunDropZone(
+  pointerY: number,
+  card: { top: number; bottom: number },
+  can: { nest: boolean; reorder: boolean },
+): AgentRunDropZone | null {
+  if (pointerY < card.top || pointerY > card.bottom) return null;
+  const height = card.bottom - card.top;
+  if (!can.reorder) return can.nest ? "nest" : null;
+  const half = pointerY < card.top + height / 2 ? "before" : "after";
+  if (!can.nest) return half;
+  const edge = height * AGENT_RUN_REORDER_EDGE;
+  if (pointerY < card.top + edge) return "before";
+  if (pointerY > card.bottom - edge) return "after";
+  return "nest";
+}
+
+/**
+ * The sortable `over` id that places `activeId` before or after `targetId`.
+ * dnd-kit moves the active item to `over`'s index, so the slot depends on
+ * which side of the target the active item started.
+ */
+export function agentRunReorderOver(
+  ids: readonly string[],
+  activeId: string,
+  targetId: string,
+  zone: "before" | "after",
+): string | null {
+  const from = ids.indexOf(activeId);
+  const target = ids.indexOf(targetId);
+  if (from < 0 || target < 0) return null;
+  const insertAt = zone === "before" ? target : target + 1;
+  return ids[from < insertAt ? insertAt - 1 : insertAt] ?? null;
 }
 
 /**

@@ -1,6 +1,5 @@
 import { useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  closestCenter,
   DndContext,
   DragOverlay,
   useDraggable,
@@ -28,7 +27,7 @@ import { SortableThreadRow } from "../SortableThreadRow";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { agentRunLinkTargets, isAgentRunNestDrop } from "./agents.logic";
+import { agentRunDropZone, agentRunLinkTargets, agentRunReorderOver } from "./agents.logic";
 import {
   AGENT_CHILD_DRAG_PREFIX,
   AGENT_LINK_DRAG_PREFIX,
@@ -44,27 +43,20 @@ const nestWrapperOf = (key: string) =>
   document.querySelector(`[${AGENT_NEST_KEY_ATTRIBUTE}="${window.CSS.escape(key)}"]`);
 
 /**
- * The run whose card header is under the pointer, when the dragged run may
- * link under it. One hit test per move: the dragged card itself rides under
- * the pointer, so it is skipped, and what lies beneath decides.
+ * The card under the pointer, other than the dragged one. One hit test per
+ * move: the dragged card rides under the pointer, so it is skipped and what
+ * lies beneath decides. Cards are hit where they are drawn, so a card the
+ * list has shifted out of the way is no longer under the pointer.
  */
-function nestTargetAt(
+function cardAt(
   pointer: { x: number; y: number },
   draggedKey: string,
-  linkTargets: ReadonlySet<string>,
-): string | null {
-  if (linkTargets.size === 0) return null;
+): { key: string; rect: DOMRect } | null {
   for (const element of document.elementsFromPoint(pointer.x, pointer.y)) {
-    const header = element.closest(".agent-thread");
-    const wrapper = header?.closest(`[${AGENT_NEST_KEY_ATTRIBUTE}]`);
-    if (!header || !wrapper) continue;
-    const key = wrapper.getAttribute(AGENT_NEST_KEY_ATTRIBUTE);
-    if (key === draggedKey) continue;
-    return key !== null &&
-      linkTargets.has(key) &&
-      isAgentRunNestDrop(pointer.y, header.getBoundingClientRect())
-      ? key
-      : null;
+    const wrapper = element.closest(`[${AGENT_NEST_KEY_ATTRIBUTE}]`);
+    const key = wrapper?.getAttribute(AGENT_NEST_KEY_ATTRIBUTE);
+    if (!wrapper || !key || key === draggedKey) continue;
+    return { key, rect: wrapper.getBoundingClientRect() };
   }
   return null;
 }
@@ -74,11 +66,22 @@ type ChildDrop = { kind: "none" } | { kind: "detach" };
 const keyOf = (thread: EnvironmentThreadShell) =>
   scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
 
+/** Pinned, settled, and reorder-less environments' cards keep their place and only link. */
+const isReorderable = (thread: EnvironmentThreadShell) =>
+  thread.pinnedAt == null &&
+  thread.settledAt === null &&
+  readEnvironmentSupportsActiveReorder(thread.environmentId);
+
 /**
  * One drag surface for a list of agent chats: active cards reorder (the
  * sidebar's pointer lifecycle and persisted drop planner), and any card or
  * sub-run row can be linked under another run or detached from its parent.
  * `active` is the reorderable list rendered by SortableAgentThreads inside.
+ *
+ * Both gestures follow the pointer over the card beneath it: the middle of a
+ * card links, its edges reorder (see agentRunDropZone). Reordering is not
+ * left to the dragged card's center, which swapped a neighbour away before
+ * the pointer could reach it.
  *
  * Link targets are not dnd-kit droppables. A sortable item loses its
  * transform whenever `over` is not a list item, so hovering a header would
@@ -134,9 +137,7 @@ export function AgentRunDragArea({
       onFinish: finish,
     }),
   );
-  const ids = activeThreads
-    .filter((thread) => thread.pinnedAt == null && thread.settledAt === null)
-    .map(keyOf);
+  const ids = activeThreads.filter(isReorderable).map(keyOf);
   const runByKey = new Map(all.map((thread) => [keyOf(thread), thread]));
   const draggedKey = (id: string | number) => {
     const value = String(id);
@@ -158,14 +159,22 @@ export function AgentRunDragArea({
     return linkTargets.current.targets;
   };
 
-  // A pointer on another card's header links under it; anywhere else a card
-  // reorders as before and a sub-run row detaches once it leaves its card.
   const collisionDetection: CollisionDetection = (args) => {
     const pointer = args.pointerCoordinates;
     const activeId = String(args.active.id);
     const key = draggedKey(activeId);
-    nestTarget.current = pointer ? nestTargetAt(pointer, key, linkTargetsFor(key)) : null;
+    const reorders = !activeId.startsWith(CHILD_PREFIX) && !activeId.startsWith(LINK_PREFIX);
+    const card = pointer ? cardAt(pointer, key) : null;
+    const zone =
+      pointer && card
+        ? agentRunDropZone(pointer.y, card.rect, {
+            nest: linkTargetsFor(key).has(card.key),
+            reorder: reorders,
+          })
+        : null;
+    nestTarget.current = card && zone === "nest" ? card.key : null;
     if (activeId.startsWith(CHILD_PREFIX)) {
+      // A sub-run row detaches once it leaves the card it is listed under.
       const anchorKey = (args.active.data.current as { anchorKey?: string } | undefined)?.anchorKey;
       const rect = anchorKey ? nestWrapperOf(anchorKey)?.getBoundingClientRect() : undefined;
       const outside =
@@ -179,13 +188,13 @@ export function AgentRunDragArea({
       childDrop.current = outside ? { kind: "detach" } : { kind: "none" };
       return [];
     }
-    if (activeId.startsWith(LINK_PREFIX)) return [];
-    if (nestTarget.current !== null) {
-      return lastSortOver.current === null ? [] : [{ id: lastSortOver.current }];
+    if (!reorders) return [];
+    if (card && (zone === "before" || zone === "after")) {
+      lastSortOver.current =
+        agentRunReorderOver(ids, activeId, card.key, zone) ?? lastSortOver.current;
     }
-    const collisions = closestCenter(args);
-    lastSortOver.current = collisions[0] ? String(collisions[0].id) : null;
-    return collisions;
+    // Between cards, or while linking, the arrangement holds still under the pointer.
+    return lastSortOver.current === null ? [] : [{ id: lastSortOver.current }];
   };
 
   const linkRun = async (child: EnvironmentThreadShell, parent: EnvironmentThreadShell | null) => {
@@ -350,22 +359,16 @@ export function SortableAgentThreads({
 }) {
   const { dragging, saving } = useContext(AgentRunDragContext);
   const nestTargetKey = useContext(AgentNestTargetContext);
-  const ids = threads
-    .filter((thread) => thread.pinnedAt == null && thread.settledAt === null)
-    .map(keyOf);
+  const ids = threads.filter(isReorderable).map(keyOf);
   return (
     <SortableContext items={ids} strategy={verticalListSortingStrategy}>
       {threads.map((thread) =>
-        thread.pinnedAt != null || thread.settledAt !== null ? (
+        !isReorderable(thread) ? (
           <LinkableAgentCard key={keyOf(thread)} thread={thread}>
             {children(thread, dragging)}
           </LinkableAgentCard>
         ) : (
-          <SortableThreadRow
-            key={keyOf(thread)}
-            id={keyOf(thread)}
-            disabled={saving || !readEnvironmentSupportsActiveReorder(thread.environmentId)}
-          >
+          <SortableThreadRow key={keyOf(thread)} id={keyOf(thread)} disabled={saving}>
             {({ setNodeRef, listeners, transform, transition, isDragging }) => (
               <div
                 ref={setNodeRef}
@@ -392,8 +395,9 @@ export function SortableAgentThreads({
 }
 
 /**
- * A pinned or settled card: it keeps its place, but other runs can be linked
- * under it and it can be dragged onto another card to link under that run.
+ * A card that cannot reorder (pinned, settled, or its environment cannot
+ * reorder): it keeps its place, but other runs can be linked under it and it
+ * can be dragged onto another card to link under that run.
  */
 export function LinkableAgentCard({
   thread,
