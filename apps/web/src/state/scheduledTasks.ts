@@ -1,13 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
-import { createScheduledTaskEnvironmentAtoms } from "@t3tools/client-runtime/state/scheduled-tasks";
 import type { EnvironmentId, ScheduledTask } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
-import { connectionAtomRuntime } from "../connection/runtime";
-import { environmentServerConfigsAtom } from "./server";
-
-export const scheduledTaskEnvironment = createScheduledTaskEnvironmentAtoms(connectionAtomRuntime);
+import { environmentServerConfigsAtom, serverEnvironment } from "./server";
 
 export interface EnvironmentScheduledTask {
   readonly environmentId: EnvironmentId;
@@ -15,20 +11,21 @@ export interface EnvironmentScheduledTask {
 }
 
 /**
- * Every scheduled task across connected environments that run them. Each
- * environment's stream opens only while something reads this atom.
+ * Agent scheduled tasks across connected environments. Tasks without a profile are managed in
+ * Settings. Reuses the shared per-environment subscription, which opens only while read.
  */
-const allScheduledTasksAtom = Atom.make((get): ReadonlyArray<EnvironmentScheduledTask> => {
+const agentScheduledTasksAtom = Atom.make((get): ReadonlyArray<EnvironmentScheduledTask> => {
   const tasks: EnvironmentScheduledTask[] = [];
   for (const [environmentId, config] of get(environmentServerConfigsAtom)) {
     if (config.environment.capabilities.scheduledTasks !== true) continue;
-    const result = get(scheduledTaskEnvironment.tasks({ environmentId, input: {} }));
-    for (const task of Option.getOrElse(AsyncResult.value(result), () => [])) {
-      tasks.push({ environmentId, task });
+    const result = get(serverEnvironment.scheduledTasksLive({ environmentId, input: {} }));
+    const snapshot = Option.getOrUndefined(AsyncResult.value(result));
+    for (const task of snapshot?.tasks ?? []) {
+      if (task.profileId !== undefined) tasks.push({ environmentId, task });
     }
   }
   return tasks;
-}).pipe(Atom.withLabel("web-scheduled-tasks"));
+}).pipe(Atom.withLabel("web-agent-scheduled-tasks"));
 
 const scheduledTasksSupportedAtom = Atom.make((get) =>
   [...get(environmentServerConfigsAtom).values()].some(
@@ -37,7 +34,7 @@ const scheduledTasksSupportedAtom = Atom.make((get) =>
 ).pipe(Atom.withLabel("web-scheduled-tasks-supported"));
 
 export function useScheduledTasks(): ReadonlyArray<EnvironmentScheduledTask> {
-  return useAtomValue(allScheduledTasksAtom);
+  return useAtomValue(agentScheduledTasksAtom);
 }
 
 export function useScheduledTasksSupported(): boolean {

@@ -1,9 +1,4 @@
-import type {
-  AgentSkill,
-  ScheduledTask,
-  ScheduledTaskCreateInput,
-  ScheduledTaskUpdateInput,
-} from "@t3tools/contracts";
+import type { AgentSkill, ScheduledTask, ScheduledTaskSchedule } from "@t3tools/contracts";
 import type { AgentHandoffInput, AgentHandoffResult } from "./handoff.ts";
 export const GATEWAY_SCOPE_VALUES = [
   "read",
@@ -163,12 +158,17 @@ export type GatewayScheduledTaskRequest =
   | { readonly action: "delete"; readonly taskId: string }
   | { readonly action: "run"; readonly taskId: string };
 
-export type GatewayScheduledTaskCreate = Omit<ScheduledTaskCreateInput, "projectId"> & {
+/** Agent-facing task fields; the runtime resolves the profile's model and modes. */
+export interface GatewayScheduledTaskCreate {
+  /** Defaults to the first line of the prompt. */
+  readonly title?: string;
+  readonly prompt: string;
+  readonly profileId: string;
   readonly projectId: string;
-};
-export type GatewayScheduledTaskPatch = Omit<ScheduledTaskUpdateInput["patch"], "projectId"> & {
-  readonly projectId?: string;
-};
+  readonly schedule: ScheduledTaskSchedule;
+  readonly enabled?: boolean;
+}
+export type GatewayScheduledTaskPatch = Partial<GatewayScheduledTaskCreate>;
 
 export interface GatewayPage<T> {
   readonly items: ReadonlyArray<T>;

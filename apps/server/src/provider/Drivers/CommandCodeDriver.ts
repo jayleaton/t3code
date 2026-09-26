@@ -1,5 +1,5 @@
 import { CommandCodeSettings, ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import { IdAllocatorV2 } from "../../orchestration-v2/IdAllocator.ts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -49,7 +49,7 @@ const maintenance = makeManualOnlyProviderMaintenanceCapabilities({
 export type CommandCodeDriverEnv =
   | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | IdAllocatorV2
   | FileSystem.FileSystem
   | ServerConfig
   | ServerSettingsService;
@@ -203,7 +203,7 @@ export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeD
         enabled: input.enabled,
         continuationIdentity,
         snapshot,
-        adapter,
+        orchestrationAdapter: adapter,
         textGeneration,
       };
     }),

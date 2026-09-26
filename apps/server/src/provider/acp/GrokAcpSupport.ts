@@ -1,3 +1,5 @@
+import type * as EffectAcpSchema from "effect-acp/compat";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { type GrokSettings, ProviderDriverKind, type RuntimeMode } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -5,7 +7,7 @@ import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
@@ -68,6 +70,28 @@ function resolveGrokAuthMethodId(environment: NodeJS.ProcessEnv | undefined): st
     : GROK_AUTH_METHOD_CACHED_TOKEN;
 }
 
+export function grokAcpRuntimeProcessOwnership(
+  processGroupPlatform: NodeJS.Platform,
+): Pick<
+  AcpSessionRuntime.AcpSessionRuntimeOptions,
+  "ownDescendantProcessGroups" | "ownDetachedProcessGroup" | "processGroupPlatform"
+> {
+  return {
+    // macOS keeps the prior provider-group teardown until a stable libproc
+    // identity provider can cover Grok's nested detached tool groups.
+    ownDescendantProcessGroups: processGroupPlatform === "linux",
+    ownDetachedProcessGroup: true,
+    processGroupPlatform,
+  };
+}
+
+/**
+ * Current Grok treats Ctrl+C cancellation as a barrier against stale
+ * background-task wake prompts until the next genuine user turn. Replay sends
+ * the same metadata so recorded cancels match.
+ */
+export const GROK_ACP_CANCEL_META = { cancelTrigger: "ctrl_c" } as const;
+
 export const makeGrokAcpRuntime = (
   input: GrokAcpRuntimeInput,
 ): Effect.Effect<
@@ -76,6 +100,9 @@ export const makeGrokAcpRuntime = (
   Crypto.Crypto | Scope.Scope
 > =>
   Effect.gen(function* () {
+    const processGroupPlatform = yield* HostProcessPlatform.pipe(
+      Effect.provide(NodeServices.layer),
+    );
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
         ...input,
@@ -86,6 +113,8 @@ export const makeGrokAcpRuntime = (
           input.runtimeMode,
         ),
         authMethodId: resolveGrokAuthMethodId(input.environment),
+        cancelMeta: { ...input.cancelMeta, ...GROK_ACP_CANCEL_META },
+        ...grokAcpRuntimeProcessOwnership(processGroupPlatform),
       }).pipe(
         Layer.provide(
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),
@@ -116,7 +145,7 @@ export function isValidGrokReasoningEffortToken(value: string): boolean {
   return GROK_REASONING_EFFORT_TOKEN.test(value);
 }
 
-export function normalizeGrokReasoningEffort(value: string | undefined): string | undefined {
+function normalizeGrokReasoningEffort(value: string | undefined): string | undefined {
   const effort = value?.trim();
   return effort && isValidGrokReasoningEffortToken(effort) ? effort : undefined;
 }

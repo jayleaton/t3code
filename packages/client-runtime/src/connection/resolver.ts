@@ -281,7 +281,10 @@ export const make = Effect.gen(function* () {
     if (compatibilityError !== null) {
       return yield* compatibilityError;
     }
-    return { ...prepared, socketUrl: appendOrchestrationProtocol(prepared.socketUrl) };
+    return {
+      ...prepared,
+      socketUrl: appendOrchestrationProtocol(prepared.socketUrl),
+    };
   });
 
   return ConnectionResolver.of({ prepare });

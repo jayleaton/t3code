@@ -1,28 +1,27 @@
 import { EnvironmentRpcUnavailableError } from "../rpc/client.ts";
 import { AgentSkill, type ServerSettings, type ServerSettingsPatch } from "@t3tools/contracts";
 import { syncAgentLibraryBeforeUse } from "../operations/agentLibrary.ts";
-import { derivePendingRequests } from "../pendingRequests.ts";
 import { performAgentHandoff } from "./handoff.ts";
 import {
-  ApprovalRequestId,
+  RuntimeRequestId,
   CommandId,
   EnvironmentId,
   MessageId,
-  ORCHESTRATION_WS_METHODS,
+  ORCHESTRATION_V2_WS_METHODS,
   ProjectId,
+  ScheduledTaskError,
   ScheduledTaskId,
   ProviderInstanceId,
   ThreadId,
   WS_METHODS,
   McpGatewayProfile,
-  type OrchestrationEvent,
-  type OrchestrationShellSnapshot,
-  type OrchestrationThreadDetailSnapshot,
+  type OrchestrationV2ShellSnapshot,
+  type OrchestrationV2ThreadProjection,
+  type OrchestrationV2ThreadShell,
+  type OrchestrationV2ShellStreamItem,
   type ServerProvider,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import * as Arr from "effect/Array";
-import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -31,15 +30,13 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
-import { hasQueuedTurnStart } from "../state/threadSettled.ts";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { ShellSnapshotLoader } from "../state/shellSnapshotHttp.ts";
 import {
-  controlThreadLifecycle,
-  createThread,
+  interruptThreadTurn,
+  stopThreadSession,
   respondToThreadApproval,
-  respondToThreadApprovals,
   startThreadTurn,
   settleThread,
   unsettleThread,
@@ -84,34 +81,31 @@ const shellSnapshot = (environmentId: EnvironmentId) =>
     return yield* registry
       .run(
         environmentId,
-        subscribe(ORCHESTRATION_WS_METHODS.subscribeShell, {}).pipe(
+        subscribe(ORCHESTRATION_V2_WS_METHODS.subscribeShell, {}).pipe(
           Stream.filter((item) => item.kind === "snapshot"),
           Stream.runHead,
           Effect.map(
             (item) =>
-              (Option.getOrThrow(item) as { snapshot: OrchestrationShellSnapshot }).snapshot,
+              (Option.getOrThrow(item) as { snapshot: OrchestrationV2ShellSnapshot }).snapshot,
           ),
         ),
       )
       .pipe(Effect.timeout("20 seconds"));
   });
 
-const threadSnapshot = (environmentId: EnvironmentId, threadId: ThreadId, turnLimit?: number) =>
+const threadSnapshot = (environmentId: EnvironmentId, threadId: ThreadId) =>
   Effect.gen(function* () {
     const registry = yield* EnvironmentRegistry;
     return yield* registry
       .run(
         environmentId,
-        subscribe(ORCHESTRATION_WS_METHODS.subscribeThread, {
+        subscribe(ORCHESTRATION_V2_WS_METHODS.subscribeThread, {
           threadId,
-          ...(turnLimit === undefined ? {} : { turnLimit }),
+          acceptBoundedSnapshot: true,
         }).pipe(
           Stream.filter((item) => item.kind === "snapshot"),
           Stream.runHead,
-          Effect.map(
-            (item) =>
-              (Option.getOrThrow(item) as { snapshot: OrchestrationThreadDetailSnapshot }).snapshot,
-          ),
+          Effect.map((item) => Option.getOrThrow(item).projection),
         ),
       )
       .pipe(Effect.timeout("20 seconds"));
@@ -131,6 +125,40 @@ const listGatewayDevices = (environmentId: EnvironmentId) =>
       connectedAt: DateTime.formatIso(client.connectedAt),
     }));
   });
+
+/**
+ * The model and modes a scheduled task stores for its agent profile, or why the profile cannot
+ * run tasks. Runs still relaunch with the profile's latest revision; this is the task's snapshot.
+ */
+export function resolveScheduledTaskProfileRouting(
+  profiles: ReadonlyArray<McpGatewayProfile>,
+  profileId: string,
+  providers: ReadonlyArray<ServerProvider>,
+) {
+  const profile = profiles.find((candidate) => candidate.profileId === profileId);
+  if (profile === undefined) return `Agent ${profileId} was not found.`;
+  if (profile.runtimeMode === "read-only") {
+    return `Agent ${profile.name} is read-only and cannot run scheduled tasks.`;
+  }
+  const selection = resolveGatewayProfileModelSelection(profile, providers);
+  if (selection === undefined) return `Agent ${profile.name} has no available provider and model.`;
+  return {
+    profileId,
+    modelSelection: {
+      model: selection.model,
+      instanceId: ProviderInstanceId.make(selection.instanceId),
+      ...(selection.options === undefined ? {} : { options: selection.options }),
+    },
+    runtimeMode: profile.runtimeMode,
+    interactionMode: profile.interactionMode,
+  };
+}
+
+/** A task created without a title is named after the first line of its prompt. */
+export function defaultScheduledTaskTitle(prompt: string): string {
+  const firstLine = prompt.trim().split("\n", 1)[0]!.trim();
+  return firstLine.length > 120 ? `${firstLine.slice(0, 119)}…` : firstLine;
+}
 
 /** Accepts a deviceId, or a device label when exactly one connected device carries it. */
 export function resolveGatewayDevice(
@@ -191,428 +219,151 @@ export function resolveGatewayProfileModelSelection(
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-export function approvalResponsesFromModifications(modifications: unknown): ReadonlyArray<{
-  readonly approvalRequestId: string;
-  readonly decision: "accept" | "acceptForSession" | "decline" | "cancel";
-}> {
-  if (!Array.isArray(modifications) || modifications.length === 0) {
-    throw new Error("Invalid approval modification: modifications must be non-empty.");
-  }
-  return modifications.map((candidate) => {
-    if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
-      throw new Error("Invalid approval modification: expected an action object.");
-    }
-    const modification = candidate as Record<string, unknown>;
-    const fields = modification.fields;
-    const decision =
-      typeof fields === "object" && fields !== null && !Array.isArray(fields)
-        ? (fields as Record<string, unknown>).decision
-        : undefined;
-    if (
-      typeof modification.actionId !== "string" ||
-      (decision !== "accept" &&
-        decision !== "acceptForSession" &&
-        decision !== "decline" &&
-        decision !== "cancel")
-    ) {
-      throw new Error("Invalid approval modification: actionId and decision are required.");
-    }
-    return { approvalRequestId: modification.actionId, decision };
-  });
+function iso(value: DateTime.Utc | null | undefined): string | null {
+  return value == null ? null : DateTime.formatIso(value);
 }
 
-interface GatewayEventContext {
-  readonly machine: string;
-  readonly project?: { readonly id: string; readonly title: string };
-  readonly thread?: { readonly title: string; readonly status: string };
-}
-
-function boundedText(value: unknown, limit = 512): string | undefined {
-  return typeof value === "string" && value.trim() !== ""
-    ? value.trim().slice(0, limit)
-    : undefined;
-}
-
-function boundedRecordField(
-  record: Readonly<Record<string, unknown>>,
-  key: string,
-  maxLength = 2_000,
-): Readonly<Record<string, string>> {
-  const value = boundedText(record[key], maxLength);
-  return value === undefined ? {} : { [key]: value };
-}
-
-function gatewayStatusForActivity(kind: string | undefined, fallback: string | undefined) {
-  // Lifecycle receipts acknowledge provider requests; they do not prove that
-  // the active turn has ended. Prefer the projected session/turn snapshot.
-  if (kind === "approval.requested") return "waiting-approval";
-  if (kind === "user-input.requested") return "waiting-input";
-  if (fallback !== undefined) return fallback;
-  if (kind === "turn.completed") return "completed";
-  if (kind === "turn.failed" || kind === "error") return "failed";
-  if (kind === "turn.interrupted") return "interrupted";
-  return undefined;
-}
-
-function gatewayNextAction(status: string | undefined): string | null | undefined {
-  if (status === "waiting-approval") return "approve_actions";
-  if (status === "waiting-input") return "provide_input";
-  if (status === "paused") return "resume";
-  if (status === "stopped") return "restart";
-  if (status === "running" || status === "queued") return "await_event";
-  if (status === "failed" || status === "interrupted") return "retry_or_restart";
-  if (status === "completed" || status === "canceled") return null;
-  return undefined;
-}
-
-export function gatewayEventFromOrchestration(
-  environmentId: EnvironmentId,
-  event: OrchestrationEvent,
-  context?: GatewayEventContext,
-): GatewayRuntimeEvent {
-  const payload = event.payload as unknown as Record<string, unknown>;
-  const activity =
-    event.type === "thread.activity-appended" &&
-    typeof payload.activity === "object" &&
-    payload.activity !== null
-      ? (payload.activity as Record<string, unknown>)
-      : undefined;
-  const activityPayload =
-    typeof activity?.payload === "object" && activity.payload !== null
-      ? (activity.payload as Record<string, unknown>)
-      : undefined;
-  const activityKind = boundedText(activity?.kind, 128);
-  const status = gatewayStatusForActivity(activityKind, context?.thread?.status);
-  const type =
-    event.type === "thread.created" || event.type === "thread.turn-start-requested"
-      ? "thread.started"
-      : event.type === "thread.session-set"
-        ? "thread.state_changed"
-        : activityKind === "approval.requested"
-          ? "approval.requested"
-          : activityKind === "user-input.requested"
-            ? "input.requested"
-            : activityKind === "turn.completed"
-              ? "thread.completed"
-              : activityKind === "turn.failed" || activityKind === "error"
-                ? "thread.failed"
-                : activityKind === "turn.interrupted"
-                  ? "thread.interrupted"
-                  : activityKind === "artifact.created" || activityKind === "artifact.updated"
-                    ? activityKind
-                    : activityKind === "pr.updated" || activityKind === "milestone"
-                      ? activityKind === "milestone"
-                        ? "thread.milestone"
-                        : activityKind
-                      : activityKind === "blocked" || activityKind === "turn.blocked"
-                        ? "thread.blocked"
-                        : event.aggregateKind === "thread"
-                          ? "thread.progress"
-                          : event.type;
-  const requestId = boundedText(activityPayload?.requestId, 256);
-  const summary = boundedText(activity?.summary);
-  const nextAction = gatewayNextAction(status);
-  const projectId = boundedText(payload.projectId, 256) ?? context?.project?.id;
-  const threadTitle = boundedText(payload.title) ?? context?.thread?.title;
-  return {
-    eventId: event.eventId,
-    sequence: event.sequence,
-    occurredAt: event.occurredAt,
-    environmentId,
-    type,
-    ...(event.aggregateKind === "thread" ? { threadId: event.aggregateId } : {}),
-    ...(event.correlationId === null ? {} : { correlationId: event.correlationId }),
-    data: {
-      ...(context?.machine === undefined ? {} : { machine: context.machine }),
-      ...(projectId === undefined
-        ? {}
-        : {
-            project: {
-              id: projectId,
-              ...(context?.project?.title === undefined ? {} : { title: context.project.title }),
-            },
-          }),
-      ...(threadTitle === undefined ? {} : { threadTitle }),
-      ...(status === undefined ? {} : { status }),
-      ...(summary === undefined ? {} : { summary }),
-      ...(nextAction === undefined ? {} : { nextAction }),
-      ...(activityKind === "approval.requested" || activityKind === "user-input.requested"
-        ? {
-            blocker: {
-              kind: activityKind === "approval.requested" ? "approval" : "input",
-              ...(requestId === undefined ? {} : { requestId }),
-            },
-          }
-        : {}),
-      serverSequence: event.sequence,
-      serverEventType: event.type,
-      ...(activityKind === undefined ? {} : { activityKind }),
-      ...(requestId === undefined ? {} : { requestId }),
-    },
-  };
-}
-
-function isSafeWorkspaceRelativePath(path: string): boolean {
-  return (
-    !path.startsWith("/") &&
-    !path.startsWith("\\") &&
-    !/^[a-z]:[\\/]/i.test(path) &&
-    path.split(/[\\/]/).every((segment) => segment !== "..")
-  );
-}
-
-function gatewayProjectProjection(project: OrchestrationShellSnapshot["projects"][number]) {
+function gatewayProjectProjection(project: OrchestrationV2ShellSnapshot["projects"][number]) {
   return {
     id: project.id,
     title: project.title,
+    workspaceRoot: project.workspaceRoot,
     defaultModelSelection: project.defaultModelSelection,
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
   };
 }
 
-function gatewayThreadShellProjection(thread: OrchestrationShellSnapshot["threads"][number]) {
+export function gatewayStatusFromThread(
+  thread: Pick<OrchestrationV2ThreadShell, "status" | "pendingRuntimeRequest">,
+): GatewayThreadExecutionState {
+  if (thread.pendingRuntimeRequest)
+    return thread.pendingRuntimeRequest.kind === "user_input"
+      ? "waiting-input"
+      : "waiting-approval";
+  if (thread.status === "preparing" || thread.status === "starting") return "queued";
+  if (thread.status === "cancelled" || thread.status === "rolled_back") return "stopped";
+  if (thread.status === "waiting") return "running";
+  return thread.status;
+}
+
+function profileAssociation(
+  profile: import("@t3tools/contracts").ThreadProfileSnapshot | undefined,
+) {
+  if (!profile) return undefined;
+  const { systemPrompt: _instructions, skills: _skills, ...association } = profile;
+  return association;
+}
+
+function gatewayThreadShellProjection(thread: OrchestrationV2ThreadShell) {
   return {
     id: thread.id,
     projectId: thread.projectId,
-    profileSnapshot: thread.profileSnapshot,
-    parentThreadId: thread.parentThreadId ?? null,
-    settledAt: thread.settledAt,
     title: thread.title,
+    profileSnapshot: profileAssociation(thread.profileSnapshot),
+    parentThreadId: thread.parentThreadId ?? null,
+    settledAt: iso(thread.settledAt),
     status: gatewayStatusFromThread(thread),
-    hasPendingApprovals: thread.hasPendingApprovals,
-    hasPendingUserInput: thread.hasPendingUserInput,
-    backgroundLiveness: thread.backgroundLiveness ?? null,
-    planProgress: thread.planProgress ?? null,
-    latestTurn: thread.latestTurn,
-    session:
-      thread.session === null
-        ? null
-        : {
-            status: thread.session.status,
-            runtimeMode: thread.session.runtimeMode,
-            activeTurnId: thread.session.activeTurnId,
-            updatedAt: thread.session.updatedAt,
-          },
-    createdAt: thread.createdAt,
-    updatedAt: thread.updatedAt,
+    hasPendingApprovals:
+      thread.pendingRuntimeRequest !== null && thread.pendingRuntimeRequest.kind !== "user_input",
+    hasPendingUserInput: thread.pendingRuntimeRequest?.kind === "user_input",
+    modelSelection: thread.modelSelection,
+    latestRunId: thread.latestRunId,
+    activeRunId: thread.activeRunId,
+    createdAt: iso(thread.createdAt),
+    updatedAt: iso(thread.updatedAt),
   };
 }
 
-function gatewayArtifactsFromThread(thread: OrchestrationThreadDetailSnapshot["thread"]) {
-  return (thread.artifacts ?? []).slice(-2_000).flatMap((artifact) => {
-    if (artifact.kind === "workspace-file") {
-      if (artifact.path === undefined || !isSafeWorkspaceRelativePath(artifact.path)) return [];
-      return [{ ...artifact, name: boundedText(artifact.name, 512) ?? "artifact" }];
-    }
-    return [
-      {
-        artifactId: artifact.artifactId,
-        kind: artifact.kind,
-        sourceId: artifact.sourceId,
-        name: boundedText(artifact.name, 512) ?? "artifact",
-        ...(artifact.mimeType === undefined ? {} : { mimeType: artifact.mimeType }),
-        ...(artifact.sizeBytes === undefined ? {} : { sizeBytes: artifact.sizeBytes }),
-        availability: artifact.availability,
-        createdAt: artifact.createdAt,
-      },
-    ];
-  });
-}
-
-function gatewayActivity(
-  activity: OrchestrationThreadDetailSnapshot["thread"]["activities"][number],
-) {
-  const payload = activity.payload as Readonly<Record<string, unknown>>;
-  const safePayload = {
-    ...boundedRecordField(payload, "requestId", 256),
-    ...boundedRecordField(payload, "requestKind", 128),
-    ...boundedRecordField(payload, "action", 64),
-    ...boundedRecordField(payload, "attemptId", 256),
-    ...boundedRecordField(payload, "status", 64),
-  };
+export function gatewayThreadProjection(projection: OrchestrationV2ThreadProjection) {
+  const { thread } = projection;
+  const latestRun = projection.runs.at(-1);
+  const pending = projection.runtimeRequests.find((request) => request.status === "pending");
   return {
-    id: activity.id,
-    sequence: activity.sequence,
-    turnId: activity.turnId,
-    tone: activity.tone,
-    kind: activity.kind,
-    summary: boundedText(activity.summary, 2_000) ?? "Activity",
-    payload: safePayload,
-    createdAt: activity.createdAt,
+    id: thread.id,
+    projectId: thread.projectId,
+    title: thread.title,
+    status: gatewayStatusFromThread({
+      status: latestRun?.status ?? "idle",
+      pendingRuntimeRequest: pending ?? null,
+    }),
+    hasPendingApprovals: pending !== undefined && pending.kind !== "user_input",
+    hasPendingUserInput: pending?.kind === "user_input",
+    modelSelection: thread.modelSelection,
+    profileSnapshot: profileAssociation(thread.profileSnapshot),
+    parentThreadId: thread.parentThreadId ?? null,
+    settledAt: iso(thread.settledAt),
+    runtimeMode: thread.runtimeMode,
+    interactionMode: thread.interactionMode,
+    runs: projection.runs.map((run) => ({
+      id: run.id,
+      status: run.status,
+      providerInstanceId: run.providerInstanceId,
+      requestedAt: iso(run.requestedAt),
+      completedAt: iso(run.completedAt),
+    })),
+    messages: projection.messages.slice(-500).map((message) => ({
+      id: message.id,
+      role: message.role,
+      text: message.text.slice(0, 120_000),
+      runId: message.runId,
+      streaming: message.streaming,
+      attachments: message.attachments.slice(0, 100).map((attachment) => ({
+        type: attachment.type,
+        id: attachment.id,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: attachment.sizeBytes,
+      })),
+      createdAt: iso(message.createdAt),
+      updatedAt: iso(message.updatedAt),
+    })),
+    runtimeRequests: projection.runtimeRequests
+      .filter((request) => request.status === "pending")
+      .map((request) => ({
+        id: request.id,
+        kind: request.kind,
+        status: request.status,
+        responseCapability: request.responseCapability.type,
+      })),
+    createdAt: iso(thread.createdAt),
+    updatedAt: iso(thread.updatedAt),
+  };
+}
+
+/** Bounded shell updates preserve the environment's native sequence and never fetch a transcript. */
+export function gatewayEventFromV2(
+  environmentId: EnvironmentId,
+  item: OrchestrationV2ShellStreamItem,
+): GatewayRuntimeEvent | undefined {
+  if (item.kind !== "thread.updated") return undefined;
+  return {
+    eventId: `${environmentId}:${item.sequence}`,
+    sequence: item.sequence,
+    occurredAt: DateTime.formatIso(item.thread.updatedAt),
+    environmentId,
+    type: "thread.updated",
+    threadId: item.thread.id,
+    data: {
+      threadId: item.thread.id,
+      projectId: item.thread.projectId,
+      title: item.thread.title,
+      status: gatewayStatusFromThread(item.thread),
+      latestRunId: item.thread.latestRunId,
+      profileId: item.thread.profileSnapshot?.profileId ?? null,
+    },
   };
 }
 
 const decodeProfile = Schema.decodeUnknownSync(McpGatewayProfile);
 const decodeProfiles = Schema.decodeUnknownEffect(Schema.Array(McpGatewayProfile));
 
-export function gatewayThreadProjection(thread: OrchestrationThreadDetailSnapshot["thread"]) {
-  const requests = derivePendingRequests(thread.activities);
-  const pending = {
-    hasPendingApprovals: requests.approvals.length > 0,
-    hasPendingUserInput: requests.userInputs.length > 0,
-  };
-  return {
-    id: thread.id,
-    projectId: thread.projectId,
-    title: thread.title,
-    status: gatewayStatusFromThread({
-      latestTurn: thread.latestTurn,
-      session: thread.session,
-      latestUserMessageAt:
-        thread.messages.findLast((message) => message.role === "user")?.createdAt ?? null,
-      ...pending,
-    }),
-    hasPendingApprovals: pending.hasPendingApprovals,
-    hasPendingUserInput: pending.hasPendingUserInput,
-    modelSelection: thread.modelSelection,
-    profileSnapshot: thread.profileSnapshot,
-    parentThreadId: thread.parentThreadId ?? null,
-    settledAt: thread.settledAt,
-    runtimeMode: thread.runtimeMode,
-    interactionMode: thread.interactionMode,
-    latestTurn: thread.latestTurn,
-    session:
-      thread.session === null
-        ? null
-        : {
-            status: thread.session.status,
-            runtimeMode: thread.session.runtimeMode,
-            activeTurnId: thread.session.activeTurnId,
-            updatedAt: thread.session.updatedAt,
-          },
-    messages: thread.messages.slice(-500).map((message) => ({
-      id: message.id,
-      role: message.role,
-      text: message.text.slice(0, 120_000),
-      attachments: (message.attachments ?? []).slice(0, 100).map((attachment) => ({
-        type: attachment.type,
-        id: boundedText(attachment.id, 512) ?? "attachment",
-        name: boundedText(attachment.name, 512) ?? "attachment",
-        mimeType: boundedText(attachment.mimeType, 255) ?? "application/octet-stream",
-        sizeBytes: attachment.sizeBytes,
-      })),
-      turnId: message.turnId,
-      streaming: message.streaming,
-      createdAt: message.createdAt,
-      updatedAt: message.updatedAt,
-    })),
-    activities: thread.activities.slice(-1_000).map(gatewayActivity),
-    artifacts: gatewayArtifactsFromThread(thread),
-    createdAt: thread.createdAt,
-    updatedAt: thread.updatedAt,
-  };
-}
-
-export function gatewayStatusFromThread(
-  thread: Pick<
-    OrchestrationShellSnapshot["threads"][number],
-    "latestTurn" | "session" | "latestUserMessageAt"
-  > &
-    Partial<
-      Pick<
-        OrchestrationShellSnapshot["threads"][number],
-        "hasPendingApprovals" | "hasPendingUserInput"
-      >
-    >,
-  now = DateTime.formatIso(DateTime.nowUnsafe()),
-): GatewayThreadExecutionState {
-  // A blocked chat outranks its session status: the agent may still hold a live
-  // session while it waits on the user, and a coordinator needs the blocker.
-  if (thread.hasPendingApprovals === true) return "waiting-approval";
-  if (thread.hasPendingUserInput === true) return "waiting-input";
-  if (thread.session?.status === "running" || thread.session?.status === "starting")
-    return "running";
-  if (hasQueuedTurnStart(thread, { now })) return "queued";
-  if (thread.session?.status === "stopped") return "stopped";
-  if (thread.session?.status === "error") return "failed";
-  if (thread.session?.status === "interrupted") return "interrupted";
-  if (thread.latestTurn?.state === "running") return "running";
-  if (thread.latestTurn?.state === "completed") return "completed";
-  if (thread.latestTurn?.state === "error") return "failed";
-  if (thread.latestTurn?.state === "interrupted") return "interrupted";
-  return "idle";
-}
-
-function gatewayEventContext(
-  machine: string,
-  snapshot: OrchestrationShellSnapshot,
-  event: OrchestrationEvent,
-): GatewayEventContext {
-  const thread =
-    event.aggregateKind === "thread"
-      ? snapshot.threads.find((candidate) => candidate.id === event.aggregateId)
-      : undefined;
-  const payload = event.payload as unknown as Record<string, unknown>;
-  const projectId = typeof payload.projectId === "string" ? payload.projectId : thread?.projectId;
-  const project = snapshot.projects.find((candidate) => candidate.id === projectId);
-  return {
-    machine,
-    ...(project === undefined ? {} : { project: { id: project.id, title: project.title } }),
-    ...(thread === undefined
-      ? {}
-      : { thread: { title: thread.title, status: gatewayStatusFromThread(thread) } }),
-  };
-}
-
-// An event consumer must not await another RPC on its own socket: a replay
-// batch can fill the RPC queue and block both the response and heartbeat replies.
-export const loadGatewayEventSnapshot = Effect.gen(function* () {
-  const supervisor = yield* EnvironmentSupervisor;
-  const loader = yield* ShellSnapshotLoader;
-  const prepared = yield* SubscriptionRef.get(supervisor.prepared);
-  return Option.isSome(prepared) ? yield* loader.load(prepared.value) : Option.none();
-});
-
-export function enrichGatewayRuntimeEventStream<E, R, E2, R2>(input: {
-  readonly environmentId: EnvironmentId;
-  readonly machine: string;
-  readonly initialSnapshot: OrchestrationShellSnapshot;
-  readonly events: Stream.Stream<OrchestrationEvent, E, R>;
-  readonly loadSnapshot: (
-    event: OrchestrationEvent,
-  ) => Effect.Effect<Option.Option<OrchestrationShellSnapshot>, E2, R2>;
-}): Stream.Stream<GatewayRuntimeEvent, E | E2, R | R2> {
-  return Stream.suspend(() => {
-    let latestSnapshot = input.initialSnapshot;
-    let retrySnapshotAfter = 0;
-    // Keep replay chunks intact: merging singleton events yields once per event,
-    // which Chromium can throttle long enough to block the RPC reader and Pongs.
-    return input.events.pipe(
-      Stream.mapArrayEffect((events) =>
-        Effect.gen(function* () {
-          const event = Arr.lastNonEmpty(events);
-          if (latestSnapshot.snapshotSequence < event.sequence) {
-            const now = yield* Clock.currentTimeMillis;
-            if (now >= retrySnapshotAfter) {
-              const snapshot = yield* input.loadSnapshot(event);
-              if (Option.isSome(snapshot)) {
-                latestSnapshot = snapshot.value;
-              } else {
-                // A failed HTTP request must not be repeated for every queued event.
-                retrySnapshotAfter = (yield* Clock.currentTimeMillis) + 30_000;
-              }
-            }
-          }
-          return Arr.map(events, (event) =>
-            gatewayEventFromOrchestration(
-              input.environmentId,
-              event,
-              gatewayEventContext(input.machine, latestSnapshot, event),
-            ),
-          );
-        }),
-      ),
-    );
-  });
-}
-
 export function createGatewayRuntimeEventSourceFromContext(
   context: Context.Context<EnvironmentRegistry | Crypto.Crypto | ShellSnapshotLoader>,
 ): GatewayRuntimeEventSource {
   return {
     subscribe: (listener, subscription) => {
-      const allowedEnvironmentIds = new Set(subscription.environmentIds);
+      const allowed = new Set(subscription.environmentIds);
       const stream = Stream.unwrap(
         Effect.gen(function* () {
           const registry = yield* EnvironmentRegistry;
@@ -621,34 +372,26 @@ export function createGatewayRuntimeEventSourceFromContext(
             Stream.switchMap((entries) =>
               Stream.mergeAll(
                 [...entries.values()]
-                  .filter((entry) => allowedEnvironmentIds.has(entry.target.environmentId))
+                  .filter((entry) => allowed.has(entry.target.environmentId))
                   .map((entry) => {
                     const environmentId = entry.target.environmentId;
-                    return Stream.unwrap(
-                      shellSnapshot(environmentId).pipe(
-                        Effect.map((snapshot) =>
-                          enrichGatewayRuntimeEventStream({
-                            environmentId,
-                            machine: entry.target.label,
-                            initialSnapshot: snapshot,
-                            events: registry.runStream(
-                              environmentId,
-                              subscribe(
-                                ORCHESTRATION_WS_METHODS.subscribeEvents,
-                                {
-                                  afterSequence:
-                                    subscription.afterSequenceByEnvironment[environmentId] ?? 0,
-                                },
-                                // Fit one event-store replay page without waiting on a throttled consumer.
-                                { streamBufferSize: 500 },
-                              ),
-                            ),
-                            loadSnapshot: () =>
-                              registry.run(environmentId, loadGatewayEventSnapshot),
-                          }),
+                    return registry
+                      .runStream(
+                        environmentId,
+                        subscribe(
+                          ORCHESTRATION_V2_WS_METHODS.subscribeShell,
+                          {
+                            afterSequence:
+                              subscription.afterSequenceByEnvironment[environmentId] ?? 0,
+                          },
+                          { streamBufferSize: 500 },
                         ),
-                      ),
-                    ).pipe(Stream.catchCause(() => Stream.empty));
+                      )
+                      .pipe(
+                        Stream.map((item) => gatewayEventFromV2(environmentId, item)),
+                        Stream.filter((event) => event !== undefined),
+                        Stream.catchCause(() => Stream.empty),
+                      );
                   }),
                 { concurrency: "unbounded" },
               ),
@@ -961,41 +704,94 @@ export function createGatewayRuntimePort(
           const registry = yield* EnvironmentRegistry;
           const call = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
             registry.run(EnvironmentId.make(environmentId), effect);
+          const profileRouting = Effect.fn("gateway.scheduledTask.profileRouting")(function* (
+            profileId: string,
+          ) {
+            const [settings, config] = yield* Effect.all([
+              call(request(WS_METHODS.serverGetSettings, {})),
+              call(request(WS_METHODS.serverGetConfig, {})),
+            ]);
+            const routing = resolveScheduledTaskProfileRouting(
+              settings.mcpGatewayProfiles,
+              profileId,
+              config.providers,
+            );
+            return typeof routing === "string"
+              ? yield* new ScheduledTaskError({ message: routing })
+              : routing;
+          });
           switch (scheduled.action) {
             case "list":
               return yield* call(request(WS_METHODS.scheduledTasksList, {}));
-            case "create":
-              return yield* call(
-                request(WS_METHODS.scheduledTasksCreate, {
-                  ...scheduled.input,
-                  projectId: ProjectId.make(scheduled.input.projectId),
+            case "create": {
+              const { input } = scheduled;
+              const routing = yield* profileRouting(input.profileId);
+              const { task } = yield* call(
+                request(WS_METHODS.scheduledTasksUpsert, {
+                  title: input.title ?? defaultScheduledTaskTitle(input.prompt),
+                  prompt: input.prompt,
+                  enabled: input.enabled ?? true,
+                  schedule: input.schedule,
+                  projectId: ProjectId.make(input.projectId),
+                  workspaceStrategy: { type: "root" },
+                  ...routing,
+                  createdBy: "agent",
+                  creationSource: "mcp",
                 }),
               );
+              return task;
+            }
             case "update": {
-              const { projectId, ...patch } = scheduled.patch;
-              return yield* call(
-                request(WS_METHODS.scheduledTasksUpdate, {
-                  taskId: ScheduledTaskId.make(scheduled.taskId),
-                  patch: {
-                    ...patch,
-                    ...(projectId === undefined ? {} : { projectId: ProjectId.make(projectId) }),
-                  },
+              const { patch } = scheduled;
+              const { tasks } = yield* call(request(WS_METHODS.scheduledTasksList, {}));
+              const existing = tasks.find((task) => task.id === scheduled.taskId);
+              if (existing === undefined) {
+                return yield* new ScheduledTaskError({
+                  message: `Scheduled task ${scheduled.taskId} was not found.`,
+                });
+              }
+              const routing =
+                patch.profileId !== undefined && patch.profileId !== existing.profileId
+                  ? yield* profileRouting(patch.profileId)
+                  : {};
+              const { task } = yield* call(
+                request(WS_METHODS.scheduledTasksUpsert, {
+                  id: existing.id,
+                  requireExisting: true,
+                  title: patch.title ?? existing.title,
+                  prompt: patch.prompt ?? existing.prompt,
+                  enabled: patch.enabled ?? existing.enabled,
+                  schedule: patch.schedule ?? existing.schedule,
+                  projectId:
+                    patch.projectId === undefined
+                      ? existing.projectId
+                      : ProjectId.make(patch.projectId),
+                  threadId: existing.threadId,
+                  workspaceStrategy: existing.workspaceStrategy,
+                  modelSelection: existing.modelSelection,
+                  runtimeMode: existing.runtimeMode,
+                  interactionMode: existing.interactionMode,
+                  creationSource: existing.creationSource,
+                  ...routing,
                 }),
               );
+              return task;
             }
             case "delete":
               yield* call(
                 request(WS_METHODS.scheduledTasksDelete, {
-                  taskId: ScheduledTaskId.make(scheduled.taskId),
+                  id: ScheduledTaskId.make(scheduled.taskId),
                 }),
               );
               return { deleted: scheduled.taskId };
-            case "run":
-              return yield* call(
+            case "run": {
+              const { task } = yield* call(
                 request(WS_METHODS.scheduledTasksRunNow, {
-                  taskId: ScheduledTaskId.make(scheduled.taskId),
+                  id: ScheduledTaskId.make(scheduled.taskId),
                 }),
               );
+              return task;
+            }
           }
         }),
       ),
@@ -1086,20 +882,20 @@ export function createGatewayRuntimePort(
     listProjects: (rawEnvironmentId) =>
       run(shellSnapshot(EnvironmentId.make(rawEnvironmentId))).then((snapshot) => ({
         items: snapshot.projects.map(gatewayProjectProjection),
-        snapshotAt: snapshot.updatedAt,
+        snapshotAt: DateTime.formatIso(DateTime.nowUnsafe()),
       })),
     listThreads: (rawEnvironmentId) =>
       run(shellSnapshot(EnvironmentId.make(rawEnvironmentId))).then((snapshot) => ({
         items: snapshot.threads.map(gatewayThreadShellProjection),
-        snapshotAt: snapshot.updatedAt,
+        snapshotAt: DateTime.formatIso(DateTime.nowUnsafe()),
       })),
     getThread: (rawEnvironmentId, rawThreadId) =>
-      run(
-        threadSnapshot(EnvironmentId.make(rawEnvironmentId), ThreadId.make(rawThreadId), 100),
-      ).then((snapshot) => gatewayThreadProjection(snapshot.thread)),
+      run(threadSnapshot(EnvironmentId.make(rawEnvironmentId), ThreadId.make(rawThreadId))).then(
+        (snapshot) => gatewayThreadProjection(snapshot),
+      ),
     hasThreadMessage: (rawEnvironmentId, rawThreadId, rawMessageId) =>
       run(threadSnapshot(EnvironmentId.make(rawEnvironmentId), ThreadId.make(rawThreadId))).then(
-        (snapshot) => snapshot.thread.messages.some((message) => message.id === rawMessageId),
+        (snapshot) => snapshot.messages.some((message) => message.id === rawMessageId),
       ),
     createAssetUrl: (rawEnvironmentId, resource) =>
       run(
@@ -1148,7 +944,7 @@ export function createGatewayRuntimePort(
           const registry = yield* EnvironmentRegistry;
           const result = yield* registry.run(
             EnvironmentId.make(rawEnvironmentId),
-            request(ORCHESTRATION_WS_METHODS.getCommandReceipts, {
+            request(ORCHESTRATION_V2_WS_METHODS.getCommandReceipts, {
               commandIds: commandIds.map((commandId) => CommandId.make(commandId)),
             }),
           );
@@ -1159,33 +955,65 @@ export function createGatewayRuntimePort(
       run(
         Effect.gen(function* () {
           const registry = yield* EnvironmentRegistry;
+          const environmentId = EnvironmentId.make(input.environmentId);
+          if (input.profileSelection)
+            yield* registry.run(
+              environmentId,
+              syncAgentLibraryBeforeUse(input.profileSelection.profileId),
+            );
+          const config = yield* registry.run(
+            environmentId,
+            request(WS_METHODS.serverGetConfig, {}),
+          );
+          const settings = yield* registry.run(
+            environmentId,
+            request(WS_METHODS.serverGetSettings, {}),
+          );
+          const profile = settings.mcpGatewayProfiles.find(
+            (profile) => profile.profileId === input.profileSelection?.profileId,
+          );
+          const selection =
+            input.modelSelection ??
+            (profile
+              ? resolveGatewayProfileModelSelection(profile, config.providers)
+              : settings.defaultModelSelection);
+          if (!selection)
+            throw new Error("Select an enabled provider and model on the target machine.");
+
           yield* registry.run(
             EnvironmentId.make(input.environmentId),
-            createThread({
+            request(ORCHESTRATION_V2_WS_METHODS.launchThread, {
+              ...(input.parentThreadId === undefined
+                ? {}
+                : { parentThreadId: ThreadId.make(input.parentThreadId) }),
               commandId: CommandId.make(input.requestId),
               threadId: ThreadId.make(input.threadId),
               projectId: ProjectId.make(input.projectId),
               title: input.title,
-              ...(input.modelSelection === undefined
-                ? { useServerDefaults: input.profileSelection === undefined }
-                : {
-                    modelSelection: {
-                      ...input.modelSelection,
-                      instanceId: ProviderInstanceId.make(input.modelSelection.instanceId),
-                    },
-                  }),
-              ...(input.runtimeMode === undefined ? {} : { runtimeMode: input.runtimeMode }),
-              ...(input.interactionMode === undefined
-                ? {}
-                : { interactionMode: input.interactionMode }),
+              modelSelection: {
+                model: selection.model,
+                instanceId: ProviderInstanceId.make(selection.instanceId),
+                ...(selection.options === undefined ? {} : { options: selection.options }),
+              },
+              runtimeMode:
+                input.runtimeMode ??
+                (profile?.runtimeMode === "read-only"
+                  ? settings.defaultRuntimeMode
+                  : profile?.runtimeMode) ??
+                settings.defaultRuntimeMode,
+              interactionMode: input.interactionMode ?? profile?.interactionMode ?? "default",
               ...(input.profileSelection === undefined
                 ? {}
-                : { profileSelection: input.profileSelection }),
-              ...(input.parentThreadId === undefined
-                ? {}
-                : { parentThreadId: ThreadId.make(input.parentThreadId) }),
-              branch: null,
-              worktreePath: null,
+                : {
+                    profileSelection: {
+                      ...input.profileSelection,
+                      revision: profile?.revision ?? input.profileSelection.revision,
+                    },
+                  }),
+              workspaceStrategy:
+                input.workspaceMode === "worktree"
+                  ? { type: "worktree", baseRef: input.baseBranch?.trim() || "HEAD" }
+                  : { type: "root", ...(input.baseBranch ? { branch: input.baseBranch } : {}) },
             }),
           );
           return {
@@ -1235,40 +1063,27 @@ export function createGatewayRuntimePort(
         Effect.gen(function* () {
           const environmentId = EnvironmentId.make(input.environmentId);
           const threadId = ThreadId.make(input.threadId);
+          const thread = (yield* threadSnapshot(environmentId, threadId)).thread;
           const registry = yield* EnvironmentRegistry;
           yield* registry.run(
             environmentId,
-            controlThreadLifecycle({
-              commandId: CommandId.make(input.requestId),
-              threadId,
-              action: input.action,
-              attemptId: input.requestId,
-              messageId: MessageId.make(input.messageId),
-            }),
-          );
-          return {
-            requestId: input.requestId,
-            commandId: input.requestId,
-            status: "accepted" as const,
-            threadId: input.threadId,
-          };
-        }),
-      ),
-    respondToApprovals: (input) =>
-      run(
-        Effect.gen(function* () {
-          const registry = yield* EnvironmentRegistry;
-          yield* registry.run(
-            EnvironmentId.make(input.environmentId),
-            respondToThreadApprovals({
-              commandId: CommandId.make(input.requestId),
-              threadId: ThreadId.make(input.threadId),
-              expectedRevision: input.expectedRevision,
-              responses: input.responses.map((response) => ({
-                requestId: ApprovalRequestId.make(response.approvalRequestId),
-                decision: response.decision,
-              })),
-            }),
+            input.action === "pause" || input.action === "cancel"
+              ? interruptThreadTurn({ threadId, commandId: CommandId.make(input.requestId) })
+              : input.action === "stop"
+                ? stopThreadSession({ threadId, commandId: CommandId.make(input.requestId) })
+                : startThreadTurn({
+                    threadId,
+                    commandId: CommandId.make(input.requestId),
+                    message: {
+                      messageId: MessageId.make(input.messageId),
+                      role: "user",
+                      text: "Continue the task.",
+                      attachments: [],
+                    },
+                    runtimeMode: thread.runtimeMode,
+                    interactionMode: thread.interactionMode,
+                    dispatchMode: input.action === "restart" ? "restart" : "auto",
+                  }),
           );
           return {
             requestId: input.requestId,
@@ -1287,7 +1102,7 @@ export function createGatewayRuntimePort(
             respondToThreadApproval({
               commandId: CommandId.make(input.requestId),
               threadId: ThreadId.make(input.threadId),
-              requestId: ApprovalRequestId.make(input.approvalRequestId),
+              requestId: RuntimeRequestId.make(input.approvalRequestId),
               decision: input.decision,
             }),
           );
@@ -1315,31 +1130,11 @@ export function createGatewayRuntimePort(
                 );
           const cwd = project?.workspaceRoot;
           if (input.operation === "approval.modify") {
-            const threadId = ThreadId.make(String(payload.threadId ?? ""));
-            const expectedRevision = Number(payload.planRevision);
-            if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
-              throw new Error("Invalid approval plan revision.");
-            }
-            const responses = approvalResponsesFromModifications(payload.modifications);
-            yield* registry.run(
-              environmentId,
-              respondToThreadApprovals({
-                commandId: CommandId.make(input.requestId ?? `gateway-approval-modify:${threadId}`),
-                threadId,
-                expectedRevision,
-                responses: responses.map((response) => ({
-                  requestId: ApprovalRequestId.make(response.approvalRequestId),
-                  decision: response.decision,
-                })),
-              }),
+            throw new Error(
+              "V2 requires responding to individual runtime requests; atomic approval plans are not supported.",
             );
-            return {
-              accepted: true,
-              threadId,
-              expectedRevision,
-              modifiedCount: responses.length,
-            };
           }
+
           if (input.operation === "git.status") {
             if (cwd === undefined)
               throw new Error(`Project ${String(payload.projectId)} was not found.`);
@@ -1356,10 +1151,14 @@ export function createGatewayRuntimePort(
             const detail = yield* threadSnapshot(environmentId, ThreadId.make(rawThreadId));
             return (yield* registry.run(
               environmentId,
-              request(ORCHESTRATION_WS_METHODS.getFullThreadDiff, {
+              request(ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff, {
                 threadId: ThreadId.make(rawThreadId),
-                toTurnCount: detail.thread.messages.filter((message) => message.role === "user")
-                  .length,
+                toTurnCount: Math.max(
+                  0,
+                  ...detail.checkpoints
+                    .filter((checkpoint) => checkpoint.status === "ready")
+                    .map((checkpoint) => checkpoint.appRunOrdinal ?? 0),
+                ),
               }),
             )) as unknown as Record<string, unknown>;
           }

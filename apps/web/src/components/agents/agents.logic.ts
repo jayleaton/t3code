@@ -30,16 +30,16 @@ export function groupAgentThreads(
 
 export function agentThreadStatus(thread: EnvironmentThreadShell) {
   if (thread.settledAt !== null) return "done";
-  if (thread.session?.status === "running" || thread.latestTurn?.state === "running")
-    return "running";
-  if (thread.session?.status === "starting") return "queued";
-  if (thread.session?.status === "error" || thread.latestTurn?.state === "error") return "error";
   if (thread.hasPendingApprovals || thread.hasPendingUserInput) return "attention";
+  if (thread.runtime?.status === "running" || thread.latestRun?.status === "running")
+    return "running";
+  if (thread.runtime?.status === "starting" || thread.runtime?.status === "preparing")
+    return "queued";
+  if (thread.runtime?.status === "failed" || thread.latestRun?.status === "failed") return "error";
   // A turn can settle while native background work runs on, as in the thread
-  // sidebar: sub-agent fleets still count as work, watch loops as monitoring.
-  if (thread.backgroundLiveness === "working") return "running";
-  if (thread.backgroundLiveness === "monitoring") return "monitoring";
-  if (thread.latestTurn?.state === "completed") return "done";
+  // sidebar's Waiting state: the chat is still live, so it is not Done.
+  if (thread.pendingBackgroundTasks.length > 0) return "monitoring";
+  if (thread.latestRun?.status === "completed") return "done";
   return "idle";
 }
 
@@ -64,7 +64,7 @@ export function isAgentChatInFocus(
   if (thread.settledAt !== null) return false;
   const status = agentThreadStatus(thread);
   if (status !== "done") return true;
-  const completedAt = thread.latestTurn?.completedAt;
+  const completedAt = thread.latestRun?.completedAt;
   if (!completedAt) return false;
   // A chat created from the board may complete before it has ever been opened.
   return (

@@ -125,12 +125,14 @@ describe("pickSharedServerSettings", () => {
     ).toEqual([
       "agentSkillDeletedAt",
       "agentSkills",
+      "autoResumeLimitedThreads",
       "continueThreadsAfterServerUpdate",
       "mcpGatewayProfileDeletedAt",
       "mcpGatewayProfiles",
       "newWorktreesStartFromOrigin",
       "sidebarAutoSettleAfterDays",
       "sidebarAutoSettleOnMerge",
+      "snoozeLimitedThreads",
       "sourceControlWritingStyle",
       "textGenerationModelSelection",
     ]);

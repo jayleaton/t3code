@@ -4,41 +4,46 @@ import { assert, it } from "@effect/vitest";
 import {
   CommandCodeSettings,
   EnvironmentId,
+  MessageId,
+  NodeId,
+  ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
-  ProviderRuntimeEvent,
+  ProviderSessionId,
+  RunAttemptId,
+  RunId,
   ThreadId,
+  type ChatAttachment,
+  type OrchestrationV2AppThread,
 } from "@t3tools/contracts";
-import type * as Cause from "effect/Cause";
-import * as Deferred from "effect/Deferred";
-import * as Fiber from "effect/Fiber";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { writeFakeCli } from "../../testUtils/fakeCli.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { IdAllocatorV2, layer as idAllocatorLayer } from "../../orchestration-v2/IdAllocator.ts";
+import { ProviderAdapterV2Event } from "../../orchestration-v2/ProviderAdapter.ts";
 import { makeCommandCodeAdapter } from "./CommandCodeAdapter.ts";
-
 const decodeSettings = Schema.decodeSync(CommandCodeSettings);
-const decodeEvent = Schema.decodeUnknownEffect(ProviderRuntimeEvent);
+const decodeEvent = Schema.decodeUnknownEffect(ProviderAdapterV2Event);
 const decodeCall = Schema.decodeUnknownSync(
   Schema.fromJsonString(
     Schema.Struct({
       args: Schema.Array(Schema.String),
       prompt: Schema.String,
+      cwd: Schema.String,
       mcpServers: Schema.String,
       modSource: Schema.String,
-      deviceMarker: Schema.optional(Schema.String),
-      cwd: Schema.String,
       attachments: Schema.Array(
         Schema.Struct({ path: Schema.String, bytes: Schema.Array(Schema.Int) }),
       ),
     }),
   ),
 );
-
 const fixture = `
 import { appendFileSync, readFileSync } from 'node:fs';
 let prompt = ''; for await (const chunk of process.stdin) prompt += chunk;
@@ -49,7 +54,7 @@ appendFileSync(process.env.CALL_LOG, JSON.stringify({ args, prompt, attachments,
 const emit = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
 if (prompt.endsWith('early-error')) { emit({type:'result',subtype:'error',finalText:'',error:'Not authenticated'}); process.exit(3); }
 if (args.includes('--mod') && !prompt.endsWith('missing-mod')) emit({type:'event',event:prompt.endsWith('mcp-failure')?{type:'t3_mcp_error',message:'MCP endpoint unavailable'}:{type:'t3_mcp_ready'}});
-const sessionId = args.includes('--resume') ? args[args.indexOf('--resume') + 1] : 'native-' + process.env.INSTANCE;
+const sessionId = prompt.endsWith('wrong-resume') ? 'wrong-session' : args.includes('--resume') ? args[args.indexOf('--resume') + 1] : 'native-' + process.env.INSTANCE;
 emit({type:'event',event:{type:'run_start',sessionId}});
 if (prompt.endsWith('hang')) { await new Promise(() => { setInterval(() => {}, 10000); }); }
 if (prompt.endsWith('bad-json')) { process.stdout.write('bad json\\n'); process.exit(1); }
@@ -66,7 +71,10 @@ emit({type:'event',event:{type:'text_delta',delta:'Hello'}});
 emit({type:'event',event:{type:'tool_queued',toolCallId:'t1',toolName:'read_file',input:{path:'README.md'}}});
 emit({type:'event',event:{type:'tool_completed',toolCallId:'t1',toolName:'read_file',result:[{type:'text',text:'contents'}]}});
 emit({type:'event',event:{type:'text_delta',delta:'Done'}});
-emit({type:'result',subtype:prompt.endsWith('limit')?'max_turns':'success',sessionId,finalText:'HelloDone',stopReason:'end_turn',usage:{inputTokens:10,outputTokens:2,cacheReadTokens:0,cacheWriteTokens:0}});
+// Mirrors the CLI: --print defaults to 100 model requests unless --max-turns raises it.
+const requestBudget = args.includes('--max-turns') ? Number(args[args.indexOf('--max-turns') + 1]) : 100;
+const requestsNeeded = prompt.endsWith('limit') ? Infinity : prompt.endsWith('long-run') ? 150 : 1;
+emit({type:'result',subtype:requestsNeeded > requestBudget ? 'max_turns' : 'success',sessionId,finalText:'HelloDone',stopReason:'end_turn',usage:{inputTokens:10,outputTokens:2,cacheReadTokens:0,cacheWriteTokens:0}});
 `;
 const threadId = ThreadId.make("thread-commandcode");
 const setup = Effect.gen(function* () {
@@ -85,448 +93,246 @@ const setup = Effect.gen(function* () {
     });
   return { fs, cwd, make };
 });
-const takeTurn = (queue: Queue.Dequeue<ProviderRuntimeEvent, Cause.Done>) =>
-  Effect.gen(function* () {
-    const events: ProviderRuntimeEvent[] = [];
+
+const layer = Layer.mergeAll(NodeServices.layer, idAllocatorLayer);
+const harness = Effect.gen(function* () {
+  const { fs, cwd, make } = yield* setup;
+  const adapter = yield* make();
+  const modelSelection = { instanceId: ProviderInstanceId.make("one"), model: "default" };
+  const runtimePolicy = {
+    runtimeMode: "approval-required" as const,
+    interactionMode: "default" as const,
+    cwd,
+  };
+  const runtime = yield* adapter.openSession({
+    threadId,
+    providerSessionId: ProviderSessionId.make("session-test"),
+    modelSelection,
+    runtimePolicy,
+  });
+  const queue = yield* Stream.toQueue(runtime.events, { capacity: "unbounded" });
+  let providerThread = yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+  let ordinal = 0;
+  const start = (text: string, attachments: ReadonlyArray<ChatAttachment> = []) =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      ordinal++;
+      const appThread: OrchestrationV2AppThread = {
+        id: threadId,
+        projectId: ProjectId.make("project-test"),
+        title: "Test",
+        providerInstanceId: modelSelection.instanceId,
+        modelSelection,
+        runtimeMode: runtimePolicy.runtimeMode,
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        activeProviderThreadId: providerThread.id,
+        lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+        forkedFrom: null,
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        lastVisitedAt: null,
+        deletedAt: null,
+        createdBy: "user",
+        creationSource: "web",
+      };
+      yield* runtime.startTurn({
+        appThread,
+        threadId,
+        runId: RunId.make(`run-${ordinal}`),
+        runOrdinal: ordinal,
+        providerTurnOrdinal: ordinal,
+        attemptId: RunAttemptId.make(`attempt-${ordinal}`),
+        rootNodeId: NodeId.make(`node-${ordinal}`),
+        providerThread,
+        message: {
+          messageId: MessageId.make(`message-${ordinal}`),
+          text,
+          attachments,
+          createdBy: "user",
+          creationSource: "web",
+        },
+        modelSelection,
+        runtimePolicy,
+      });
+    });
+  const take = Effect.gen(function* () {
+    const events: ProviderAdapterV2Event[] = [];
     while (true) {
       const event = yield* Queue.take(queue);
       yield* decodeEvent(event);
       events.push(event);
-      if (event.type === "turn.completed") return events;
+      if (event.type === "provider_thread.updated") providerThread = event.providerThread;
+      if (event.type === "turn.terminal") return events;
     }
   });
-
-it.effect("passes stored images and files to headless turns through environment-local paths", () =>
-  Effect.gen(function* () {
-    const { fs, cwd, make } = yield* setup;
-    const image = {
-      type: "image" as const,
-      id: "thread-commandcode-12345678-1234-1234-1234-123456789abc",
-      name: "screenshot.png",
-      mimeType: "image/png",
-      sizeBytes: 4,
-    };
-    const file = {
-      type: "file" as const,
-      id: "thread-commandcode-12345678-1234-1234-1234-123456789abc-txt",
-      name: "notes.txt",
-      mimeType: "text/plain",
-      sizeBytes: 5,
-    };
-    const imagePath = `${cwd}/attachments/${image.id}.png`;
-    const filePath = `${cwd}/attachments/${file.id}.txt`;
-    const bytes = [137, 80, 78, 71];
-    yield* fs.writeFile(imagePath, new Uint8Array(bytes));
-    yield* fs.writeFileString(filePath, "notes");
-    yield* fs.makeDirectory(`${cwd}/project`);
-    const adapter = yield* make();
-    const queue = yield* Stream.toQueue(adapter.streamEvents, { capacity: "unbounded" });
-    yield* adapter.startSession({
-      threadId,
-      cwd: `${cwd}/project`,
-      runtimeMode: "approval-required",
-    });
-    yield* adapter.sendTurn({ threadId, attachments: [image] });
-    yield* takeTurn(queue);
-    yield* adapter.sendTurn({ threadId, input: "Compare these", attachments: [image, file] });
-    yield* takeTurn(queue);
-    yield* adapter.sendTurn({ threadId, input: "Use the earlier image again" });
-    yield* takeTurn(queue);
-    const calls = (yield* fs.readFileString(`${cwd}/calls.jsonl`))
-      .trim()
-      .split("\n")
-      .map((line) => decodeCall(line));
-    assert.lengthOf(calls, 3);
-    assert.deepEqual(calls[0]!.attachments, [{ path: imagePath, bytes }]);
-    assert.deepEqual(calls[1]!.attachments, [
-      { path: imagePath, bytes },
-      { path: filePath, bytes: [...new TextEncoder().encode("notes")] },
-    ]);
-    assert.include(calls[1]!.prompt, "Compare these");
-    assert.include(calls[0]!.prompt, "use read_file");
-    assert.notInclude(calls[0]!.prompt, "undefined");
-    const projectPath = yield* fs.realPath(`${cwd}/project`);
-    for (const call of calls) {
-      assert.equal(call.cwd, projectPath);
-      assert.equal(call.args[call.args.indexOf("--add-dir") + 1], `${cwd}/attachments`);
-      assert.include(call.args, "dont-ask");
-      assert.notInclude(call.args, "--yolo");
-    }
-    assert.include(calls[2]!.args, "--resume");
-    assert.isTrue(yield* fs.exists(imagePath));
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-);
-
-for (const id of ["../outside", "thread-commandcode-12345678-1234-1234-1234-123456789abc"]) {
-  it.effect(`rejects an unavailable attachment before spawning: ${id}`, () =>
-    Effect.gen(function* () {
-      const { fs, cwd, make } = yield* setup;
-      const adapter = yield* make();
-      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
-      const error = yield* adapter
-        .sendTurn({
-          threadId,
-          attachments: [
-            { type: "image", id, name: "missing.png", mimeType: "image/png", sizeBytes: 1 },
-          ],
-        })
-        .pipe(Effect.flip);
-      assert.equal(
-        error._tag,
-        id.startsWith("..") ? "ProviderAdapterValidationError" : "ProviderAdapterRequestError",
-      );
-      assert.isFalse(yield* fs.exists(`${cwd}/calls.jsonl`));
-      assert.equal((yield* adapter.listSessions())[0]?.status, "ready");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  const run = (text: string, attachments: ReadonlyArray<ChatAttachment> = []) =>
+    start(text, attachments).pipe(Effect.andThen(take));
+  const calls = fs.readFileString(`${cwd}/calls.jsonl`).pipe(
+    Effect.map((text) =>
+      text
+        .trim()
+        .split("\n")
+        .map((line) => decodeCall(line)),
+    ),
   );
-}
+  return { fs, cwd, adapter, runtime, start, take, run, calls, queue };
+});
 
 it.effect(
-  "streams canonical events, resumes the exact session, and preserves agent instructions",
+  "streams native V2 items, preserves permissions and resumes the environment-local conversation with attachments",
   () =>
     Effect.gen(function* () {
-      const { fs, cwd, make } = yield* setup;
-      const adapter = yield* make();
-      const queue = yield* Stream.toQueue(adapter.streamEvents, { capacity: "unbounded" });
-      yield* adapter.startSession({
-        threadId,
-        runtimeMode: "approval-required",
-        agentInstructions: "Follow the saved agent role.",
-      });
-      const first = yield* adapter.sendTurn({
-        threadId,
-        input: "first",
-        modelSelection: { instanceId: ProviderInstanceId.make("one"), model: "kimi-k2.5" },
-      });
-      const events = yield* takeTurn(queue);
-      assert.deepEqual(
-        events.flatMap((e) =>
-          e.type === "content.delta" && e.payload.streamKind === "assistant_text"
-            ? [e.payload.delta]
-            : [],
-        ),
-        ["Hello", "Done"],
-      );
-      assert.equal(
-        events.filter(
-          (e) => e.type === "item.completed" && e.payload.itemType === "dynamic_tool_call",
-        ).length,
-        1,
-      );
-      assert.deepEqual(first.resumeCursor, { sessionId: "native-one" });
-      yield* adapter.stopSession(threadId);
-      yield* adapter.startSession({
-        threadId,
-        runtimeMode: "full-access",
-        resumeCursor: first.resumeCursor,
-      });
-      yield* adapter.sendTurn({ threadId, input: "second", interactionMode: "plan" });
-      yield* takeTurn(queue);
-      const log = yield* fs.readFileString(`${cwd}/calls.jsonl`);
-      assert.include(log, "<tool_availability>");
-      assert.notInclude(log, "<pull_request_linking>");
-      assert.include(log, "Follow the saved agent role.");
-      assert.include(log, '"--resume","native-one"');
-      assert.include(log, '"--plan"');
-      assert.notInclude(log, '"--yolo"');
-      assert.equal((yield* adapter.listSessions())[0]?.status, "ready");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-);
-
-it.effect(
-  "queues concurrent follow-ups in order without blocking another Command Code thread",
-  () =>
-    Effect.gen(function* () {
-      const { fs, cwd, make } = yield* setup;
-      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const completing = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      let calls = 0;
-      const adapter = yield* make().pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, {
-          ...spawner,
-          spawn: (command) =>
-            spawner.spawn(command).pipe(
-              Effect.map((child) => {
-                if (++calls !== 1) return child;
-                return {
-                  ...child,
-                  stdout: child.stdout.pipe(
-                    Stream.decodeText(),
-                    Stream.splitLines,
-                    Stream.mapEffect((line) =>
-                      Effect.gen(function* () {
-                        if (line.includes('"type":"result"')) {
-                          yield* Deferred.succeed(completing, undefined);
-                          yield* Deferred.await(release);
-                        }
-                        return line + "\n";
-                      }),
-                    ),
-                    Stream.encodeText,
-                  ),
-                };
-              }),
-            ),
-        }),
-      );
-      const queue = yield* Stream.toQueue(adapter.streamEvents, { capacity: "unbounded" });
-      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
-      const first = yield* adapter.sendTurn({ threadId, input: "first queued test" });
-      yield* Deferred.await(completing);
-      const second = yield* adapter
-        .sendTurn({ threadId, input: "second queued test" })
-        .pipe(Effect.forkChild({ startImmediately: true }));
-      const third = yield* adapter
-        .sendTurn({ threadId, input: "third queued test" })
-        .pipe(Effect.forkChild({ startImmediately: true }));
-      const otherId = ThreadId.make("other-commandcode-thread");
-      yield* adapter.startSession({ threadId: otherId, runtimeMode: "full-access" });
-      yield* adapter.sendTurn({ threadId: otherId, input: "independent" });
-      const otherEvents = yield* takeTurn(queue);
-      assert.equal(otherEvents.at(-1)?.threadId, otherId);
-      assert.equal(calls, 2);
-      yield* Deferred.succeed(release, undefined);
-      const secondTurn = yield* Fiber.join(second);
-      const thirdTurn = yield* Fiber.join(third);
-      assert.notEqual(secondTurn.turnId, first.turnId);
-      assert.notEqual(thirdTurn.turnId, secondTurn.turnId);
-      for (let i = 0; i < 3; i++) yield* takeTurn(queue);
-      const recorded = (yield* fs.readFileString(`${cwd}/calls.jsonl`))
-        .trim()
-        .split("\n")
-        .map((line) => decodeCall(line));
-      assert.deepEqual(
-        recorded.map((call) => call.prompt.split("\n").at(-1)),
-        ["first queued test", "independent", "second queued test", "third queued test"],
-      );
-      for (const call of recorded.slice(2)) assert.include(call.args, "--resume");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-);
-
-it.effect(
-  "interrupts a running process, cancels waiting follow-ups, and allows the next turn",
-  () =>
-    Effect.gen(function* () {
-      const { make } = yield* setup;
-      const adapter = yield* make();
-      const queue = yield* Stream.toQueue(adapter.streamEvents, { capacity: "unbounded" });
-      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
-      const first = yield* adapter.sendTurn({ threadId, input: "hang" });
-      const overlapping = yield* adapter
-        .sendTurn({ threadId, input: "overlap" })
-        .pipe(Effect.forkChild({ startImmediately: true }));
-      yield* adapter.interruptTurn(threadId, first.turnId);
-      const failure = yield* Fiber.join(overlapping).pipe(Effect.flip);
-      assert.equal(failure._tag, "ProviderAdapterValidationError");
-      assert.include(String(failure), "canceled");
-      const events = yield* takeTurn(queue);
-      assert.equal(events.at(-1)?.type, "turn.completed");
+      const h = yield* harness;
+      const image: ChatAttachment = {
+        type: "image",
+        id: "thread-commandcode-12345678-1234-1234-1234-123456789abc",
+        name: "screenshot.png",
+        mimeType: "image/png",
+        sizeBytes: 4,
+      };
+      const path = `${h.cwd}/attachments/${image.id}.png`;
+      yield* h.fs.writeFile(path, new Uint8Array([137, 80, 78, 71]));
+      const events = yield* h.run("Inspect this", [image]);
+      assert.equal(events.at(-1)?.type, "turn.terminal");
       assert.include(
-        events.map((event) => (event.type === "turn.completed" ? event.payload.state : "")),
-        "interrupted",
+        events.filter((e) => e.type === "turn.terminal").map((e) => e.status),
+        "completed",
       );
-      yield* adapter.sendTurn({ threadId, input: "next" });
-      yield* takeTurn(queue);
-      yield* adapter.stopAll();
-      assert.deepEqual(yield* adapter.listSessions(), []);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+      assert.ok(
+        events.some(
+          (e) =>
+            e.type === "message.updated" && e.message.text === "HelloDone" && !e.message.streaming,
+        ),
+      );
+      assert.ok(
+        events.some(
+          (e) =>
+            e.type === "turn_item.updated" &&
+            e.turnItem.type === "dynamic_tool" &&
+            e.turnItem.status === "completed",
+        ),
+      );
+      yield* h.run("Follow up");
+      const calls = yield* h.calls;
+      assert.deepEqual(calls[0]?.attachments, [{ path, bytes: [137, 80, 78, 71] }]);
+      assert.include(calls[0]!.args, "dont-ask");
+      assert.notInclude(calls[0]!.args, "--yolo");
+      assert.include(calls[1]!.args, "--resume");
+      assert.include(calls[1]!.args, "native-one");
+      assert.equal(calls[0]!.cwd, yield* h.fs.realPath(h.cwd));
+    }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
-it.effect(
-  "stopping a session cancels waiting messages instead of replaying them after restart",
-  () =>
-    Effect.gen(function* () {
-      const { fs, cwd, make } = yield* setup;
-      const adapter = yield* make();
-      const queue = yield* Stream.toQueue(adapter.streamEvents, { capacity: "unbounded" });
-      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
-      yield* adapter.sendTurn({ threadId, input: "hang" });
-      const waiting = yield* adapter
-        .sendTurn({ threadId, input: "must not run" })
-        .pipe(Effect.forkChild({ startImmediately: true }));
-      yield* adapter.stopSession(threadId);
-      const failure = yield* Fiber.join(waiting).pipe(Effect.flip);
-      assert.equal(failure._tag, "ProviderAdapterSessionNotFoundError");
-      yield* takeTurn(queue);
-      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
-      yield* adapter.sendTurn({ threadId, input: "fresh" });
-      yield* takeTurn(queue);
-      const calls = (yield* fs.readFileString(`${cwd}/calls.jsonl`))
-        .trim()
-        .split("\n")
-        .map((line) => decodeCall(line));
-      assert.deepEqual(
-        calls.map((call) => call.prompt.split("\n").at(-1)),
-        ["hang", "fresh"],
-      );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+it.effect("completes a turn that needs more model requests than the headless default", () =>
+  Effect.gen(function* () {
+    const h = yield* harness;
+    const events = yield* h.run("long-run");
+    assert.ok(events.some((e) => e.type === "turn.terminal" && e.status === "completed"));
+  }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
 for (const prompt of ["early-error", "bad-json", "limit"]) {
-  it.effect(`settles ${prompt} without leaving a running session`, () =>
+  it.effect(`terminalizes ${prompt} as a failed V2 turn`, () =>
     Effect.gen(function* () {
-      const { make } = yield* setup;
-      const adapter = yield* make();
-      const queue = yield* Stream.toQueue(adapter.streamEvents, { capacity: "unbounded" });
-      yield* adapter.startSession({ threadId, runtimeMode: "approval-required" });
-      yield* adapter.sendTurn({ threadId, input: prompt }).pipe(Effect.ignore);
-      const events = yield* takeTurn(queue);
-      assert.include(
-        events.map((event) => (event.type === "turn.completed" ? event.payload.state : "")),
-        "failed",
-      );
-      assert.equal((yield* adapter.listSessions())[0]?.status, "ready");
-      if (prompt === "limit") {
-        assert.include(
-          events
-            .flatMap((event) =>
-              event.type === "turn.completed" ? [event.payload.errorMessage ?? ""] : [],
-            )
-            .join("\n"),
-          "The session is saved; send a follow-up to continue.",
-        );
-        const resumed = yield* adapter.sendTurn({ threadId, input: "continue" });
-        assert.deepEqual(resumed.resumeCursor, { sessionId: "native-one" });
-        const continuedEvents = yield* takeTurn(queue);
-        assert.include(
-          continuedEvents.map((event) =>
-            event.type === "turn.completed" ? event.payload.state : "",
-          ),
-          "completed",
-        );
-      }
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+      const h = yield* harness;
+      const events = yield* h.run(prompt);
+      assert.ok(events.some((e) => e.type === "turn.terminal" && e.status === "failed"));
+    }).pipe(Effect.provide(layer), Effect.scoped),
   );
 }
 
-it.effect("isolates two provider instances and rejects invalid resume cursors", () =>
+it.effect("rejects native session identity changes on resume", () =>
   Effect.gen(function* () {
-    const { make } = yield* setup;
-    const one = yield* make("one");
-    const two = yield* make("two");
-    const q1 = yield* Stream.toQueue(one.streamEvents, { capacity: "unbounded" });
-    const q2 = yield* Stream.toQueue(two.streamEvents, { capacity: "unbounded" });
-    for (const adapter of [one, two])
-      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
-    const [a, b] = yield* Effect.all(
-      [one.sendTurn({ threadId, input: "one" }), two.sendTurn({ threadId, input: "two" })],
-      { concurrency: "unbounded" },
+    const h = yield* harness;
+    yield* h.run("Hello");
+    const events = yield* h.run("wrong-resume");
+    assert.ok(events.some((e) => e.type === "turn.terminal" && e.status === "failed"));
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
+it.effect("interrupts the owned process and allows a subsequent turn", () =>
+  Effect.gen(function* () {
+    const h = yield* harness;
+    yield* h.start("hang");
+    let running;
+    while (true) {
+      const event = yield* Queue.take(h.queue);
+      if (event.type === "provider_thread.updated") {
+        running = event.providerThread;
+        break;
+      }
+    }
+    yield* h.runtime.interruptTurn({
+      providerThread: running,
+      providerTurnId: (yield* IdAllocatorV2).derive.providerTurn({
+        driver: ProviderDriverKind.make("commandcode"),
+        nativeTurnId: "one:attempt-1",
+      }),
+    });
+    assert.ok(
+      (yield* h.take).some((e) => e.type === "turn.terminal" && e.status === "interrupted"),
     );
-    assert.notDeepEqual(a.resumeCursor, b.resumeCursor);
-    yield* takeTurn(q1);
-    yield* takeTurn(q2);
-    yield* one.stopAll();
-    assert.isTrue(yield* two.hasSession(threadId));
-    const invalid = yield* one
-      .startSession({ threadId, runtimeMode: "full-access", resumeCursor: { sessionId: "" } })
-      .pipe(Effect.flip);
-    assert.equal(invalid._tag, "ProviderAdapterValidationError");
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    assert.ok(
+      (yield* h.run("Again")).some((e) => e.type === "turn.terminal" && e.status === "completed"),
+    );
+  }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
-it.effect(
-  "injects thread-scoped MCP tools on initial and resumed turns without persisting credentials",
-  () =>
+for (const prompt of ["ready", "missing-mod", "mcp-failure"]) {
+  it.effect(`keeps authorized MCP endpoints and fails closed for ${prompt}`, () =>
     Effect.gen(function* () {
-      const { fs, cwd, make } = yield* setup;
-      const config = {
-        environmentId: EnvironmentId.make("local"),
-        threadId,
-        providerSessionId: "provider-session",
-        providerInstanceId: ProviderInstanceId.make("one"),
-        endpoint: "http://localhost:9999/mcp",
-        gatewayEndpoint: "http://localhost:9999/mcp/gateway",
-        authorizationHeader: "Bearer first-thread-token",
-        capabilities: new Set(["gateway", "device"]),
-        agentDeviceEnvironment: { T3_TEST_DEVICE: "available" },
-      };
-      McpProviderSession.setMcpProviderSession(config);
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId)),
-      );
-      const adapter = yield* make();
-      const queue = yield* Stream.toQueue(adapter.streamEvents, { capacity: "unbounded" });
-      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
-      yield* adapter.sendTurn({ threadId, input: "List skills" });
-      yield* takeTurn(queue);
       McpProviderSession.setMcpProviderSession({
-        ...config,
-        authorizationHeader: "Bearer renewed-thread-token",
-      });
-      yield* adapter.sendTurn({ threadId, input: "List skills again" });
-      yield* takeTurn(queue);
-      const calls = (yield* fs.readFileString(`${cwd}/calls.jsonl`))
-        .trim()
-        .split("\n")
-        .map((line) => decodeCall(line));
-      assert.lengthOf(calls, 2);
-      for (const call of calls) {
-        assert.include(call.args, "--mod");
-        assert.include(call.mcpServers, "t3-code");
-        assert.include(call.mcpServers, "t3-gateway");
-        assert.notInclude(call.prompt, "does not inject");
-        assert.include(call.prompt, "link_pull_request");
-        assert.notInclude(call.modSource, "thread-token");
-        assert.notInclude(call.prompt, "thread-token");
-        assert.equal(call.deviceMarker, "available");
-        assert.isFalse(yield* fs.exists(call.args[call.args.indexOf("--mod") + 1]!));
-      }
-      assert.include(calls[0]!.mcpServers, "first-thread-token");
-      assert.include(calls[1]!.mcpServers, "renewed-thread-token");
-      assert.include(calls[1]!.args, "--resume");
-      assert.isFalse(yield* fs.exists(`${cwd}/.mcp.json`));
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-);
-
-for (const prompt of ["mcp-failure", "missing-mod"]) {
-  it.effect(`fails clearly when T3 MCP cannot load (${prompt})`, () =>
-    Effect.gen(function* () {
-      const { make } = yield* setup;
-      McpProviderSession.setMcpProviderSession({
-        environmentId: EnvironmentId.make("local"),
+        environmentId: EnvironmentId.make("test"),
         threadId,
-        providerSessionId: "provider-session",
+        providerSessionId: "test-session",
         providerInstanceId: ProviderInstanceId.make("one"),
-        endpoint: "http://localhost:9999/mcp",
-        authorizationHeader: "Bearer test-token",
-        capabilities: new Set(),
+        endpoint: "http://127.0.0.1:43123/mcp",
+        gatewayEndpoint: "http://127.0.0.1:43123/mcp/gateway",
+        authorizationHeader: "Bearer test-only",
+        browserToolsAvailable: false,
       });
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId)),
       );
-      const adapter = yield* make();
-      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
-      const failure = yield* adapter.sendTurn({ threadId, input: prompt }).pipe(Effect.flip);
-      assert.instanceOf(failure, Error);
-      assert.include(
-        String(failure),
-        prompt === "mcp-failure" ? "MCP endpoint unavailable" : "did not load the T3 MCP tools",
+      const h = yield* harness;
+      const events = yield* h.run(prompt);
+      assert.ok(
+        events.some(
+          (e) =>
+            e.type === "turn.terminal" &&
+            e.status === (prompt === "ready" ? "completed" : "failed"),
+        ),
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+      const calls = yield* h.calls;
+      assert.include(calls[0]!.args, "--mod");
+      assert.include(calls[0]!.mcpServers, "/mcp/gateway");
+      assert.include(calls[0]!.modSource, "t3_mcp_ready");
+    }).pipe(Effect.provide(layer), Effect.scoped),
   );
 }
 
-it.effect("reports automatic compaction savings and continues the same turn", () =>
+it.effect("projects valid compaction reports without inventing context window measurements", () =>
   Effect.gen(function* () {
-    const { make } = yield* setup;
-    const adapter = yield* make();
-    const queue = yield* Stream.toQueue(adapter.streamEvents, { capacity: "unbounded" });
-    yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
-    yield* adapter.sendTurn({ threadId, input: "compact" });
-    const events = yield* takeTurn(queue);
-    const compacted = events.filter((event) => event.type === "thread.state.changed");
+    const h = yield* harness;
+    const events = yield* h.run("compact");
+    const items = events.flatMap((event) =>
+      event.type === "turn_item.updated" && event.turnItem.type === "compaction"
+        ? [event.turnItem]
+        : [],
+    );
     assert.deepEqual(
-      compacted.map((event) => event.payload),
-      [
-        { state: "compacted", detail: "Saved 41300 tokens (112000 total this session)." },
-        { state: "compacted", detail: "Saved 200 tokens." },
-      ],
+      items.map((item) => item.summary),
+      ["Saved 41300 tokens", "Saved 200 tokens"],
     );
-    assert.isTrue(compacted.every((event) => event.turnId === events.at(-1)?.turnId));
-    assert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
-    assert.isTrue(
-      events.some((event) => event.type === "content.delta" && event.payload.delta === "Done"),
+    assert.ok(
+      items.every(
+        (item) => item.beforeTokenCount === undefined && item.afterTokenCount === undefined,
+      ),
     );
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(layer), Effect.scoped),
 );

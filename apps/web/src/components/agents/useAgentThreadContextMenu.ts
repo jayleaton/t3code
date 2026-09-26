@@ -258,7 +258,7 @@ export function useAgentThreadContextMenu(
           );
           return;
         case "mark-unread":
-          markThreadUnread(scopedThreadKey(ref), current.latestTurn?.completedAt);
+          markThreadUnread(scopedThreadKey(ref), current.latestRun?.completedAt);
           return;
         case "detach-parent":
           await reportFailure("Failed to detach chat", () =>

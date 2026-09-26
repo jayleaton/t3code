@@ -42,7 +42,6 @@ import {
   requireThread,
   requireThreadArchived,
   requireThreadAbsent,
-  requireValidParentThread,
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
@@ -254,7 +253,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           defaultModelSelection: null,
           faviconPath: null,
           projectIcon: null,
-          scripts: [],
+          scripts: command.scripts ?? [],
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -377,17 +376,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.create": {
-      if (
-        command.modelSelection === undefined ||
-        command.runtimeMode === undefined ||
-        command.interactionMode === undefined
-      ) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail:
-            "thread.create requires model, runtime, and interaction selections after server normalization.",
-        });
-      }
       yield* requireProject({
         readModel,
         command,
@@ -398,21 +386,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      if (command.parentThreadId !== undefined) {
-        yield* requireValidParentThread({
-          readModel,
-          command,
-          threadId: command.threadId,
-          parentThreadId: command.parentThreadId,
-        });
-      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
           occurredAt: command.createdAt,
           commandId: command.commandId,
-          ...(command.historyImport === true ? { metadata: { historyImport: true } } : {}),
         })),
         type: "thread.created",
         payload: {
@@ -422,12 +401,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
-          ...(command.profileSnapshot === undefined
-            ? {}
-            : { profileSnapshot: command.profileSnapshot }),
-          ...(command.parentThreadId === undefined
-            ? {}
-            : { parentThreadId: command.parentThreadId }),
           branch: command.branch,
           worktreePath: command.worktreePath,
           createdAt: command.createdAt,
@@ -1024,14 +997,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ],
         });
       }
-      if (command.parentThreadId != null) {
-        yield* requireValidParentThread({
-          readModel,
-          command,
-          threadId: command.threadId,
-          parentThreadId: command.parentThreadId,
-        });
-      }
       const branch =
         command.branch !== undefined &&
         command.expectedBranch !== undefined &&
@@ -1084,9 +1049,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
           ...(command.linkedPullRequest !== undefined
             ? { linkedPullRequest: command.linkedPullRequest }
-            : {}),
-          ...(command.parentThreadId !== undefined
-            ? { parentThreadId: command.parentThreadId }
             : {}),
           updatedAt: occurredAt,
         },
@@ -1624,127 +1586,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
-    case "thread.lifecycle.control": {
-      const thread = yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      const turnState = thread.latestTurn?.state;
-      const sessionStatus = thread.session?.status;
-      const invalid =
-        (command.action === "pause" && turnState !== "running" && sessionStatus !== "running") ||
-        (command.action === "resume" &&
-          (turnState !== "interrupted" ||
-            (sessionStatus !== "interrupted" && sessionStatus !== "stopped") ||
-            !thread.messages.some((message) => message.role === "user"))) ||
-        (command.action === "retry" &&
-          turnState !== "error" &&
-          turnState !== "interrupted" &&
-          sessionStatus !== "error" &&
-          sessionStatus !== "interrupted") ||
-        ((command.action === "retry" || command.action === "restart") &&
-          !thread.messages.some((message) => message.role === "user")) ||
-        (command.action === "restart" &&
-          (turnState === "running" ||
-            !thread.messages.some((message) => message.role === "user"))) ||
-        (command.action === "stop" &&
-          (thread.session === null || thread.session.status === "stopped")) ||
-        (command.action === "cancel" && (turnState === "completed" || turnState === "error"));
-      if (invalid) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `Cannot ${command.action} thread '${command.threadId}' from turn state '${String(turnState ?? "queued")}' and session state '${String(sessionStatus ?? "none")}'.`,
-        });
-      }
-      const base = yield* withEventBase({
-        aggregateKind: "thread",
-        aggregateId: command.threadId,
-        occurredAt: command.createdAt,
-        commandId: command.commandId,
-      });
-      return {
-        ...base,
-        type: "thread.activity-appended",
-        payload: {
-          threadId: command.threadId,
-          activity: {
-            id: base.eventId,
-            tone: "info",
-            kind: `lifecycle.${command.action}.requested`,
-            summary: `${command.action[0]?.toUpperCase()}${command.action.slice(1)} requested`,
-            payload: {
-              action: command.action,
-              attemptId: command.attemptId,
-              messageId: command.messageId,
-            },
-            turnId: thread.latestTurn?.turnId ?? null,
-            createdAt: command.createdAt,
-          },
-        },
-      };
-    }
-
-    case "thread.approval.batch-respond": {
-      const thread = yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      const pendingRequests = openRequests(thread);
-      const currentRevision = thread.activities.reduce(
-        (revision, activity) =>
-          typeof activity.sequence === "number" ? Math.max(revision, activity.sequence) : revision,
-        0,
-      );
-      if (command.expectedRevision !== undefined && command.expectedRevision !== currentRevision) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `approval plan revision ${currentRevision} does not match expected revision ${command.expectedRevision}`,
-        });
-      }
-      const seen = new Set<string>();
-      for (const response of command.responses) {
-        if (seen.has(response.requestId)) {
-          return yield* Effect.fail(
-            new OrchestrationCommandInvariantError({
-              commandType: command.type,
-              detail: `approval request ${response.requestId} appears more than once`,
-            }),
-          );
-        }
-        seen.add(response.requestId);
-        if (pendingRequests.get(response.requestId)?.kind !== "approval.requested") {
-          return yield* Effect.fail(
-            new OrchestrationCommandInvariantError({
-              commandType: command.type,
-              detail: `approval request ${response.requestId} is not pending`,
-            }),
-          );
-        }
-      }
-      return yield* Effect.forEach(command.responses, (response) =>
-        withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-          metadata: { requestId: response.requestId },
-        }).pipe(
-          Effect.map((base) => ({
-            ...base,
-            type: "thread.approval-response-requested" as const,
-            payload: {
-              threadId: command.threadId,
-              requestId: response.requestId,
-              decision: response.decision,
-              createdAt: command.createdAt,
-            },
-          })),
-        ),
-      );
-    }
-
     case "thread.approval.respond": {
       yield* requireThread({
         readModel,
@@ -2090,8 +1931,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       return [unsettledEvent, sessionSetEvent];
     }
 
-    case "thread.message.assistant.delta":
-    case "thread.message.reasoning.delta": {
+    case "thread.message.assistant.delta": {
       if (isImportedAgentSessionMessageId(command.messageId)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -2114,7 +1954,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           messageId: command.messageId,
-          role: command.type === "thread.message.reasoning.delta" ? "reasoning" : "assistant",
+          role: "assistant",
           text: command.delta,
           turnId: command.turnId ?? null,
           streaming: true,
@@ -2124,8 +1964,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
-    case "thread.message.assistant.complete":
-    case "thread.message.reasoning.complete": {
+    case "thread.message.assistant.complete": {
       if (isImportedAgentSessionMessageId(command.messageId)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -2148,7 +1987,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           messageId: command.messageId,
-          role: command.type === "thread.message.reasoning.complete" ? "reasoning" : "assistant",
+          role: "assistant",
           text: "",
           turnId: command.turnId ?? null,
           streaming: false,
@@ -2193,7 +2032,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             aggregateId: command.threadId,
             occurredAt: message.createdAt,
             commandId: command.commandId,
-            metadata: { historyImport: true },
           })),
           type: "thread.message-sent",
           payload: {
@@ -2219,7 +2057,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           aggregateId: command.threadId,
           occurredAt: settledAt,
           commandId: command.commandId,
-          metadata: { historyImport: true },
         })),
         type: "thread.settled",
         payload: {

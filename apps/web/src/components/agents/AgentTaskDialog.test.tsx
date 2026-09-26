@@ -101,6 +101,17 @@ afterEach(async () => {
   await act(async () => root.render(null));
 });
 describe("Agents new chat workspace", () => {
+  it("keeps the agent permission mode explicit instead of inheriting the project default", async () => {
+    await render();
+    await select(0, mac);
+    await select(1, t3code);
+    const drafts = Object.values(useComposerDraftStore.getState().draftsByThreadKey);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+    });
+  });
   it("keeps disconnected machines visible and prevents submission if the selected machine disconnects", async () => {
     await render();
     await select(0, mac);

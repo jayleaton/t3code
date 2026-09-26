@@ -1,39 +1,33 @@
 import {
   type CommandCodeSettings,
-  EventId,
   ProviderDriverKind,
   type ProviderInstanceId,
-  type ProviderRuntimeEvent,
-  type ProviderSession,
-  type ProviderSessionStartInput,
-  RuntimeItemId,
-  type ThreadId,
-  TurnId,
+  type OrchestrationV2ProviderCapabilities,
+  type OrchestrationV2ProviderThread,
+  type OrchestrationV2ProviderTurn,
+  type OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
-import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
-import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
-import * as Semaphore from "effect/Semaphore";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+import { IdAllocatorV2 } from "../../orchestration-v2/IdAllocator.ts";
 import {
-  ProviderAdapterRequestError,
-  ProviderAdapterSessionNotFoundError,
-  ProviderAdapterValidationError,
-  type ProviderAdapterError,
-} from "../Errors.ts";
-import type {
-  ProviderAdapterShape,
-  ProviderThreadTurnSnapshot,
-} from "../Services/ProviderAdapter.ts";
+  ProviderAdapterProtocolError,
+  type ProviderAdapterV2Shape,
+  type ProviderAdapterV2SessionRuntime,
+  type ProviderAdapterV2Event,
+  type ProviderAdapterV2TurnInput,
+} from "../../orchestration-v2/ProviderAdapter.ts";
+import { makeProviderFailure } from "../../orchestration-v2/ProviderFailure.ts";
+import { turnScopedSelectionTransition } from "../../orchestration-v2/ProviderSelectionTransition.ts";
 import {
   commandCodePermissionArgs,
   commandCodeTokenUsage,
@@ -45,14 +39,10 @@ import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { COMMAND_CODE_MCP_MOD } from "../commandCodeMcp.ts";
 import { spawnCommandCode } from "../commandCodeProcess.ts";
 import { collectStreamAsString } from "../providerSnapshot.ts";
-import { buildRuntimeInstructions, withAgentInstructions } from "../RuntimeInstructions.ts";
+import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 
-const PROVIDER = ProviderDriverKind.make("commandcode");
-const ResumeCursor = Schema.Struct({ sessionId: Schema.NonEmptyString });
-const decodeResume = Schema.decodeUnknownOption(ResumeCursor);
-const isRequestError = Schema.is(ProviderAdapterRequestError);
-const encodeMcpServers = Schema.encodeSync(
+const encodeMcpServers = Schema.encodeEffect(
   Schema.fromJsonString(
     Schema.Array(
       Schema.Struct({
@@ -63,22 +53,108 @@ const encodeMcpServers = Schema.encodeSync(
     ),
   ),
 );
-const encodeAttachmentPaths = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
-type EventInput = ProviderRuntimeEvent extends infer E
-  ? E extends ProviderRuntimeEvent
-    ? Omit<E, "eventId" | "provider" | "providerInstanceId" | "createdAt" | "threadId">
-    : never
-  : never;
-interface SessionContext {
-  session: ProviderSession;
-  instructions: string | undefined;
-  nativeId: string | undefined;
-  fiber: Fiber.Fiber<void> | undefined;
-  readonly sendGate: Semaphore.Semaphore;
-  interruptEpoch: number;
-  turns: ProviderThreadTurnSnapshot[];
-}
+const encodeAttachmentPaths = Schema.encodeEffect(
+  Schema.fromJsonString(Schema.Array(Schema.String)),
+);
+// Command Code caps --print runs at 100 model requests, a tenth of its
+// interactive loop. Agents that build, test, and wait on CI exceed that in one
+// turn, so use the interactive budget; it still stops a runaway tool loop.
+const MAX_MODEL_REQUESTS_PER_TURN = "1000";
 
+const DRIVER = ProviderDriverKind.make("commandcode");
+const CommandCodeCapabilities = {
+  runtimePolicy: { enforcement: "native" },
+  sessions: {
+    supportsMultipleProviderThreadsPerSession: false,
+    supportsModelSwitchInSession: true,
+    supportsProviderSwitchingViaHandoff: true,
+    supportsRuntimeModeSwitchInSession: true,
+    pendingRequestsSurviveRestart: false,
+  },
+  threads: {
+    canCreateEmptyThread: true,
+    canReadThreadSnapshot: false,
+    canRollbackThread: false,
+    canForkThread: false,
+    canForkFromTurn: false,
+    canForkFromSubagentThread: false,
+    exposesNativeThreadId: true,
+  },
+  turns: {
+    exposesNativeTurnId: false,
+    emitsTurnStarted: true,
+    emitsTurnCompleted: true,
+    supportsInterrupt: true,
+    supportsActiveSteering: false,
+    supportsSteeringByInterruptRestart: false,
+    supportsQueuedMessages: true,
+    terminalStatusQuality: "strong",
+  },
+  streaming: {
+    streamsAssistantText: true,
+    streamsReasoning: true,
+    streamsToolOutput: true,
+    streamsPlanText: false,
+    emitsMessageCompleted: true,
+  },
+  tools: {
+    exposesToolItemIds: true,
+    emitsToolStarted: true,
+    emitsToolCompleted: true,
+    emitsToolOutput: true,
+    supportsMcpTools: true,
+    supportsDynamicToolCallbacks: false,
+  },
+  approvals: {
+    supportsCommandApproval: false,
+    supportsFileReadApproval: false,
+    supportsFileChangeApproval: false,
+    supportsApplyPatchApproval: false,
+    approvalsHaveNativeRequestIds: false,
+    approvalCallbacksAreLiveOnly: false,
+    approvalsCanOriginateFromSubagents: false,
+  },
+  planning: {
+    emitsPlanUpdated: false,
+    emitsTodoList: false,
+    emitsProposedPlan: false,
+    supportsStructuredQuestions: false,
+    planDeltasHaveItemIds: false,
+  },
+  subagents: {
+    supportsSubagents: true,
+    exposesSubagentThreadIds: false,
+    emitsSubagentLifecycle: false,
+    canWaitForSubagents: false,
+    canCloseSubagents: false,
+    canForkSubagentThread: false,
+  },
+  context: {
+    acceptsSystemContext: false,
+    acceptsDeveloperContext: false,
+    acceptsSyntheticUserContext: true,
+    canGenerateSummaries: false,
+    canConsumeHandoffSummaries: true,
+    supportsDeltaHandoff: true,
+    supportsFullThreadHandoff: true,
+    maxRecommendedHandoffChars: null,
+  },
+  checkpointing: {
+    appCanCheckpointFilesystem: true,
+    supportsNestedCheckpointScopes: false,
+    providerCanRollbackConversation: false,
+    providerRollbackReturnsSnapshot: false,
+    providerCanReadConversationSnapshot: false,
+  },
+  identity: {
+    nativeThreadIds: "strong",
+    nativeTurnIds: "weak",
+    nativeItemIds: "strong",
+    nativeRequestIds: "strong",
+  },
+} satisfies OrchestrationV2ProviderCapabilities;
+
+/** The CLI owns conversation history; V2 owns run lifecycle, queueing and profile instructions. */
 export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(function* (
   settings: CommandCodeSettings,
   options: {
@@ -88,509 +164,421 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
     attachmentsDir: string;
   },
 ) {
-  const crypto = yield* Crypto.Crypto;
-  const fileSystem = yield* FileSystem.FileSystem;
+  const fs = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const scope = yield* Effect.scope;
-  const sessions = new Map<ThreadId, SessionContext>();
-  const gate = yield* Semaphore.make(1);
-  const events = yield* Effect.acquireRelease(
-    PubSub.unbounded<ProviderRuntimeEvent>(),
-    PubSub.shutdown,
-  );
-  const now = DateTime.now.pipe(Effect.map(DateTime.formatIso));
-  const emit = (context: SessionContext, event: EventInput) =>
-    Effect.gen(function* () {
-      yield* PubSub.publish(events, {
-        ...event,
-        eventId: EventId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie)),
-        provider: PROVIDER,
-        providerInstanceId: options.instanceId,
-        threadId: context.session.threadId,
-        createdAt: yield* now,
-      } as ProviderRuntimeEvent);
-    });
-  const getSession = (threadId: ThreadId) =>
-    Effect.suspend(() => {
-      const context = sessions.get(threadId);
-      return context
-        ? Effect.succeed(context)
-        : Effect.fail(new ProviderAdapterSessionNotFoundError({ provider: PROVIDER, threadId }));
-    });
-  const unsupported = (method: string) =>
-    Effect.fail(
-      new ProviderAdapterRequestError({
-        provider: PROVIDER,
-        method,
-        detail: `Command Code headless mode does not support ${method}.`,
-      }),
-    );
-  const interruptTurn: ProviderAdapterShape<ProviderAdapterError>["interruptTurn"] = (
-    threadId,
-    turnId,
-  ) =>
-    Effect.gen(function* () {
-      const context = yield* getSession(threadId);
-      if (turnId && context.session.activeTurnId !== turnId) return;
-      context.interruptEpoch++;
-      if (context.fiber) yield* Fiber.interrupt(context.fiber);
-    });
-  const stopSession = (threadId: ThreadId) =>
-    Effect.gen(function* () {
-      const context = sessions.get(threadId);
-      if (!context) return;
-      // Remove first so a concurrent send cannot resurrect a closing session.
-      sessions.delete(threadId);
-      if (context.fiber) yield* Fiber.interrupt(context.fiber);
-      context.session = { ...context.session, status: "closed", updatedAt: yield* now };
-      yield* emit(context, {
-        type: "session.exited",
-        payload: { reason: "Session stopped", exitKind: "graceful" },
-      });
-    });
-  const stopAll = () => Effect.forEach([...sessions.keys()], stopSession, { discard: true });
-  yield* Effect.addFinalizer(() => stopAll());
-
-  const startSession = (input: ProviderSessionStartInput) =>
-    gate.withPermits(1)(
+  const ids = yield* IdAllocatorV2;
+  const unsupported = (detail: string) =>
+    Effect.fail(new ProviderAdapterProtocolError({ driver: DRIVER, detail }));
+  return {
+    instanceId: options.instanceId,
+    driver: DRIVER,
+    getCapabilities: () => Effect.succeed(CommandCodeCapabilities),
+    planSelectionTransition: () => Effect.succeed(turnScopedSelectionTransition()),
+    openSession: (input) =>
       Effect.gen(function* () {
-        const resume =
-          input.resumeCursor === undefined ? undefined : decodeResume(input.resumeCursor);
-        if (resume?._tag === "None")
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "startSession",
-            issue: "Invalid Command Code resume cursor.",
-          });
-        yield* stopSession(input.threadId);
-        const nativeId = resume?._tag === "Some" ? resume.value.sessionId : undefined;
-        const timestamp = yield* now;
-        const context: SessionContext = {
-          session: {
-            provider: PROVIDER,
-            providerInstanceId: options.instanceId,
-            threadId: input.threadId,
-            status: "ready",
-            runtimeMode: input.runtimeMode,
-            cwd: input.cwd ?? options.cwd,
-            model: input.modelSelection?.model ?? "default",
-            createdAt: timestamp,
-            updatedAt: timestamp,
-            ...(nativeId ? { resumeCursor: { sessionId: nativeId } } : {}),
-          },
-          instructions: input.agentInstructions,
-          nativeId,
-          fiber: undefined,
-          sendGate: yield* Semaphore.make(1),
-          interruptEpoch: 0,
-          turns: [],
-        };
-        sessions.set(input.threadId, context);
-        yield* emit(context, {
-          type: "session.started",
-          payload: nativeId ? { resume: { sessionId: nativeId } } : {},
-        });
-        yield* emit(context, { type: "session.state.changed", payload: { state: "ready" } });
-        return context.session;
-      }),
-    );
-
-  // Headless Command Code cannot steer. Serialize admission per session, then
-  // wait for the preceding process and its terminal events before resuming it.
-  const withIdleSession = Effect.fn("CommandCodeAdapter.withIdleSession")(function* <A, E, R>(
-    threadId: ThreadId,
-    use: (context: SessionContext) => Effect.Effect<A, E, R>,
-  ) {
-    const context = yield* getSession(threadId);
-    const interruptEpoch = context.interruptEpoch;
-    return yield* context.sendGate.withPermits(1)(
-      Effect.gen(function* () {
-        if (context.fiber) yield* Fiber.await(context.fiber);
-        if (sessions.get(threadId) !== context)
-          return yield* new ProviderAdapterSessionNotFoundError({ provider: PROVIDER, threadId });
-        if (context.interruptEpoch !== interruptEpoch)
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "sendTurn",
-            issue:
-              "Queued Command Code message was canceled by an interruption. Send it again to continue.",
-          });
-        return yield* use(context);
-      }),
-    );
-  });
-
-  const sendTurn: ProviderAdapterShape<ProviderAdapterError>["sendTurn"] = (input) =>
-    withIdleSession(input.threadId, (context) =>
-      Effect.gen(function* () {
-        if (!input.input?.trim() && !input.attachments?.length)
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "sendTurn",
-            issue: "Command Code requires a prompt or attachments.",
-          });
-        const attachmentPaths = yield* Effect.forEach(input.attachments ?? [], (attachment) =>
+        const scope = yield* Effect.scope;
+        const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
+        yield* Effect.addFinalizer(() => Queue.shutdown(events));
+        const now = yield* DateTime.now;
+        let thread: OrchestrationV2ProviderThread | undefined;
+        let active: Fiber.Fiber<void> | undefined;
+        const emit = (event: ProviderAdapterV2Event) =>
+          Queue.offer(events, event).pipe(Effect.asVoid);
+        const execute = (turn: ProviderAdapterV2TurnInput) =>
           Effect.gen(function* () {
-            const path = resolveAttachmentPath({
-              attachmentsDir: options.attachmentsDir,
-              attachment,
-            });
-            if (!path)
-              return yield* new ProviderAdapterValidationError({
-                provider: PROVIDER,
-                operation: "sendTurn",
-                issue: `Invalid attachment id '${attachment.id}'.`,
-              });
-            yield* fileSystem.access(path).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProviderAdapterRequestError({
-                    provider: PROVIDER,
-                    method: "sendTurn",
-                    detail: `Cannot access attachment '${attachment.name}'.`,
-                    cause,
-                  }),
-              ),
-            );
-            return path;
-          }),
-        );
-        const turnId = TurnId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie));
-        const ready = yield* Deferred.make<string, ProviderAdapterRequestError>();
-        const model = input.modelSelection?.model ?? context.session.model ?? "default";
-        // Command Code publishes no effort descriptor, so agent thinking levels
-        // arrive under the provider-neutral id.
-        const effort = input.modelSelection
-          ? (getModelSelectionStringOptionValue(input.modelSelection, "effort") ??
-            getModelSelectionStringOptionValue(input.modelSelection, "reasoningEffort"))
-          : undefined;
-        const args = [
-          "--print",
-          "--output-format",
-          "json",
-          "--no-auto-update",
-          "--skip-onboarding",
-          // Keep stored attachments readable on resumed turns as well.
-          "--add-dir",
-          options.attachmentsDir,
-          ...commandCodePermissionArgs(
-            context.session.runtimeMode,
-            input.interactionMode === "plan",
-          ),
-          ...(context.nativeId ? ["--resume", context.nativeId] : []),
-          ...(model !== "default" ? ["--model", model] : []),
-          ...(effort ? ["--effort", effort] : []),
-        ];
-        const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
-        const instructions = withAgentInstructions(
-          buildRuntimeInstructions({
-            harness: "Command Code",
-            model,
-            reasoningEffort: effort,
-            threadMcpTools: mcpSession !== undefined,
-          }),
-          input.agentInstructions ?? context.instructions,
-        );
-        // Headless stdin is text-only. read_file delivers local images as image
-        // blocks, using the same environment-local store as the other adapters.
-        const attachmentPrompt = attachmentPaths.length
-          ? `\n\nAttached files on this environment (use read_file to inspect the images and other files):\n${encodeAttachmentPaths(attachmentPaths)}`
-          : "";
-        const prompt = `${instructions}\n\n${input.input ?? ""}${attachmentPrompt}`;
-        context.session = {
-          ...context.session,
-          status: "running",
-          activeTurnId: turnId,
-          model,
-          updatedAt: yield* now,
-        };
-        let result: Extract<CommandCodeFrame, { type: "result" }> | undefined;
-        let mcpReady = mcpSession === undefined;
-        let textStreamed = false;
-        let hasSubagents = false;
-        const pendingTools = new Map<string, string>();
-        let messageIndex = 0;
-        let messageOpen = false;
-        const itemId = () => RuntimeItemId.make(`${turnId}:message:${messageIndex}`);
-        const captureSession = (sessionId: string) =>
-          Effect.gen(function* () {
-            if (!sessionId.trim()) return;
-            if (context.nativeId && context.nativeId !== sessionId)
-              return yield* new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "resume",
-                detail: "Command Code resumed a different session than requested.",
-              });
-            context.nativeId = sessionId;
-            context.session = { ...context.session, resumeCursor: { sessionId } };
-            yield* Deferred.succeed(ready, sessionId);
-          });
-        const finishMessage = () =>
-          Effect.gen(function* () {
-            if (!messageOpen) return;
-            yield* emit(context, {
-              type: "item.completed",
-              turnId,
-              itemId: itemId(),
-              payload: { itemType: "assistant_message", status: "completed" },
-            });
-            messageOpen = false;
-            messageIndex++;
-          });
-        const onLine = (line: string) =>
-          Effect.gen(function* () {
-            if (!line.trim()) return;
-            const frame = yield* Effect.try({
-              try: () => decodeCommandCodeFrame(line),
-              catch: (cause) =>
-                new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "stream",
-                  detail:
-                    "Command Code returned invalid JSON output. Update the CLI to a version supporting --output-format json.",
-                  cause,
-                }),
-            });
-            if (frame.type === "result") {
-              result = frame;
-              if (frame.sessionId) yield* captureSession(frame.sessionId);
-              if (!textStreamed && frame.finalText) {
-                messageOpen = true;
-                yield* emit(context, {
-                  type: "content.delta",
-                  turnId,
-                  itemId: itemId(),
-                  payload: { streamKind: "assistant_text", delta: frame.finalText },
+            thread = turn.providerThread;
+            const startedAt = yield* DateTime.now;
+            let providerTurn: OrchestrationV2ProviderTurn = {
+              id: ids.derive.providerTurn({
+                driver: DRIVER,
+                nativeTurnId: `${options.instanceId}:${turn.attemptId}`,
+              }),
+              providerThreadId: thread.id,
+              nodeId: turn.rootNodeId,
+              runAttemptId: turn.attemptId,
+              nativeTurnRef: null,
+              ordinal: turn.providerTurnOrdinal,
+              status: "running",
+              startedAt,
+              completedAt: null,
+            };
+            let ordinal = 0;
+            let text = "";
+            let reasoning = "";
+            let compactionOrdinal = 0;
+            let hasSubagents = false;
+            let result: Extract<CommandCodeFrame, { type: "result" }> | undefined;
+            const items = new Map<string, OrchestrationV2TurnItem>();
+            const mcpSession = McpProviderSession.readMcpProviderSession(turn.threadId);
+            let mcpReady = mcpSession === undefined;
+            const captureSession = (nativeId: string) =>
+              Effect.gen(function* () {
+                if (!nativeId.trim()) return;
+                if (
+                  thread?.nativeThreadRef?.nativeId &&
+                  thread.nativeThreadRef.nativeId !== nativeId
+                )
+                  return yield* unsupported("Command Code resumed a different native session");
+                thread = {
+                  ...turn.providerThread,
+                  nativeThreadRef: { driver: DRIVER, nativeId, strength: "strong" },
+                  status: "active",
+                  updatedAt: yield* DateTime.now,
+                };
+                yield* emit({
+                  type: "provider_thread.updated",
+                  driver: DRIVER,
+                  providerThread: thread,
                 });
-              }
-              return;
-            }
-            const event = frame.event;
-            if (event.type === "compaction_done") {
-              const tokensSaved = event.tokensSaved;
-              const totalTokensSaved = event.totalTokensSaved;
-              // Fast-mode trimming can finish without a start event; zero-yield
-              // summarization can start without a finish. Only report real savings.
-              if (
-                typeof tokensSaved === "number" &&
-                Number.isFinite(tokensSaved) &&
-                tokensSaved > 0
-              )
-                yield* emit(context, {
-                  type: "thread.state.changed",
-                  turnId,
-                  payload: {
-                    state: "compacted",
-                    detail: `Saved ${tokensSaved} tokens${typeof totalTokensSaved === "number" && Number.isFinite(totalTokensSaved) && totalTokensSaved >= tokensSaved ? ` (${totalTokensSaved} total this session)` : ""}.`,
-                  },
-                });
-            }
-            if (event.type === "subagent_progress") hasSubagents = true;
-            if (event.type === "t3_mcp_ready") mcpReady = true;
-            if (event.type === "t3_mcp_error" || (event.type === "run_start" && !mcpReady))
-              return yield* new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "mcp",
-                detail:
-                  typeof event.message === "string"
-                    ? event.message
-                    : "Command Code did not load the T3 MCP tools. Update the CLI to a version supporting session mods (--mod).",
               });
-            if (event.type === "run_start" && typeof event.sessionId === "string")
-              yield* captureSession(event.sessionId);
-            if (
-              (event.type === "text_delta" || event.type === "thinking_delta") &&
-              typeof event.delta === "string"
-            ) {
-              const thinking = event.type === "thinking_delta";
-              if (!thinking) {
-                textStreamed = true;
-                messageOpen = true;
-              }
-              yield* emit(context, {
-                type: "content.delta",
-                turnId,
-                itemId: thinking
-                  ? RuntimeItemId.make(`${turnId}:reasoning:${messageIndex}`)
-                  : itemId(),
-                payload: {
-                  streamKind: thinking ? "reasoning_text" : "assistant_text",
-                  delta: event.delta,
-                },
-              });
-            }
-            if (event.type === "tool_queued") yield* finishMessage();
-            if (typeof event.toolCallId === "string" && typeof event.toolName === "string") {
-              const started = event.type === "tool_queued";
-              const completed = event.type === "tool_completed";
-              const denied = event.type === "tool_denied";
-              const failed = event.type === "tool_errored" || event.type === "tool_hook_blocked";
-              if (started) pendingTools.set(event.toolCallId, event.toolName);
-              if (completed || denied || failed) pendingTools.delete(event.toolCallId);
-              if (started || completed || denied || failed)
-                yield* emit(context, {
-                  type: started ? "item.started" : "item.completed",
-                  turnId,
-                  itemId: RuntimeItemId.make(`${turnId}:tool:${event.toolCallId}`),
-                  payload: {
-                    itemType: "dynamic_tool_call",
-                    title: event.toolName,
-                    status: started
-                      ? "inProgress"
-                      : denied
-                        ? "declined"
-                        : failed
-                          ? "failed"
-                          : "completed",
-                    data: {
-                      toolName: event.toolName,
-                      ...(started
-                        ? { input: commandCodeToolData(event.input) }
-                        : {
-                            output: commandCodeToolData(event.result),
-                            error: commandCodeToolData(event.error),
-                          }),
+            const itemBase = (key: string) => {
+              const nativeItemId = `${options.instanceId}:${turn.attemptId}:${key}`;
+              const previous = items.get(key);
+              return {
+                id: ids.derive.turnItemFromProviderItem({ driver: DRIVER, nativeItemId }),
+                threadId: turn.threadId,
+                runId: turn.runId,
+                nodeId: turn.rootNodeId,
+                providerThreadId: turn.providerThread.id,
+                providerTurnId: providerTurn.id,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: previous?.ordinal ?? ++ordinal,
+                startedAt,
+                updatedAt: DateTime.nowUnsafe(),
+              };
+            };
+            const publish = (key: string, item: OrchestrationV2TurnItem) =>
+              Effect.gen(function* () {
+                items.set(key, item);
+                yield* emit({ type: "turn_item.updated", driver: DRIVER, turnItem: item });
+                if (item.type === "assistant_message")
+                  yield* emit({
+                    type: "message.updated",
+                    driver: DRIVER,
+                    message: {
+                      id: item.messageId,
+                      threadId: turn.threadId,
+                      runId: turn.runId,
+                      nodeId: turn.rootNodeId,
+                      role: "assistant",
+                      text: item.text,
+                      attachments: [],
+                      streaming: item.streaming,
+                      createdBy: "agent",
+                      creationSource: "provider",
+                      createdAt: startedAt,
+                      updatedAt: item.updatedAt,
                     },
-                  },
-                });
-            }
-          });
-        const run = Effect.gen(function* () {
-          let modArgs: string[] = [];
-          if (mcpSession) {
-            const directory = yield* fileSystem.makeTempDirectoryScoped({
-              prefix: "t3-commandcode-mcp-",
-            });
-            const modPath = `${directory}/t3-mcp.mjs`;
-            yield* fileSystem.writeFileString(modPath, COMMAND_CODE_MCP_MOD);
-            modArgs = ["--mod", modPath];
-          }
-          const child = yield* spawnCommandCode({
-            binaryPath: settings.binaryPath,
-            args: [...args, ...modArgs],
-            cwd: context.session.cwd ?? options.cwd,
-            environment: {
-              ...McpProviderSession.withAgentDeviceEnvironment(options.environment, mcpSession),
-              T3_COMMANDCODE_MCP_SERVERS: encodeMcpServers(
-                McpProviderSession.mcpHttpServers(mcpSession),
-              ),
-            },
-            prompt,
-          });
-          yield* emit(context, { type: "turn.started", turnId, payload: { model } });
-          const [, stderr, code] = yield* Effect.all(
-            [
-              child.stdout.pipe(Stream.decodeText(), Stream.splitLines, Stream.runForEach(onLine)),
-              collectStreamAsString(child.stderr, { maxBytes: 16 * 1024 }),
-              child.exitCode.pipe(Effect.map(Number)),
-            ],
-            { concurrency: "unbounded" },
-          );
-          if (!result || code !== 0 || result.subtype !== "success")
-            return yield* new ProviderAdapterRequestError({
-              provider: PROVIDER,
-              method: "turn",
-              detail:
-                result?.error ||
-                (result?.subtype === "max_turns"
-                  ? "Command Code reached its model-request limit. The session is saved; send a follow-up to continue. Resolve any repeatedly failing or unavailable tool before continuing."
-                  : stderr.trim() ||
-                    `Command Code exited with code ${code} without a successful result.`),
-            });
-        }).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.scoped,
-        );
-        context.fiber = yield* run.pipe(
-          Effect.onExit((exit) =>
-            Effect.gen(function* () {
-              const interrupted = Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause);
-              const errorMessage =
-                Exit.isFailure(exit) && !interrupted ? Cause.pretty(exit.cause) : undefined;
-              const state = interrupted
-                ? "interrupted"
-                : Exit.isFailure(exit)
-                  ? "failed"
-                  : "completed";
-              yield* Deferred.fail(
-                ready,
-                new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "sendTurn",
-                  detail: errorMessage ?? "Command Code stopped before opening a session.",
+                  });
+              });
+            const publishText = (key: "text" | "reasoning", streaming: boolean) => {
+              const base = {
+                ...itemBase(key),
+                status: streaming ? ("running" as const) : ("completed" as const),
+                title: null,
+                completedAt: streaming ? null : DateTime.nowUnsafe(),
+              };
+              return key === "text"
+                ? publish(key, {
+                    ...base,
+                    type: "assistant_message",
+                    messageId: ids.derive.messageFromProviderItem({
+                      driver: DRIVER,
+                      nativeItemId: `${options.instanceId}:${turn.attemptId}:text`,
+                    }),
+                    text,
+                    streaming,
+                  })
+                : publish(key, { ...base, type: "reasoning", text: reasoning, streaming });
+            };
+            const run = Effect.gen(function* () {
+              const paths = yield* Effect.forEach(turn.message.attachments, (attachment) =>
+                Effect.gen(function* () {
+                  const path = resolveAttachmentPath({
+                    attachmentsDir: options.attachmentsDir,
+                    attachment,
+                  });
+                  if (!path) return yield* unsupported("Invalid attachment id");
+                  yield* fs.access(path);
+                  return path;
                 }),
               );
-              yield* finishMessage();
-              for (const [id, toolName] of pendingTools)
-                yield* emit(context, {
-                  type: "item.completed",
-                  turnId,
-                  itemId: RuntimeItemId.make(`${turnId}:tool:${id}`),
-                  payload: {
-                    itemType: "dynamic_tool_call",
-                    title: toolName,
-                    status: "failed",
-                    detail: "Command Code stopped before this tool completed.",
-                  },
+              const effort =
+                getModelSelectionStringOptionValue(turn.modelSelection, "effort") ??
+                getModelSelectionStringOptionValue(turn.modelSelection, "reasoningEffort");
+              const args = [
+                "--print",
+                "--output-format",
+                "json",
+                "--no-auto-update",
+                "--skip-onboarding",
+                "--max-turns",
+                MAX_MODEL_REQUESTS_PER_TURN,
+                "--add-dir",
+                options.attachmentsDir,
+                ...commandCodePermissionArgs(
+                  turn.runtimePolicy.runtimeMode,
+                  turn.runtimePolicy.interactionMode === "plan",
+                ),
+                ...(thread?.nativeThreadRef?.nativeId
+                  ? ["--resume", thread.nativeThreadRef.nativeId]
+                  : []),
+                ...(turn.modelSelection.model !== "default"
+                  ? ["--model", turn.modelSelection.model]
+                  : []),
+                ...(effort ? ["--effort", effort] : []),
+              ];
+              if (mcpSession) {
+                const directory = yield* fs.makeTempDirectoryScoped({
+                  prefix: "t3-commandcode-mcp-",
                 });
-              context.turns.push({ id: turnId, items: [] });
-              context.session = {
-                ...context.session,
-                status: "ready",
-                activeTurnId: undefined,
-                updatedAt: yield* now,
-                ...(errorMessage ? { lastError: errorMessage } : { lastError: undefined }),
-              };
-              yield* emit(context, { type: "session.state.changed", payload: { state: "ready" } });
-              yield* emit(context, {
-                type: "turn.completed",
-                turnId,
-                payload: {
-                  state,
-                  tokenUsage: commandCodeTokenUsage(result?.usage, hasSubagents),
-                  ...(errorMessage ? { errorMessage } : {}),
-                  ...(result?.usage ? { usage: result.usage } : {}),
-                  ...(result?.stopReason ? { stopReason: result.stopReason } : {}),
+                const mod = `${directory}/t3-mcp.mjs`;
+                yield* fs.writeFileString(mod, COMMAND_CODE_MCP_MOD);
+                args.push("--mod", mod);
+              }
+              const child = yield* spawnCommandCode({
+                binaryPath: settings.binaryPath,
+                args,
+                cwd: turn.runtimePolicy.cwd ?? options.cwd,
+                environment: {
+                  ...McpProviderSession.withAgentDeviceEnvironment(options.environment, mcpSession),
+                  T3_COMMANDCODE_MCP_SERVERS: yield* encodeMcpServers(
+                    McpProviderSession.mcpHttpServers(mcpSession),
+                  ),
                 },
+                prompt: `${buildRuntimeInstructions({ harness: "Command Code", model: turn.modelSelection.model, reasoningEffort: effort, threadMcpTools: mcpSession !== undefined })}\n\n${turn.message.text}${paths.length ? `\n\nAttached files on this environment (use read_file to inspect):\n${yield* encodeAttachmentPaths(paths)}` : ""}`,
               });
-              context.fiber = undefined;
-            }),
-          ),
-          Effect.ignoreCause({ log: false }),
-          Effect.forkIn(scope),
-        );
-        const sessionId = yield* Deferred.await(ready).pipe(
-          Effect.timeout("30 seconds"),
-          Effect.mapError((cause) =>
-            isRequestError(cause)
-              ? cause
-              : new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "sendTurn",
-                  detail: "Command Code did not start a session within 30 seconds.",
-                  cause,
+              yield* emit({ type: "provider_turn.updated", driver: DRIVER, providerTurn });
+              const [, , code] = yield* Effect.all(
+                [
+                  child.stdout.pipe(
+                    Stream.decodeText(),
+                    Stream.splitLines,
+                    Stream.runForEach((line) =>
+                      Effect.gen(function* () {
+                        if (!line.trim()) return;
+                        const frame = yield* Effect.try(() => decodeCommandCodeFrame(line));
+                        if (frame.type === "result") {
+                          result = frame;
+                          if (frame.sessionId) yield* captureSession(frame.sessionId);
+                          if (!text && frame.finalText) {
+                            text = frame.finalText;
+                            yield* publishText("text", true);
+                          }
+                          return;
+                        }
+                        const event = frame.event;
+                        if (event.type === "subagent_progress") hasSubagents = true;
+                        if (
+                          event.type === "compaction_done" &&
+                          typeof event.tokensSaved === "number" &&
+                          Number.isFinite(event.tokensSaved) &&
+                          event.tokensSaved > 0
+                        ) {
+                          const key = `compaction:${++compactionOrdinal}`;
+                          yield* publish(key, {
+                            ...itemBase(key),
+                            type: "compaction",
+                            driver: DRIVER,
+                            title: "Context compacted",
+                            summary: `Saved ${event.tokensSaved} tokens`,
+                            status: "completed",
+                            completedAt: yield* DateTime.now,
+                          });
+                        }
+                        if (event.type === "t3_mcp_ready") mcpReady = true;
+                        if (
+                          event.type === "t3_mcp_error" ||
+                          (event.type === "run_start" && !mcpReady)
+                        )
+                          return yield* unsupported(
+                            "Command Code did not load the authorized T3 MCP tools",
+                          );
+                        if (event.type === "run_start" && typeof event.sessionId === "string")
+                          yield* captureSession(event.sessionId);
+                        if (event.type === "text_delta" && typeof event.delta === "string") {
+                          text += event.delta;
+                          yield* publishText("text", true);
+                        }
+                        if (event.type === "thinking_delta" && typeof event.delta === "string") {
+                          reasoning += event.delta;
+                          yield* publishText("reasoning", true);
+                        }
+                        if (
+                          typeof event.toolCallId === "string" &&
+                          [
+                            "tool_queued",
+                            "tool_completed",
+                            "tool_denied",
+                            "tool_errored",
+                            "tool_hook_blocked",
+                          ].includes(String(event.type))
+                        ) {
+                          const key = `tool:${event.toolCallId}`;
+                          const previous = items.get(key);
+                          const running = event.type === "tool_queued";
+                          const toolName =
+                            typeof event.toolName === "string"
+                              ? event.toolName
+                              : (previous?.title ?? "tool");
+                          yield* publish(key, {
+                            ...itemBase(key),
+                            type: "dynamic_tool",
+                            title: toolName,
+                            toolName,
+                            input:
+                              event.input ??
+                              (previous?.type === "dynamic_tool" ? previous.input : {}),
+                            output: commandCodeToolData(
+                              event.result ?? event.error ?? event.message,
+                            ),
+                            status: running
+                              ? "running"
+                              : event.type === "tool_completed"
+                                ? "completed"
+                                : "failed",
+                            completedAt: running ? null : yield* DateTime.now,
+                          });
+                        }
+                      }),
+                    ),
+                  ),
+                  collectStreamAsString(child.stderr, { maxBytes: 16 * 1024 }),
+                  child.exitCode.pipe(Effect.map(Number)),
+                ],
+                { concurrency: "unbounded" },
+              );
+              if (!result || code !== 0 || result.subtype !== "success" || !mcpReady)
+                return yield* unsupported(
+                  result?.subtype === "max_turns"
+                    ? "Command Code reached its turn limit"
+                    : "Command Code did not complete successfully",
+                );
+            }).pipe(
+              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+              Effect.scoped,
+            );
+            yield* run.pipe(
+              Effect.onExit((exit) =>
+                Effect.gen(function* () {
+                  const failed = Exit.isFailure(exit);
+                  const interrupted = failed && Cause.hasInterrupts(exit.cause);
+                  const status = interrupted ? "interrupted" : failed ? "failed" : "completed";
+                  if (text) yield* publishText("text", false);
+                  if (reasoning) yield* publishText("reasoning", false);
+                  for (const [key, item] of items)
+                    if (item.status === "running")
+                      yield* publish(key, { ...item, status, completedAt: yield* DateTime.now });
+                  providerTurn = {
+                    ...providerTurn,
+                    status,
+                    completedAt: yield* DateTime.now,
+                    ...(result
+                      ? { turnTokenUsage: commandCodeTokenUsage(result.usage, hasSubagents) }
+                      : {}),
+                  };
+                  yield* emit({ type: "provider_turn.updated", driver: DRIVER, providerTurn });
+                  if (thread) {
+                    thread = { ...thread, status: "idle", updatedAt: yield* DateTime.now };
+                    yield* emit({
+                      type: "provider_thread.updated",
+                      driver: DRIVER,
+                      providerThread: thread,
+                    });
+                  }
+                  const base = {
+                    type: "turn.terminal" as const,
+                    driver: DRIVER,
+                    providerThreadId: turn.providerThread.id,
+                    providerTurnId: providerTurn.id,
+                    runOrdinal: turn.runOrdinal,
+                    threadDisposition: "reusable" as const,
+                  };
+                  yield* emit(
+                    status === "failed"
+                      ? {
+                          ...base,
+                          status,
+                          failureItemOrdinal: ++ordinal,
+                          failure: makeProviderFailure({
+                            cause: failed ? exit.cause : undefined,
+                            message: "Command Code failed. Check the CLI setup and retry the turn.",
+                          }),
+                        }
+                      : { ...base, status, failure: null },
+                  );
+                  active = undefined;
                 }),
-          ),
-          Effect.onError(() => (context.fiber ? Fiber.interrupt(context.fiber) : Effect.void)),
-        );
-        return { threadId: input.threadId, turnId, resumeCursor: { sessionId } };
+              ),
+              Effect.catchCause(() => Effect.void),
+            );
+          });
+        const runtime: ProviderAdapterV2SessionRuntime = {
+          instanceId: options.instanceId,
+          driver: DRIVER,
+          providerSessionId: input.providerSessionId,
+          providerSession: {
+            id: input.providerSessionId,
+            driver: DRIVER,
+            providerInstanceId: options.instanceId,
+            status: "ready",
+            cwd: input.runtimePolicy.cwd ?? options.cwd,
+            model: input.modelSelection.model,
+            capabilities: CommandCodeCapabilities,
+            createdAt: now,
+            updatedAt: now,
+            lastError: null,
+          },
+          events: Stream.fromQueue(events),
+          ensureThread: (request) =>
+            Effect.sync(() => {
+              thread = request.existingProviderThread ?? {
+                id: ids.derive.providerThread({
+                  driver: DRIVER,
+                  nativeThreadId: `${input.providerSessionId}:${request.threadId}`,
+                  providerInstanceId: options.instanceId,
+                }),
+                driver: DRIVER,
+                providerInstanceId: options.instanceId,
+                providerSessionId: input.providerSessionId,
+                appThreadId: request.threadId,
+                ownerNodeId: null,
+                nativeThreadRef: null,
+                nativeConversationHeadRef: null,
+                status: "idle",
+                firstRunOrdinal: null,
+                lastRunOrdinal: null,
+                handoffIds: [],
+                forkedFrom: null,
+                createdAt: now,
+                updatedAt: now,
+              };
+              return thread;
+            }),
+          resumeThread: (request) =>
+            Effect.sync(
+              () =>
+                (thread = {
+                  ...request.providerThread,
+                  providerSessionId: input.providerSessionId,
+                }),
+            ),
+          startTurn: (turn) =>
+            Effect.gen(function* () {
+              if (active) return yield* unsupported("Command Code already has an active turn");
+              active = yield* execute(turn).pipe(Effect.forkIn(scope));
+            }),
+          interruptTurn: () => (active ? Fiber.interrupt(active) : Effect.void),
+          steerTurn: () => unsupported("Command Code does not support active steering"),
+          respondToRuntimeRequest: () =>
+            unsupported("Command Code headless mode does not accept interactive approvals"),
+          readThreadSnapshot: () =>
+            unsupported("Command Code does not expose conversation snapshots"),
+          rollbackThread: () => unsupported("Command Code does not support conversation rollback"),
+          forkThread: () => unsupported("Command Code does not support conversation forks"),
+        };
+        return runtime;
       }),
-    );
-  return {
-    provider: PROVIDER,
-    capabilities: { sessionModelSwitch: "in-session", supportsConversationRollback: false },
-    startSession,
-    sendTurn,
-    interruptTurn,
-    stopSession,
-    stopAll,
-    respondToRequest: () => unsupported("interactive approvals"),
-    respondToUserInput: () => unsupported("interactive questions"),
-    readThread: (threadId) =>
-      getSession(threadId).pipe(Effect.map((context) => ({ threadId, turns: [...context.turns] }))),
-    rollbackThread: () => unsupported("conversation rollback"),
-    hasSession: (threadId) => Effect.sync(() => sessions.has(threadId)),
-    listSessions: () => Effect.sync(() => [...sessions.values()].map((context) => context.session)),
-    streamEvents: Stream.fromPubSub(events),
-  } satisfies ProviderAdapterShape<ProviderAdapterError>;
+  } satisfies ProviderAdapterV2Shape;
 });

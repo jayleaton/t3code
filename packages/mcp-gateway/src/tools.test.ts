@@ -355,7 +355,7 @@ describe("gateway chat tools", () => {
           prompt: "git pull",
           profileId: "a",
           projectId: "p",
-          schedule: { kind: "cron", expression: "0 7 * * *", timezone: "Asia/Bangkok" },
+          schedule: { type: "cron", expression: "0 7 * * *", timezone: "Asia/Bangkok" },
         },
       },
       {
@@ -364,7 +364,7 @@ describe("gateway chat tools", () => {
           prompt: "git pull",
           profileId: "a",
           projectId: "p",
-          schedule: { kind: "once", runAt: "2026-09-25T02:00:00Z" },
+          schedule: { type: "once", runAt: "2026-09-25T02:00:00Z" },
         },
       },
       { action: "update", taskId: "t1", patch: { enabled: false } },

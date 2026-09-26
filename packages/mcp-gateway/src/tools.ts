@@ -253,14 +253,14 @@ function scheduleFromInput(input: Record<string, unknown>): ScheduledTaskSchedul
   if (runAt !== undefined && cron !== undefined) throw invalid("Pass runAt or cron, not both.");
   if (runAt !== undefined) {
     if (input.timezone !== undefined) throw invalid("timezone applies to cron only.");
-    return { kind: "once", runAt };
+    return { type: "once", runAt };
   }
   if (cron !== undefined) {
     const timezone =
       typeof input.timezone === "string"
         ? input.timezone
         : Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return { kind: "cron", expression: cron, timezone };
+    return { type: "cron", expression: cron, timezone };
   }
   if (input.timezone !== undefined) throw invalid("timezone requires cron.");
   return undefined;
@@ -1094,7 +1094,7 @@ export async function callGatewayTool(
       }
       return context.port.scheduledTask(environmentId, {
         action: "create",
-        input: fields as GatewayScheduledTaskCreate,
+        input: fields as unknown as GatewayScheduledTaskCreate,
       });
     }
     case "t3_update_scheduled_task": {

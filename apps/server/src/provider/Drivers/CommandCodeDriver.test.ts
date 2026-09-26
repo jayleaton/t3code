@@ -9,10 +9,12 @@ import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { writeFakeCli } from "../../testUtils/fakeCli.ts";
+import { layer as idAllocatorLayer } from "../../orchestration-v2/IdAllocator.ts";
 import { CommandCodeDriver } from "./CommandCodeDriver.ts";
 
 const layer = ServerConfig.layerTest(process.cwd(), { prefix: "t3-commandcode-driver-" }).pipe(
   Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(idAllocatorLayer),
   Layer.provideMerge(ServerSettingsService.layerTest()),
   Layer.provideMerge(
     Layer.mock(BackgroundPolicy.BackgroundPolicy)({

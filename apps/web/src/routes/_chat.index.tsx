@@ -141,8 +141,8 @@ function HostedStaticOnboardingState() {
               </div>
               <EmptyTitle>Connect to a computer running T3 Agents</EmptyTitle>
               <EmptyDescription>
-                This app connects to T3 Agents running on your computer or a server. Start the T3
-                Agents desktop app or command-line server on that machine and keep it running.
+                This app connects to T3 Agents running on your computer or a server. Start the T3 Agents
+                desktop app or command-line server on that machine and keep it running.
               </EmptyDescription>
               <EmptyDescription>{description}</EmptyDescription>
               <div className="mt-6 flex justify-center">

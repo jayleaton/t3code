@@ -1,17 +1,13 @@
 import { useState, type CSSProperties } from "react";
 import { Link } from "@tanstack/react-router";
-import { ScheduledTaskId } from "@t3tools/contracts";
 import { ArrowLeftIcon, ClockIcon, PlayIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react";
 
 import { useAgentLibrary } from "../../hooks/useAgentLibrary";
 import { useClientSettings } from "../../hooks/useSettings";
 import { useEnvironments } from "../../state/environments";
 import { useProjects } from "../../state/entities";
-import {
-  scheduledTaskEnvironment,
-  useScheduledTasks,
-  type EnvironmentScheduledTask,
-} from "../../state/scheduledTasks";
+import { useScheduledTasks, type EnvironmentScheduledTask } from "../../state/scheduledTasks";
+import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { formatDayAwareTimestamp, formatUpcomingTimestamp } from "../../timestampFormat";
 import { Button } from "../ui/button";
@@ -19,6 +15,13 @@ import { Switch } from "../ui/switch";
 import { AgentIcon, agentColorFor } from "./AgentIcon";
 import { ScheduledTaskEditor } from "./ScheduledTaskEditor";
 import { describeSchedule } from "./scheduledTasks.logic";
+
+const LAST_RUN_LABELS = {
+  never: "Never",
+  running: "Running since",
+  succeeded: "Sent",
+  failed: "Failed",
+} as const;
 
 /** Armed tasks first, soonest run on top; paused and finished ones after, newest edit first. */
 function sortTasks(tasks: ReadonlyArray<EnvironmentScheduledTask>) {
@@ -69,7 +72,7 @@ export function ScheduledTasksPanel({ newForProfileId }: { newForProfileId?: str
         <ul className="scheduled-task-list">
           {sortTasks(tasks).map((entry) => (
             <ScheduledTaskRow
-              key={`${entry.environmentId}:${entry.task.taskId}`}
+              key={`${entry.environmentId}:${entry.task.id}`}
               entry={entry}
               onEdit={() => setEditing(entry)}
             />
@@ -100,9 +103,9 @@ function ScheduledTaskRow({
   const projects = useProjects();
   const { environments } = useEnvironments();
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
-  const update = useAtomCommand(scheduledTaskEnvironment.update);
-  const remove = useAtomCommand(scheduledTaskEnvironment.remove);
-  const runNow = useAtomCommand(scheduledTaskEnvironment.runNow);
+  const setEnabled = useAtomCommand(serverEnvironment.setScheduledTaskEnabled);
+  const remove = useAtomCommand(serverEnvironment.deleteScheduledTask);
+  const runNow = useAtomCommand(serverEnvironment.runScheduledTaskNow);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -114,7 +117,7 @@ function ScheduledTaskRow({
     environments.length > 1
       ? environments.find((env) => env.environmentId === environmentId)?.label
       : undefined;
-  const taskId = ScheduledTaskId.make(task.taskId);
+  const id = task.id;
   const act = async (action: () => Promise<unknown>) => {
     setBusy(true);
     try {
@@ -124,7 +127,7 @@ function ScheduledTaskRow({
     }
   };
   // A finished one-time task has nothing to resume until it is given a new time.
-  const finished = task.schedule.kind === "once" && !task.enabled && task.runCount > 0;
+  const finished = task.schedule.type === "once" && !task.enabled && task.runCount > 0;
 
   return (
     <li
@@ -151,7 +154,7 @@ function ScheduledTaskRow({
           checked={task.enabled}
           disabled={busy || finished}
           onCheckedChange={(enabled) =>
-            act(() => update({ environmentId, input: { taskId, patch: { enabled } } }))
+            act(() => setEnabled({ environmentId, input: { id, enabled } }))
           }
         />
       </div>
@@ -177,9 +180,9 @@ function ScheduledTaskRow({
         </div>
         <div>
           <dt>Last run</dt>
-          <dd data-status={task.lastRunStatus ?? undefined}>
+          <dd data-status={task.lastRunStatus}>
             {task.lastRunAt
-              ? `${task.lastRunStatus === "failed" ? "Failed" : "Sent"} ${formatDayAwareTimestamp(
+              ? `${LAST_RUN_LABELS[task.lastRunStatus]} ${formatDayAwareTimestamp(
                   task.lastRunAt,
                   timestampFormat,
                 )} · ${task.runCount} ${task.runCount === 1 ? "run" : "runs"}`
@@ -197,7 +200,7 @@ function ScheduledTaskRow({
           size="compact"
           variant="outline"
           disabled={busy}
-          onClick={() => act(() => runNow({ environmentId, input: { taskId } }))}
+          onClick={() => act(() => runNow({ environmentId, input: { id } }))}
         >
           <PlayIcon />
           Run now
@@ -227,7 +230,7 @@ function ScheduledTaskRow({
           onBlur={() => setConfirmDelete(false)}
           onClick={() =>
             confirmDelete
-              ? act(() => remove({ environmentId, input: { taskId } }))
+              ? act(() => remove({ environmentId, input: { id } }))
               : setConfirmDelete(true)
           }
         >

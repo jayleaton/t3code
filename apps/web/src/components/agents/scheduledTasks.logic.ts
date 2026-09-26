@@ -74,7 +74,26 @@ export function describeSchedule(
   formatInstant: (iso: string) => string,
   viewerTimeZone: string = localTimeZone(),
 ): string {
-  if (schedule.kind === "once") return `Once · ${formatInstant(schedule.runAt)}`;
+  switch (schedule.type) {
+    case "once":
+      return `Once · ${formatInstant(schedule.runAt)}`;
+    case "interval": {
+      const minutes = schedule.everyMs / 60_000;
+      return minutes % 60 === 0
+        ? `Every ${minutes / 60 === 1 ? "hour" : `${minutes / 60} hours`}`
+        : `Every ${minutes === 1 ? "minute" : `${Math.round(minutes)} minutes`}`;
+    }
+    case "fixed_time": {
+      const days = schedule.weekdays ?? [];
+      const on =
+        days.length === 0 || days.length === 7
+          ? "Every day"
+          : days.map((day) => WEEKDAY_NAMES[day]).join(", ");
+      return `${on} at ${schedule.timeOfDay}`;
+    }
+    case "cron":
+      break;
+  }
   const form = cronToRepeatForm(schedule.expression);
   const zone = schedule.timezone === viewerTimeZone ? "" : ` (${schedule.timezone})`;
   switch (form.preset) {
