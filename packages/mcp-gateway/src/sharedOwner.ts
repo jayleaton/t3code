@@ -19,6 +19,11 @@ export interface SharedGatewayConfig {
   readonly retentionEvents: number;
   readonly repositoryAllowlist: ReadonlyArray<string>;
   readonly initialGrants: GatewayGrants;
+  /**
+   * Identifies the gateway code. Sessions from another build retire the owner
+   * so it cannot keep serving old tools; it is not part of the configuration.
+   */
+  readonly build?: string;
 }
 
 export function sharedGatewayConfiguration(config: SharedGatewayConfig): string {
@@ -44,6 +49,8 @@ export async function startSharedGatewayOwner(
   options: {
     readonly idleTimeoutMs?: number;
     readonly onIdle?: () => void;
+    /** A session from another build retired this owner; it has already closed. */
+    readonly onRetire?: () => void;
   } = {},
 ) {
   const configuration = sharedGatewayConfiguration(config);
@@ -66,6 +73,20 @@ export async function startSharedGatewayOwner(
       { once: true },
     );
   };
+  let unsubscribeStatus = () => {};
+  let delivery: ReturnType<typeof startWebhookDeliveryWorker> | undefined;
+  async function close() {
+    if (closing) return;
+    closing = true;
+    idleController?.abort();
+    unsubscribeStatus();
+    await Promise.allSettled([
+      delivery?.stop(),
+      ...[...sessions.values()].map((gateway) => gateway.close()),
+    ]);
+    await bridge.close();
+    events?.close();
+  }
   const store = () => {
     if (events === undefined) throw new Error("Shared gateway store is not ready.");
     return events;
@@ -84,25 +105,33 @@ export async function startSharedGatewayOwner(
       };
     },
     onMcpConnection: (socket) => {
-      void acceptMcpSession(socket, config.token, configuration, async (transport) => {
-        if (closing) throw new Error("Shared gateway is shutting down.");
-        const gateway = createMcpGateway({
-          port: bridge.port,
-          grants: bridge.getGrants,
-          profiles: bridge.getProfiles,
-          repositoryAllowlist: config.repositoryAllowlist,
-          events: store(),
-          health: bridge.getHealth,
-        });
-        sessions.set(socket, gateway);
-        idleController?.abort();
-        socket.once("close", () => {
-          sessions.delete(socket);
-          void gateway.close().catch(() => undefined);
-          scheduleIdle();
-        });
-        await gateway.connect(transport);
-      }).catch(() => socket.terminate());
+      void acceptMcpSession(
+        socket,
+        config.token,
+        configuration,
+        async (transport) => {
+          if (closing) throw new Error("Shared gateway is shutting down.");
+          const gateway = createMcpGateway({
+            port: bridge.port,
+            grants: bridge.getGrants,
+            profiles: bridge.getProfiles,
+            repositoryAllowlist: config.repositoryAllowlist,
+            events: store(),
+            health: bridge.getHealth,
+          });
+          sessions.set(socket, gateway);
+          idleController?.abort();
+          socket.once("close", () => {
+            sessions.delete(socket);
+            void gateway.close().catch(() => undefined);
+            scheduleIdle();
+          });
+          await gateway.connect(transport);
+        },
+        config.build === undefined
+          ? undefined
+          : { build: config.build, retire: () => void close().then(options.onRetire) },
+      ).catch(() => socket.terminate());
     },
   });
   const startup = await bridge.ready;
@@ -122,25 +151,12 @@ export async function startSharedGatewayOwner(
     await bridge.close();
     throw error;
   }
-  const unsubscribeStatus = events.onStatusChange(() => {
+  unsubscribeStatus = events.onStatusChange(() => {
     for (const listener of statusListeners) listener();
   });
-  const delivery = startWebhookDeliveryWorker(events, {
+  delivery = startWebhookDeliveryWorker(events, {
     isAuthorized: (id) => hasGatewayScopes(bridge.getGrants(), id, ["read", "delivery"]),
   });
   scheduleIdle();
-  return {
-    close: async () => {
-      if (closing) return;
-      closing = true;
-      idleController?.abort();
-      unsubscribeStatus();
-      await Promise.allSettled([
-        delivery.stop(),
-        ...[...sessions.values()].map((gateway) => gateway.close()),
-      ]);
-      await bridge.close();
-      events?.close();
-    },
-  };
+  return { close };
 }

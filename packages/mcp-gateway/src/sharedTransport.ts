@@ -48,12 +48,18 @@ function socketTransport(socket: WebSocket): Transport {
   return transport;
 }
 
-/** MCP authentication cannot replace or configure the desktop runtime connection. */
+/**
+ * MCP authentication cannot replace or configure the desktop runtime connection.
+ * The challenge carries the owner's build, and a client from another build may
+ * prove the token and ask the owner to retire, so an app update reaches the
+ * long-lived owner instead of leaving every agent on its old tools.
+ */
 export async function acceptMcpSession(
   socket: WebSocket,
   token: string,
   configuration: string,
   attach: (transport: Transport) => Promise<void>,
+  retirement?: { readonly build: string; readonly retire: () => void },
 ): Promise<void> {
   const nonce = NodeCrypto.randomBytes(32).toString("hex");
   await new Promise<void>((resolve, reject) => {
@@ -72,6 +78,21 @@ export async function acceptMcpSession(
     const authenticate = (raw: WebSocket.RawData) => {
       try {
         const message: unknown = JSON.parse(raw.toString());
+        if (
+          retirement !== undefined &&
+          typeof message === "object" &&
+          message !== null &&
+          "type" in message &&
+          message.type === "retire" &&
+          "proof" in message &&
+          matches(message.proof, proof(token, "retire", nonce, configuration))
+        ) {
+          cleanup();
+          socket.close(1000, "Shared gateway retiring for another build.");
+          reject(new GatewayRetiredError("Shared gateway retired for another build."));
+          retirement.retire();
+          return;
+        }
         if (
           typeof message !== "object" ||
           message === null ||
@@ -93,7 +114,15 @@ export async function acceptMcpSession(
     socket.on("error", fail);
     socket.once("close", fail);
     socket.on("message", authenticate);
-    socket.send(JSON.stringify({ type: "challenge", protocol: PROTOCOL, nonce, configuration }));
+    socket.send(
+      JSON.stringify({
+        type: "challenge",
+        protocol: PROTOCOL,
+        nonce,
+        configuration,
+        ...(retirement === undefined ? {} : { build: retirement.build }),
+      }),
+    );
   });
   if (socket.readyState !== WebSocket.OPEN) throw new Error("MCP session closed during startup.");
   await attach(socketTransport(socket));
@@ -103,16 +132,24 @@ export async function acceptMcpSession(
 }
 
 export class GatewayUnavailableError extends Error {}
+/** The owner was from another build and agreed to retire; connect again once it has gone. */
+export class GatewayRetiredError extends Error {}
 
-/** An occupied port is usable only if its owner proves the same token and configuration. */
+/**
+ * An occupied port is usable only if its owner proves the same token and
+ * configuration. With a `build`, an owner that reports a different one is asked
+ * to retire instead; an owner too old to report a build is used as it is.
+ */
 export function connectMcpSession(input: {
   readonly port: number;
   readonly token: string;
   readonly configuration: string;
+  readonly build?: string;
 }): Promise<Transport> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(`ws://127.0.0.1:${input.port}/mcp`, { maxPayload: 1024 * 1024 });
     let nonce: string | undefined;
+    let retiring = false;
     const timeout = AbortSignal.timeout(AUTH_TIMEOUT_MS);
     const onTimeout = () => fail(new Error("Timed out authenticating the shared MCP gateway."));
     const cleanup = () => {
@@ -136,11 +173,13 @@ export function connectMcpSession(input: {
       );
     const onClose = () =>
       fail(
-        new Error(
-          nonce === undefined
-            ? "The port belongs to an older gateway or a different service that is not the T3 shared MCP gateway. Stop that process or use the configured gateway port."
-            : "Shared gateway authentication failed: the bridge token did not match. Verify the MCP gateway token configured for this environment.",
-        ),
+        retiring
+          ? new GatewayRetiredError("The shared gateway retired for this build.")
+          : new Error(
+              nonce === undefined
+                ? "The port belongs to an older gateway or a different service that is not the T3 shared MCP gateway. Stop that process or use the configured gateway port."
+                : "Shared gateway authentication failed: the bridge token did not match. Verify the MCP gateway token configured for this environment.",
+            ),
       );
     const authenticate = (raw: WebSocket.RawData) => {
       try {
@@ -175,6 +214,20 @@ export function connectMcpSession(input: {
             return;
           }
           nonce = message.nonce;
+          if (
+            input.build !== undefined &&
+            typeof message.build === "string" &&
+            message.build !== input.build
+          ) {
+            retiring = true;
+            socket.send(
+              JSON.stringify({
+                type: "retire",
+                proof: proof(input.token, "retire", nonce, input.configuration),
+              }),
+            );
+            return;
+          }
           socket.send(
             JSON.stringify({
               type: "authenticate",

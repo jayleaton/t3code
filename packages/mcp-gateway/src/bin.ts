@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import * as NodeCrypto from "node:crypto";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - The build identity is read synchronously before the Effect runtime exists.
+import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Gateway state path is initialized synchronously before the Effect runtime exists.
 import * as NodePath from "node:path";
@@ -54,7 +57,12 @@ if (!Number.isInteger(retentionEvents) || retentionEvents < 1) {
 const stateDirectory = process.env.T3CODE_HOME ?? NodePath.join(NodeOS.homedir(), ".t3code");
 const stateFile =
   process.env.T3_MCP_STATE_FILE ?? NodePath.join(stateDirectory, "mcp-gateway-v3.sqlite");
+// Any update changes the bundle, so its hash tells an outdated owner apart.
+const build = NodeCrypto.createHash("sha256")
+  .update(NodeFS.readFileSync(process.argv[1]!))
+  .digest("hex");
 const config: SharedGatewayConfig = {
+  build,
   port: bridgePort,
   token: bridgeToken,
   stateFile,
@@ -86,10 +94,11 @@ try {
       process.once("SIGTERM", stop);
     }
   } else {
-    const remote = await connectSharedGateway(config, async () => {
-      await launchSharedOwner(process.argv[1]!, config);
-    });
-    await proxyMcpStdio(remote);
+    const connect = () =>
+      connectSharedGateway(config, async () => {
+        await launchSharedOwner(process.argv[1]!, config);
+      });
+    await proxyMcpStdio(await connect(), connect);
   }
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
