@@ -16,7 +16,7 @@ import {
   excludePinnedAgentThreads,
   resolveAgentTaskProject,
   nestAgentRuns,
-  checkAgentRunLink,
+  agentRunLinkTargets,
   isAgentRunNestDrop,
 } from "./agents.logic";
 const profile: McpGatewayProfile = {
@@ -114,6 +114,14 @@ describe("agent chat focus", () => {
     const settled = { ...completed(), settledAt: "2026-09-06T00:03:00.000Z" };
     expect(isAgentChatInFocus(settled, undefined, false)).toBe(false);
     expect(isAgentChatInFocus(settled, undefined, true)).toBe(true);
+  });
+  it("keeps a chat with background work live after its turn completes", () => {
+    const watching = { ...completed(), backgroundLiveness: "monitoring" as const };
+    expect(agentThreadStatus(watching)).toBe("monitoring");
+    expect(isAgentChatInFocus(watching, "2026-09-06T00:03:00.000Z", false)).toBe(true);
+    expect(agentThreadStatus({ ...completed(), backgroundLiveness: "working" as const })).toBe(
+      "running",
+    );
   });
 });
 
@@ -370,7 +378,7 @@ describe("nestAgentRuns", () => {
   });
 });
 
-describe("checkAgentRunLink", () => {
+describe("agentRunLinkTargets", () => {
   const run = (id: string, parentThreadId: string | null, environmentId = "local") => ({
     environmentId: EnvironmentId.make(environmentId),
     id: ThreadId.make(id),
@@ -379,18 +387,28 @@ describe("checkAgentRunLink", () => {
   const root = run("root", null);
   const child = run("child", "root");
   const grandchild = run("grandchild", "child");
-  const all = [root, child, grandchild];
+  const loose = run("loose", null);
+  const remote = run("remote", null, "remote");
+  const all = [root, child, grandchild, loose, remote];
 
-  it("allows linking a run under another run in the same environment", () => {
-    expect(checkAgentRunLink(run("loose", null), child, all)).toBe("ok");
-    expect(checkAgentRunLink(grandchild, root, all)).toBe("ok");
+  it("offers every run in the same environment outside the dragged run's own tree", () => {
+    expect([...agentRunLinkTargets(loose, all)].toSorted()).toEqual([
+      "local:child",
+      "local:grandchild",
+      "local:root",
+    ]);
+    expect([...agentRunLinkTargets(grandchild, all)].toSorted()).toEqual([
+      "local:loose",
+      "local:root",
+    ]);
   });
 
-  it("rejects links the server would refuse or that change nothing", () => {
-    expect(checkAgentRunLink(root, grandchild, all)).toBe("cycle");
-    expect(checkAgentRunLink(child, child, all)).toBe("same-run");
-    expect(checkAgentRunLink(child, root, all)).toBe("already-parent");
-    expect(checkAgentRunLink(run("remote", null, "remote"), root, all)).toBe("other-environment");
+  it("rejects cycles, the current parent, and other environments", () => {
+    // root cannot move under its own sub-runs.
+    expect([...agentRunLinkTargets(root, all)]).toEqual(["local:loose"]);
+    // child is already under root and cannot move under grandchild.
+    expect([...agentRunLinkTargets(child, all)]).toEqual(["local:loose"]);
+    expect(agentRunLinkTargets(remote, all).size).toBe(0);
   });
 });
 

@@ -1,10 +1,9 @@
-import { useCallback, useContext, useRef, useState, type ReactNode } from "react";
+import { useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   closestCenter,
   DndContext,
   DragOverlay,
   useDraggable,
-  useDroppable,
   useSensor,
   useSensors,
   type CollisionDetection,
@@ -29,29 +28,45 @@ import { SortableThreadRow } from "../SortableThreadRow";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { checkAgentRunLink, isAgentRunNestDrop } from "./agents.logic";
+import { agentRunLinkTargets, isAgentRunNestDrop } from "./agents.logic";
 import {
   AGENT_CHILD_DRAG_PREFIX,
   AGENT_LINK_DRAG_PREFIX,
-  AGENT_NEST_DROP_PREFIX,
+  AGENT_NEST_KEY_ATTRIBUTE,
+  AgentNestTargetContext,
   AgentRunDragContext,
 } from "./agentRunDrag";
 
-const NEST_PREFIX = AGENT_NEST_DROP_PREFIX;
 const CHILD_PREFIX = AGENT_CHILD_DRAG_PREFIX;
 const LINK_PREFIX = AGENT_LINK_DRAG_PREFIX;
 
-function NestTarget({
-  id,
-  disabled,
-  children,
-}: {
-  id: string;
-  disabled: boolean;
-  children: (setNodeRef: (element: HTMLElement | null) => void) => ReactNode;
-}) {
-  const { setNodeRef } = useDroppable({ id: `${NEST_PREFIX}${id}`, disabled });
-  return children(setNodeRef);
+const nestWrapperOf = (key: string) =>
+  document.querySelector(`[${AGENT_NEST_KEY_ATTRIBUTE}="${window.CSS.escape(key)}"]`);
+
+/**
+ * The run whose card header is under the pointer, when the dragged run may
+ * link under it. One hit test per move: the dragged card itself rides under
+ * the pointer, so it is skipped, and what lies beneath decides.
+ */
+function nestTargetAt(
+  pointer: { x: number; y: number },
+  draggedKey: string,
+  linkTargets: ReadonlySet<string>,
+): string | null {
+  if (linkTargets.size === 0) return null;
+  for (const element of document.elementsFromPoint(pointer.x, pointer.y)) {
+    const header = element.closest(".agent-thread");
+    const wrapper = header?.closest(`[${AGENT_NEST_KEY_ATTRIBUTE}]`);
+    if (!header || !wrapper) continue;
+    const key = wrapper.getAttribute(AGENT_NEST_KEY_ATTRIBUTE);
+    if (key === draggedKey) continue;
+    return key !== null &&
+      linkTargets.has(key) &&
+      isAgentRunNestDrop(pointer.y, header.getBoundingClientRect())
+      ? key
+      : null;
+  }
+  return null;
 }
 
 type ChildDrop = { kind: "none" } | { kind: "detach" };
@@ -64,6 +79,12 @@ const keyOf = (thread: EnvironmentThreadShell) =>
  * sidebar's pointer lifecycle and persisted drop planner), and any card or
  * sub-run row can be linked under another run or detached from its parent.
  * `active` is the reorderable list rendered by SortableAgentThreads inside.
+ *
+ * Link targets are not dnd-kit droppables. A sortable item loses its
+ * transform whenever `over` is not a list item, so hovering a header would
+ * snap every card, the dragged one included, back to its resting place.
+ * Instead the hovered header is tracked on the side and `over` stays on the
+ * last list position, which keeps the arrangement still under the pointer.
  */
 export function AgentRunDragArea({
   active: activeThreads,
@@ -77,7 +98,10 @@ export function AgentRunDragArea({
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
+  const nestTarget = useRef<string | null>(null);
   const [nestTargetKey, setNestTargetKey] = useState<string | null>(null);
+  const linkTargets = useRef<{ key: string; targets: ReadonlySet<string> } | null>(null);
+  const lastSortOver = useRef<string | null>(null);
   const [draggedChild, setDraggedChild] = useState<{ key: string; anchorKey: string } | null>(null);
   const childDrop = useRef<ChildDrop>({ kind: "none" });
   const [childDropHint, setChildDropHint] = useState<ChildDrop["kind"]>("none");
@@ -94,7 +118,10 @@ export function AgentRunDragArea({
     setDragging(false);
   }, []);
   const clearDrop = useCallback(() => {
+    nestTarget.current = null;
     setNestTargetKey(null);
+    linkTargets.current = null;
+    lastSortOver.current = null;
     setDraggedChild(null);
     childDrop.current = { kind: "none" };
     setChildDropHint("none");
@@ -119,59 +146,46 @@ export function AgentRunDragArea({
     return value;
   };
 
+  // Valid parents depend only on the dragged run, so they are worked out once per drag.
+  const linkTargetsFor = (key: string) => {
+    if (linkTargets.current?.key !== key) {
+      const dragged = runByKey.get(key);
+      linkTargets.current = {
+        key,
+        targets: dragged ? agentRunLinkTargets(dragged, all) : new Set(),
+      };
+    }
+    return linkTargets.current.targets;
+  };
+
   // A pointer on another card's header links under it; anywhere else a card
   // reorders as before and a sub-run row detaches once it leaves its card.
   const collisionDetection: CollisionDetection = (args) => {
     const pointer = args.pointerCoordinates;
     const activeId = String(args.active.id);
-    const dragged = runByKey.get(draggedKey(activeId));
-    if (pointer && dragged) {
-      for (const container of args.droppableContainers) {
-        const id = String(container.id);
-        if (!id.startsWith(NEST_PREFIX)) continue;
-        const targetKey = id.slice(NEST_PREFIX.length);
-        const target = runByKey.get(targetKey);
-        const rect = args.droppableRects.get(container.id);
-        const header = container.node.current
-          ?.querySelector(".agent-thread")
-          ?.getBoundingClientRect();
-        if (
-          target &&
-          rect &&
-          header &&
-          targetKey !== keyOf(dragged) &&
-          pointer.x >= rect.left &&
-          pointer.x <= rect.left + rect.width &&
-          isAgentRunNestDrop(pointer.y, header) &&
-          checkAgentRunLink(dragged, target, all) === "ok"
-        ) {
-          return [{ id: container.id }];
-        }
-      }
-    }
+    const key = draggedKey(activeId);
+    nestTarget.current = pointer ? nestTargetAt(pointer, key, linkTargetsFor(key)) : null;
     if (activeId.startsWith(CHILD_PREFIX)) {
       const anchorKey = (args.active.data.current as { anchorKey?: string } | undefined)?.anchorKey;
-      const anchor = args.droppableContainers.find(
-        (container) => String(container.id) === `${NEST_PREFIX}${anchorKey}`,
-      );
-      const rect = anchor ? args.droppableRects.get(anchor.id) : undefined;
+      const rect = anchorKey ? nestWrapperOf(anchorKey)?.getBoundingClientRect() : undefined;
       const outside =
+        nestTarget.current === null &&
         pointer !== null &&
         rect !== undefined &&
         (pointer.y < rect.top ||
-          pointer.y > rect.top + rect.height ||
+          pointer.y > rect.bottom ||
           pointer.x < rect.left ||
-          pointer.x > rect.left + rect.width);
+          pointer.x > rect.right);
       childDrop.current = outside ? { kind: "detach" } : { kind: "none" };
       return [];
     }
     if (activeId.startsWith(LINK_PREFIX)) return [];
-    return closestCenter({
-      ...args,
-      droppableContainers: args.droppableContainers.filter(
-        (container) => !String(container.id).startsWith(NEST_PREFIX),
-      ),
-    });
+    if (nestTarget.current !== null) {
+      return lastSortOver.current === null ? [] : [{ id: lastSortOver.current }];
+    }
+    const collisions = closestCenter(args);
+    lastSortOver.current = collisions[0] ? String(collisions[0].id) : null;
+    return collisions;
   };
 
   const linkRun = async (child: EnvironmentThreadShell, parent: EnvironmentThreadShell | null) => {
@@ -193,9 +207,10 @@ export function AgentRunDragArea({
 
   const onDragEnd = async ({ active: dragged, over }: DragEndEvent) => {
     const drop = childDrop.current;
+    const targetKey = nestTarget.current;
     const run = runByKey.get(draggedKey(dragged.id));
-    if (over && String(over.id).startsWith(NEST_PREFIX)) {
-      const target = runByKey.get(String(over.id).slice(NEST_PREFIX.length));
+    if (targetKey !== null) {
+      const target = runByKey.get(targetKey);
       if (run && target) await linkRun(run, target);
       return;
     }
@@ -260,8 +275,12 @@ export function AgentRunDragArea({
       setSaving(false);
     }
   };
+  const dragContext = useMemo(
+    () => ({ childDragEnabled: !saving, dragging, saving }),
+    [dragging, saving],
+  );
   const draggedChildRun = draggedChild ? runByKey.get(draggedChild.key) : undefined;
-  const nestTarget = nestTargetKey ? runByKey.get(nestTargetKey) : undefined;
+  const nestTargetRun = nestTargetKey ? runByKey.get(nestTargetKey) : undefined;
   return (
     <DndContext
       sensors={sensors}
@@ -269,6 +288,7 @@ export function AgentRunDragArea({
       modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
       onDragStart={({ active: started }) => {
         setDragging(true);
+        lastSortOver.current = String(started.id);
         const anchorKey = (started.data.current as { anchorKey?: string } | undefined)?.anchorKey;
         if (String(started.id).startsWith(CHILD_PREFIX) && anchorKey) {
           setDraggedChild({ key: draggedKey(started.id), anchorKey });
@@ -276,14 +296,11 @@ export function AgentRunDragArea({
           setDraggedChild({ key: draggedKey(started.id), anchorKey: "" });
         }
       }}
-      onDragMove={() => setChildDropHint(childDrop.current.kind)}
-      onDragOver={({ over }) =>
-        setNestTargetKey(
-          over && String(over.id).startsWith(NEST_PREFIX)
-            ? String(over.id).slice(NEST_PREFIX.length)
-            : null,
-        )
-      }
+      // Both setters bail out when unchanged, so a move re-renders only on a change.
+      onDragMove={() => {
+        setNestTargetKey(nestTarget.current);
+        setChildDropHint(childDrop.current.kind);
+      }}
       onDragEnd={(event) => void onDragEnd(event).finally(clearDrop)}
       onDragCancel={() => {
         finish();
@@ -291,23 +308,25 @@ export function AgentRunDragArea({
       }}
     >
       <SidebarDragLifecycle onUnmount={cancel} />
-      <AgentRunDragContext.Provider
-        value={{ childDragEnabled: !saving, nestTargetKey, dragging, saving }}
-      >
-        {children}
+      <AgentRunDragContext.Provider value={dragContext}>
+        <AgentNestTargetContext.Provider value={nestTargetKey}>
+          {children}
+        </AgentNestTargetContext.Provider>
       </AgentRunDragContext.Provider>
-      <DragOverlay dropAnimation={null}>
-        {draggedChildRun ? (
+      {/* Mounted only for these drags: while any overlay is up, a sortable card
+          stops following the pointer and jumps between slots instead. */}
+      {draggedChildRun ? (
+        <DragOverlay dropAnimation={null}>
           <div className="agent-child-drag">
-            {nestTarget ? (
+            {nestTargetRun ? (
               <CornerDownRightIcon size={12} aria-hidden="true" />
             ) : childDropHint === "detach" ? (
               <UnlinkIcon size={12} aria-hidden="true" />
             ) : null}
             <span className="agent-child-drag-title">{draggedChildRun.title}</span>
             <span className="agent-child-drag-hint">
-              {nestTarget
-                ? `Link under ${nestTarget.title}`
+              {nestTargetRun
+                ? `Link under ${nestTargetRun.title}`
                 : draggedChild?.anchorKey === ""
                   ? "Drop on a chat to link"
                   : childDropHint === "detach"
@@ -315,8 +334,8 @@ export function AgentRunDragArea({
                     : "Drag out to detach"}
             </span>
           </div>
-        ) : null}
-      </DragOverlay>
+        </DragOverlay>
+      ) : null}
     </DndContext>
   );
 }
@@ -330,6 +349,7 @@ export function SortableAgentThreads({
   children: (thread: EnvironmentThreadShell, dragging: boolean) => ReactNode;
 }) {
   const { dragging, saving } = useContext(AgentRunDragContext);
+  const nestTargetKey = useContext(AgentNestTargetContext);
   const ids = threads
     .filter((thread) => thread.pinnedAt == null && thread.settledAt === null)
     .map(keyOf);
@@ -341,34 +361,30 @@ export function SortableAgentThreads({
             {children(thread, dragging)}
           </LinkableAgentCard>
         ) : (
-          <NestTarget key={keyOf(thread)} id={keyOf(thread)} disabled={saving}>
-            {(setNestRef) => (
-              <SortableThreadRow
-                id={keyOf(thread)}
-                disabled={saving || !readEnvironmentSupportsActiveReorder(thread.environmentId)}
+          <SortableThreadRow
+            key={keyOf(thread)}
+            id={keyOf(thread)}
+            disabled={saving || !readEnvironmentSupportsActiveReorder(thread.environmentId)}
+          >
+            {({ setNodeRef, listeners, transform, transition, isDragging }) => (
+              <div
+                ref={setNodeRef}
+                {...listeners}
+                {...{ [AGENT_NEST_KEY_ATTRIBUTE]: keyOf(thread) }}
+                data-nest-target={nestTargetKey === keyOf(thread) || undefined}
+                style={{
+                  transform: CSS.Transform.toString(transform),
+                  transition,
+                  position: "relative",
+                  zIndex: isDragging ? 1 : undefined,
+                  touchAction: "pan-x",
+                  userSelect: dragging ? "none" : undefined,
+                }}
               >
-                {({ setNodeRef, listeners, transform, transition, isDragging }) => (
-                  <div
-                    ref={(element) => {
-                      setNodeRef(element);
-                      setNestRef(element);
-                    }}
-                    {...listeners}
-                    style={{
-                      transform: CSS.Transform.toString(transform),
-                      transition,
-                      position: "relative",
-                      zIndex: isDragging ? 1 : undefined,
-                      touchAction: "pan-x",
-                      userSelect: dragging ? "none" : undefined,
-                    }}
-                  >
-                    {children(thread, dragging)}
-                  </div>
-                )}
-              </SortableThreadRow>
+                {children(thread, dragging)}
+              </div>
             )}
-          </NestTarget>
+          </SortableThreadRow>
         ),
       )}
     </SortableContext>
@@ -387,19 +403,18 @@ export function LinkableAgentCard({
   children: ReactNode;
 }) {
   const { dragging, saving } = useContext(AgentRunDragContext);
+  const nestTargetKey = useContext(AgentNestTargetContext);
   const key = keyOf(thread);
-  const { setNodeRef: setNestRef } = useDroppable({ id: `${NEST_PREFIX}${key}`, disabled: saving });
   const { setNodeRef, listeners, isDragging } = useDraggable({
     id: `${LINK_PREFIX}${key}`,
     disabled: saving,
   });
   return (
     <div
-      ref={(element) => {
-        setNodeRef(element);
-        setNestRef(element);
-      }}
+      ref={setNodeRef}
       {...listeners}
+      {...{ [AGENT_NEST_KEY_ATTRIBUTE]: key }}
+      data-nest-target={nestTargetKey === key || undefined}
       data-dragging={isDragging || undefined}
       style={{ touchAction: "pan-x", userSelect: dragging ? "none" : undefined }}
     >

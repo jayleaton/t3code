@@ -47,6 +47,7 @@ import {
   type AgentRunContextMenu,
 } from "./agents.logic";
 import { DesktopUpdateButton } from "../sidebar/SidebarUpdatePill";
+import { useToggleWorkspaceView } from "../sidebar/mainAppLocation";
 import { BrandMark } from "../BrandMark";
 import { openCommandPalette } from "../../commandPaletteBus";
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialog";
@@ -161,6 +162,7 @@ export function AgentsBoard() {
   };
   const { environments } = useEnvironments();
   const navigate = useNavigate();
+  const toggleWorkspaceView = useToggleWorkspaceView();
   const scheduledSupported = useScheduledTasksSupported();
   const scheduledTasks = useScheduledTasks();
   const modelPreferences = useClientSettings((settings) => settings.providerModelPreferences);
@@ -225,7 +227,17 @@ export function AgentsBoard() {
         </Link>
         <nav aria-label="Workspace view">
           <span aria-current="page">Agents</span>
-          <Link to="/">Threads</Link>
+          <Link
+            to="/"
+            onClick={(event) => {
+              if (event.metaKey || event.ctrlKey || event.shiftKey) return;
+              // Return to the chat left open in the threads view, not a fresh draft.
+              event.preventDefault();
+              void toggleWorkspaceView("threads");
+            }}
+          >
+            Threads
+          </Link>
         </nav>
         <div className="agents-search">
           <SearchIcon size={15} aria-hidden="true" />

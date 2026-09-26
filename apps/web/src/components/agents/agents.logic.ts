@@ -35,6 +35,10 @@ export function agentThreadStatus(thread: EnvironmentThreadShell) {
   if (thread.session?.status === "starting") return "queued";
   if (thread.session?.status === "error" || thread.latestTurn?.state === "error") return "error";
   if (thread.hasPendingApprovals || thread.hasPendingUserInput) return "attention";
+  // A turn can settle while native background work runs on, as in the thread
+  // sidebar: sub-agent fleets still count as work, watch loops as monitoring.
+  if (thread.backgroundLiveness === "working") return "running";
+  if (thread.backgroundLiveness === "monitoring") return "monitoring";
   if (thread.latestTurn?.state === "completed") return "done";
   return "idle";
 }
@@ -43,6 +47,7 @@ export function agentThreadStatusLabel(status: ReturnType<typeof agentThreadStat
   return {
     done: "Done",
     running: "In progress",
+    monitoring: "Monitoring",
     queued: "Queued",
     idle: "Idle",
     error: "Error",
@@ -283,38 +288,39 @@ export function nestAgentRuns<T extends AgentRun>(input: {
   };
 }
 
-export type AgentRunLinkCheck =
-  | "ok"
-  | "same-run"
-  | "already-parent"
-  | "other-environment"
-  | "cycle";
+type AgentRunLink = Pick<AgentRun, "environmentId" | "id" | "parentThreadId">;
 
 /**
- * Whether `child` may become a sub-run of `parent`. Links stay within one
- * environment, and a run cannot move under itself or one of its own sub-runs.
+ * Keys of the runs `child` may become a sub-run of. Links stay within one
+ * environment, and a run cannot move under itself, its current parent, or one
+ * of its own sub-runs. Computed once per drag, not per pointer move.
  */
-export function checkAgentRunLink(
-  child: Pick<AgentRun, "environmentId" | "id" | "parentThreadId">,
-  parent: Pick<AgentRun, "environmentId" | "id" | "parentThreadId">,
-  all: readonly Pick<AgentRun, "environmentId" | "id" | "parentThreadId">[],
-): AgentRunLinkCheck {
-  if (child.environmentId !== parent.environmentId) return "other-environment";
-  if (child.id === parent.id) return "same-run";
-  if (child.parentThreadId === parent.id) return "already-parent";
-  const byId = new Map(
-    all.filter((run) => run.environmentId === parent.environmentId).map((run) => [run.id, run]),
-  );
-  const seen = new Set<string>();
-  for (
-    let ancestor: Pick<AgentRun, "id" | "parentThreadId"> | undefined = parent;
-    ancestor !== undefined && !seen.has(ancestor.id);
-    ancestor = ancestor.parentThreadId == null ? undefined : byId.get(ancestor.parentThreadId)
-  ) {
-    if (ancestor.id === child.id) return "cycle";
-    seen.add(ancestor.id);
+export function agentRunLinkTargets(
+  child: AgentRunLink,
+  all: readonly AgentRunLink[],
+): ReadonlySet<string> {
+  const sameEnvironment = all.filter((run) => run.environmentId === child.environmentId);
+  const childIdsByParent = new Map<string, string[]>();
+  for (const run of sameEnvironment) {
+    if (run.parentThreadId == null) continue;
+    const siblings = childIdsByParent.get(run.parentThreadId);
+    if (siblings) siblings.push(run.id);
+    else childIdsByParent.set(run.parentThreadId, [run.id]);
   }
-  return "ok";
+  const ownRuns = new Set<string>([child.id]);
+  const pending: string[] = [child.id];
+  for (let id = pending.pop(); id !== undefined; id = pending.pop()) {
+    for (const childId of childIdsByParent.get(id) ?? []) {
+      if (ownRuns.has(childId)) continue;
+      ownRuns.add(childId);
+      pending.push(childId);
+    }
+  }
+  return new Set(
+    sameEnvironment
+      .filter((run) => !ownRuns.has(run.id) && run.id !== child.parentThreadId)
+      .map(threadKey),
+  );
 }
 
 /**

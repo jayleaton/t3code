@@ -130,6 +130,15 @@ describe("sidebar pointer lifecycle", () => {
     expect(nextPropagation).not.toHaveBeenCalled();
   });
 
+  it("keeps a drop over a link from following the link", () => {
+    gesture();
+    document.dispatchEvent(pointer("pointermove", { clientY: 20 }));
+    document.dispatchEvent(pointer("pointerup", { buttons: 0 }));
+    const releaseClick = new Event("click", { cancelable: true });
+    document.dispatchEvent(releaseClick);
+    expect(releaseClick.defaultPrevented).toBe(true);
+  });
+
   it("allows the next click when the cancelled release happened outside the document", () => {
     const drag = gesture();
     document.dispatchEvent(pointer("pointermove", { clientY: 20 }));

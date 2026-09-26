@@ -37,6 +37,7 @@ const METHODS = new Set<keyof GatewayRuntimePort>([
   "handoffThread",
   "settleThread",
   "unsettleThread",
+  "setThreadParent",
   "listSkills",
   "createSkill",
   "updateSkill",

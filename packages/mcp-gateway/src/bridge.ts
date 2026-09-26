@@ -374,6 +374,8 @@ export function createBridgeRuntimePort(input: {
       settleThread: (environmentId, threadId) => invoke("settleThread", [environmentId, threadId]),
       unsettleThread: (environmentId, threadId) =>
         invoke("unsettleThread", [environmentId, threadId]),
+      setThreadParent: (environmentId, threadId, parentThreadId) =>
+        invoke("setThreadParent", [environmentId, threadId, parentThreadId]),
       listSkills: (environmentId) => invoke("listSkills", [environmentId]),
       createSkill: (environmentId, input) => invoke("createSkill", [environmentId, input]),
       updateSkill: (environmentId, skillId, patch) =>

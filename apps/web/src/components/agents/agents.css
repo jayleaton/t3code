@@ -258,6 +258,10 @@
   color: #f5d577;
   background: #3b3421;
 }
+.agent-status-monitoring {
+  color: var(--foreground);
+  background: color-mix(in srgb, #a8cfff 18%, transparent);
+}
 .agent-status-idle {
   color: #a8cfff;
   background: #223145;
@@ -1108,25 +1112,41 @@
     width: 300px;
   }
 }
+/* Narrow windows fold the agent filters behind the Agents button; the chat
+   list stays beside the chat so a selected chat always keeps a sidebar. */
 @media (max-width: 1023px) {
   .agents-filters,
   .agents-threads {
-    width: 100%;
-    border-right: 0;
+    width: 300px;
   }
   .agents-filters {
-    display: none;
-  }
-  .agents-chat-pane {
     display: none;
   }
   .agent-mobile-filters {
     display: inline-flex;
   }
+  .agents-threads > header {
+    flex-wrap: wrap;
+  }
+  .agents-threads-heading {
+    order: -1;
+    flex-basis: 100%;
+  }
   .agents-page[data-show-filters="true"] .agents-filters {
     display: flex;
   }
   .agents-page[data-show-filters="true"] .agents-threads {
+    display: none;
+  }
+}
+/* Phone widths: one pane at a time. */
+@media (max-width: 767px) {
+  .agents-filters,
+  .agents-threads {
+    width: 100%;
+    border-right: 0;
+  }
+  .agents-chat-pane {
     display: none;
   }
   .agents-page[data-thread-selected="true"] .agents-filters,
@@ -1207,7 +1227,7 @@
   display: none;
   gap: 4px;
 }
-@media (max-width: 1023px) {
+@media (max-width: 767px) {
   .agent-mobile-back {
     display: inline-flex;
   }
@@ -1371,16 +1391,24 @@
   width: 12px;
   height: 12px;
 }
-.agent-thread-container[data-nest-target="true"] {
+[data-nest-target="true"] > .agent-thread-container {
   border-color: var(--agent-color, var(--ring));
   box-shadow: 0 0 0 1px var(--agent-color, var(--ring));
 }
-.agent-thread-container[data-nest-target="true"] .agent-thread::after {
+/* Floats over the border: growing the card mid-drag would shift every card
+   below it away from the positions the drag measured. */
+[data-nest-target="true"] > .agent-thread-container::after {
   content: "Link as sub-run";
-  display: block;
-  margin-top: 6px;
+  position: absolute;
+  top: -8px;
+  right: 12px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--background);
   font-size: 10px;
+  line-height: 16px;
   color: var(--agent-color, var(--foreground));
+  pointer-events: none;
 }
 .agent-thread-children li[data-dragging="true"] {
   opacity: 0.35;
