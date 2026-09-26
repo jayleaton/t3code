@@ -416,6 +416,7 @@ export function createBridgeRuntimePort(input: {
       controlThread: (request) => invoke("controlThread", [request]),
       respondToApprovals: (request) => invoke("respondToApprovals", [request]),
       respondToApproval: (request) => invoke("respondToApproval", [request]),
+      respondToUserInput: (request) => invoke("respondToUserInput", [request]),
       executeOperation: (request) => invoke("executeOperation", [request]),
     },
     close: () =>
