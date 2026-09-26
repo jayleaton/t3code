@@ -112,6 +112,9 @@ describe("agent chat focus", () => {
     };
     expect(agentThreadStatus(running)).toBe("running");
     expect(isAgentChatInFocus(running, "2026-09-06T00:03:00.000Z", false)).toBe(true);
+    // A question or approval is asked mid-turn, while the turn is still running.
+    expect(agentThreadStatus({ ...running, hasPendingUserInput: true })).toBe("attention");
+    expect(agentThreadStatus({ ...running, hasPendingApprovals: true })).toBe("attention");
     const settled = { ...completed(), settledAt: "2026-09-06T00:03:00.000Z" };
     expect(isAgentChatInFocus(settled, undefined, false)).toBe(false);
     expect(isAgentChatInFocus(settled, undefined, true)).toBe(true);

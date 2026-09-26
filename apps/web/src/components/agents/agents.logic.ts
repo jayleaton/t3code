@@ -30,11 +30,12 @@ export function groupAgentThreads(
 
 export function agentThreadStatus(thread: EnvironmentThreadShell) {
   if (thread.settledAt !== null) return "done";
+  // Questions and approvals arrive mid-turn, so they outrank the running turn.
+  if (thread.hasPendingApprovals || thread.hasPendingUserInput) return "attention";
   if (thread.session?.status === "running" || thread.latestTurn?.state === "running")
     return "running";
   if (thread.session?.status === "starting") return "queued";
   if (thread.session?.status === "error" || thread.latestTurn?.state === "error") return "error";
-  if (thread.hasPendingApprovals || thread.hasPendingUserInput) return "attention";
   // A turn can settle while native background work runs on, as in the thread
   // sidebar: sub-agent fleets still count as work, watch loops as monitoring.
   if (thread.backgroundLiveness === "working") return "running";
