@@ -17,7 +17,8 @@ import {
   resolveAgentTaskProject,
   nestAgentRuns,
   agentRunLinkTargets,
-  isAgentRunNestDrop,
+  agentRunDropZone,
+  agentRunReorderOver,
 } from "./agents.logic";
 const profile: McpGatewayProfile = {
   profileId: "write",
@@ -111,6 +112,9 @@ describe("agent chat focus", () => {
     };
     expect(agentThreadStatus(running)).toBe("running");
     expect(isAgentChatInFocus(running, "2026-09-06T00:03:00.000Z", false)).toBe(true);
+    // A question or approval is asked mid-turn, while the turn is still running.
+    expect(agentThreadStatus({ ...running, hasPendingUserInput: true })).toBe("attention");
+    expect(agentThreadStatus({ ...running, hasPendingApprovals: true })).toBe("attention");
     const settled = { ...completed(), settledAt: "2026-09-06T00:03:00.000Z" };
     expect(isAgentChatInFocus(settled, undefined, false)).toBe(false);
     expect(isAgentChatInFocus(settled, undefined, true)).toBe(true);
@@ -412,11 +416,46 @@ describe("agentRunLinkTargets", () => {
   });
 });
 
-describe("isAgentRunNestDrop", () => {
-  it("nests on the header body and reorders at its top edge", () => {
-    const header = { top: 100, bottom: 200 };
-    expect(isAgentRunNestDrop(110, header)).toBe(false);
-    expect(isAgentRunNestDrop(150, header)).toBe(true);
-    expect(isAgentRunNestDrop(210, header)).toBe(false);
+describe("agentRunDropZone", () => {
+  const card = { top: 100, bottom: 300 };
+  const both = { nest: true, reorder: true };
+
+  it("links in the middle of the card and reorders at its edges", () => {
+    expect(agentRunDropZone(140, card, both)).toBe("before");
+    expect(agentRunDropZone(160, card, both)).toBe("nest");
+    expect(agentRunDropZone(240, card, both)).toBe("nest");
+    expect(agentRunDropZone(260, card, both)).toBe("after");
+    expect(agentRunDropZone(310, card, both)).toBeNull();
+  });
+
+  it("reorders by halves over a card the run cannot link under", () => {
+    const reorderOnly = { nest: false, reorder: true };
+    expect(agentRunDropZone(190, card, reorderOnly)).toBe("before");
+    expect(agentRunDropZone(210, card, reorderOnly)).toBe("after");
+  });
+
+  it("links anywhere on the card for drags that cannot reorder", () => {
+    expect(agentRunDropZone(101, card, { nest: true, reorder: false })).toBe("nest");
+    expect(agentRunDropZone(150, card, { nest: false, reorder: false })).toBeNull();
+  });
+});
+
+describe("agentRunReorderOver", () => {
+  const ids = ["a", "b", "c"];
+
+  it("moves down past a card only from its bottom edge", () => {
+    expect(agentRunReorderOver(ids, "a", "b", "before")).toBe("a");
+    expect(agentRunReorderOver(ids, "a", "b", "after")).toBe("b");
+    expect(agentRunReorderOver(ids, "a", "c", "after")).toBe("c");
+  });
+
+  it("moves up past a card only from its top edge", () => {
+    expect(agentRunReorderOver(ids, "c", "b", "after")).toBe("c");
+    expect(agentRunReorderOver(ids, "c", "b", "before")).toBe("b");
+    expect(agentRunReorderOver(ids, "c", "a", "after")).toBe("b");
+  });
+
+  it("ignores cards outside the list", () => {
+    expect(agentRunReorderOver(ids, "a", "pinned", "before")).toBeNull();
   });
 });
