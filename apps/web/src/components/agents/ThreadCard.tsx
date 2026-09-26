@@ -73,6 +73,8 @@ function AgentChildRunLink({
   });
   const status = agentThreadStatus(run);
   const agent = runAgentName(run, profiles);
+  const environment = useEnvironment(run.environmentId);
+  const machine = environment?.label ?? "Machine unavailable";
   return (
     <Link
       to="/agents/$environmentId/$threadId"
@@ -93,6 +95,20 @@ function AgentChildRunLink({
       }}
     >
       <AgentIcon icon={agent.profile?.icon} />
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span className="agent-thread-child-machine" aria-label={`Machine: ${machine}`} />
+          }
+        >
+          <EnvironmentMachineIcon
+            kind={resolveEnvironmentMachineKind(environment?.serverConfig ?? null)}
+            size={11}
+            aria-hidden="true"
+          />
+        </TooltipTrigger>
+        <TooltipPopup>{machine}</TooltipPopup>
+      </Tooltip>
       {run.pinnedAt != null && run.settledAt === null && (
         <PinIcon aria-label="Pinned" className="agent-thread-child-pin" size={10} />
       )}

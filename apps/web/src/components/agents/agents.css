@@ -1367,6 +1367,13 @@
   flex-shrink: 0;
   color: var(--agent-color);
 }
+.agent-thread-child-machine {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.agent-thread-child .agent-thread-child-machine svg {
+  color: var(--muted-foreground);
+}
 .agent-thread-child-agent {
   flex-shrink: 0;
   font-weight: 600;
