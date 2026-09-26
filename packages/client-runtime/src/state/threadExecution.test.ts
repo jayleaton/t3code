@@ -2,7 +2,9 @@ import {
   TurnItemId,
   NodeId,
   MessageId,
+  ProviderInstanceId,
   RunId,
+  ThreadId,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2RunStatus,
 } from "@t3tools/contracts";
@@ -12,6 +14,9 @@ import { describe, expect, it } from "vite-plus/test";
 import { v2Projection } from "./orchestrationV2TestFixtures.ts";
 import {
   deriveLatestThreadRun,
+  deriveProviderSubagentStatus,
+  formatModelSelectionEffort,
+  formatProviderSubagentStatus,
   deriveRunlessWorkStartedAt,
   deriveThreadActivityRun,
   deriveThreadRuntime,
@@ -192,8 +197,21 @@ describe("deriveRunlessWorkStartedAt", () => {
     completedAt: null,
   });
 
+  const nativeChild = {
+    ...v2Projection,
+    thread: {
+      ...v2Projection.thread,
+      creationSource: "provider" as const,
+      lineage: {
+        parentThreadId: ThreadId.make("parent"),
+        relationshipToParent: "subagent" as const,
+        rootThreadId: ThreadId.make("parent"),
+      },
+    },
+  };
+
   it("times a provider-native subagent from its runless root turn while it works", () => {
-    const projection = { ...v2Projection, nodes: [rootTurn("running", later)] };
+    const projection = { ...nativeChild, nodes: [rootTurn("running", later)] };
     expect(deriveRunlessWorkStartedAt(projection)).toBe("2026-07-28T10:05:00.000Z");
     // The subagent has no run, so it stays unstoppable and unqueueable.
     expect(deriveThreadRuntime(projection)).toBeNull();
@@ -202,13 +220,143 @@ describe("deriveRunlessWorkStartedAt", () => {
   it.each(["completed", "cancelled", "failed", "interrupted", "idle"] as const)(
     "is idle once the subagent is %s",
     (status) => {
-      expect(deriveRunlessWorkStartedAt({ ...v2Projection, nodes: [rootTurn(status)] })).toBe(null);
+      expect(deriveRunlessWorkStartedAt({ ...nativeChild, nodes: [rootTurn(status)] })).toBe(null);
     },
   );
 
-  it("ignores root turns that belong to a run", () => {
+  it("ignores root turns that belong to a run, and threads the provider does not run", () => {
     const owned = { ...rootTurn("running"), runId: RunId.make("run-1") };
-    expect(deriveRunlessWorkStartedAt({ ...v2Projection, nodes: [owned] })).toBeNull();
+    expect(deriveRunlessWorkStartedAt({ ...nativeChild, nodes: [owned] })).toBeNull();
+    expect(
+      deriveRunlessWorkStartedAt({ ...v2Projection, nodes: [rootTurn("running")] }),
+    ).toBeNull();
+  });
+});
+
+describe("deriveProviderSubagentStatus", () => {
+  const root = {
+    id: NodeId.make("child-root"),
+    threadId: v2Projection.thread.id,
+    runId: null,
+    parentNodeId: null,
+    rootNodeId: NodeId.make("child-root"),
+    kind: "root_turn" as const,
+    status: "completed" as const,
+    countsForRun: false,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    runtimeRequestId: null,
+    checkpointScopeId: null,
+    startedAt: now,
+    completedAt: now,
+  };
+  const child = (creationSource: "provider" | "mcp") => ({
+    ...v2Projection,
+    thread: {
+      ...v2Projection.thread,
+      creationSource,
+      lineage: {
+        parentThreadId: ThreadId.make("parent"),
+        relationshipToParent: "subagent" as const,
+        rootThreadId: ThreadId.make("parent"),
+      },
+    },
+    nodes: [root],
+  });
+
+  it("reports the provider's own subagent from its runless root turn", () => {
+    expect(deriveProviderSubagentStatus(child("provider"))).toEqual({
+      status: "completed",
+      startedAt: "2026-07-28T10:00:00.000Z",
+      completedAt: "2026-07-28T10:00:00.000Z",
+    });
+  });
+
+  it("says how long the subagent has worked, or took", () => {
+    const startedAt = "2026-07-28T10:00:00.000Z";
+    const at = (iso: string) => Date.parse(iso);
+    expect(
+      formatProviderSubagentStatus(
+        { status: "running", startedAt, completedAt: null },
+        at("2026-07-28T10:01:05.400Z"),
+      ),
+    ).toBe("Working 1m 5s");
+    expect(
+      formatProviderSubagentStatus(
+        { status: "completed", startedAt, completedAt: "2026-07-28T10:00:34.000Z" },
+        at("2026-07-28T11:00:00.000Z"),
+      ),
+    ).toBe("Completed in 34s");
+    expect(
+      formatProviderSubagentStatus(
+        { status: "cancelled", startedAt, completedAt: "2026-07-28T10:00:34.000Z" },
+        0,
+      ),
+    ).toBe("Cancelled");
+    expect(formatProviderSubagentStatus(null, 0)).toBe("Starting");
+  });
+
+  it("leaves T3 delegated tasks and ordinary threads alone", () => {
+    expect(deriveProviderSubagentStatus(child("mcp"))).toBeNull();
+    expect(deriveProviderSubagentStatus({ ...v2Projection, nodes: [root] })).toBeNull();
+  });
+});
+
+describe("formatModelSelectionEffort", () => {
+  const instanceId = ProviderInstanceId.make("claudeAgent");
+  const selection = (options?: ReadonlyArray<{ id: string; value: string }>) => ({
+    instanceId,
+    model: "claude-sonnet-5",
+    ...(options === undefined ? {} : { options }),
+  });
+  const catalog = (descriptor: { currentValue?: string }) => [
+    {
+      slug: "claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      isCustom: false,
+      capabilities: {
+        optionDescriptors: [
+          {
+            id: "effort",
+            label: "Reasoning",
+            type: "select" as const,
+            options: [
+              { id: "medium", label: "Medium" },
+              { id: "high", label: "High", isDefault: true },
+              { id: "xhigh", label: "Extra High" },
+            ],
+            ...descriptor,
+          },
+        ],
+      },
+    },
+  ];
+
+  it("shows the model's default effort when the user never picked one", () => {
+    expect(formatModelSelectionEffort(selection(), catalog({}))).toBe("High");
+  });
+
+  it("names a stored effort the way the catalog does", () => {
+    expect(
+      formatModelSelectionEffort(selection([{ id: "effort", value: "xhigh" }]), catalog({})),
+    ).toBe("Extra High");
+  });
+
+  it("uses the descriptor's current value over the default", () => {
+    expect(formatModelSelectionEffort(selection(), catalog({ currentValue: "medium" }))).toBe(
+      "Medium",
+    );
+  });
+
+  it("shows nothing for a model the catalog does not describe", () => {
+    expect(formatModelSelectionEffort(selection([{ id: "effort", value: "high" }]))).toBeNull();
+    expect(
+      formatModelSelectionEffort(
+        { ...selection(), model: "claude-haiku-4-5" },
+        catalog({ currentValue: "medium" }),
+      ),
+    ).toBeNull();
   });
 });
 
