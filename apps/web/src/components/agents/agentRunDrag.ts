@@ -1,7 +1,7 @@
 import { createContext } from "react";
 
 export const AGENT_CHILD_DRAG_PREFIX = "child:";
-/** Pinned and settled cards: they cannot reorder, only link under another run. */
+/** Cards that cannot reorder (pinned, settled, reorder-less environment) only link under another run. */
 export const AGENT_LINK_DRAG_PREFIX = "link:";
 /** Marks a card's wrapper so a pointer hit test can find the run under it. */
 export const AGENT_NEST_KEY_ATTRIBUTE = "data-agent-nest-key";

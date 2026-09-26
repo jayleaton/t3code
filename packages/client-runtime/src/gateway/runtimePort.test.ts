@@ -7,6 +7,9 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   type ServerProvider,
   type OrchestrationV2Command,
+  NodeId,
+  RuntimeRequestId,
+  TurnItemId,
 } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "@effect/vitest";
 import * as Fiber from "effect/Fiber";
@@ -552,5 +555,74 @@ describe("resolveGatewayDevice", () => {
   it("names the connected devices when the choice is ambiguous or missing", () => {
     expect(() => resolveGatewayDevice(devices, "pc")).toThrow(/Several devices.*win-1.*win-2/);
     expect(() => resolveGatewayDevice(devices, "iPhone")).toThrow(/not connected.*Studio Mac/);
+  });
+});
+
+describe("gateway pending questions", () => {
+  it("projects a waiting question with its options for MCP answers", () => {
+    const requestId = RuntimeRequestId.make("question-1");
+    const nodeId = NodeId.make("question-node");
+    const projected = gatewayThreadProjection({
+      ...v2Projection,
+      runtimeRequests: [
+        {
+          id: requestId,
+          nodeId,
+          providerTurnId: null,
+          nativeRequestRef: null,
+          kind: "user_input",
+          status: "pending",
+          responseCapability: { type: "message" },
+          createdAt: v2Now,
+          resolvedAt: null,
+        },
+      ],
+      turnItems: [
+        {
+          id: TurnItemId.make("question-item"),
+          threadId: v2Projection.thread.id,
+          runId: null,
+          nodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 0,
+          status: "completed",
+          title: null,
+          startedAt: v2Now,
+          completedAt: v2Now,
+          updatedAt: v2Now,
+          type: "user_input_request",
+          requestId,
+          questions: [
+            {
+              id: "target",
+              header: "Target",
+              question: "Which environment?",
+              allowCustomAnswer: false,
+              options: [{ label: "Staging", value: "staging", description: "Safe first" }],
+            },
+          ],
+        },
+      ],
+    });
+    expect(projected.hasPendingUserInput).toBe(true);
+    expect(projected.pendingQuestions).toEqual([
+      {
+        questionRequestId: "question-1",
+        askedAt: DateTime.formatIso(v2Now),
+        questions: [
+          {
+            questionId: "target",
+            header: "Target",
+            question: "Which environment?",
+            multiSelect: false,
+            allowsFreeText: false,
+            options: [{ label: "Staging", description: "Safe first", value: "staging" }],
+          },
+        ],
+      },
+    ]);
   });
 });

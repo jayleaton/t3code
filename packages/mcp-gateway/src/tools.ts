@@ -488,6 +488,130 @@ function isStaleApprovalFailure(payload: Record<string, unknown>): boolean {
   );
 }
 
+type PendingQuestion = {
+  readonly questionId: string;
+  readonly header: string;
+  readonly question: string;
+  readonly multiSelect: boolean;
+  readonly allowsFreeText: boolean;
+  readonly options: ReadonlyArray<{
+    readonly label: string;
+    readonly description: string;
+    readonly value?: string;
+  }>;
+};
+type PendingQuestionRequest = {
+  readonly questionRequestId: string;
+  readonly askedAt: string;
+  readonly questions: ReadonlyArray<PendingQuestion>;
+};
+
+/** Questions the runtime projected onto a thread; empty for runtimes that predate them. */
+function pendingQuestionsOf(
+  thread: Record<string, unknown>,
+): ReadonlyArray<PendingQuestionRequest> {
+  return Array.isArray(thread.pendingQuestions)
+    ? (thread.pendingQuestions as ReadonlyArray<PendingQuestionRequest>)
+    : [];
+}
+
+type QuestionAnswerInput = {
+  readonly questionId?: string | undefined;
+  readonly options?: ReadonlyArray<string> | undefined;
+  readonly text?: string | undefined;
+};
+
+function invalidAnswer(message: string, request: PendingQuestionRequest): GatewayError {
+  return new GatewayError({
+    code: "invalid_input",
+    message,
+    retryable: false,
+    details: { questionRequestId: request.questionRequestId, questions: request.questions },
+  });
+}
+
+/**
+ * Turns chosen option labels or free text into the answers a provider expects:
+ * each question id maps to its option value (the label when there is none),
+ * a list of values for multi-select, or the text. Mirrors the composer's rules.
+ */
+export function resolveQuestionAnswers(
+  request: PendingQuestionRequest,
+  answers: ReadonlyArray<QuestionAnswerInput>,
+): Record<string, string | ReadonlyArray<string>> {
+  const resolved = new Map<string, string | ReadonlyArray<string>>();
+  for (const answer of answers) {
+    const question =
+      answer.questionId === undefined
+        ? request.questions.length === 1
+          ? request.questions[0]
+          : undefined
+        : request.questions.find((candidate) => candidate.questionId === answer.questionId);
+    if (question === undefined) {
+      throw invalidAnswer(
+        answer.questionId === undefined
+          ? `This request asks ${request.questions.length} questions; pass questionId with each answer.`
+          : `Question ${answer.questionId} is not part of this request.`,
+        request,
+      );
+    }
+    if (resolved.has(question.questionId)) {
+      throw invalidAnswer(`"${question.header}" was answered more than once.`, request);
+    }
+    const text = answer.text?.trim() ?? "";
+    const choices = answer.options ?? [];
+    if (text !== "" && choices.length > 0) {
+      throw invalidAnswer(
+        `Answer "${question.header}" with options or with text, not both.`,
+        request,
+      );
+    }
+    if (text !== "") {
+      if (!question.allowsFreeText) {
+        throw invalidAnswer(`"${question.header}" only accepts one of its options.`, request);
+      }
+      resolved.set(question.questionId, text);
+      continue;
+    }
+    if (choices.length === 0) {
+      throw invalidAnswer(`Pass options or text for "${question.header}".`, request);
+    }
+    const values = [
+      ...new Set(
+        choices.map((choice) => {
+          const wanted = choice.trim().toLocaleLowerCase();
+          const option =
+            question.options.find((candidate) => (candidate.value ?? candidate.label) === choice) ??
+            question.options.find(
+              (candidate) =>
+                candidate.label.trim().toLocaleLowerCase() === wanted ||
+                candidate.value?.trim().toLocaleLowerCase() === wanted,
+            );
+          if (option === undefined) {
+            throw invalidAnswer(
+              `"${choice}" is not an option for "${question.header}". Options: ${question.options.map((candidate) => candidate.label).join(", ")}.`,
+              request,
+            );
+          }
+          return option.value ?? option.label;
+        }),
+      ),
+    ];
+    if (!question.multiSelect && values.length !== 1) {
+      throw invalidAnswer(`"${question.header}" takes exactly one option.`, request);
+    }
+    resolved.set(question.questionId, question.multiSelect ? values : values[0]!);
+  }
+  const missing = request.questions.filter((question) => !resolved.has(question.questionId));
+  if (missing.length > 0) {
+    throw invalidAnswer(
+      `Answer every question in the request. Missing: ${missing.map((question) => question.header).join(", ")}.`,
+      request,
+    );
+  }
+  return Object.fromEntries(resolved);
+}
+
 function approvalPlan(thread: Record<string, unknown>) {
   const pending = new Map<string, Record<string, unknown>>();
   const activities = (Array.isArray(thread.activities) ? thread.activities : []).toSorted(
@@ -1043,19 +1167,33 @@ export async function callGatewayTool(
       const profileId = typeof input.profileId === "string" ? input.profileId : undefined;
       const parentThreadId =
         typeof input.parentThreadId === "string" ? input.parentThreadId : undefined;
+      const items = page.items.filter((thread) => {
+        const snapshot = thread.profileSnapshot as { profileId?: string } | undefined;
+        return (
+          (projectId === undefined || thread.projectId === projectId) &&
+          (parentThreadId === undefined || thread.parentThreadId === parentThreadId) &&
+          (profileId === undefined || snapshot?.profileId === profileId) &&
+          (state === "all" ||
+            (state === "settled" ? thread.settledAt != null : thread.settledAt == null)) &&
+          (executionState === undefined || readThreadExecutionState(thread) === executionState)
+        );
+      });
+      if (input.includeQuestions !== true) return { ...page, items };
+      // Only chats waiting on a question need a detail read; the rest pass through.
       return {
         ...page,
-        items: page.items.filter((thread) => {
-          const snapshot = thread.profileSnapshot as { profileId?: string } | undefined;
-          return (
-            (projectId === undefined || thread.projectId === projectId) &&
-            (parentThreadId === undefined || thread.parentThreadId === parentThreadId) &&
-            (profileId === undefined || snapshot?.profileId === profileId) &&
-            (state === "all" ||
-              (state === "settled" ? thread.settledAt != null : thread.settledAt == null)) &&
-            (executionState === undefined || readThreadExecutionState(thread) === executionState)
-          );
-        }),
+        items: await Promise.all(
+          items.map(async (thread) =>
+            thread.hasPendingUserInput === true && typeof thread.id === "string"
+              ? {
+                  ...thread,
+                  pendingQuestions: pendingQuestionsOf(
+                    await context.port.getThread(environmentId, thread.id),
+                  ),
+                }
+              : thread,
+          ),
+        ),
       };
     }
     case "t3_list_devices": {
@@ -1141,6 +1279,7 @@ export async function callGatewayTool(
       const environmentId = environmentWithScope(context, input, "read");
       const thread = await context.port.getThread(environmentId, requiredString(input, "threadId"));
       const plan = approvalPlan(thread);
+      const pendingQuestions = pendingQuestionsOf(thread);
       const session =
         typeof thread.session === "object" && thread.session !== null
           ? (thread.session as Record<string, unknown>)
@@ -1154,13 +1293,15 @@ export async function callGatewayTool(
           ? "settled"
           : plan.actions.length > 0
             ? "waiting-approval"
-            : typeof thread.status === "string"
-              ? thread.status
-              : typeof latestTurn?.state === "string"
-                ? latestTurn.state
-                : typeof session?.status === "string"
-                  ? session.status
-                  : "queued";
+            : pendingQuestions.length > 0
+              ? "waiting-input"
+              : typeof thread.status === "string"
+                ? thread.status
+                : typeof latestTurn?.state === "string"
+                  ? latestTurn.state
+                  : typeof session?.status === "string"
+                    ? session.status
+                    : "queued";
       return {
         environmentId,
         threadId: thread.id,
@@ -1169,13 +1310,16 @@ export async function callGatewayTool(
         summary: session?.lastError ?? `Thread is ${status}.`,
         blockers: plan.actions,
         approvalPlan: plan,
+        pendingQuestions,
         artifacts: Array.isArray(thread.artifacts) ? thread.artifacts : [],
         nextAction:
           plan.actions.length > 0
             ? "approve_actions"
-            : status === "running" || status === "queued"
-              ? "await_event"
-              : null,
+            : pendingQuestions.length > 0
+              ? "provide_input"
+              : status === "running" || status === "queued"
+                ? "await_event"
+                : null,
         snapshotAt: thread.updatedAt ?? "runtime",
       };
     }
@@ -2195,6 +2339,87 @@ export async function callGatewayTool(
             messageId: prepared?.messageId ?? idFor("message", idempotencyKey),
           }),
         () => ({ requestId: authoritativeRequestId, messageId: authoritativeMessageId }),
+      );
+    }
+    case "t3_get_pending_questions": {
+      const environmentId = environmentWithScope(context, input, "read");
+      const thread = await context.port.getThread(environmentId, requiredString(input, "threadId"));
+      return {
+        environmentId,
+        threadId: thread.id,
+        title: thread.title,
+        status: thread.status,
+        pendingQuestions: pendingQuestionsOf(thread),
+      };
+    }
+    case "t3_answer_question": {
+      const environmentId = environmentWithScope(context, input, "send");
+      const idempotencyKey = requiredIdempotencyKey(input);
+      const threadId = requiredString(input, "threadId");
+      const respond = context.port.respondToUserInput;
+      if (respond === undefined) {
+        throw new Error("Answering questions is unavailable in this runtime. Update T3.");
+      }
+      const answers = z
+        .array(
+          z.object({
+            questionId: z.string().optional(),
+            options: z.array(z.string()).optional(),
+            text: z.string().optional(),
+          }),
+        )
+        .min(1)
+        .parse(input.answers);
+      return withIdempotency(
+        context,
+        `${environmentId}::${threadId}::${idFor("request", idempotencyKey)}`,
+        idempotencyCommandPayload("user-input.respond", input),
+        async (prepared) => {
+          const receipt = await respond({
+            environmentId,
+            threadId,
+            userInputRequestId: prepared!.questionRequestId,
+            answers: prepared!.answers,
+            requestId: prepared!.requestId,
+          });
+          return {
+            ...receipt,
+            questionRequestId: prepared!.questionRequestId,
+            answers: prepared!.answers,
+          };
+        },
+        async () => {
+          // Answers are checked against the live question, so a stale or
+          // mistyped choice fails here instead of reaching the provider.
+          const pending = pendingQuestionsOf(await context.port.getThread(environmentId, threadId));
+          const wanted =
+            typeof input.questionRequestId === "string" ? input.questionRequestId : undefined;
+          const request =
+            wanted === undefined
+              ? pending.length === 1
+                ? pending[0]
+                : undefined
+              : pending.find((candidate) => candidate.questionRequestId === wanted);
+          if (request === undefined) {
+            throw new GatewayError({
+              code: pending.length === 0 || wanted !== undefined ? "stale_plan" : "invalid_input",
+              message:
+                pending.length === 0
+                  ? "This chat is not waiting on a question."
+                  : wanted === undefined
+                    ? `This chat has ${pending.length} pending questions; pass questionRequestId.`
+                    : `Question request ${wanted} is no longer pending. Read the pending questions again.`,
+              retryable: false,
+              environmentId,
+              details: { threadId, pendingQuestions: pending },
+            });
+          }
+          return {
+            questionRequestId: request.questionRequestId,
+            answers: resolveQuestionAnswers(request, answers),
+            requestId: scopedIdFor("user-input-response", environmentId, threadId, idempotencyKey),
+          };
+        },
       );
     }
     case "t3_respond_to_approval": {

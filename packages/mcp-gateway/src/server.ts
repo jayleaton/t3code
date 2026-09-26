@@ -222,7 +222,7 @@ const TOOL_SPECS = {
     { environmentId, ...optionalRequestContext },
   ],
   t3_list_threads: [
-    "List chats in one T3 environment, optionally filtered by agent profileId, project, parentThreadId, active/settled state, and executionState. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly.",
+    "List chats in one T3 environment, optionally filtered by agent profileId, project, parentThreadId, active/settled state, and executionState. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly. hasPendingUserInput marks a chat waiting on a question; pass includeQuestions to attach each one's pendingQuestions (full text and options, as t3_get_pending_questions returns).",
     {
       environmentId,
       state: z.enum(["all", "active", "settled"]).optional(),
@@ -235,7 +235,52 @@ const TOOL_SPECS = {
         .min(1)
         .optional()
         .describe("Only chats created under this chat."),
+      includeQuestions: z
+        .boolean()
+        .optional()
+        .describe("Attach pendingQuestions to chats waiting on a question."),
       ...optionalRequestContext,
+    },
+  ],
+  t3_get_pending_questions: [
+    "Read the questions a chat is waiting on (status waiting-input): each request's questionRequestId, and for every question its questionId, header, full question text, options (label and description), multiSelect, and allowsFreeText (whether a typed answer is accepted instead of an option). Empty when nothing is pending. Answer with t3_answer_question.",
+    { environmentId, threadId, ...optionalRequestContext },
+  ],
+  t3_answer_question: [
+    "Answer a question a chat is waiting on, so its turn continues. For each question pass options (option labels from t3_get_pending_questions; exactly one unless multiSelect) or text (only where allowsFreeText). Every question in the request must be answered. questionRequestId and questionId may be omitted when there is only one. Requires send scope. Retrying with the same idempotencyKey does not answer twice.",
+    {
+      environmentId,
+      threadId,
+      questionRequestId: z
+        .string()
+        .trim()
+        .min(1)
+        .optional()
+        .describe("From t3_get_pending_questions; omit when the chat has one pending request."),
+      answers: z
+        .array(
+          z.object({
+            questionId: z
+              .string()
+              .trim()
+              .min(1)
+              .optional()
+              .describe("Omit when the request asks a single question."),
+            options: z
+              .array(z.string().min(1))
+              .optional()
+              .describe("Chosen option labels. Several only for multiSelect questions."),
+            text: z
+              .string()
+              .trim()
+              .min(1)
+              .optional()
+              .describe("A typed answer instead of options, where allowsFreeText."),
+          }),
+        )
+        .min(1),
+      idempotencyKey,
+      correlationId: optionalRequestContext.correlationId,
     },
   ],
   t3_open_thread: [

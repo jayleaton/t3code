@@ -37,12 +37,14 @@ import {
   interruptThreadTurn,
   stopThreadSession,
   respondToThreadApproval,
+  respondToThreadUserInput,
   startThreadTurn,
   settleThread,
   unsettleThread,
   updateThreadMetadata,
 } from "../operations/commands.ts";
 import { request, runStream, subscribe } from "../rpc/client.ts";
+import { derivePendingThreadRequests } from "../state/threadRequests.ts";
 import type {
   GatewayDevice,
   GatewayProfile,
@@ -289,6 +291,7 @@ export function gatewayThreadProjection(projection: OrchestrationV2ThreadProject
     }),
     hasPendingApprovals: pending !== undefined && pending.kind !== "user_input",
     hasPendingUserInput: pending?.kind === "user_input",
+    pendingQuestions: gatewayPendingQuestions(projection),
     modelSelection: thread.modelSelection,
     profileSnapshot: profileAssociation(thread.profileSnapshot),
     parentThreadId: thread.parentThreadId ?? null,
@@ -353,6 +356,31 @@ export function gatewayEventFromV2(
       profileId: item.thread.profileSnapshot?.profileId ?? null,
     },
   };
+}
+
+/**
+ * Questions the agent is waiting on, with every option, so an MCP client can
+ * read them aloud and answer through respondToUserInput.
+ */
+function gatewayPendingQuestions(projection: OrchestrationV2ThreadProjection) {
+  // Same derivation the V2 composers use, so MCP sees exactly the questions the app shows.
+  return derivePendingThreadRequests(projection).userInputs.map((request) => ({
+    questionRequestId: request.requestId,
+    askedAt: request.createdAt,
+    questions: request.questions.slice(0, 20).map((question) => ({
+      questionId: question.id,
+      header: question.header.slice(0, 512),
+      question: question.question.slice(0, 4_000),
+      multiSelect: question.multiSelect,
+      // Matches the composer: free text is allowed unless the provider forbids it.
+      allowsFreeText: question.allowCustomAnswer !== false,
+      options: question.options.slice(0, 50).map((option) => ({
+        label: option.label.slice(0, 512),
+        description: option.description.slice(0, 2_000),
+        ...(option.value === undefined ? {} : { value: option.value }),
+      })),
+    })),
+  }));
 }
 
 const decodeProfile = Schema.decodeUnknownSync(McpGatewayProfile);
@@ -1104,6 +1132,27 @@ export function createGatewayRuntimePort(
               threadId: ThreadId.make(input.threadId),
               requestId: RuntimeRequestId.make(input.approvalRequestId),
               decision: input.decision,
+            }),
+          );
+          return {
+            requestId: input.requestId,
+            commandId: input.requestId,
+            status: "accepted" as const,
+            threadId: input.threadId,
+          };
+        }),
+      ),
+    respondToUserInput: (input) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          yield* registry.run(
+            EnvironmentId.make(input.environmentId),
+            respondToThreadUserInput({
+              commandId: CommandId.make(input.requestId),
+              threadId: ThreadId.make(input.threadId),
+              requestId: RuntimeRequestId.make(input.userInputRequestId),
+              answers: input.answers,
             }),
           );
           return {

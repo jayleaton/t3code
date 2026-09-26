@@ -64,6 +64,7 @@ const METHODS = new Set<keyof GatewayRuntimePort>([
   "controlThread",
   "respondToApprovals",
   "respondToApproval",
+  "respondToUserInput",
   "executeOperation",
 ]);
 

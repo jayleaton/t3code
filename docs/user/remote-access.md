@@ -224,6 +224,16 @@ Agents board; changing an agent does not change existing chats. Use `t3_list_env
 to check the environment IDs and effective grants seen by the assistant. Permission errors also
 report the granted and missing scopes.
 
+### Answer an agent's questions through MCP
+
+When an agent asks a question with answer options, its chat shows `waiting-input`, and
+`t3_list_threads` marks it with `hasPendingUserInput` (pass `includeQuestions: true` to include
+the questions). `t3_get_pending_questions` returns each question's full text, its options, whether
+several options can be chosen, and whether a typed answer is accepted. `t3_answer_question`
+answers with option labels or typed text, and the chat continues as if you had answered in the
+app. Every question in the request needs an answer. Answering needs the same send access as
+`t3_send_message`.
+
 ### Pause or stop work through MCP
 
 Default access does not include pause or stop. In **Settings → MCP Gateway**, open the target

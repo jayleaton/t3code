@@ -3369,3 +3369,196 @@ describe("shared skill tools", () => {
     ).toMatchObject({ skill: { skillId: "review" }, sync: { failedEnvironmentIds: ["remote"] } });
   });
 });
+
+describe("pending question tools", () => {
+  const pendingQuestions = [
+    {
+      questionRequestId: "question-1",
+      askedAt: "2026-09-26T00:00:00.000Z",
+      questions: [
+        {
+          questionId: "approach",
+          header: "Approach",
+          question: "How should the hosted /mcp reuse the CLI API's checks?",
+          multiSelect: false,
+          allowsFreeText: true,
+          options: [
+            { label: "Shared operation layer", description: "Move the checks in-process." },
+            { label: "HTTP loopback", description: "Call /api/cli/v1.", value: "loopback" },
+          ],
+        },
+        {
+          questionId: "surfaces",
+          header: "Surfaces",
+          question: "Which clients should ship first?",
+          multiSelect: true,
+          allowsFreeText: false,
+          options: [
+            { label: "Web", description: "" },
+            { label: "Desktop", description: "" },
+            { label: "Mobile", description: "" },
+          ],
+        },
+      ],
+    },
+  ];
+
+  function questionPort(pending: ReadonlyArray<unknown> = pendingQuestions) {
+    const port = makePort();
+    port.getThread = async (_environmentId, threadId) => ({
+      id: threadId,
+      title: "Plan the hosted MCP",
+      status: "waiting-input",
+      pendingQuestions: pending,
+    });
+    const respondToUserInput = vi.fn(async (input: { requestId: string; threadId: string }) => ({
+      requestId: input.requestId,
+      commandId: input.requestId,
+      status: "accepted" as const,
+      threadId: input.threadId,
+    }));
+    port.respondToUserInput = respondToUserInput;
+    return { port, respondToUserInput };
+  }
+  const grants = { local: ["read", "send"] as const };
+  const answer = (answers: ReadonlyArray<Record<string, unknown>>, key = "answer-1") => ({
+    environmentId: "local",
+    threadId: "chat",
+    answers,
+    idempotencyKey: key,
+  });
+
+  it("reads every question and option with read access", async () => {
+    const { port } = questionPort();
+    await expect(
+      callGatewayTool({ port, grants: { local: ["read"] } }, "t3_get_pending_questions", {
+        environmentId: "local",
+        threadId: "chat",
+      }),
+    ).resolves.toMatchObject({ threadId: "chat", status: "waiting-input", pendingQuestions });
+  });
+
+  it("answers by option label, multi-select, and free text with the provider's values", async () => {
+    const { port, respondToUserInput } = questionPort();
+    const receipt = await callGatewayTool(
+      { port, grants },
+      "t3_answer_question",
+      answer([
+        { questionId: "approach", options: ["http loopback"] },
+        { questionId: "surfaces", options: ["Web", "Mobile", "Web"] },
+      ]),
+    );
+    expect(receipt).toMatchObject({
+      status: "accepted",
+      questionRequestId: "question-1",
+      answers: { approach: "loopback", surfaces: ["Web", "Mobile"] },
+    });
+    expect(respondToUserInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environmentId: "local",
+        threadId: "chat",
+        userInputRequestId: "question-1",
+        answers: { approach: "loopback", surfaces: ["Web", "Mobile"] },
+      }),
+    );
+
+    await callGatewayTool(
+      { port, grants },
+      "t3_answer_question",
+      answer(
+        [
+          { questionId: "approach", text: "Plan only for now" },
+          { questionId: "surfaces", options: ["Desktop"] },
+        ],
+        "answer-2",
+      ),
+    );
+    expect(respondToUserInput).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        answers: { approach: "Plan only for now", surfaces: ["Desktop"] },
+      }),
+    );
+  });
+
+  it("rejects answers the question cannot take before reaching the provider", async () => {
+    const { port, respondToUserInput } = questionPort();
+    const rejected = async (answers: ReadonlyArray<Record<string, unknown>>, message: string) => {
+      await expect(
+        callGatewayTool({ port, grants }, "t3_answer_question", answer(answers)),
+      ).rejects.toThrow(message);
+    };
+    await rejected(
+      [
+        { questionId: "approach", options: ["Shared operation layer", "HTTP loopback"] },
+        { questionId: "surfaces", options: ["Web"] },
+      ],
+      '"Approach" takes exactly one option.',
+    );
+    await rejected(
+      [
+        { questionId: "approach", options: ["Shared operation layer"] },
+        { questionId: "surfaces", text: "All of them" },
+      ],
+      '"Surfaces" only accepts one of its options.',
+    );
+    await rejected(
+      [
+        { questionId: "approach", options: ["Rewrite it"] },
+        { questionId: "surfaces", options: ["Web"] },
+      ],
+      '"Rewrite it" is not an option for "Approach". Options: Shared operation layer, HTTP loopback.',
+    );
+    await rejected(
+      [{ questionId: "approach", options: ["Shared operation layer"] }],
+      "Missing: Surfaces.",
+    );
+    await rejected([{ options: ["Web"] }], "pass questionId with each answer");
+    expect(respondToUserInput).not.toHaveBeenCalled();
+  });
+
+  it("reports a chat that is no longer waiting instead of answering", async () => {
+    const { port, respondToUserInput } = questionPort([]);
+    await expect(
+      callGatewayTool(
+        { port, grants },
+        "t3_answer_question",
+        answer([{ options: ["Shared operation layer"] }]),
+      ),
+    ).rejects.toMatchObject({ code: "stale_plan" });
+    expect(respondToUserInput).not.toHaveBeenCalled();
+  });
+
+  it("needs send access, and a retry does not answer twice", async () => {
+    const single = [{ ...pendingQuestions[0]!, questions: [pendingQuestions[0]!.questions[0]!] }];
+    const { port, respondToUserInput } = questionPort(single);
+    const request = answer([{ options: ["Shared operation layer"] }]);
+    await expect(
+      callGatewayTool({ port, grants: { local: ["read"] } }, "t3_answer_question", request),
+    ).rejects.toThrow();
+    const events = createGatewayEventStore();
+    const first = await callGatewayTool({ port, grants, events }, "t3_answer_question", request);
+    const retry = await callGatewayTool({ port, grants, events }, "t3_answer_question", request);
+    expect(retry).toEqual(first);
+    expect(respondToUserInput).toHaveBeenCalledTimes(1);
+    expect(respondToUserInput).toHaveBeenCalledWith(
+      expect.objectContaining({ answers: { approach: "Shared operation layer" } }),
+    );
+  });
+
+  it("attaches pending questions to waiting chats in the thread list on request", async () => {
+    const { port } = questionPort();
+    port.listThreads = async () => ({
+      snapshotAt: "runtime",
+      items: [
+        { id: "chat", hasPendingUserInput: true, status: "waiting-input" },
+        { id: "busy", hasPendingUserInput: false, status: "running" },
+      ],
+    });
+    const listed = (await callGatewayTool({ port, grants }, "t3_list_threads", {
+      environmentId: "local",
+      includeQuestions: true,
+    })) as { items: ReadonlyArray<Record<string, unknown>> };
+    expect(listed.items[0]).toMatchObject({ id: "chat", pendingQuestions });
+    expect(listed.items[1]).not.toHaveProperty("pendingQuestions");
+  });
+});

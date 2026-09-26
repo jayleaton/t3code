@@ -522,6 +522,17 @@ export interface GatewayRuntimePort {
     readonly decision: GatewayApprovalDecision;
     readonly requestId: string;
   }): Promise<GatewayMutationResult>;
+  /**
+   * Answers a question the agent is waiting on. `answers` maps each question id
+   * to an option value, several values for multi-select, or free text.
+   */
+  respondToUserInput?(input: {
+    readonly environmentId: string;
+    readonly threadId: string;
+    readonly userInputRequestId: string;
+    readonly answers: Readonly<Record<string, string | ReadonlyArray<string>>>;
+    readonly requestId: string;
+  }): Promise<GatewayMutationResult>;
   /** Extended v3 operations that map directly to authoritative server RPCs.
    * Kept behind one transport method so older bridge clients fail closed. */
   executeOperation?(input: {
