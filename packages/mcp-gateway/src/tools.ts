@@ -926,10 +926,15 @@ export async function callGatewayTool(
         throw new Error("Linking chats is unavailable in this runtime.");
       const parentThreadId =
         input.parentThreadId === null ? null : requiredString(input, "parentThreadId");
+      const parentEnvironmentId =
+        parentThreadId !== null && typeof input.parentEnvironmentId === "string"
+          ? environmentWithScope(context, { environmentId: input.parentEnvironmentId }, "read")
+          : null;
       return context.port.setThreadParent(
         environmentId,
         requiredString(input, "threadId"),
         parentThreadId,
+        parentEnvironmentId,
       );
     }
     case "t3_list_skills": {

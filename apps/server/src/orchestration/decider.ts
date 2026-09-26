@@ -1024,7 +1024,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ],
         });
       }
-      if (command.parentThreadId != null) {
+      // A parent in another environment is invisible here; the client that
+      // sees every environment keeps those links acyclic.
+      const parentEnvironmentId =
+        command.parentThreadId == null ? null : (command.parentEnvironmentId ?? null);
+      if (command.parentThreadId != null && parentEnvironmentId === null) {
         yield* requireValidParentThread({
           readModel,
           command,
@@ -1086,7 +1090,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { linkedPullRequest: command.linkedPullRequest }
             : {}),
           ...(command.parentThreadId !== undefined
-            ? { parentThreadId: command.parentThreadId }
+            ? { parentThreadId: command.parentThreadId, parentEnvironmentId }
             : {}),
           updatedAt: occurredAt,
         },

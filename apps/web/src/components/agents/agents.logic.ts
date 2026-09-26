@@ -163,6 +163,7 @@ type AgentRun = Pick<
   | "environmentId"
   | "id"
   | "parentThreadId"
+  | "parentEnvironmentId"
   | "createdAt"
   | "settledAt"
   | "pinnedAt"
@@ -187,6 +188,19 @@ export interface AgentCardChildren<T> {
 }
 
 type AgentRunList = "pinned" | "active" | "settled";
+
+type AgentRunParent = Pick<
+  AgentRun,
+  "environmentId" | "id" | "parentThreadId" | "parentEnvironmentId"
+>;
+
+/** Key of the run's parent, which may live on another machine; null when it has none. */
+export function agentRunParentKey(run: AgentRunParent): string | null {
+  if (run.parentThreadId == null) return null;
+  const environmentId = run.parentEnvironmentId ?? run.environmentId;
+  if (environmentId === run.environmentId && run.parentThreadId === run.id) return null;
+  return threadKey({ environmentId, id: run.parentThreadId });
+}
 
 /** Pinned first (latest pin on top), then active by arranged order, then settled. */
 function sortSiblingRuns<T extends AgentRun>(runs: readonly T[]): T[] {
@@ -224,10 +238,7 @@ export function nestAgentRuns<T extends AgentRun>(input: {
   for (const run of [...input.all, ...input.lists.pinned, ...input.lists.active]) {
     if (run.archivedAt === null) runByKey.set(threadKey(run), run);
   }
-  const parentKeyOf = (run: T) =>
-    run.parentThreadId == null || run.parentThreadId === run.id
-      ? null
-      : threadKey({ environmentId: run.environmentId, id: run.parentThreadId });
+  const parentKeyOf = agentRunParentKey;
   const anchorByKey = new Map<string, string | null>();
   const resolveAnchor = (run: T, visiting: Set<string>): string | null => {
     const key = threadKey(run);
@@ -289,39 +300,34 @@ export function nestAgentRuns<T extends AgentRun>(input: {
   };
 }
 
-type AgentRunLink = Pick<AgentRun, "environmentId" | "id" | "parentThreadId">;
-
 /**
- * Keys of the runs `child` may become a sub-run of. Links stay within one
- * environment, and a run cannot move under itself, its current parent, or one
- * of its own sub-runs. Computed once per drag, not per pointer move.
+ * Keys of the runs `child` may become a sub-run of, on any machine. A run
+ * cannot move under itself, its current parent, or one of its own sub-runs.
+ * Computed once per drag, not per pointer move.
  */
 export function agentRunLinkTargets(
-  child: AgentRunLink,
-  all: readonly AgentRunLink[],
+  child: AgentRunParent,
+  all: readonly AgentRunParent[],
 ): ReadonlySet<string> {
-  const sameEnvironment = all.filter((run) => run.environmentId === child.environmentId);
-  const childIdsByParent = new Map<string, string[]>();
-  for (const run of sameEnvironment) {
-    if (run.parentThreadId == null) continue;
-    const siblings = childIdsByParent.get(run.parentThreadId);
-    if (siblings) siblings.push(run.id);
-    else childIdsByParent.set(run.parentThreadId, [run.id]);
+  const childKeysByParent = new Map<string, string[]>();
+  for (const run of all) {
+    const parentKey = agentRunParentKey(run);
+    if (parentKey === null) continue;
+    const siblings = childKeysByParent.get(parentKey);
+    if (siblings) siblings.push(threadKey(run));
+    else childKeysByParent.set(parentKey, [threadKey(run)]);
   }
-  const ownRuns = new Set<string>([child.id]);
-  const pending: string[] = [child.id];
-  for (let id = pending.pop(); id !== undefined; id = pending.pop()) {
-    for (const childId of childIdsByParent.get(id) ?? []) {
-      if (ownRuns.has(childId)) continue;
-      ownRuns.add(childId);
-      pending.push(childId);
+  const ownRuns = new Set<string>([threadKey(child)]);
+  const pending: string[] = [threadKey(child)];
+  for (let key = pending.pop(); key !== undefined; key = pending.pop()) {
+    for (const childKey of childKeysByParent.get(key) ?? []) {
+      if (ownRuns.has(childKey)) continue;
+      ownRuns.add(childKey);
+      pending.push(childKey);
     }
   }
-  return new Set(
-    sameEnvironment
-      .filter((run) => !ownRuns.has(run.id) && run.id !== child.parentThreadId)
-      .map(threadKey),
-  );
+  const currentParent = agentRunParentKey(child);
+  return new Set(all.map(threadKey).filter((key) => !ownRuns.has(key) && key !== currentParent));
 }
 
 export type AgentRunDropZone = "before" | "nest" | "after";

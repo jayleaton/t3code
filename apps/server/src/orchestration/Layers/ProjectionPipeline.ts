@@ -636,6 +636,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             activeOrderKey: null,
             autoSettleDisabledAt: null,
             parentThreadId: event.payload.parentThreadId ?? null,
+            parentEnvironmentId: null,
             titleRegenerationRequestId: null,
             titleRegenerationStartedAt: null,
             latestUserMessageAt: null,
@@ -851,7 +852,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               ? { branchPullRequest: event.payload.branchPullRequest }
               : {}),
             ...(event.payload.parentThreadId !== undefined
-              ? { parentThreadId: event.payload.parentThreadId }
+              ? {
+                  parentThreadId: event.payload.parentThreadId,
+                  parentEnvironmentId: event.payload.parentEnvironmentId ?? null,
+                }
               : {}),
             updatedAt: event.payload.updatedAt,
           });

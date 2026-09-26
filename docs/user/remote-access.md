@@ -302,10 +302,12 @@ it. This happens without the agent doing anything extra. Pass `parentThreadId` t
 new chat to another chat in the same environment, or `parentThreadId: null` for a standalone
 chat. `t3_list_threads` accepts `parentThreadId` to list a chat's sub-runs. To regroup existing
 chats, `t3_set_thread_parent` moves a chat under another chat, or detaches it with
-`parentThreadId: null`; it needs lifecycle access.
+`parentThreadId: null`; it needs lifecycle access. The parent can be on another machine: pass its
+`parentEnvironmentId`, which needs read access.
 
 On the Agents board, sub-runs appear inside the card of the run that created them, including
-runs by other agents. Each one shows its agent, title, and status; click it to open that chat.
+runs by other agents and runs on other machines. Each one shows its agent, the machine it runs on,
+its title, and its status; click it to open that chat.
 Right-click a sub-run for the same actions as a card. **Pin to top of parent** keeps it first in
 its parent's list, **Move up** and **Move down** arrange it among its siblings, and settling moves
 it into its parent's collapsed **Settled** group. A live sub-run whose parent is settled keeps its
@@ -313,8 +315,9 @@ own card, which names its parent's agent and chat; click that name to open the p
 
 To link runs yourself on web and desktop, drag a card onto another card's title to make it a
 sub-run, or drag a sub-run out of its card to make it independent. Dragging a sub-run onto
-another card moves it there. Links stay within one environment, and a run cannot go under its
-own sub-runs. You can also right-click a card and choose **Detach from parent run**.
+another card moves it there. Runs can link across machines, so a chat on your Mac can hold
+sub-runs on a Linux or Windows machine and the other way around. A run cannot go under its own
+sub-runs. You can also right-click a card and choose **Detach from parent run**.
 
 ### Schedule prompts for an agent
 

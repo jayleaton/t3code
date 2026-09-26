@@ -3,6 +3,7 @@ import {
   ChatAttachment,
   ComposerContextId,
   CheckpointRef,
+  EnvironmentId,
   EventId,
   MessageId,
   ProjectId,
@@ -214,6 +215,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           pin_order_key,
           active_order_key,
           parent_thread_id,
+          parent_environment_id,
           created_at,
           updated_at,
           deleted_at
@@ -238,6 +240,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'gm',
           'hq',
           'thread-parent',
+          'environment-mac',
           '2026-02-24T00:00:02.000Z',
           '2026-02-24T00:00:03.000Z',
           NULL
@@ -493,6 +496,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           activeOrderKey: "hq",
           autoSettleDisabledAt: null,
           parentThreadId: ThreadId.make("thread-parent"),
+          parentEnvironmentId: EnvironmentId.make("environment-mac"),
           titleRegeneration: null,
           titleState: null,
           deletedAt: null,
@@ -632,6 +636,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           activeOrderKey: "hq",
           autoSettleDisabledAt: null,
           parentThreadId: ThreadId.make("thread-parent"),
+          parentEnvironmentId: EnvironmentId.make("environment-mac"),
           titleRegeneration: null,
           titleState: null,
           session: {

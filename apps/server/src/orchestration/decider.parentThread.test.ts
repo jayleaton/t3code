@@ -1,5 +1,6 @@
 import {
   CommandId,
+  EnvironmentId,
   EventId,
   ProjectId,
   ProviderInstanceId,
@@ -44,11 +45,18 @@ const createThread = (id: string, parentThreadId?: string): OrchestrationCommand
   createdAt: NOW,
 });
 
-const setParent = (id: string, parentThreadId: string | null): OrchestrationCommand => ({
+const setParent = (
+  id: string,
+  parentThreadId: string | null,
+  parentEnvironmentId?: string,
+): OrchestrationCommand => ({
   type: "thread.meta.update",
-  commandId: CommandId.make(`parent-${id}-${parentThreadId}`),
+  commandId: CommandId.make(`parent-${id}-${parentEnvironmentId ?? "local"}-${parentThreadId}`),
   threadId: ThreadId.make(id),
   parentThreadId: parentThreadId === null ? null : ThreadId.make(parentThreadId),
+  ...(parentEnvironmentId === undefined
+    ? {}
+    : { parentEnvironmentId: EnvironmentId.make(parentEnvironmentId) }),
 });
 
 const seed = Effect.gen(function* () {
@@ -79,6 +87,8 @@ const seed = Effect.gen(function* () {
 
 const parentOf = (readModel: OrchestrationReadModel, id: string) =>
   readModel.threads.find((thread) => thread.id === id)?.parentThreadId ?? null;
+const parentEnvironmentOf = (readModel: OrchestrationReadModel, id: string) =>
+  readModel.threads.find((thread) => thread.id === id)?.parentEnvironmentId ?? null;
 
 it.layer(NodeServices.layer)("thread parent links", (it) => {
   it.effect("records the parent a thread was created under", () =>
@@ -115,6 +125,32 @@ it.layer(NodeServices.layer)("thread parent links", (it) => {
       expect((yield* Effect.result(apply(readModel, setParent("child", "child"))))._tag).toBe(
         "Failure",
       );
+    }),
+  );
+
+  it.effect("links under a parent on another machine, which this server cannot see", () =>
+    Effect.gen(function* () {
+      const linked = yield* apply(yield* seed, setParent("parent", "mac-thread", "mac"));
+      expect(parentOf(linked, "parent")).toBe("mac-thread");
+      expect(parentEnvironmentOf(linked, "parent")).toBe("mac");
+      // Relinking to a local parent clears the remote machine.
+      const remoteChild = yield* apply(linked, setParent("child", "mac-thread", "mac"));
+      const localChild = yield* apply(remoteChild, setParent("child", "parent"));
+      expect(parentEnvironmentOf(localChild, "child")).toBeNull();
+      // Detaching clears the remote machine along with the parent.
+      const detached = yield* apply(linked, setParent("parent", null));
+      expect(parentOf(detached, "parent")).toBeNull();
+      expect(parentEnvironmentOf(detached, "parent")).toBeNull();
+    }),
+  );
+
+  it.effect("stops the ancestor walk at a parent on another machine", () =>
+    Effect.gen(function* () {
+      // parent sits under a remote thread whose id matches the local child.
+      const linked = yield* apply(yield* seed, setParent("parent", "child", "mac"));
+      const detached = yield* apply(linked, setParent("child", null));
+      const relinked = yield* Effect.result(apply(detached, setParent("child", "parent")));
+      expect(relinked._tag).toBe("Success");
     }),
   );
 });

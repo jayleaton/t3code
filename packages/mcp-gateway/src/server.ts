@@ -188,7 +188,7 @@ const TOOL_SPECS = {
     { environmentId, threadId },
   ],
   t3_set_thread_parent: [
-    "Make a chat a sub-run of another chat in the same environment, or pass parentThreadId null to detach it. Sub-runs show inside their parent's card on the Agents board. Requires lifecycle scope. A chat cannot move under itself or one of its own sub-runs. Does not start or stop a turn.",
+    "Make a chat a sub-run of another chat, in the same environment or another one, or pass parentThreadId null to detach it. Sub-runs show inside their parent's card on the Agents board. Requires lifecycle scope on the chat's environment and read scope on the parent's. A chat cannot move under itself or one of its own sub-runs. Does not start or stop a turn.",
     {
       environmentId,
       threadId,
@@ -198,6 +198,12 @@ const TOOL_SPECS = {
         .min(1)
         .nullable()
         .describe("The chat to nest under, or null to detach."),
+      parentEnvironmentId: z
+        .string()
+        .trim()
+        .min(1)
+        .optional()
+        .describe("Environment of the parent chat when it differs from environmentId."),
     },
   ],
   t3_open_agents: [

@@ -19,6 +19,7 @@ import {
   resolveGatewayProfileModelSelection,
   gatewayThreadProjection,
   gatewayStatusFromThread,
+  parentLinkLoops,
   resolveGatewayDevice,
 } from "./runtimePort.ts";
 
@@ -845,4 +846,43 @@ describe("resolveGatewayDevice", () => {
     expect(() => resolveGatewayDevice(devices, "pc")).toThrow(/Several devices.*win-1.*win-2/);
     expect(() => resolveGatewayDevice(devices, "iPhone")).toThrow(/not connected.*Studio Mac/);
   });
+});
+
+describe("parentLinkLoops", () => {
+  const threads: Record<
+    string,
+    { id: string; parentThreadId?: string; parentEnvironmentId?: string }[]
+  > = {
+    mac: [{ id: "a" }, { id: "c", parentThreadId: "b", parentEnvironmentId: "linux" }],
+    linux: [{ id: "b", parentThreadId: "a", parentEnvironmentId: "mac" }],
+  };
+  const loops = (child: [string, string], parent: [string, string], offline: string[] = []) =>
+    parentLinkLoops(
+      { environmentId: child[0], threadId: child[1] },
+      { environmentId: parent[0], threadId: parent[1] },
+      (environmentId) =>
+        Effect.succeed(offline.includes(environmentId) ? null : (threads[environmentId] ?? null)),
+    );
+
+  it.effect("finds a loop that passes through another machine", () =>
+    Effect.gen(function* () {
+      // c (mac) is under b (linux), which is under a (mac): a cannot move under c.
+      expect(yield* loops(["mac", "a"], ["mac", "c"])).toBe(true);
+      expect(yield* loops(["mac", "a"], ["linux", "b"])).toBe(true);
+    }),
+  );
+
+  it.effect("allows links outside the chat's own sub-runs", () =>
+    Effect.gen(function* () {
+      expect(yield* loops(["mac", "c"], ["mac", "a"])).toBe(false);
+      // Same thread id on another machine is a different chat.
+      expect(yield* loops(["linux", "a"], ["mac", "c"])).toBe(false);
+    }),
+  );
+
+  it.effect("stops at a machine it cannot reach", () =>
+    Effect.gen(function* () {
+      expect(yield* loops(["mac", "a"], ["mac", "c"], ["linux"])).toBe(false);
+    }),
+  );
 });

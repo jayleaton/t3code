@@ -136,6 +136,7 @@ export function applyThreadDetailEvent(
           activeOrderKey: null,
           autoSettleDisabledAt: null,
           parentThreadId: event.payload.parentThreadId ?? null,
+          parentEnvironmentId: null,
           snoozedUntil: null,
           snoozedAt: null,
           deletedAt: null,
@@ -294,7 +295,10 @@ export function applyThreadDetailEvent(
             ? { activeOrderKey: event.payload.activeOrderKey }
             : {}),
           ...(event.payload.parentThreadId !== undefined
-            ? { parentThreadId: event.payload.parentThreadId }
+            ? {
+                parentThreadId: event.payload.parentThreadId,
+                parentEnvironmentId: event.payload.parentEnvironmentId ?? null,
+              }
             : {}),
           updatedAt: event.payload.updatedAt,
         },

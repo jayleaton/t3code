@@ -2786,8 +2786,30 @@ describe("agent chat lifecycle", () => {
       status: "succeeded",
     });
     await callGatewayTool(context, "t3_set_thread_parent", { ...link, parentThreadId: null });
-    expect(port.setThreadParent).toHaveBeenNthCalledWith(1, "remote", "child", "parent");
-    expect(port.setThreadParent).toHaveBeenNthCalledWith(2, "remote", "child", null);
+    expect(port.setThreadParent).toHaveBeenNthCalledWith(1, "remote", "child", "parent", null);
+    expect(port.setThreadParent).toHaveBeenNthCalledWith(2, "remote", "child", null, null);
+  });
+  it("links a chat under a parent on another machine it can read", async () => {
+    const port = makePort();
+    port.setThreadParent = vi.fn(async () => ({ status: "succeeded" as const }));
+    const link = {
+      environmentId: "linux",
+      threadId: "child",
+      parentThreadId: "parent",
+      parentEnvironmentId: "mac",
+    };
+    await expect(
+      callGatewayTool({ port, grants: { linux: ["lifecycle"] } }, "t3_set_thread_parent", link),
+    ).rejects.toThrow();
+    expect(port.setThreadParent).not.toHaveBeenCalled();
+    await expect(
+      callGatewayTool(
+        { port, grants: { linux: ["lifecycle"], mac: ["read"] } },
+        "t3_set_thread_parent",
+        link,
+      ),
+    ).resolves.toEqual({ status: "succeeded" });
+    expect(port.setThreadParent).toHaveBeenCalledWith("linux", "child", "parent", "mac");
   });
 });
 

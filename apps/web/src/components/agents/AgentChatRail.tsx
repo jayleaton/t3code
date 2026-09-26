@@ -4,7 +4,7 @@ import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environ
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useThreadShells } from "../../state/entities";
 import { useUiStateStore } from "../../uiStateStore";
-import { isAgentChatInFocus, nestAgentRuns } from "./agents.logic";
+import { agentRunParentKey, isAgentChatInFocus, nestAgentRuns } from "./agents.logic";
 import { ThreadCard } from "./ThreadCard";
 import { useAgentThreadContextMenu } from "./useAgentThreadContextMenu";
 
@@ -42,15 +42,7 @@ export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
                 thread={thread}
                 dragging={dragging}
                 childRuns={childrenByKey.get(`${thread.environmentId}:${thread.id}`)}
-                parentRun={
-                  thread.parentThreadId == null
-                    ? null
-                    : runByKey.get(
-                        scopedThreadKey(
-                          scopeThreadRef(thread.environmentId, thread.parentThreadId),
-                        ),
-                      )
-                }
+                parentRun={runByKey.get(agentRunParentKey(thread) ?? "") ?? null}
                 onContextMenu={onContextMenu}
               />
             )}

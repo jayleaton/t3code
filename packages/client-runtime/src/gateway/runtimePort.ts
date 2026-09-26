@@ -96,6 +96,54 @@ const shellSnapshot = (environmentId: EnvironmentId) =>
       .pipe(Effect.timeout("20 seconds"));
   });
 
+type ThreadLocation = { readonly environmentId: string; readonly threadId: string };
+type ThreadParentLink = {
+  readonly id: string;
+  readonly parentThreadId?: string | null | undefined;
+  readonly parentEnvironmentId?: string | null | undefined;
+};
+
+/**
+ * Whether linking `child` under `parent` would loop. Walks up from the parent
+ * across environments, since no single server can see a chain that crosses
+ * machines. An environment whose threads are unavailable (null) ends the walk.
+ */
+export const parentLinkLoops = <E, R>(
+  child: ThreadLocation,
+  parent: ThreadLocation,
+  threadsIn: (environmentId: string) => Effect.Effect<readonly ThreadParentLink[] | null, E, R>,
+) =>
+  Effect.gen(function* () {
+    const threadsByEnvironment = new Map<string, readonly ThreadParentLink[] | null>();
+    const seen = new Set<string>();
+    let cursor: ThreadLocation | null = parent;
+    while (cursor !== null) {
+      if (cursor.environmentId === child.environmentId && cursor.threadId === child.threadId)
+        return true;
+      const key = `${cursor.environmentId}:${cursor.threadId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      if (!threadsByEnvironment.has(cursor.environmentId)) {
+        threadsByEnvironment.set(cursor.environmentId, yield* threadsIn(cursor.environmentId));
+      }
+      const at: ThreadLocation = cursor;
+      const thread = threadsByEnvironment.get(at.environmentId)?.find((t) => t.id === at.threadId);
+      cursor = thread?.parentThreadId
+        ? {
+            environmentId: thread.parentEnvironmentId ?? at.environmentId,
+            threadId: thread.parentThreadId,
+          }
+        : null;
+    }
+    return false;
+  });
+
+const shellThreadsOrNull = (environmentId: string) =>
+  shellSnapshot(EnvironmentId.make(environmentId)).pipe(
+    Effect.map((snapshot) => snapshot.threads),
+    Effect.orElseSucceed(() => null),
+  );
+
 const threadSnapshot = (environmentId: EnvironmentId, threadId: ThreadId, turnLimit?: number) =>
   Effect.gen(function* () {
     const registry = yield* EnvironmentRegistry;
@@ -377,6 +425,7 @@ function gatewayThreadShellProjection(thread: OrchestrationShellSnapshot["thread
     projectId: thread.projectId,
     profileSnapshot: thread.profileSnapshot,
     parentThreadId: thread.parentThreadId ?? null,
+    parentEnvironmentId: thread.parentEnvironmentId ?? null,
     settledAt: thread.settledAt,
     title: thread.title,
     status: gatewayStatusFromThread(thread),
@@ -468,6 +517,7 @@ export function gatewayThreadProjection(thread: OrchestrationThreadDetailSnapsho
     modelSelection: thread.modelSelection,
     profileSnapshot: thread.profileSnapshot,
     parentThreadId: thread.parentThreadId ?? null,
+    parentEnvironmentId: thread.parentEnvironmentId ?? null,
     settledAt: thread.settledAt,
     runtimeMode: thread.runtimeMode,
     interactionMode: thread.interactionMode,
@@ -820,8 +870,26 @@ export function createGatewayRuntimePort(
           return { status: "succeeded" as const };
         }),
       ),
-    setThreadParent: (environmentId, threadId, parentThreadId) =>
-      run(
+    setThreadParent: async (environmentId, threadId, parentThreadId, parentEnvironmentId) => {
+      const remoteParent =
+        parentThreadId !== null &&
+        parentEnvironmentId != null &&
+        parentEnvironmentId !== environmentId
+          ? EnvironmentId.make(parentEnvironmentId)
+          : null;
+      if (
+        parentThreadId !== null &&
+        (await run(
+          parentLinkLoops(
+            { environmentId, threadId },
+            { environmentId: remoteParent ?? environmentId, threadId: parentThreadId },
+            shellThreadsOrNull,
+          ),
+        ))
+      ) {
+        throw new Error("A chat cannot move under itself or one of its own sub-runs.");
+      }
+      return run(
         Effect.gen(function* () {
           const registry = yield* EnvironmentRegistry;
           const crypto = yield* Crypto.Crypto;
@@ -830,12 +898,14 @@ export function createGatewayRuntimePort(
             updateThreadMetadata({
               threadId: ThreadId.make(threadId),
               parentThreadId: parentThreadId === null ? null : ThreadId.make(parentThreadId),
+              parentEnvironmentId: remoteParent,
               commandId: CommandId.make(yield* crypto.randomUUIDv4),
             }),
           );
           return { status: "succeeded" as const };
         }),
-      ),
+      );
+    },
     handoffThread: async (input) => {
       await port.syncAgentLibrary!(input.environmentId);
       const source = await run(shellSnapshot(EnvironmentId.make(input.sourceEnvironmentId)));

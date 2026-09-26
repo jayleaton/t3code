@@ -12,6 +12,7 @@ import {
   CheckpointRef,
   ClientSurface,
   CommandId,
+  EnvironmentId,
   EventId,
   IsoDateTime,
   MessageId,
@@ -880,10 +881,13 @@ export const OrchestrationThread = Schema.Struct({
   // Survives manual settle, un-settle, and activity: only the user clears it.
   // Optional so payloads from older servers still decode.
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
-  // Thread that spawned this one (for example an agent creating sub-threads
-  // over MCP). Same environment; may be missing or deleted, so clients treat
-  // it as a hint. Optional so payloads from older servers still decode.
+  // Thread that spawned or adopted this one (for example an agent creating
+  // sub-threads over MCP). May be missing or deleted, so clients treat it as a
+  // hint. Optional so payloads from older servers still decode.
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // Environment of the parent when it lives on another machine; null or
+  // absent means the parent shares this thread's environment.
+  parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
   // Pending-only state. Optional so older servers remain compatible.
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
@@ -959,6 +963,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
   session: Schema.NullOr(OrchestrationSession),
@@ -1308,6 +1313,9 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   // Null detaches the thread from its parent.
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // Set when the parent lives in another environment, which this server
+  // cannot see or validate. Only read alongside parentThreadId.
+  parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
 }).check(
   Schema.makeFilter(
     (input) =>
@@ -1967,6 +1975,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
   updatedAt: IsoDateTime,
 });
 

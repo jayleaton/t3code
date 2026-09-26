@@ -200,7 +200,12 @@ export function AgentRunDragArea({
   const linkRun = async (child: EnvironmentThreadShell, parent: EnvironmentThreadShell | null) => {
     const result = await updateThreadMetadata({
       environmentId: child.environmentId,
-      input: { threadId: child.id, parentThreadId: parent?.id ?? null },
+      input: {
+        threadId: child.id,
+        parentThreadId: parent?.id ?? null,
+        parentEnvironmentId:
+          parent && parent.environmentId !== child.environmentId ? parent.environmentId : null,
+      },
     });
     if (result._tag === "Failure") {
       const error = squashAtomCommandFailure(result);

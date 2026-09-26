@@ -187,9 +187,11 @@ export function requireValidParentThread(input: {
   for (
     let ancestor: OrchestrationThread | undefined = parent;
     ancestor !== undefined && !visited.has(ancestor.id);
-    ancestor = ancestor.parentThreadId
-      ? findThreadById(input.readModel, ancestor.parentThreadId)
-      : undefined
+    // The walk ends at a parent on another machine; that thread is not here.
+    ancestor =
+      ancestor.parentThreadId && ancestor.parentEnvironmentId == null
+        ? findThreadById(input.readModel, ancestor.parentThreadId)
+        : undefined
   ) {
     if (ancestor.id === input.threadId) {
       return Effect.fail(

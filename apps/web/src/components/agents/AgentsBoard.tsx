@@ -38,6 +38,7 @@ import { AgentEditor } from "./AgentEditor";
 import { AgentTaskDialog } from "./AgentTaskDialog";
 import { AgentsLoadingNotice } from "./AgentsLoadingNotice";
 import {
+  agentRunParentKey,
   excludePinnedAgentThreads,
   groupAgentThreads,
   nestAgentRuns,
@@ -82,11 +83,7 @@ function AgentThreadList({
       profile={profiles.find((profile) => profile.profileId === thread.profileSnapshot?.profileId)}
       profiles={profiles}
       childRuns={childrenByKey.get(`${thread.environmentId}:${thread.id}`)}
-      parentRun={
-        thread.parentThreadId == null
-          ? null
-          : runByKey.get(`${thread.environmentId}:${thread.parentThreadId}`)
-      }
+      parentRun={runByKey.get(agentRunParentKey(thread) ?? "") ?? null}
       onContextMenu={onContextMenu}
     />
   );

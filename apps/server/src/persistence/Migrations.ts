@@ -70,6 +70,7 @@ import Migration0055 from "./Migrations/055_PullRequestFilesViewed.ts";
 import Migration0056 from "./Migrations/056_ScheduledTasks.ts";
 import Migration0057 from "./Migrations/057_ProjectionThreadsAutoSettleDisabledAt.ts";
 import Migration0058 from "./Migrations/058_ProjectionThreadsParentThreadId.ts";
+import Migration0059 from "./Migrations/059_ProjectionThreadsParentEnvironmentId.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -140,6 +141,7 @@ const migrationEntries = [
   [56, "ScheduledTasks", Migration0056],
   [57, "ProjectionThreadsAutoSettleDisabledAt", Migration0057],
   [58, "ProjectionThreadsParentThreadId", Migration0058],
+  [59, "ProjectionThreadsParentEnvironmentId", Migration0059],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

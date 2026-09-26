@@ -446,6 +446,7 @@ export function projectEvent(
             activeOrderKey: null,
             autoSettleDisabledAt: null,
             parentThreadId: payload.parentThreadId ?? null,
+            parentEnvironmentId: null,
             snoozedUntil: null,
             snoozedAt: null,
             deletedAt: null,
@@ -648,7 +649,10 @@ export function projectEvent(
                 ? { branchPullRequest: payload.branchPullRequest }
                 : {}),
               ...(payload.parentThreadId !== undefined
-                ? { parentThreadId: payload.parentThreadId }
+                ? {
+                    parentThreadId: payload.parentThreadId,
+                    parentEnvironmentId: payload.parentEnvironmentId ?? null,
+                  }
                 : {}),
               ...legacyLinkPatch,
               updatedAt: payload.updatedAt,

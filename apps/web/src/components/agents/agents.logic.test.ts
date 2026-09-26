@@ -307,11 +307,22 @@ describe("nestAgentRuns", () => {
   const run = (
     id: string,
     parentThreadId: string | null,
-    options: { settled?: boolean; pinned?: boolean; minute?: number; orderKey?: string } = {},
+    options: {
+      settled?: boolean;
+      pinned?: boolean;
+      minute?: number;
+      orderKey?: string;
+      environment?: string;
+      parentEnvironment?: string;
+    } = {},
   ) => ({
-    environmentId: EnvironmentId.make("local"),
+    environmentId: EnvironmentId.make(options.environment ?? "local"),
     id: ThreadId.make(id),
     parentThreadId: parentThreadId === null ? null : ThreadId.make(parentThreadId),
+    parentEnvironmentId:
+      options.parentEnvironment === undefined
+        ? null
+        : EnvironmentId.make(options.parentEnvironment),
     createdAt: `2026-09-25T00:${String(options.minute ?? 0).padStart(2, "0")}:00.000Z`,
     settledAt: options.settled ? "2026-09-25T01:00:00.000Z" : null,
     pinnedAt: options.pinned ? "2026-09-25T01:00:00.000Z" : null,
@@ -326,6 +337,18 @@ describe("nestAgentRuns", () => {
   const tests = run("tests", "coordinator", { minute: 1 });
   const docs = run("docs", "coordinator", { minute: 2, settled: true });
   const deps = run("deps", "tests", { minute: 3 });
+
+  it("folds a sub-run on another machine into its parent's card", () => {
+    const linux = run("lint", "coordinator", { environment: "linux", parentEnvironment: "local" });
+    // Same parent id without a parent environment points at a thread on its own machine.
+    const stray = run("stray", "coordinator", { environment: "linux" });
+    const nested = nestAgentRuns({
+      lists: { pinned: [], active: [coordinator, linux, stray], settled: [] },
+      all: [coordinator, linux, stray],
+    });
+    expect(ids(nested.lists.active)).toEqual(["coordinator", "stray"]);
+    expect(entries(nested.childrenByKey.get("local:coordinator")?.live)).toEqual([["lint", 0]]);
+  });
 
   it("folds sub-runs, including settled and filtered-out ones, into the parent's card", () => {
     const nested = nestAgentRuns({
@@ -383,10 +406,17 @@ describe("nestAgentRuns", () => {
 });
 
 describe("agentRunLinkTargets", () => {
-  const run = (id: string, parentThreadId: string | null, environmentId = "local") => ({
+  const run = (
+    id: string,
+    parentThreadId: string | null,
+    environmentId = "local",
+    parentEnvironmentId: string | null = null,
+  ) => ({
     environmentId: EnvironmentId.make(environmentId),
     id: ThreadId.make(id),
     parentThreadId: parentThreadId === null ? null : ThreadId.make(parentThreadId),
+    parentEnvironmentId:
+      parentEnvironmentId === null ? null : EnvironmentId.make(parentEnvironmentId),
   });
   const root = run("root", null);
   const child = run("child", "root");
@@ -395,24 +425,44 @@ describe("agentRunLinkTargets", () => {
   const remote = run("remote", null, "remote");
   const all = [root, child, grandchild, loose, remote];
 
-  it("offers every run in the same environment outside the dragged run's own tree", () => {
+  it("offers every run on any machine outside the dragged run's own tree", () => {
     expect([...agentRunLinkTargets(loose, all)].toSorted()).toEqual([
       "local:child",
       "local:grandchild",
       "local:root",
+      "remote:remote",
     ]);
-    expect([...agentRunLinkTargets(grandchild, all)].toSorted()).toEqual([
+    expect([...agentRunLinkTargets(remote, all)].toSorted()).toEqual([
+      "local:child",
+      "local:grandchild",
       "local:loose",
       "local:root",
     ]);
   });
 
-  it("rejects cycles, the current parent, and other environments", () => {
+  it("rejects cycles and the current parent", () => {
     // root cannot move under its own sub-runs.
-    expect([...agentRunLinkTargets(root, all)]).toEqual(["local:loose"]);
+    expect([...agentRunLinkTargets(root, all)].toSorted()).toEqual([
+      "local:loose",
+      "remote:remote",
+    ]);
     // child is already under root and cannot move under grandchild.
-    expect([...agentRunLinkTargets(child, all)]).toEqual(["local:loose"]);
-    expect(agentRunLinkTargets(remote, all).size).toBe(0);
+    expect([...agentRunLinkTargets(child, all)].toSorted()).toEqual([
+      "local:loose",
+      "remote:remote",
+    ]);
+  });
+
+  it("follows sub-runs across machines when rejecting cycles", () => {
+    // remote runs under local root, so root cannot move under remote or its sub-run.
+    const adopted = run("remote", "root", "remote", "local");
+    const underAdopted = run("leaf", "remote", "local", "remote");
+    const runs = [root, loose, adopted, underAdopted];
+    expect([...agentRunLinkTargets(root, runs)]).toEqual(["local:loose"]);
+    // Same thread id, different machine: not the same run.
+    expect(
+      agentRunLinkTargets(loose, [loose, run("loose", null, "remote")]).has("remote:loose"),
+    ).toBe(true);
   });
 });
 
