@@ -168,6 +168,7 @@ function commandThreadIds(command: OrchestrationV2Command): ReadonlyArray<Thread
     case "runtime-request.respond":
     case "thread.user-input.dismiss":
     case "checkpoint.rollback":
+    case "checkpoint.rollback.fail":
     case "provider.switch":
       return [command.threadId];
     case "delegated_task.request":
