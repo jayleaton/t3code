@@ -185,11 +185,11 @@ const TOOL_SPECS = {
     handoffInputSchema.shape,
   ],
   t3_settle_thread: [
-    "Settle a conversation only after the user explicitly chooses to settle it. Requires lifecycle scope. Does not delete the conversation. Do not call automatically after a handoff.",
+    "Settle a conversation only after the user explicitly chooses to settle it. Requires lifecycle scope. Does not delete the conversation. Idle sub-runs settle with it; ones still working are left alone. Do not call automatically after a handoff.",
     { environmentId, threadId, confirmed: z.literal(true) },
   ],
   t3_unsettle_thread: [
-    "Return a settled chat to active work in its agent column. Requires lifecycle scope. Does not send a message or start a turn.",
+    "Return a settled chat to active work in its agent column, with the sub-runs that settled along with it. Requires lifecycle scope. Does not send a message or start a turn.",
     { environmentId, threadId },
   ],
   t3_set_thread_parent: [

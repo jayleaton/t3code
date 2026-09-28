@@ -327,6 +327,10 @@ its parent's list, **Move up** and **Move down** arrange it among its siblings, 
 it into its parent's collapsed **Settled** group. A live sub-run whose parent is settled keeps its
 own card, which names its parent's agent and chat; click that name to open the parent.
 
+Settling a run also settles its sub-runs, at every depth, except ones that are still working or
+waiting on an approval. Un-settling the run brings back the sub-runs that settled with it; ones you
+settled earlier stay settled.
+
 To link runs yourself on web and desktop, drag a card onto another card's title to make it a
 sub-run, or drag a sub-run out of its card to make it independent. Dragging a sub-run onto
 another card moves it there. Links stay within one environment, and a run cannot go under its

@@ -2017,7 +2017,10 @@ const make = Effect.gen(function* () {
         }
         yield* orchestrationEngine.dispatch({
           type: "thread.session.stop",
-          commandId: CommandId.make(`session-stop-for-settle:${event.commandId ?? event.eventId}`),
+          // One settle command can settle a chat and its sub-runs, so the id names the thread too.
+          commandId: CommandId.make(
+            `session-stop-for-settle:${event.payload.threadId}:${event.commandId ?? event.eventId}`,
+          ),
           threadId: event.payload.threadId,
           createdAt: event.occurredAt,
           onlyIfSettled: true,
