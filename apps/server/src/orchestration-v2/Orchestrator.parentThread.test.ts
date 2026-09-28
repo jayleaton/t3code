@@ -8,6 +8,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import { OrchestratorV2 } from "./Orchestrator.ts";
@@ -15,6 +16,7 @@ import { ProjectionStoreV2, layer as projectionLayer } from "./ProjectionStore.t
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
+import * as ThreadManagement from "./ThreadManagementService.ts";
 
 const instanceId = ProviderInstanceId.make("codex");
 const adapter = {
@@ -83,4 +85,68 @@ it.effect("links chats under a parent, rejects cycles and missing parents, and d
     yield* setParent("deps", null);
     assert.isNull(yield* parentOf("deps"));
   }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect(
+  "settling a chat settles idle sub-runs at every depth; unsettling returns only those",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const projections = yield* ProjectionStoreV2;
+      const create = (id: string, parentThreadId?: string) =>
+        orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`create:${id}`),
+          threadId: ThreadId.make(id),
+          projectId: ProjectId.make("project:parents"),
+          title: id,
+          modelSelection: { instanceId, model: "gpt-5.1-codex" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "agent",
+          creationSource: "mcp",
+          ...(parentThreadId === undefined
+            ? {}
+            : { parentThreadId: ThreadId.make(parentThreadId) }),
+        });
+      const settledAt = (id: string) =>
+        projections.getThread(ThreadId.make(id)).pipe(Effect.map((thread) => thread.settledAt));
+
+      yield* create("lead");
+      yield* create("worker", "lead");
+      yield* create("helper", "worker");
+      yield* create("earlier", "lead");
+      yield* threads.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("settle:earlier"),
+        threadId: ThreadId.make("earlier"),
+      });
+      const earlierAt = yield* settledAt("earlier");
+      yield* TestClock.adjust("1 minute");
+
+      yield* threads.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("settle:lead"),
+        threadId: ThreadId.make("lead"),
+      });
+      const leadAt = yield* settledAt("lead");
+      assert.isNotNull(leadAt);
+      assert.deepEqual(yield* settledAt("worker"), leadAt);
+      assert.deepEqual(yield* settledAt("helper"), leadAt);
+      assert.deepEqual(yield* settledAt("earlier"), earlierAt);
+
+      yield* threads.dispatch({
+        type: "thread.unsettle",
+        commandId: CommandId.make("unsettle:lead"),
+        threadId: ThreadId.make("lead"),
+        reason: "user",
+      });
+      assert.isNull(yield* settledAt("lead"));
+      assert.isNull(yield* settledAt("worker"));
+      assert.isNull(yield* settledAt("helper"));
+      assert.deepEqual(yield* settledAt("earlier"), earlierAt);
+    }).pipe(Effect.provide(Layer.provideMerge(ThreadManagement.layer, testLayer))),
 );

@@ -2,11 +2,8 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { MessageId, ThreadId } from "@t3tools/contracts";
 
 import { runMigrations } from "../Migrations.ts";
-import { ProjectionThreadMessageRepositoryLive } from "../Layers/ProjectionThreadMessages.ts";
-import { ProjectionThreadMessageRepository } from "../Services/ProjectionThreadMessages.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
@@ -29,26 +26,16 @@ layer("agents migration 52 upgrade", (it) => {
         WHERE thread_id = 'existing-thread'
       `;
       assert.deepEqual(messages, [{ text: "Keep this message", context: null }]);
-      yield* Effect.gen(function* () {
-        const repository = yield* ProjectionThreadMessageRepository;
-        const threadId = ThreadId.make("existing-thread");
-        const now = "2026-09-16T00:00:00Z";
-        yield* repository.upsert({
-          messageId: MessageId.make("new-message"),
-          threadId,
-          turnId: null,
-          role: "user",
-          text: "New message after upgrade",
-          isStreaming: false,
-          createdAt: now,
-          updatedAt: now,
-        });
-        const saved = yield* repository.listByThreadId({ threadId });
-        assert.sameMembers(
-          saved.map((message) => message.text),
-          ["Keep this message", "New message after upgrade"],
-        );
-      }).pipe(Effect.provide(ProjectionThreadMessageRepositoryLive));
+      yield* sql`INSERT INTO projection_thread_messages
+        (message_id, thread_id, role, text, is_streaming, created_at, updated_at, context_json)
+        VALUES ('new-message', 'existing-thread', 'user', 'New message after upgrade', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL)`;
+      const saved = yield* sql<{ text: string }>`
+        SELECT text FROM projection_thread_messages WHERE thread_id = 'existing-thread'
+      `;
+      assert.sameMembers(
+        saved.map((message) => message.text),
+        ["Keep this message", "New message after upgrade"],
+      );
       assert.deepEqual(yield* runMigrations(), []);
     }),
   );

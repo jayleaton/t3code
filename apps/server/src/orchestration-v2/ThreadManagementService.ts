@@ -1,4 +1,5 @@
 import { resolveThreadCreateProfile } from "./AgentProfile.ts";
+import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import type {
@@ -8,11 +9,12 @@ import type {
 } from "./ProjectionStore.ts";
 import {
   type ChatAttachment,
-  type CommandId,
+  CommandId,
   MessageId,
   type ModelSelection,
   type OrchestrationV2Actor,
   type OrchestrationV2Command,
+  type OrchestrationV2ServerCommand,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2CreationSource,
   type OrchestrationV2Run,
@@ -41,10 +43,7 @@ import {
   type OrchestratorV2DispatchResult,
   type OrchestratorV2Error,
 } from "./Orchestrator.ts";
-import {
-  LegacyV1ThreadImporter,
-  type LegacyV1ThreadImportError,
-} from "./LegacyV1ThreadImporter.ts";
+import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 
 export type ThreadManagementSendMode = "auto" | "queue" | "steer" | "restart";
 
@@ -70,7 +69,7 @@ export function withCreationProvenance(
 }
 
 export function existingThreadIdsForCommand(
-  command: OrchestrationV2Command,
+  command: OrchestrationV2ServerCommand,
 ): ReadonlyArray<ThreadId> {
   switch (command.type) {
     case "thread.create":
@@ -282,9 +281,9 @@ type ThreadManagementFailure = ThreadManagementError | OrchestratorV2Error;
 export interface ThreadManagementServiceShape {
   readonly ensureLegacyTranscript: (
     threadId: ThreadId,
-  ) => Effect.Effect<void, LegacyV1ThreadImportError>;
+  ) => Effect.Effect<void, LegacyV1ThreadImporter.LegacyV1ThreadImportError>;
   readonly dispatch: (
-    command: OrchestrationV2Command,
+    command: OrchestrationV2ServerCommand,
   ) => Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error>;
   readonly getTimelinePage: OrchestratorV2["Service"]["getTimelinePage"];
   readonly getMessageCount: OrchestratorV2["Service"]["getMessageCount"];
@@ -387,7 +386,7 @@ function latestSteerableRun(
 
 const make = Effect.gen(function* () {
   const orchestrator = yield* OrchestratorV2;
-  const legacyImporter = yield* LegacyV1ThreadImporter;
+  const legacyImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
 
   const ensureLegacyTranscript = Effect.fn(
     "orchestrationV2.threadManagement.ensureLegacyTranscript",
@@ -415,7 +414,7 @@ const make = Effect.gen(function* () {
 
   const ensureCommandTranscripts = Effect.fn(
     "orchestrationV2.threadManagement.ensureCommandTranscripts",
-  )(function* (command: OrchestrationV2Command) {
+  )(function* (command: OrchestrationV2ServerCommand) {
     yield* Effect.forEach(
       existingThreadIdsForCommand(command),
       (threadId) => ensureLegacyTranscript(threadId),
@@ -456,9 +455,70 @@ const make = Effect.gen(function* () {
 
   const settings = yield* Effect.serviceOption(ServerSettingsService);
   const providers = yield* Effect.serviceOption(ProviderRegistry);
+  const projections = yield* Effect.serviceOption(ProjectionStoreV2);
+  /**
+   * Settling a chat settles its sub-runs at every depth with the parent's settledAt; unsettling
+   * brings back only the sub-runs that settled with it. Each sub-run gets its own command so its
+   * settle guard still applies: a sub-run that is working or waiting is left alone.
+   */
+  const cascadeSettlement = Effect.fn("ThreadManagementService.cascadeSettlement")(function* (
+    command: Extract<
+      OrchestrationV2Command,
+      { readonly type: "thread.settle" | "thread.unsettle" }
+    >,
+    settledAt: DateTime.Utc,
+  ) {
+    if (Option.isNone(projections)) return;
+    const settledAtMs = DateTime.toEpochMillis(settledAt);
+    const visited = new Set<ThreadId>([command.threadId]);
+    const pending: Array<ThreadId> = [command.threadId];
+    for (let parentId = pending.pop(); parentId !== undefined; parentId = pending.pop()) {
+      const children = yield* projections.value
+        .getChildThreads(parentId)
+        .pipe(Effect.orElseSucceed(() => []));
+      for (const child of children) {
+        if (visited.has(child.id)) continue;
+        visited.add(child.id);
+        pending.push(child.id);
+        const settled = child.settledOverride === "settled";
+        const settledWithParent =
+          settled &&
+          child.settledAt != null &&
+          DateTime.toEpochMillis(child.settledAt) === settledAtMs;
+        if (command.type === "thread.settle" ? settled : !settledWithParent) continue;
+        const commandId = CommandId.make(`${command.commandId}:cascade:${child.id}`);
+        yield* orchestrator
+          .dispatch(
+            command.type === "thread.settle"
+              ? { type: "thread.settle", commandId, threadId: child.id, settledAt }
+              : { type: "thread.unsettle", commandId, threadId: child.id, reason: "user" },
+          )
+          .pipe(
+            Effect.catch((cause) =>
+              Effect.logDebug("Sub-run kept its settlement", { threadId: child.id, cause }),
+            ),
+          );
+      }
+    }
+  });
+
   const dispatch: ThreadManagementServiceShape["dispatch"] = (command) =>
     Effect.gen(function* () {
       yield* ensureCommandTranscripts(command);
+      if (command.type === "thread.settle" || command.type === "thread.unsettle") {
+        const readSettledAt = Option.isNone(projections)
+          ? Effect.succeed(null)
+          : projections.value.getThread(command.threadId).pipe(
+              Effect.map((thread) => thread.settledAt),
+              Effect.orElseSucceed(() => null),
+            );
+        // Unsettling matches sub-runs against the settledAt the parent had before.
+        const before = command.type === "thread.unsettle" ? yield* readSettledAt : null;
+        const result = yield* orchestrator.dispatch(command);
+        const settledAt = command.type === "thread.settle" ? yield* readSettledAt : before;
+        if (settledAt != null) yield* cascadeSettlement(command, settledAt);
+        return result;
+      }
       if (command.type !== "thread.create" || command.profileSelection === undefined) {
         if (command.type === "thread.create") {
           const { profileSnapshot: _untrustedSnapshot, ...trusted } = command;
@@ -795,8 +855,8 @@ const make = Effect.gen(function* () {
 });
 
 const legacyV1ThreadImporterNoopLayer = Layer.succeed(
-  LegacyV1ThreadImporter,
-  LegacyV1ThreadImporter.of({
+  LegacyV1ThreadImporter.LegacyV1ThreadImporter,
+  LegacyV1ThreadImporter.LegacyV1ThreadImporter.of({
     pendingThreadCount: Effect.succeed(0),
     reconcileShells: Effect.succeed({ importedThreadCount: 0, importedMessageCount: 0 }),
     ensureTranscript: () => Effect.succeed({ importedThreadCount: 0, importedMessageCount: 0 }),
@@ -812,5 +872,5 @@ export const layer: Layer.Layer<ThreadManagementService, never, OrchestratorV2> 
 export const layerWithLegacyImporter: Layer.Layer<
   ThreadManagementService,
   never,
-  LegacyV1ThreadImporter | OrchestratorV2
+  LegacyV1ThreadImporter.LegacyV1ThreadImporter | OrchestratorV2
 > = Layer.effect(ThreadManagementService, make);

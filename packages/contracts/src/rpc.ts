@@ -1,8 +1,8 @@
 import {
   OrchestrationGetCommandReceiptsInput,
   OrchestrationGetCommandReceiptsResult,
-} from "./orchestration.ts";
-import { OrchestrationDispatchCommandError } from "./orchestration.ts";
+} from "./commandReceipts.ts";
+import { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 
 import {
   McpGatewayRelayEvent,
@@ -145,7 +145,7 @@ import {
   OrchestrationSearchThreadsError,
   OrchestrationSearchThreadsInput,
   OrchestrationSearchThreadsResult,
-} from "./orchestration.ts";
+} from "./threadSearch.ts";
 import {
   ProviderUploadFeedbackError,
   ProviderUploadFeedbackInput,
