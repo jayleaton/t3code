@@ -13,6 +13,7 @@ import {
   TurnId,
   ProviderInstanceId,
   OrchestrationMessageContext,
+  OrchestrationShellSnapshot,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -34,6 +35,8 @@ import { encodeThreadDetailPageCursor } from "../threadDetailCursor.ts";
 import { projectThreadDetailSnapshot } from "../ActivityPayloadProjection.ts";
 import { readSweepSnapshot } from "../ThreadPullRequestReactor.ts";
 import { makeSqlStatementCounter } from "../../../integration/SqlStatementCounter.integration.ts";
+
+const encodeShellSnapshot = Schema.encodeEffect(OrchestrationShellSnapshot);
 
 const encodeProfileSnapshot = Schema.encodeEffect(Schema.fromJsonString(ThreadProfileSnapshot));
 
@@ -688,8 +691,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       const agentDetail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"));
       assert.deepEqual(Option.getOrThrow(agentShell).profileSnapshot, profileSnapshot);
       assert.deepEqual(Option.getOrThrow(agentDetail).profileSnapshot, profileSnapshot);
+      // The thread list leaves frozen skill contents off the wire.
+      const shellWire = yield* encodeShellSnapshot(yield* snapshotQuery.getShellSnapshot());
       assert.deepEqual(
-        (yield* snapshotQuery.getShellSnapshot()).threads[0]?.profileSnapshot,
+        shellWire.threads[0]?.profileSnapshot,
         Struct.omit(profileSnapshot, ["skills"]),
       );
       assert.deepEqual(
