@@ -347,6 +347,219 @@ function environmentWithAnyScope(
   return environmentId;
 }
 
+interface DiscoveryTarget {
+  readonly environmentId: string;
+  readonly environmentLabel: string;
+}
+
+interface EnvironmentCoverage extends DiscoveryTarget {
+  readonly connectionState: string;
+  readonly status: "listed" | "skipped" | "failed";
+  readonly reason?: string;
+}
+
+/**
+ * Runs a read listing on the requested environment, or on every granted environment when
+ * environmentId is omitted. Fan-out results come with coverage so a caller can tell an empty
+ * machine from one that was disconnected, lacked read access, or failed.
+ */
+async function discover<T>(
+  context: GatewayToolContext,
+  input: Record<string, unknown>,
+  list: (target: DiscoveryTarget) => Promise<T>,
+): Promise<{
+  readonly results: ReadonlyArray<{ readonly target: DiscoveryTarget; readonly value: T }>;
+  readonly coverage?: ReadonlyArray<EnvironmentCoverage>;
+}> {
+  if (input.environmentId !== undefined) {
+    const environmentId = environmentWithScope(context, input, "read");
+    const environments = await context.port.listEnvironments();
+    const environmentLabel =
+      environments.find((environment) => environment.environmentId === environmentId)?.label ??
+      environmentId;
+    const target = { environmentId, environmentLabel };
+    return { results: [{ target, value: await list(target) }] };
+  }
+  const environments = await context.port.listEnvironments();
+  const grants = currentGrants(context.grants);
+  const outcomes = await Promise.all(
+    environments
+      .filter((environment) => grants[environment.environmentId] !== undefined)
+      .map(
+        async (
+          environment,
+        ): Promise<{
+          readonly coverage: EnvironmentCoverage;
+          readonly listed?: { readonly target: DiscoveryTarget; readonly value: T };
+        }> => {
+          const target = {
+            environmentId: environment.environmentId,
+            environmentLabel: environment.label,
+          };
+          const base = { ...target, connectionState: environment.connectionState };
+          if (!grants[environment.environmentId]?.includes("read")) {
+            return { coverage: { ...base, status: "skipped", reason: "read not granted" } };
+          }
+          if (environment.connectionState !== "connected") {
+            return {
+              coverage: { ...base, status: "skipped", reason: environment.connectionState },
+            };
+          }
+          try {
+            const value = await list(target);
+            return { listed: { target, value }, coverage: { ...base, status: "listed" } };
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            return { coverage: { ...base, status: "failed", reason } };
+          }
+        },
+      ),
+  );
+  return {
+    results: outcomes.flatMap((outcome) => (outcome.listed === undefined ? [] : [outcome.listed])),
+    coverage: outcomes.map((outcome) => outcome.coverage),
+  };
+}
+
+/** Merges per-environment pages; a single-environment page keeps its own shape. */
+function discoveredPage(
+  discovered: Awaited<ReturnType<typeof discover<GatewayListPage>>>,
+): GatewayListPage & { readonly environments?: ReadonlyArray<EnvironmentCoverage> } {
+  const items = discovered.results.flatMap(({ value }) => value.items);
+  if (discovered.coverage === undefined) return { ...discovered.results[0]!.value, items };
+  return { items, environments: discovered.coverage, snapshotAt: "runtime" };
+}
+
+type GatewayListPage = {
+  readonly items: ReadonlyArray<Record<string, unknown>>;
+  readonly nextCursor?: string;
+  readonly snapshotAt: string;
+};
+
+function tagged(target: DiscoveryTarget, page: GatewayListPage): GatewayListPage {
+  return { ...page, items: page.items.map((item) => ({ ...item, ...target })) };
+}
+
+async function listGatewayThreads(
+  context: GatewayToolContext,
+  target: DiscoveryTarget,
+  input: Record<string, unknown>,
+): Promise<GatewayListPage> {
+  const { environmentId } = target;
+  const state = z.enum(["all", "active", "settled"]).default("all").parse(input.state);
+  const executionState = parseExecutionStateFilter(input);
+  const page = await context.port.listThreads(environmentId);
+  const projectId = typeof input.projectId === "string" ? input.projectId : undefined;
+  const profileId = typeof input.profileId === "string" ? input.profileId : undefined;
+  const parentThreadId =
+    typeof input.parentThreadId === "string" ? input.parentThreadId : undefined;
+  const items = page.items.filter((thread) => {
+    const snapshot = thread.profileSnapshot as { profileId?: string } | undefined;
+    return (
+      (projectId === undefined || thread.projectId === projectId) &&
+      (parentThreadId === undefined || thread.parentThreadId === parentThreadId) &&
+      (profileId === undefined || snapshot?.profileId === profileId) &&
+      (state === "all" ||
+        (state === "settled" ? thread.settledAt != null : thread.settledAt == null)) &&
+      (executionState === undefined || readThreadExecutionState(thread) === executionState)
+    );
+  });
+  if (input.includeQuestions !== true) return tagged(target, { ...page, items });
+  // Only chats waiting on a question need a detail read; the rest pass through.
+  return tagged(target, {
+    ...page,
+    items: await Promise.all(
+      items.map(async (thread) =>
+        thread.hasPendingUserInput === true && typeof thread.id === "string"
+          ? {
+              ...thread,
+              pendingQuestions: pendingQuestionsOf(
+                await context.port.getThread(environmentId, thread.id),
+              ),
+            }
+          : thread,
+      ),
+    ),
+  });
+}
+
+async function agentsView(
+  context: GatewayToolContext,
+  target: DiscoveryTarget,
+  input: Record<string, unknown>,
+) {
+  const { environmentId } = target;
+  const { profileId, state } = z
+    .object({
+      profileId: z.string().trim().min(1).optional(),
+      state: z.enum(["active", "settled", "all"]).default("active"),
+    })
+    .parse(input);
+  const executionState = parseExecutionStateFilter(input);
+  const [profiles, page] = await Promise.all([
+    authoritativeProfiles(context, environmentId),
+    context.port.listThreads(environmentId),
+  ]);
+  const runsByProfile = new Map<string, Record<string, unknown>[]>();
+  for (const thread of page.items) {
+    const snapshot = thread.profileSnapshot as { profileId?: string } | null | undefined;
+    const agentId = snapshot?.profileId;
+    if (!agentId || (profileId !== undefined && profileId !== agentId)) continue;
+    if (
+      state !== "all" &&
+      (state === "settled" ? thread.settledAt == null : thread.settledAt != null)
+    )
+      continue;
+    if (executionState !== undefined && readThreadExecutionState(thread) !== executionState)
+      continue;
+    const runs = runsByProfile.get(agentId) ?? [];
+    runs.push({
+      threadId: thread.id,
+      ...target,
+      projectId: thread.projectId,
+      title: thread.title,
+      status: thread.status,
+      settledAt: thread.settledAt ?? null,
+      createdAt: thread.createdAt,
+      updatedAt: thread.updatedAt,
+    });
+    runsByProfile.set(agentId, runs);
+  }
+  const items = profiles
+    .filter((profile) => profileId === undefined || profile.profileId === profileId)
+    .map((profile) => {
+      const runs = profile.profileId ? (runsByProfile.get(profile.profileId) ?? []) : [];
+      if (profile.profileId) runsByProfile.delete(profile.profileId);
+      return {
+        profileId: profile.profileId,
+        name: profile.name,
+        description: profile.description ?? "",
+        providerLabel: profile.providerLabel,
+        modelLabel: profile.modelLabel,
+        environmentIds: profile.environmentIds ?? [],
+        runs,
+      };
+    });
+  return {
+    environmentId,
+    items,
+    orphanedRuns: [...runsByProfile].flatMap(([profileId, runs]) =>
+      runs.map((run) => ({ ...run, profileId })),
+    ),
+    snapshotAt: page.snapshotAt,
+  };
+}
+
+/** Profiles the shared library makes available on one environment. */
+async function availableProfiles(context: GatewayToolContext, environmentId: string) {
+  return (await authoritativeProfiles(context, environmentId)).filter(
+    (profile) =>
+      !Array.isArray(profile.environmentIds) ||
+      profile.environmentIds.length === 0 ||
+      profile.environmentIds.includes(environmentId),
+  );
+}
+
 function idFor(kind: string, idempotencyKey: string): string {
   return `mcp-${kind}-${idempotencyKey}`;
 }
@@ -1155,46 +1368,19 @@ export async function callGatewayTool(
       return context.port.openAgents(environmentId);
     }
     case "t3_list_projects": {
-      const environmentId = environmentWithScope(context, input, "read");
-      return context.port.listProjects(environmentId);
+      return discoveredPage(
+        await discover(context, input, async (target) =>
+          tagged(target, await context.port.listProjects(target.environmentId)),
+        ),
+      );
     }
     case "t3_list_threads": {
-      const environmentId = environmentWithScope(context, input, "read");
-      const state = z.enum(["all", "active", "settled"]).default("all").parse(input.state);
-      const executionState = parseExecutionStateFilter(input);
-      const page = await context.port.listThreads(environmentId);
-      const projectId = typeof input.projectId === "string" ? input.projectId : undefined;
-      const profileId = typeof input.profileId === "string" ? input.profileId : undefined;
-      const parentThreadId =
-        typeof input.parentThreadId === "string" ? input.parentThreadId : undefined;
-      const items = page.items.filter((thread) => {
-        const snapshot = thread.profileSnapshot as { profileId?: string } | undefined;
-        return (
-          (projectId === undefined || thread.projectId === projectId) &&
-          (parentThreadId === undefined || thread.parentThreadId === parentThreadId) &&
-          (profileId === undefined || snapshot?.profileId === profileId) &&
-          (state === "all" ||
-            (state === "settled" ? thread.settledAt != null : thread.settledAt == null)) &&
-          (executionState === undefined || readThreadExecutionState(thread) === executionState)
-        );
-      });
-      if (input.includeQuestions !== true) return { ...page, items };
-      // Only chats waiting on a question need a detail read; the rest pass through.
-      return {
-        ...page,
-        items: await Promise.all(
-          items.map(async (thread) =>
-            thread.hasPendingUserInput === true && typeof thread.id === "string"
-              ? {
-                  ...thread,
-                  pendingQuestions: pendingQuestionsOf(
-                    await context.port.getThread(environmentId, thread.id),
-                  ),
-                }
-              : thread,
-          ),
-        ),
-      };
+      // Validate filters once so a bad input fails the call instead of every environment.
+      z.enum(["all", "active", "settled"]).optional().parse(input.state);
+      parseExecutionStateFilter(input);
+      return discoveredPage(
+        await discover(context, input, (target) => listGatewayThreads(context, target, input)),
+      );
     }
     case "t3_list_devices": {
       const environmentId = environmentWithScope(context, input, "read");
@@ -1324,76 +1510,49 @@ export async function callGatewayTool(
       };
     }
     case "t3_get_agents_view": {
-      const environmentId = environmentWithScope(context, input, "read");
-      const { profileId, state } = z
-        .object({
-          profileId: z.string().trim().min(1).optional(),
-          state: z.enum(["active", "settled", "all"]).default("active"),
-        })
-        .parse(input);
-      const executionState = parseExecutionStateFilter(input);
-      const [profiles, page] = await Promise.all([
-        authoritativeProfiles(context, environmentId),
-        context.port.listThreads(environmentId),
-      ]);
-      const runsByProfile = new Map<string, Record<string, unknown>[]>();
-      for (const thread of page.items) {
-        const snapshot = thread.profileSnapshot as { profileId?: string } | null | undefined;
-        const agentId = snapshot?.profileId;
-        if (!agentId || (profileId !== undefined && profileId !== agentId)) continue;
-        if (
-          state !== "all" &&
-          (state === "settled" ? thread.settledAt == null : thread.settledAt != null)
-        )
-          continue;
-        if (executionState !== undefined && readThreadExecutionState(thread) !== executionState)
-          continue;
-        const runs = runsByProfile.get(agentId) ?? [];
-        runs.push({
-          threadId: thread.id,
-          environmentId,
-          projectId: thread.projectId,
-          title: thread.title,
-          status: thread.status,
-          settledAt: thread.settledAt ?? null,
-          createdAt: thread.createdAt,
-          updatedAt: thread.updatedAt,
-        });
-        runsByProfile.set(agentId, runs);
+      // Validate filters once so a bad input fails the call instead of every environment.
+      z.enum(["active", "settled", "all"]).optional().parse(input.state);
+      parseExecutionStateFilter(input);
+      const discovered = await discover(context, input, (target) =>
+        agentsView(context, target, input),
+      );
+      if (discovered.coverage === undefined) return discovered.results[0]!.value;
+      // The Agents library is shared, so one card per agent collects its runs from every machine.
+      const cards = new Map<string, Awaited<ReturnType<typeof agentsView>>["items"][number]>();
+      for (const { value } of discovered.results) {
+        for (const card of value.items) {
+          const key = card.profileId ?? card.name;
+          const existing = cards.get(key);
+          cards.set(key, existing ? { ...existing, runs: [...existing.runs, ...card.runs] } : card);
+        }
       }
-      const items = profiles
-        .filter((profile) => profileId === undefined || profile.profileId === profileId)
-        .map((profile) => {
-          const runs = profile.profileId ? (runsByProfile.get(profile.profileId) ?? []) : [];
-          if (profile.profileId) runsByProfile.delete(profile.profileId);
-          return {
-            profileId: profile.profileId,
-            name: profile.name,
-            description: profile.description ?? "",
-            providerLabel: profile.providerLabel,
-            modelLabel: profile.modelLabel,
-            environmentIds: profile.environmentIds ?? [],
-            runs,
-          };
-        });
       return {
-        environmentId,
-        items,
-        orphanedRuns: [...runsByProfile].flatMap(([profileId, runs]) =>
-          runs.map((run) => ({ ...run, profileId })),
-        ),
-        snapshotAt: page.snapshotAt,
+        items: [...cards.values()],
+        orphanedRuns: discovered.results.flatMap(({ value }) => value.orphanedRuns),
+        environments: discovered.coverage,
+        snapshotAt: "runtime",
       };
     }
     case "t3_list_agents": {
-      const environmentId = environmentWithScope(context, input, "read");
+      const discovered = await discover(context, input, (target) =>
+        availableProfiles(context, target.environmentId),
+      );
+      if (discovered.coverage === undefined) {
+        return { items: discovered.results[0]!.value, snapshotAt: "runtime" };
+      }
+      // One entry per shared agent, listing the machines it is available on.
+      const agents = new Map<string, GatewayProfile & { availableEnvironmentIds: string[] }>();
+      for (const { target, value } of discovered.results) {
+        for (const profile of value) {
+          const key = profile.profileId ?? profile.name;
+          const existing = agents.get(key);
+          if (existing) existing.availableEnvironmentIds.push(target.environmentId);
+          else agents.set(key, { ...profile, availableEnvironmentIds: [target.environmentId] });
+        }
+      }
       return {
-        items: (await authoritativeProfiles(context, environmentId)).filter(
-          (profile) =>
-            !Array.isArray(profile.environmentIds) ||
-            profile.environmentIds.length === 0 ||
-            profile.environmentIds.includes(environmentId),
-        ),
+        items: [...agents.values()],
+        environments: discovered.coverage,
         snapshotAt: "runtime",
       };
     }
