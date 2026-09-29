@@ -321,7 +321,7 @@ export const InterruptThreadTool = mutateTool(
 
 export const SettleThreadTool = Tool.make("settle_thread", {
   description:
-    "Settle a finished thread only when the user asks, preserving history and artifacts. A request to archive a finished task means settle. Active turns, pending requests, queued starts and archived threads conflict. No deferred or self-settle during a turn.",
+    "Settle a finished thread only when the user asks, preserving history and artifacts. A request to archive a finished task means settle. Active turns, pending requests, queued starts and archived threads conflict. No deferred or self-settle during a turn. Idle sub-runs settle with it.",
   parameters: Schema.Struct({ threadId: ThreadId }),
   success: Schema.Struct({
     threadId: Schema.String,

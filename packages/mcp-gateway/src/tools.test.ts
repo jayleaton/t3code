@@ -3562,3 +3562,163 @@ describe("pending question tools", () => {
     expect(listed.items[1]).not.toHaveProperty("pendingQuestions");
   });
 });
+
+describe("cross-environment discovery", () => {
+  const profile = (profileId: string, environmentIds?: ReadonlyArray<string>): GatewayProfile => ({
+    profileId,
+    name: profileId,
+    providerLabel: "Codex",
+    modelLabel: "GPT-5",
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    ...(environmentIds === undefined ? {} : { environmentIds }),
+  });
+  const threadsByEnvironment: Record<string, ReadonlyArray<Record<string, unknown>>> = {
+    macbook: [
+      { id: "mac-idle", projectId: "t3", status: "idle", profileSnapshot: { profileId: "code" } },
+    ],
+    "dev-box": [
+      {
+        id: "tensorfold",
+        projectId: "tf",
+        status: "running",
+        profileSnapshot: { profileId: "code" },
+      },
+    ],
+  };
+  function discoveryPort(): GatewayRuntimePort {
+    return {
+      ...makePort(),
+      listEnvironments: async () => [
+        {
+          environmentId: "macbook",
+          label: "MacBook",
+          targetKind: "primary",
+          connectionState: "connected",
+        },
+        {
+          environmentId: "dev-box",
+          label: "dev-box",
+          targetKind: "relay",
+          connectionState: "connected",
+        },
+        {
+          environmentId: "broken",
+          label: "Broken",
+          targetKind: "relay",
+          connectionState: "connected",
+        },
+        {
+          environmentId: "laptop",
+          label: "Laptop",
+          targetKind: "relay",
+          connectionState: "disconnected",
+        },
+        {
+          environmentId: "phone",
+          label: "Phone",
+          targetKind: "relay",
+          connectionState: "connected",
+        },
+        {
+          environmentId: "ungranted",
+          label: "Other",
+          targetKind: "relay",
+          connectionState: "connected",
+        },
+      ],
+      listThreads: async (environmentId) => {
+        if (environmentId === "broken") throw new Error("snapshot timed out");
+        return { snapshotAt: "now", items: threadsByEnvironment[environmentId] ?? [] };
+      },
+      listProfiles: async () => [profile("code"), profile("review", ["dev-box"])],
+    };
+  }
+  const context = {
+    port: discoveryPort(),
+    grants: {
+      macbook: ["read"],
+      "dev-box": ["read"],
+      broken: ["read"],
+      laptop: ["read"],
+      phone: ["create"],
+    },
+  } as const;
+  const coverage = [
+    { environmentId: "macbook", environmentLabel: "MacBook", status: "listed" },
+    { environmentId: "dev-box", environmentLabel: "dev-box", status: "listed" },
+    { environmentId: "broken", status: "failed", reason: "snapshot timed out" },
+    { environmentId: "laptop", status: "skipped", reason: "disconnected" },
+    { environmentId: "phone", status: "skipped", reason: "read not granted" },
+  ];
+
+  it("lists chats from every connected environment, tagged, and reports what it missed", async () => {
+    const listed = await callGatewayTool(context, "t3_list_threads", {});
+    expect(listed.items).toEqual([
+      expect.objectContaining({
+        id: "mac-idle",
+        environmentId: "macbook",
+        environmentLabel: "MacBook",
+      }),
+      expect.objectContaining({
+        id: "tensorfold",
+        environmentId: "dev-box",
+        environmentLabel: "dev-box",
+      }),
+    ]);
+    expect(listed.environments).toMatchObject(coverage);
+
+    const running = await callGatewayTool(context, "t3_list_threads", {
+      executionState: "running",
+    });
+    expect(running.items.map((thread: { id: string }) => thread.id)).toEqual(["tensorfold"]);
+    await expect(
+      callGatewayTool(context, "t3_list_threads", { executionState: "sleeping" }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+  });
+
+  it("keeps one-environment listings scoped while tagging their items", async () => {
+    const listed = await callGatewayTool(context, "t3_list_threads", { environmentId: "dev-box" });
+    expect(listed).toEqual({
+      snapshotAt: "now",
+      items: [expect.objectContaining({ id: "tensorfold", environmentLabel: "dev-box" })],
+    });
+    await expect(
+      callGatewayTool(context, "t3_list_threads", { environmentId: "phone" }),
+    ).rejects.toMatchObject({ code: "scope_required" });
+  });
+
+  it("lists projects across environments", async () => {
+    const listed = await callGatewayTool(context, "t3_list_projects", {});
+    expect(listed.items).toEqual([
+      expect.objectContaining({ id: "macbook-project", environmentId: "macbook" }),
+      expect.objectContaining({ id: "dev-box-project", environmentId: "dev-box" }),
+      expect.objectContaining({ id: "broken-project", environmentId: "broken" }),
+    ]);
+  });
+
+  it("lists each shared agent once with the machines it is available on", async () => {
+    const listed = await callGatewayTool(context, "t3_list_agents", {});
+    expect(listed.items).toEqual([
+      expect.objectContaining({
+        profileId: "code",
+        availableEnvironmentIds: ["macbook", "dev-box", "broken"],
+      }),
+      expect.objectContaining({ profileId: "review", availableEnvironmentIds: ["dev-box"] }),
+    ]);
+  });
+
+  it("collects each agent's runs from every environment onto one board card", async () => {
+    const board = await callGatewayTool(context, "t3_get_agents_view", { profileId: "code" });
+    expect(board.items).toEqual([
+      expect.objectContaining({
+        profileId: "code",
+        runs: [
+          expect.objectContaining({ threadId: "mac-idle", environmentId: "macbook" }),
+          expect.objectContaining({ threadId: "tensorfold", environmentLabel: "dev-box" }),
+        ],
+      }),
+    ]);
+    expect(board.environments).toMatchObject(coverage);
+  });
+});

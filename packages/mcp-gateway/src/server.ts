@@ -17,6 +17,11 @@ import {
 
 const environmentId = z.string().trim().min(1);
 const threadId = z.string().trim().min(1);
+const discoveryEnvironmentId = environmentId
+  .optional()
+  .describe(
+    "Limit to one environment. Omit to list every connected environment granted read; each result carries environmentId and environmentLabel, and environments reports which machines were listed, skipped, or failed.",
+  );
 const idempotencyKey = z.string().trim().min(1).max(200);
 const scheduledTaskFields = {
   title: z.string().trim().min(1).max(120).optional(),
@@ -146,13 +151,13 @@ const TOOL_SPECS = {
     { environmentId, skillId: z.string().trim().min(1) },
   ],
   t3_list_agents: [
-    "List agents from the shared Agents library available on this environment, including specialization descriptions, instructions and model settings. Use t3_get_agents_view to find their chats/runs. Use profileId to create chats or hand work to an agent.",
-    { environmentId, ...optionalRequestContext },
+    "List agents from the shared Agents library, including specialization descriptions, instructions and model settings. Across environments each agent appears once with availableEnvironmentIds. Use t3_get_agents_view to find their chats/runs. Use profileId to create chats or hand work to an agent.",
+    { environmentId: discoveryEnvironmentId, ...optionalRequestContext },
   ],
   t3_get_agents_view: [
-    "List the Agents board for an environment: agent specializations and their chat/run summaries, including thread IDs and status. Use this to find an agent’s running or completed work without searching unrelated threads. Filter by profileId, state (active means unsettled, including completed chats), and executionState (for example running or waiting-input). Use t3_get_thread or t3_open_thread with a returned threadId for details.",
+    "List the Agents board across environments (or one): agent specializations and their chat/run summaries, including thread IDs and status. Use this to find an agent’s running or completed work without searching unrelated threads. Filter by profileId, state (active means unsettled, including completed chats), and executionState (for example running or waiting-input). Use t3_get_thread or t3_open_thread with a returned threadId for details.",
     {
-      environmentId,
+      environmentId: discoveryEnvironmentId,
       profileId: z.string().trim().min(1).optional(),
       state: z.enum(["active", "settled", "all"]).optional(),
       executionState: executionState.optional(),
@@ -180,11 +185,11 @@ const TOOL_SPECS = {
     handoffInputSchema.shape,
   ],
   t3_settle_thread: [
-    "Settle a conversation only after the user explicitly chooses to settle it. Requires lifecycle scope. Does not delete the conversation. Do not call automatically after a handoff.",
+    "Settle a conversation only after the user explicitly chooses to settle it. Requires lifecycle scope. Does not delete the conversation. Idle sub-runs settle with it; ones still working are left alone. Do not call automatically after a handoff.",
     { environmentId, threadId, confirmed: z.literal(true) },
   ],
   t3_unsettle_thread: [
-    "Return a settled chat to active work in its agent column. Requires lifecycle scope. Does not send a message or start a turn.",
+    "Return a settled chat to active work in its agent column, with the sub-runs that settled along with it. Requires lifecycle scope. Does not send a message or start a turn.",
     { environmentId, threadId },
   ],
   t3_set_thread_parent: [
@@ -218,13 +223,13 @@ const TOOL_SPECS = {
     optionalRequestContext,
   ],
   t3_list_projects: [
-    "List projects in one T3 environment.",
-    { environmentId, ...optionalRequestContext },
+    "List projects across T3 environments, or in one.",
+    { environmentId: discoveryEnvironmentId, ...optionalRequestContext },
   ],
   t3_list_threads: [
-    "List chats in one T3 environment, optionally filtered by agent profileId, project, parentThreadId, active/settled state, and executionState. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly. hasPendingUserInput marks a chat waiting on a question; pass includeQuestions to attach each one's pendingQuestions (full text and options, as t3_get_pending_questions returns).",
+    "List chats across every connected T3 environment (or one), optionally filtered by agent profileId, project, parentThreadId, active/settled state, and executionState. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly. hasPendingUserInput marks a chat waiting on a question; pass includeQuestions to attach each one's pendingQuestions (full text and options, as t3_get_pending_questions returns).",
     {
-      environmentId,
+      environmentId: discoveryEnvironmentId,
       state: z.enum(["all", "active", "settled"]).optional(),
       executionState: executionState.optional(),
       projectId: z.string().trim().min(1).optional(),
