@@ -121,6 +121,20 @@ it("requires matching saved native state for an unfinished root run", () => {
     assert.isUndefined(restartContinuationRun(invalid as OrchestrationV2ThreadProjection));
 });
 
+it("continues a live turn whose session the adapter never marked running", () => {
+  const projection = makeProjection();
+  // Codex, Claude, Cursor and ACP sessions stay "ready" for their whole life.
+  const withSessionStatus = (status: string) =>
+    ({
+      ...projection,
+      providerSessions: [{ ...projection.providerSessions[0]!, status }],
+    }) as OrchestrationV2ThreadProjection;
+  for (const status of ["starting", "ready", "running", "waiting"])
+    assert.equal(restartContinuationRun(withSessionStatus(status))?.id, runId, status);
+  for (const status of ["stopped", "error"])
+    assert.isUndefined(restartContinuationRun(withSessionStatus(status)), status);
+});
+
 it("recovers an admitted continuation after another crash before provider start", () => {
   const projection = makeProjection();
   const starting = {

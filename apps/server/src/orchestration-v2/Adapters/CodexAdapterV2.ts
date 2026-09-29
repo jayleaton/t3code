@@ -115,6 +115,7 @@ import {
   type ProviderContinuationRequest,
   ProviderContinuationRequests,
 } from "../ProviderContinuationRequests.ts";
+import { backgroundWorkNotification } from "../Notification.ts";
 import {
   makeProviderFailure,
   makeProviderFailureTurnItem,
@@ -4209,17 +4210,19 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                       driver: CODEX_PROVIDER,
                       detail: codexBackgroundCommandDetail(payload.item),
                       notification: {
-                        source: { kind: "background_command" },
-                        outcome:
-                          payload.item.exitCode === 0
-                            ? "completed"
-                            : payload.item.exitCode == null
-                              ? "unknown"
-                              : "failed",
-                        summary:
-                          payload.item.exitCode == null || payload.item.exitCode === 0
-                            ? "Background command finished"
-                            : `Background command exited with code ${payload.item.exitCode}`,
+                        ...backgroundWorkNotification([
+                          {
+                            kind: "command",
+                            label: payload.item.command,
+                            outcome:
+                              payload.item.exitCode === 0
+                                ? "completed"
+                                : payload.item.exitCode == null
+                                  ? "unknown"
+                                  : "failed",
+                            exitCode: payload.item.exitCode ?? undefined,
+                          },
+                        ]),
                         detail: payload.item.command,
                       },
                     });
@@ -5584,6 +5587,24 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                     providerTurnId: turnInput.providerTurnId,
                     cause,
                   }),
+              ),
+            ),
+          // Dropping this connection's subscription lets the shared app-server
+          // shut the native thread (and its MCP servers) down once it is idle.
+          // `notLoaded` / `notSubscribed` mean there is nothing left to unload.
+          unloadThread: (unloadInput) =>
+            Effect.gen(function* () {
+              const nativeThreadId = yield* getNativeThreadId(unloadInput.providerThread);
+              yield* client.request("thread/unsubscribe", { threadId: nativeThreadId });
+            }).pipe(
+              Effect.mapError((cause) =>
+                cause._tag === "ProviderAdapterProtocolError"
+                  ? cause
+                  : new ProviderAdapterProtocolError({
+                      driver: CODEX_PROVIDER,
+                      detail: `Failed to unload Codex thread for provider thread ${unloadInput.providerThread.id}`,
+                      cause: normalizeCodexCause(cause),
+                    }),
               ),
             ),
           interruptTurn: (turnInput) =>

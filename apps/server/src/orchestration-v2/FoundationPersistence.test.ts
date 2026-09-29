@@ -1668,7 +1668,7 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
         handoffIds: [] as const,
         forkedFrom: null,
         pendingBackgroundTasks: [
-          { taskId: "bg-owner", description: "sleep 20", taskType: "local_bash" },
+          { taskId: "bg-owner", description: "sleep 20", kind: "command" as const },
         ],
         createdAt: now,
         updatedAt: now,
@@ -1767,7 +1767,7 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
                 {
                   taskId: "bg-superseded",
                   description: "should not land",
-                  taskType: "local_bash",
+                  kind: "command" as const,
                 },
               ],
               updatedAt: afterReplacement,

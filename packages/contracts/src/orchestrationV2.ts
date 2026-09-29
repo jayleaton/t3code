@@ -1,6 +1,7 @@
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as SchemaAST from "effect/SchemaAST";
 import * as SchemaGetter from "effect/SchemaGetter";
 
 import {
@@ -701,16 +702,87 @@ export const OrchestrationV2ProviderSessionDetached = Schema.Struct({
 export type OrchestrationV2ProviderSessionDetached =
   typeof OrchestrationV2ProviderSessionDetached.Type;
 
+/** The literal `kind` a union member is stored and sent with. */
+function encodedKind(member: Schema.Top): string {
+  const encoded = SchemaAST.toEncoded(member.ast);
+  const kind = SchemaAST.isObjects(encoded)
+    ? encoded.propertySignatures.find((property) => property.name === "kind")?.type
+    : undefined;
+  if (kind !== undefined && SchemaAST.isLiteral(kind) && typeof kind.literal === "string") {
+    return kind.literal;
+  }
+  throw new Error("Each member of a kind union needs a literal string `kind`.");
+}
+
+/**
+ * A union tagged by `kind` that tolerates kinds this build does not know.
+ * After the known members comes a decode-only arm: an object with an unknown
+ * `kind`, or none, decodes through `fallback` to a known member instead of
+ * failing, so a newer server can add kinds without breaking older clients and
+ * rows written before a kind existed still load. `unknown` builds that arm's
+ * input around the given `kind` field. A known kind whose fields do not decode
+ * still fails. Kinds are the encoded ones, which a member may rename on decode.
+ * The arm never encodes; values always match a known member first.
+ */
+function kindUnionWithFallback<
+  const Members extends ReadonlyArray<Schema.Top & { readonly Encoded: { readonly kind: string } }>,
+  Unknown extends Schema.Top,
+>(
+  members: Members,
+  unknown: (kind: Schema.optional<Schema.String>) => Unknown,
+  fallback: (value: Unknown["Type"]) => Schema.Union<Members>["Encoded"],
+) {
+  const knownKinds: ReadonlySet<string> = new Set(members.map(encodedKind));
+  const unknownKind = unknown(
+    Schema.optional(
+      Schema.String.check(
+        Schema.makeFilter(
+          (kind: string) => !knownKinds.has(kind) || "A known kind must decode in full.",
+        ),
+      ),
+    ),
+  ).pipe(
+    Schema.decodeTo(Schema.Union(members), {
+      decode: SchemaGetter.transform(fallback),
+      encode: SchemaGetter.forbidden(() => "Unknown kinds are decode-only."),
+    }),
+  );
+  // Members are tried in order, so the fallback must come last.
+  return Schema.Union([...members, unknownKind]);
+}
+
+const PendingBackgroundTaskFields = {
+  taskId: TrimmedNonEmptyString,
+  /** The work's name: a subagent's title, a command's description, a monitor's. */
+  description: Schema.optional(TrimmedNonEmptyString),
+};
+
 /**
  * Provider-owned background work that can outlive the root turn (for example a
  * Claude background Bash task). Associated with the provider thread so shared
- * runtimes cannot make an unrelated app thread look busy.
+ * runtimes cannot make an unrelated app thread look busy. Adapters pick the
+ * kind; `background_task` is work they cannot name. Rosters persisted before
+ * kinds existed carry no `kind` and load as `background_task`.
  */
-export const OrchestrationV2PendingBackgroundTask = Schema.Struct({
-  taskId: TrimmedNonEmptyString,
-  description: Schema.optional(TrimmedNonEmptyString),
-  taskType: Schema.optional(TrimmedNonEmptyString),
-});
+export const OrchestrationV2PendingBackgroundTask = kindUnionWithFallback(
+  [
+    Schema.Struct({
+      ...PendingBackgroundTaskFields,
+      kind: Schema.Literal("subagent"),
+      /** The subagent's own thread, when it has one. */
+      childThreadId: Schema.optional(ThreadId),
+    }),
+    Schema.Struct({ ...PendingBackgroundTaskFields, kind: Schema.Literal("command") }),
+    Schema.Struct({ ...PendingBackgroundTaskFields, kind: Schema.Literal("monitor") }),
+    Schema.Struct({ ...PendingBackgroundTaskFields, kind: Schema.Literal("background_task") }),
+  ],
+  (kind) => Schema.Struct({ ...PendingBackgroundTaskFields, kind }),
+  ({ taskId, description }) => ({
+    taskId,
+    ...(description === undefined ? {} : { description }),
+    kind: "background_task",
+  }),
+);
 export type OrchestrationV2PendingBackgroundTask = typeof OrchestrationV2PendingBackgroundTask.Type;
 
 /** Provider and adapter metadata that should not overwrite the app thread's title. */
@@ -876,19 +948,65 @@ export const OrchestrationV2RuntimeRequest = Schema.Struct({
 });
 export type OrchestrationV2RuntimeRequest = typeof OrchestrationV2RuntimeRequest.Type;
 
-// A notification records an observed event, not whether its payload has reached the agent.
-// Provider delivery, wake policy, and agent-facing instructions belong to the backend.
-export const OrchestrationV2Notification = Schema.Struct({
-  source: Schema.Union([
+const SubagentNotificationSource = Schema.Struct({
+  kind: Schema.Literal("subagent"),
+  /** The subagent's own thread, when the notification reports one subagent. */
+  childThreadId: Schema.optional(ThreadId),
+});
+const CommandNotificationSource = Schema.Struct({ kind: Schema.Literal("command") });
+
+/**
+ * What a notification reports on. Several pieces of work of one kind share
+ * that kind; mixed or unnamed work is `background_task`.
+ *
+ * Sources are stored and sent in the shape clients before `subagent` and
+ * `command` existed decode, since they reject a kind they do not know: a
+ * command is `background_command`, and a subagent is `background_task` with
+ * `work: "subagent"`, a field those clients ignore. Encoding picks the first
+ * member that fits, so those come first. The plain `subagent` and `command`
+ * members after them decode values that were already decoded once.
+ */
+export const OrchestrationV2NotificationSource = kindUnionWithFallback(
+  [
     Schema.Struct({
       kind: Schema.Literal("delegated_task"),
       taskIds: Schema.Array(NodeId),
+      /** The task's own thread, when the notification reports one task. */
+      childThreadId: Schema.optional(ThreadId),
     }),
     Schema.Struct({
-      kind: Schema.Literals(["background_task", "background_command", "monitor"]),
-      nativeRef: Schema.optional(OrchestrationV2ProviderRef),
-    }),
-  ]),
+      kind: Schema.Literal("background_task"),
+      work: Schema.Literal("subagent"),
+      childThreadId: Schema.optional(ThreadId),
+    }).pipe(
+      Schema.decodeTo(Schema.toType(SubagentNotificationSource), {
+        decode: SchemaGetter.transform(({ childThreadId }) =>
+          childThreadId === undefined
+            ? { kind: "subagent" as const }
+            : { kind: "subagent" as const, childThreadId },
+        ),
+        encode: SchemaGetter.transform(({ childThreadId }) => ({
+          kind: "background_task" as const,
+          work: "subagent" as const,
+          ...(childThreadId === undefined ? {} : { childThreadId }),
+        })),
+      }),
+    ),
+    Schema.Struct({ kind: Schema.Literal("background_command").transform("command") }),
+    SubagentNotificationSource,
+    CommandNotificationSource,
+    Schema.Struct({ kind: Schema.Literal("monitor") }),
+    Schema.Struct({ kind: Schema.Literal("background_task") }),
+  ],
+  (kind) => Schema.Struct({ kind }),
+  () => ({ kind: "background_task" }),
+);
+export type OrchestrationV2NotificationSource = typeof OrchestrationV2NotificationSource.Type;
+
+// A notification records an observed event, not whether its payload has reached the agent.
+// Provider delivery, wake policy, and agent-facing instructions belong to the backend.
+export const OrchestrationV2Notification = Schema.Struct({
+  source: OrchestrationV2NotificationSource,
   // Item status describes this timeline record; outcome describes the reported work.
   outcome: Schema.Literals(["completed", "failed", "cancelled", "updated", "unknown"]),
   summary: TrimmedNonEmptyString,

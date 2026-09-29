@@ -12,6 +12,8 @@ import { assertClaudeBackgroundWakeBeforeQueuedPromptOutput } from "./claude_bac
 import { claudeBackgroundWakeBeforeQueuedPromptNoEchoInput } from "./claude_background_wake_before_queued_prompt_no_echo/input.ts";
 import { assertClaudeBackgroundWakeBeforeQueuedPromptNoEchoOutput } from "./claude_background_wake_before_queued_prompt_no_echo/output.ts";
 import { assertClaudeBackgroundTaskInterruptOutput } from "./claude_background_task_interrupt/output.ts";
+import { claudeBackgroundMonitorWakeInput } from "./claude_background_monitor_wake/input.ts";
+import { assertClaudeBackgroundMonitorWakeOutput } from "./claude_background_monitor_wake/output.ts";
 import { claudeBackgroundTaskWakeInput } from "./claude_background_task_wake/input.ts";
 import { assertClaudeBackgroundTaskWakeOutput } from "./claude_background_task_wake/output.ts";
 import { claudeIdleResumeInput } from "./claude_idle_resume/input.ts";
@@ -240,6 +242,22 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         modelSelection: CLAUDE_MODEL_SELECTION,
         runContinuationWorker: true,
         assertOutput: assertClaudeBackgroundWakeBeforeQueuedPromptNoEchoOutput,
+      },
+    ],
+  },
+  {
+    name: "claude_background_monitor_wake",
+    buildInput: claudeBackgroundMonitorWakeInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("claudeAgent"),
+        transcriptFile: new URL(
+          "./claude_background_monitor_wake/claude_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: CLAUDE_MODEL_SELECTION,
+        runContinuationWorker: true,
+        assertOutput: assertClaudeBackgroundMonitorWakeOutput,
       },
     ],
   },

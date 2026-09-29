@@ -3,6 +3,7 @@ import type {
   OrchestrationV2ProviderThread,
   OrchestrationV2Run,
   OrchestrationV2TurnItem,
+  ThreadId,
 } from "@t3tools/contracts";
 import { isOrchestrationV2WorkActive } from "@t3tools/contracts";
 
@@ -66,6 +67,7 @@ type PendingBackgroundWorkTurnItem = {
   } | null;
   readonly input?: unknown;
   readonly prompt?: string | undefined;
+  readonly childThreadId?: ThreadId | null;
 };
 
 function isLatestRunSettledForBackgroundWait(
@@ -103,6 +105,26 @@ function descriptionFromTurnItem(item: PendingBackgroundWorkTurnItem): string | 
     return prompt.length > 0 ? prompt : undefined;
   }
   return undefined;
+}
+
+function pendingTaskFromTurnItem(
+  taskId: string,
+  item: PendingBackgroundWorkTurnItem,
+): PendingBackgroundWorkTask {
+  const description = descriptionFromTurnItem(item);
+  const named = { taskId, ...(description === undefined ? {} : { description }) };
+  switch (item.type) {
+    case "subagent":
+      return {
+        ...named,
+        kind: "subagent",
+        ...(item.childThreadId == null ? {} : { childThreadId: item.childThreadId }),
+      };
+    case "command_execution":
+      return { ...named, kind: "command" };
+    default:
+      return { ...named, kind: "background_task" };
+  }
 }
 
 function nativeTaskIdFromTurnItem(item: PendingBackgroundWorkTurnItem): string {
@@ -168,11 +190,11 @@ export function derivePendingBackgroundWork(input: {
       if (task.taskId.length === 0 || byTaskId.has(task.taskId)) {
         continue;
       }
-      const description = task.description?.trim();
+      const { description: rawDescription, ...named } = task;
+      const description = rawDescription?.trim();
       byTaskId.set(task.taskId, {
-        taskId: task.taskId,
+        ...named,
         ...(description === undefined || description.length === 0 ? {} : { description }),
-        ...(task.taskType === undefined ? {} : { taskType: task.taskType }),
       });
     }
   }
@@ -198,31 +220,8 @@ export function derivePendingBackgroundWork(input: {
       continue;
     }
 
-    const description = descriptionFromTurnItem(item);
-    byTaskId.set(taskId, {
-      taskId,
-      ...(description === undefined ? {} : { description }),
-      taskType: item.type,
-    });
+    byTaskId.set(taskId, pendingTaskFromTurnItem(taskId, item));
   }
 
   return Array.from(byTaskId.values());
-}
-
-export function formatPendingBackgroundWorkLabel(
-  tasks: ReadonlyArray<PendingBackgroundWorkTask>,
-): string | null {
-  if (tasks.length === 0) {
-    return null;
-  }
-  const firstDescription = tasks[0]?.description?.trim();
-  if (tasks.length === 1) {
-    return firstDescription && firstDescription.length > 0
-      ? `Waiting on background task: ${firstDescription}`
-      : "Waiting on a background task";
-  }
-  if (firstDescription && firstDescription.length > 0) {
-    return `Waiting on ${tasks.length} background tasks: ${firstDescription}, …`;
-  }
-  return `Waiting on ${tasks.length} background tasks`;
 }
