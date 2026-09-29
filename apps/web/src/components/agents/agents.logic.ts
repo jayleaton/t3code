@@ -37,8 +37,9 @@ export function agentThreadStatus(thread: EnvironmentThreadShell) {
   if (thread.runtime?.status === "starting" || thread.runtime?.status === "preparing")
     return "queued";
   if (thread.runtime?.status === "failed" || thread.latestRun?.status === "failed") return "error";
-  // A turn can settle while native background work runs on, as in the thread
-  // sidebar's Waiting state: the chat is still live, so it is not Done.
+  // A turn can settle while native background work runs on: sub-agents are
+  // still doing the work, while commands, monitors, and other tasks watch or wait.
+  if (thread.pendingBackgroundTasks.some((task) => task.kind === "subagent")) return "running";
   if (thread.pendingBackgroundTasks.length > 0) return "monitoring";
   if (thread.latestRun?.status === "completed") return "done";
   return "idle";

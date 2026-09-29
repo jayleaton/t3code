@@ -104,10 +104,17 @@ describe("agent chat focus", () => {
   it("keeps a chat with background work live after its turn completes", () => {
     const watching = {
       ...completed(),
-      pendingBackgroundTasks: [{ taskId: "watch", description: "Watch CI" }],
+      pendingBackgroundTasks: [
+        { taskId: "watch", description: "Watch CI", kind: "monitor" as const },
+      ],
     };
     expect(agentThreadStatus(watching)).toBe("monitoring");
     expect(isAgentChatInFocus(watching, "2026-09-06T00:03:00.000Z", false)).toBe(true);
+    const delegating = {
+      ...completed(),
+      pendingBackgroundTasks: [{ taskId: "review", kind: "subagent" as const }],
+    };
+    expect(agentThreadStatus(delegating)).toBe("running");
   });
 });
 
