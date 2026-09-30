@@ -436,6 +436,81 @@ describe("Gateway Runtime Port", () => {
     ).toBe("idle");
   });
 
+  it("projects the questions a chat waits on with every option until they are answered", () => {
+    const asked = {
+      id: "asked",
+      sequence: 1,
+      turnId: null,
+      tone: "info",
+      kind: "user-input.requested",
+      summary: "Question",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      payload: {
+        requestId: "r1",
+        questions: [
+          {
+            id: "approach",
+            header: "Approach",
+            question: "Which approach?",
+            options: [
+              { label: "Shared layer", description: "In-process" },
+              { label: "Loopback", description: "Over HTTP", value: "loopback" },
+            ],
+          },
+          {
+            id: "surfaces",
+            header: "Surfaces",
+            question: "Which clients?",
+            multiSelect: true,
+            allowCustomAnswer: false,
+            options: [{ label: "Web", description: "" }],
+          },
+        ],
+      },
+    };
+    const project = (activities: unknown[]) =>
+      gatewayThreadProjection({
+        id: "chat",
+        projectId: "p",
+        title: "Chat",
+        session: { status: "running" },
+        latestTurn: null,
+        messages: [],
+        checkpoints: [],
+        artifacts: [],
+        activities,
+      } as never);
+    expect(project([asked]).pendingQuestions).toEqual([
+      {
+        questionRequestId: "r1",
+        askedAt: "2026-01-01T00:00:00.000Z",
+        questions: [
+          {
+            questionId: "approach",
+            header: "Approach",
+            question: "Which approach?",
+            multiSelect: false,
+            allowsFreeText: true,
+            options: [
+              { label: "Shared layer", description: "In-process" },
+              { label: "Loopback", description: "Over HTTP", value: "loopback" },
+            ],
+          },
+          {
+            questionId: "surfaces",
+            header: "Surfaces",
+            question: "Which clients?",
+            multiSelect: true,
+            allowsFreeText: false,
+            options: [{ label: "Web", description: "" }],
+          },
+        ],
+      },
+    ]);
+    const resolved = { ...asked, id: "resolved", sequence: 2, kind: "user-input.resolved" };
+    expect(project([asked, resolved]).pendingQuestions).toEqual([]);
+  });
+
   it.each([
     ["approval", "stale pending approval request"],
     ["approval", "unknown pending permission request"],

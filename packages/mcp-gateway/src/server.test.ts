@@ -158,7 +158,7 @@ describe("MCP gateway server", () => {
 
     const listedTools = await client.listTools();
     const toolNames = listedTools.tools.map((tool) => tool.name);
-    expect(toolNames).toHaveLength(73);
+    expect(toolNames).toHaveLength(75);
     expect(
       listedTools.tools.find((tool) => tool.name === "t3_update_agent")?.inputSchema.properties
         ?.patch,
@@ -193,7 +193,7 @@ describe("MCP gateway server", () => {
     });
     const agents = await client.callTool({
       name: "t3_list_agents",
-      arguments: { environmentId: "local" },
+      arguments: { environmentId: "local", includeSystemPrompt: true },
     });
     expect(agents.isError).not.toBe(true);
     const board = await client.callTool({
@@ -242,6 +242,8 @@ describe("MCP gateway server", () => {
         "t3_run_scheduled_task",
         "t3_get_artifact",
         "t3_get_approval_plan",
+        "t3_get_pending_questions",
+        "t3_answer_question",
         "t3_approve_actions",
         "t3_reject_actions",
         "t3_rotate_webhook_secret",

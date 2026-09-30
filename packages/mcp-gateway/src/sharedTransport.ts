@@ -48,21 +48,35 @@ function socketTransport(socket: WebSocket): Transport {
   return transport;
 }
 
+/** Identifies the gateway script an owner or launcher is running. */
+export interface GatewayBuild {
+  readonly id: string;
+  /** False once the installed script no longer matches the running one, e.g. after an app update. */
+  readonly isCurrent: () => boolean;
+}
+
+/** A retiring owner is releasing the port; the launcher should start a fresh one. */
+export class GatewayRetiringError extends Error {}
+
+/** Tell a connecting launcher to retry against the next owner, then drop the socket. */
+export function rejectRetiring(socket: WebSocket): void {
+  socket.send(JSON.stringify({ type: "retiring" }), () => socket.close(1012, "Gateway retiring."));
+}
+
 /**
  * MCP authentication cannot replace or configure the desktop runtime connection.
- * The challenge carries the owner's build, and a client from another build may
- * prove the token and ask the owner to retire, so an app update reaches the
- * long-lived owner instead of leaving every agent on its old tools.
+ * A launcher on a different build may ask a stale owner to retire instead of attaching.
  */
 export async function acceptMcpSession(
   socket: WebSocket,
   token: string,
   configuration: string,
+  build: GatewayBuild,
   attach: (transport: Transport) => Promise<void>,
-  retirement?: { readonly build: string; readonly retire: () => void },
+  retire: () => void,
 ): Promise<void> {
   const nonce = NodeCrypto.randomBytes(32).toString("hex");
-  await new Promise<void>((resolve, reject) => {
+  const retireIfStale = await new Promise<boolean>((resolve, reject) => {
     const timeout = AbortSignal.timeout(AUTH_TIMEOUT_MS);
     const cleanup = () => {
       timeout.removeEventListener("abort", fail);
@@ -79,21 +93,6 @@ export async function acceptMcpSession(
       try {
         const message: unknown = JSON.parse(raw.toString());
         if (
-          retirement !== undefined &&
-          typeof message === "object" &&
-          message !== null &&
-          "type" in message &&
-          message.type === "retire" &&
-          "proof" in message &&
-          matches(message.proof, proof(token, "retire", nonce, configuration))
-        ) {
-          cleanup();
-          socket.close(1000, "Shared gateway retiring for another build.");
-          reject(new GatewayRetiredError("Shared gateway retired for another build."));
-          retirement.retire();
-          return;
-        }
-        if (
           typeof message !== "object" ||
           message === null ||
           !("type" in message) ||
@@ -105,7 +104,7 @@ export async function acceptMcpSession(
           return;
         }
         cleanup();
-        resolve();
+        resolve("retireIfStale" in message && message.retireIfStale === true);
       } catch {
         fail();
       }
@@ -120,11 +119,17 @@ export async function acceptMcpSession(
         protocol: PROTOCOL,
         nonce,
         configuration,
-        ...(retirement === undefined ? {} : { build: retirement.build }),
+        build: build.id,
       }),
     );
   });
   if (socket.readyState !== WebSocket.OPEN) throw new Error("MCP session closed during startup.");
+  // Only the owner's own script decides, so two installed builds cannot evict each other.
+  if (retireIfStale && !build.isCurrent()) {
+    rejectRetiring(socket);
+    retire();
+    return;
+  }
   await attach(socketTransport(socket));
   socket.send(
     JSON.stringify({ type: "ready", proof: proof(token, "server", nonce, configuration) }),
@@ -132,24 +137,18 @@ export async function acceptMcpSession(
 }
 
 export class GatewayUnavailableError extends Error {}
-/** The owner was from another build and agreed to retire; connect again once it has gone. */
-export class GatewayRetiredError extends Error {}
 
-/**
- * An occupied port is usable only if its owner proves the same token and
- * configuration. With a `build`, an owner that reports a different one is asked
- * to retire instead; an owner too old to report a build is used as it is.
- */
+/** An occupied port is usable only if its owner proves the same token and configuration. */
 export function connectMcpSession(input: {
   readonly port: number;
   readonly token: string;
   readonly configuration: string;
+  /** This launcher's build; a differing owner is asked to retire if its script changed. */
   readonly build?: string;
 }): Promise<Transport> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(`ws://127.0.0.1:${input.port}/mcp`, { maxPayload: 1024 * 1024 });
     let nonce: string | undefined;
-    let retiring = false;
     const timeout = AbortSignal.timeout(AUTH_TIMEOUT_MS);
     const onTimeout = () => fail(new Error("Timed out authenticating the shared MCP gateway."));
     const cleanup = () => {
@@ -173,13 +172,11 @@ export function connectMcpSession(input: {
       );
     const onClose = () =>
       fail(
-        retiring
-          ? new GatewayRetiredError("The shared gateway retired for this build.")
-          : new Error(
-              nonce === undefined
-                ? "The port belongs to an older gateway or a different service that is not the T3 shared MCP gateway. Stop that process or use the configured gateway port."
-                : "Shared gateway authentication failed: the bridge token did not match. Verify the MCP gateway token configured for this environment.",
-            ),
+        new Error(
+          nonce === undefined
+            ? "The port belongs to an older gateway or a different service that is not the T3 shared MCP gateway. Stop that process or use the configured gateway port."
+            : "Shared gateway authentication failed: the bridge token did not match. Verify the MCP gateway token configured for this environment.",
+        ),
       );
     const authenticate = (raw: WebSocket.RawData) => {
       try {
@@ -188,6 +185,10 @@ export function connectMcpSession(input: {
           throw new Error("Invalid handshake.");
         }
         const message = value as Record<string, unknown>;
+        if (message.type === "retiring") {
+          fail(new GatewayRetiringError("The shared gateway owner is retiring."));
+          return;
+        }
         if (nonce === undefined) {
           if (message.type !== "challenge" || typeof message.nonce !== "string") {
             fail(
@@ -214,24 +215,13 @@ export function connectMcpSession(input: {
             return;
           }
           nonce = message.nonce;
-          if (
-            input.build !== undefined &&
-            typeof message.build === "string" &&
-            message.build !== input.build
-          ) {
-            retiring = true;
-            socket.send(
-              JSON.stringify({
-                type: "retire",
-                proof: proof(input.token, "retire", nonce, input.configuration),
-              }),
-            );
-            return;
-          }
           socket.send(
             JSON.stringify({
               type: "authenticate",
               proof: proof(input.token, "client", nonce, input.configuration),
+              ...(input.build !== undefined && message.build !== input.build
+                ? { retireIfStale: true }
+                : {}),
             }),
           );
           return;

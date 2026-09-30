@@ -17,6 +17,11 @@ import {
 
 const environmentId = z.string().trim().min(1);
 const threadId = z.string().trim().min(1);
+const discoveryEnvironmentId = environmentId
+  .optional()
+  .describe(
+    "Limit to one environment. Omit to list every connected environment granted read; each result carries environmentId and environmentLabel, and environments reports which machines were listed, skipped, or failed.",
+  );
 const idempotencyKey = z.string().trim().min(1).max(200);
 const scheduledTaskFields = {
   title: z.string().trim().min(1).max(120).optional(),
@@ -146,13 +151,20 @@ const TOOL_SPECS = {
     { environmentId, skillId: z.string().trim().min(1) },
   ],
   t3_list_agents: [
-    "List agents from the shared Agents library available on this environment, including specialization descriptions, instructions and model settings. Use t3_get_agents_view to find their chats/runs. Use profileId to create chats or hand work to an agent.",
-    { environmentId, ...optionalRequestContext },
+    "List agents from the shared Agents library, including specialization descriptions and model settings. System prompts are left out unless includeSystemPrompt is true (pass environmentId too when you only need one machine). Across environments each agent appears once with availableEnvironmentIds. Use t3_get_agents_view to find their chats/runs. Use profileId to create chats or hand work to an agent.",
+    {
+      environmentId: discoveryEnvironmentId,
+      includeSystemPrompt: z
+        .boolean()
+        .optional()
+        .describe("Include each agent's full systemPrompt, e.g. before t3_update_agent."),
+      ...optionalRequestContext,
+    },
   ],
   t3_get_agents_view: [
-    "List the Agents board for an environment: agent specializations and their chat/run summaries, including thread IDs and status. Use this to find an agent’s running or completed work without searching unrelated threads. Filter by profileId, state (active means unsettled, including completed chats), and executionState (for example running or waiting-input). Use t3_get_thread or t3_open_thread with a returned threadId for details.",
+    "List the Agents board across environments (or one): agent specializations and their chat/run summaries, including thread IDs and status. Use this to find an agent’s running or completed work without searching unrelated threads. Filter by profileId, state (active means unsettled, including completed chats), and executionState (for example running or waiting-input). Use t3_get_thread or t3_open_thread with a returned threadId for details.",
     {
-      environmentId,
+      environmentId: discoveryEnvironmentId,
       profileId: z.string().trim().min(1).optional(),
       state: z.enum(["active", "settled", "all"]).optional(),
       executionState: executionState.optional(),
@@ -180,11 +192,11 @@ const TOOL_SPECS = {
     handoffInputSchema.shape,
   ],
   t3_settle_thread: [
-    "Settle a conversation only after the user explicitly chooses to settle it. Requires lifecycle scope. Does not delete the conversation. Do not call automatically after a handoff.",
+    "Settle a conversation only after the user explicitly chooses to settle it. Requires lifecycle scope. Does not delete the conversation. Idle sub-runs settle with it; ones still working are left alone. Do not call automatically after a handoff.",
     { environmentId, threadId, confirmed: z.literal(true) },
   ],
   t3_unsettle_thread: [
-    "Return a settled chat to active work in its agent column. Requires lifecycle scope. Does not send a message or start a turn.",
+    "Return a settled chat to active work in its agent column, with the sub-runs that settled along with it. Requires lifecycle scope. Does not send a message or start a turn.",
     { environmentId, threadId },
   ],
   t3_set_thread_parent: [
@@ -218,13 +230,13 @@ const TOOL_SPECS = {
     optionalRequestContext,
   ],
   t3_list_projects: [
-    "List projects in one T3 environment.",
-    { environmentId, ...optionalRequestContext },
+    "List projects across T3 environments, or in one.",
+    { environmentId: discoveryEnvironmentId, ...optionalRequestContext },
   ],
   t3_list_threads: [
-    "List chats in one T3 environment, optionally filtered by agent profileId, project, parentThreadId, active/settled state, and executionState. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly.",
+    "List chats across every connected T3 environment (or one), optionally filtered by agent profileId, project, parentThreadId, active/settled state, and executionState. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly. hasPendingUserInput marks a chat waiting on a question; pass includeQuestions to attach each one's pendingQuestions (full text and options, as t3_get_pending_questions returns). profileSnapshot omits systemPrompt; read it with t3_get_thread.",
     {
-      environmentId,
+      environmentId: discoveryEnvironmentId,
       state: z.enum(["all", "active", "settled"]).optional(),
       executionState: executionState.optional(),
       projectId: z.string().trim().min(1).optional(),
@@ -235,7 +247,52 @@ const TOOL_SPECS = {
         .min(1)
         .optional()
         .describe("Only chats created under this chat."),
+      includeQuestions: z
+        .boolean()
+        .optional()
+        .describe("Attach pendingQuestions to chats waiting on a question."),
       ...optionalRequestContext,
+    },
+  ],
+  t3_get_pending_questions: [
+    "Read the questions a chat is waiting on (status waiting-input): each request's questionRequestId, and for every question its questionId, header, full question text, options (label and description), multiSelect, and allowsFreeText (whether a typed answer is accepted instead of an option). Empty when nothing is pending. Answer with t3_answer_question.",
+    { environmentId, threadId, ...optionalRequestContext },
+  ],
+  t3_answer_question: [
+    "Answer a question a chat is waiting on, so its turn continues. For each question pass options (option labels from t3_get_pending_questions; exactly one unless multiSelect) or text (only where allowsFreeText). Every question in the request must be answered. questionRequestId and questionId may be omitted when there is only one. Requires send scope. Retrying with the same idempotencyKey does not answer twice.",
+    {
+      environmentId,
+      threadId,
+      questionRequestId: z
+        .string()
+        .trim()
+        .min(1)
+        .optional()
+        .describe("From t3_get_pending_questions; omit when the chat has one pending request."),
+      answers: z
+        .array(
+          z.object({
+            questionId: z
+              .string()
+              .trim()
+              .min(1)
+              .optional()
+              .describe("Omit when the request asks a single question."),
+            options: z
+              .array(z.string().min(1))
+              .optional()
+              .describe("Chosen option labels. Several only for multiSelect questions."),
+            text: z
+              .string()
+              .trim()
+              .min(1)
+              .optional()
+              .describe("A typed answer instead of options, where allowsFreeText."),
+          }),
+        )
+        .min(1),
+      idempotencyKey,
+      correlationId: optionalRequestContext.correlationId,
     },
   ],
   t3_open_thread: [
@@ -282,7 +339,7 @@ const TOOL_SPECS = {
     { environmentId, taskId: z.string().trim().min(1) },
   ],
   t3_get_thread: [
-    "Read one T3 chat and its messages.",
+    "Read one T3 chat and its messages, including the full profileSnapshot with its systemPrompt.",
     { environmentId, threadId, ...optionalRequestContext },
   ],
   t3_summarize_thread: [
@@ -703,6 +760,8 @@ export function createMcpGateway(input: {
   readonly repositoryAllowlist?: ReadonlyArray<string>;
   readonly events?: import("./events.ts").GatewayEventStore;
   readonly health?: GatewayToolContext["health"];
+  /** Holds calls while the desktop runtime is (re)connecting, so grants are not read too early. */
+  readonly waitForRuntime?: () => Promise<void>;
 }) {
   const server = new McpServer({ name: "t3-code", version: "3.0.0" });
   const context: GatewayToolContext = {
@@ -840,6 +899,7 @@ export function createMcpGateway(input: {
         const caller = gatewayCaller(extra._meta);
         const responseContext = requestContext(args);
         try {
+          if (name !== "t3_get_gateway_health") await input.waitForRuntime?.();
           const aliasAction = LIFECYCLE_ALIASES[name];
           const toolName = aliasAction === undefined ? name : "t3_control_thread";
           const normalizedArgs =

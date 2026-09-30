@@ -6,10 +6,12 @@ import {
   ThreadLinkedPullRequest,
   UserInputRequestedPayload,
   isImportedAgentSessionMessageId,
+  type CommandId,
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
   type OrchestrationThread,
+  type ThreadId,
   type ThreadPullRequestKey,
   type ThreadPullRequestLink,
   type OrchestrationThreadActivity,
@@ -170,6 +172,121 @@ function withEventBase(
 }
 
 type PlannedOrchestrationEvent = Omit<OrchestrationEvent, "sequence">;
+
+function singleOrMany(
+  events: ReadonlyArray<PlannedOrchestrationEvent>,
+): PlannedOrchestrationEvent | ReadonlyArray<PlannedOrchestrationEvent> {
+  return events.length === 1 ? events[0]! : events;
+}
+
+/** Every chat nested under a thread, at any depth. */
+function threadDescendants(
+  readModel: OrchestrationReadModel,
+  threadId: ThreadId,
+): ReadonlyArray<OrchestrationThread> {
+  const descendants: OrchestrationThread[] = [];
+  const visited = new Set<ThreadId>([threadId]);
+  const pending: ThreadId[] = [threadId];
+  for (let parentId = pending.pop(); parentId !== undefined; parentId = pending.pop()) {
+    for (const candidate of readModel.threads) {
+      if (candidate.parentThreadId !== parentId || candidate.deletedAt !== null) continue;
+      if (visited.has(candidate.id)) continue;
+      visited.add(candidate.id);
+      descendants.push(candidate);
+      pending.push(candidate.id);
+    }
+  }
+  return descendants;
+}
+
+/**
+ * The server owns settle eligibility: a thread whose session is coming alive
+ * or working, that has queued a turn, or that waits on anything but an async
+ * question cannot settle. Manual settlement dismisses async questions without
+ * answering them; native callbacks and approvals still need a response.
+ */
+function canSettle(thread: OrchestrationThread, occurredAt: string, automatic: boolean) {
+  if (thread.session?.status === "starting" || thread.session?.status === "running") return false;
+  const blockingRequest = Array.from(openRequests(thread).values()).some(
+    (activity) =>
+      automatic ||
+      activity.kind !== "user-input.requested" ||
+      !Predicate.isObject(activity.payload) ||
+      activity.payload.responseMode !== "message",
+  );
+  // Settling inside the adoption window would hide just-requested work.
+  return !blockingRequest && !hasQueuedTurnStartForThread(thread, occurredAt);
+}
+
+/**
+ * Settles one thread. Settling is "I'm done with this": it also dismisses
+ * async questions and clears states that would keep the row pinned or
+ * snoozed instead of showing the new settled state.
+ */
+const settleEvents = Effect.fnUntraced(function* (
+  thread: OrchestrationThread,
+  commandId: CommandId,
+  occurredAt: string,
+  settledAt: string,
+) {
+  const eventBase = withEventBase({
+    aggregateKind: "thread",
+    aggregateId: thread.id,
+    occurredAt,
+    commandId,
+  });
+  // Settling an already-settled thread re-emits with the original
+  // settledAt: the engine rejects zero-event commands, and bulk-settle /
+  // double-click must stay silent no-ops rather than surface errors.
+  const alreadySettled = thread.settledOverride === "settled" && thread.settledAt !== null;
+  const events: PlannedOrchestrationEvent[] = [
+    {
+      ...(yield* eventBase),
+      type: "thread.settled",
+      payload: {
+        threadId: thread.id,
+        settledAt: alreadySettled ? (thread.settledAt ?? settledAt) : settledAt,
+        // A re-emission is a projected no-op: keep the existing updatedAt
+        // so duplicate settles neither rewind nor churn ordering. A fresh
+        // settle stamps the command time.
+        updatedAt: alreadySettled ? thread.updatedAt : occurredAt,
+      },
+    },
+  ];
+  for (const [requestId, request] of openRequests(thread)) {
+    events.push({
+      ...(yield* eventBase),
+      type: "thread.activity-appended",
+      payload: {
+        threadId: thread.id,
+        activity: {
+          id: EventId.make(`settle:${commandId}:${thread.id}:${requestId}`),
+          kind: "user-input.resolved",
+          summary: "User input dismissed",
+          tone: "info",
+          turnId: request.turnId,
+          createdAt: occurredAt,
+          payload: { requestId, responseMode: "message" },
+        },
+      },
+    });
+  }
+  if (thread.pinnedAt != null) {
+    events.push({
+      ...(yield* eventBase),
+      type: "thread.unpinned",
+      payload: { threadId: thread.id, updatedAt: occurredAt },
+    });
+  }
+  if (thread.snoozedUntil != null) {
+    events.push({
+      ...(yield* eventBase),
+      type: "thread.unsnoozed",
+      payload: { threadId: thread.id, reason: "user", updatedAt: occurredAt },
+    });
+  }
+  return events;
+});
 
 type DecideOrchestrationCommandResult =
   | PlannedOrchestrationEvent
@@ -519,113 +636,26 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `thread ${command.threadId} changed before automatic settlement`,
         });
       }
-      // The server owns settle eligibility. A stale command must not settle
-      // a thread whose session is coming alive or working.
-      if (thread.session?.status === "starting" || thread.session?.status === "running") {
-        return yield* new OrchestrationThreadSettleBlockedError({ threadId: command.threadId });
-      }
-      const pendingRequests = openRequests(thread);
-      // Manual settlement dismisses async questions without answering them.
-      // Native callbacks and approvals still need a response or interruption.
-      if (
-        Array.from(pendingRequests.values()).some(
-          (activity) =>
-            command.type === "thread.auto-settle" ||
-            activity.kind !== "user-input.requested" ||
-            !Predicate.isObject(activity.payload) ||
-            activity.payload.responseMode !== "message",
-        )
-      ) {
-        return yield* new OrchestrationThreadSettleBlockedError({ threadId: command.threadId });
-      }
       const occurredAt = yield* nowIso;
-      // Settling inside the adoption window would hide just-requested work.
-      if (hasQueuedTurnStartForThread(thread, occurredAt)) {
+      if (!canSettle(thread, occurredAt, command.type === "thread.auto-settle")) {
         return yield* new OrchestrationThreadSettleBlockedError({ threadId: command.threadId });
       }
-      // Settling an already-settled thread re-emits with the original
-      // settledAt: the engine rejects zero-event commands, and bulk-settle /
-      // double-click must stay silent no-ops rather than surface errors.
-      const alreadySettled = thread.settledOverride === "settled" && thread.settledAt !== null;
-      const settledEvent = {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.settled" as const,
-        payload: {
-          threadId: command.threadId,
-          settledAt: alreadySettled
-            ? thread.settledAt
-            : command.type === "thread.auto-settle"
-              ? command.settledAt
-              : occurredAt,
-          // A re-emission is a projected no-op: keep the existing updatedAt
-          // so duplicate settles neither rewind nor churn ordering. A fresh
-          // settle stamps the command time.
-          updatedAt: alreadySettled ? thread.updatedAt : occurredAt,
-        },
-      };
-      // Settling is "I'm done with this": clear states that would keep the
-      // row pinned or snoozed instead of showing the new settled state.
-      const companionEvents: Array<Omit<OrchestrationEvent, "sequence">> = [];
-      for (const [requestId, request] of pendingRequests) {
-        companionEvents.push({
-          ...(yield* withEventBase({
-            aggregateKind: "thread",
-            aggregateId: command.threadId,
-            occurredAt,
-            commandId: command.commandId,
-          })),
-          type: "thread.activity-appended",
-          payload: {
-            threadId: command.threadId,
-            activity: {
-              id: EventId.make(`settle:${command.commandId}:${requestId}`),
-              kind: "user-input.resolved",
-              summary: "User input dismissed",
-              tone: "info",
-              turnId: request.turnId,
-              createdAt: occurredAt,
-              payload: { requestId, responseMode: "message" },
-            },
-          },
-        });
+      const settledAt = command.type === "thread.auto-settle" ? command.settledAt : occurredAt;
+      const parentEvents = yield* settleEvents(thread, command.commandId, occurredAt, settledAt);
+      if (command.type === "thread.auto-settle") return singleOrMany(parentEvents);
+      // Settling a chat settles its sub-runs with it, sharing its settledAt so
+      // unsettling the parent can bring back exactly these. Sub-runs that are
+      // still working or waiting on an approval stay as they are. Their events
+      // come first: the command receipt records the last event's aggregate.
+      const descendantEvents: PlannedOrchestrationEvent[] = [];
+      for (const descendant of threadDescendants(readModel, thread.id)) {
+        if (descendant.archivedAt !== null || descendant.settledOverride === "settled") continue;
+        if (!canSettle(descendant, occurredAt, false)) continue;
+        descendantEvents.push(
+          ...(yield* settleEvents(descendant, command.commandId, occurredAt, settledAt)),
+        );
       }
-      if (thread.pinnedAt != null) {
-        companionEvents.push({
-          ...(yield* withEventBase({
-            aggregateKind: "thread",
-            aggregateId: command.threadId,
-            occurredAt,
-            commandId: command.commandId,
-          })),
-          type: "thread.unpinned" as const,
-          payload: {
-            threadId: command.threadId,
-            updatedAt: occurredAt,
-          },
-        });
-      }
-      if (thread.snoozedUntil != null) {
-        companionEvents.push({
-          ...(yield* withEventBase({
-            aggregateKind: "thread",
-            aggregateId: command.threadId,
-            occurredAt,
-            commandId: command.commandId,
-          })),
-          type: "thread.unsnoozed",
-          payload: {
-            threadId: command.threadId,
-            reason: "user",
-            updatedAt: occurredAt,
-          },
-        });
-      }
-      return companionEvents.length > 0 ? [settledEvent, ...companionEvents] : settledEvent;
+      return singleOrMany([...descendantEvents, ...parentEvents]);
     }
 
     case "thread.unsettle": {
@@ -639,20 +669,38 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // the existing updatedAt so duplicates do not churn ordering.
       const alreadyPinnedActive = thread.settledOverride === "active";
       const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
+      const unsettled = (threadId: ThreadId, updatedAt: string) =>
+        withEventBase({
           aggregateKind: "thread",
-          aggregateId: command.threadId,
+          aggregateId: threadId,
           occurredAt,
           commandId: command.commandId,
-        })),
-        type: "thread.unsettled",
-        payload: {
-          threadId: command.threadId,
-          reason: command.reason,
-          updatedAt: alreadyPinnedActive ? thread.updatedAt : occurredAt,
-        },
-      };
+        }).pipe(
+          Effect.map((base): PlannedOrchestrationEvent => ({
+            ...base,
+            type: "thread.unsettled",
+            payload: { threadId, reason: command.reason, updatedAt },
+          })),
+        );
+      const parentEvent = yield* unsettled(
+        command.threadId,
+        alreadyPinnedActive ? thread.updatedAt : occurredAt,
+      );
+      // Sub-runs settled together with this chat come back with it; ones
+      // settled on their own before it stay settled.
+      const descendantEvents: PlannedOrchestrationEvent[] = [];
+      if (thread.settledOverride === "settled" && thread.settledAt !== null) {
+        for (const descendant of threadDescendants(readModel, thread.id)) {
+          if (
+            descendant.archivedAt === null &&
+            descendant.settledOverride === "settled" &&
+            descendant.settledAt === thread.settledAt
+          ) {
+            descendantEvents.push(yield* unsettled(descendant.id, occurredAt));
+          }
+        }
+      }
+      return descendantEvents.length > 0 ? [...descendantEvents, parentEvent] : parentEvent;
     }
 
     case "thread.snooze": {

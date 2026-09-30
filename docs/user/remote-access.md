@@ -224,6 +224,27 @@ Agents board; changing an agent does not change existing chats. Use `t3_list_env
 to check the environment IDs and effective grants seen by the assistant. Permission errors also
 report the granted and missing scopes.
 
+`t3_list_threads`, `t3_list_projects`, `t3_list_agents`, and `t3_get_agents_view` cover every
+connected machine with read access when `environmentId` is omitted. Each result names its
+machine with `environmentId` and `environmentLabel`, and `environments` lists any machine that
+was skipped (disconnected or without read access) or failed, so a missing chat is not mistaken
+for one that does not exist. Pass `environmentId` to list one machine.
+
+Listings stay small by leaving out agent system prompts. A chat's `profileSnapshot` in
+`t3_list_threads` keeps the agent's `profileId`, `profileName`, and `revision`; read the chat with
+`t3_get_thread` to see the prompt it runs with. Pass `includeSystemPrompt: true` to
+`t3_list_agents` when you need each agent's current prompt, for example before `t3_update_agent`.
+
+### Answer an agent's questions through MCP
+
+When an agent asks a question with answer options, its chat shows `waiting-input`, and
+`t3_list_threads` marks it with `hasPendingUserInput` (pass `includeQuestions: true` to include
+the questions). `t3_get_pending_questions` returns each question's full text, its options, whether
+several options can be chosen, and whether a typed answer is accepted. `t3_answer_question`
+answers with option labels or typed text, and the chat continues as if you had answered in the
+app. Every question in the request needs an answer. Answering needs the same send access as
+`t3_send_message`.
+
 ### Pause or stop work through MCP
 
 Default access does not include pause or stop. In **Settings → MCP Gateway**, open the target
@@ -290,7 +311,7 @@ Add a short **Specialization** when creating or editing an agent to show what it
 MCP assistants can discover agents with read access using `t3_list_agents`, or manage them using `t3_create_agent`, `t3_update_agent`, and `t3_delete_agent` with create
 or admin access. Agent writes share only to connected environments with one of those grants;
 check the returned sync failures. Use `profileId` with `t3_create_thread` to select an agent and its initial settings,
-then `t3_send_message` to start work, or `t3_create_and_start_thread` to create the chat and send its opening task in one idempotent call. The environment-local `/mcp/workspace` endpoint exposes `list_agents` and `get_agents_view` with the same profile and state filters, using runs from its hosting machine. Agent listings include specializations without exposing system prompts. Use `t3_get_agents_view` with an `environmentId` to list agents alongside their chats and run status. Filter by `profileId`, `state` (`active`, `settled`, or `all`; active is the default and includes completed chats that have not been settled), and `executionState` (`running`, `queued`, `waiting-approval`, `waiting-input`, `completed`, `failed`, `interrupted`, `stopped`, or `idle`). Chats belonging to deleted agents appear under `orphanedRuns`. To follow one chat without polling, use `t3_wait_for_thread_status`, which returns the new status and a resume cursor when it changes or the bounded timeout elapses. Use `t3_unsettle_thread`
+then `t3_send_message` to start work, or `t3_create_and_start_thread` to create the chat and send its opening task in one idempotent call. The environment-local `/mcp/workspace` endpoint exposes `list_agents` and `get_agents_view` with the same profile and state filters, using runs from its hosting machine. Agent listings include specializations without exposing system prompts. Use `t3_get_agents_view` to list agents alongside their chats and run status. Filter by `profileId`, `state` (`active`, `settled`, or `all`; active is the default and includes completed chats that have not been settled), and `executionState` (`running`, `queued`, `waiting-approval`, `waiting-input`, `completed`, `failed`, `interrupted`, `stopped`, or `idle`). Chats belonging to deleted agents appear under `orphanedRuns`. To follow one chat without polling, use `t3_wait_for_thread_status`, which returns the new status and a resume cursor when it changes or the bounded timeout elapses. Use `t3_unsettle_thread`
 with lifecycle access to return a settled chat to the active list. `t3_open_agents` opens the
 board in the connected desktop window with read access.
 
@@ -310,6 +331,10 @@ Right-click a sub-run for the same actions as a card. **Pin to top of parent** k
 its parent's list, **Move up** and **Move down** arrange it among its siblings, and settling moves
 it into its parent's collapsed **Settled** group. A live sub-run whose parent is settled keeps its
 own card, which names its parent's agent and chat; click that name to open the parent.
+
+Settling a run also settles its sub-runs, at every depth, except ones that are still working or
+waiting on an approval. Un-settling the run brings back the sub-runs that settled with it; ones you
+settled earlier stay settled.
 
 To link runs yourself on web and desktop, drag a card onto another card's title to make it a
 sub-run, or drag a sub-run out of its card to make it independent. Dragging a sub-run onto

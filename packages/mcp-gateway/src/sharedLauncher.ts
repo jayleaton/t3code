@@ -8,13 +8,9 @@ import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { sharedGatewayConfiguration, type SharedGatewayConfig } from "./sharedOwner.ts";
 import {
   connectMcpSession,
-  GatewayRetiredError,
+  GatewayRetiringError,
   GatewayUnavailableError,
 } from "./sharedTransport.ts";
-
-/** Connection attempts while a retiring owner releases the port to a fresh one. */
-const CONNECT_ATTEMPTS = 20;
-const RETIRE_RETRY_MS = 100;
 
 export function launchSharedOwner(
   entryPoint: string,
@@ -77,33 +73,40 @@ export function launchSharedOwner(
   });
 }
 
+/**
+ * Joins the running owner, or launches one. An owner retiring for a newer build releases the
+ * port, so the launcher retries until it can start or join the replacement.
+ */
 export async function connectSharedGateway(
   config: SharedGatewayConfig,
   launch: () => Promise<void>,
+  build?: string,
 ): Promise<Transport> {
   const input = {
     port: config.port,
     token: config.token,
     configuration: sharedGatewayConfiguration(config),
-    ...(config.build === undefined ? {} : { build: config.build }),
+    ...(build === undefined ? {} : { build }),
   };
-  for (let attempt = 1; ; attempt++) {
+  const deadline = AbortSignal.timeout(15_000);
+  let launched = false;
+  for (;;) {
     try {
       return await connectMcpSession(input);
     } catch (error) {
-      const retired = error instanceof GatewayRetiredError;
-      if (!retired && !(error instanceof GatewayUnavailableError)) throw error;
-      if (attempt >= CONNECT_ATTEMPTS) throw error;
-      // A retired owner releases the port as it closes, so connect again rather
-      // than launching into a port it may still hold.
-      if (retired) {
+      if (deadline.aborted) throw error;
+      if (error instanceof GatewayRetiringError) {
+        launched = false;
         await new Promise((resolve) =>
-          AbortSignal.timeout(RETIRE_RETRY_MS).addEventListener("abort", resolve, { once: true }),
+          AbortSignal.timeout(50).addEventListener("abort", resolve, { once: true }),
         );
-        continue;
+      } else if (error instanceof GatewayUnavailableError && !launched) {
+        await launch();
+        launched = true;
+      } else {
+        throw error;
       }
     }
-    await launch();
   }
 }
 

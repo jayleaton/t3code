@@ -1,7 +1,4 @@
 #!/usr/bin/env node
-import * as NodeCrypto from "node:crypto";
-// @effect-diagnostics-next-line nodeBuiltinImport:off - The build identity is read synchronously before the Effect runtime exists.
-import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Gateway state path is initialized synchronously before the Effect runtime exists.
 import * as NodePath from "node:path";
@@ -9,7 +6,7 @@ import * as NodePath from "node:path";
 import { GATEWAY_SCOPE_VALUES } from "./port.ts";
 import type { GatewayScope } from "./port.ts";
 import { connectSharedGateway, launchSharedOwner, proxyMcpStdio } from "./sharedLauncher.ts";
-import { startSharedGatewayOwner, type SharedGatewayConfig } from "./sharedOwner.ts";
+import { gatewayBuild, startSharedGatewayOwner, type SharedGatewayConfig } from "./sharedOwner.ts";
 
 function parseGrants(
   raw: string | undefined,
@@ -57,12 +54,7 @@ if (!Number.isInteger(retentionEvents) || retentionEvents < 1) {
 const stateDirectory = process.env.T3CODE_HOME ?? NodePath.join(NodeOS.homedir(), ".t3code");
 const stateFile =
   process.env.T3_MCP_STATE_FILE ?? NodePath.join(stateDirectory, "mcp-gateway-v3.sqlite");
-// Any update changes the bundle, so its hash tells an outdated owner apart.
-const build = NodeCrypto.createHash("sha256")
-  .update(NodeFS.readFileSync(process.argv[1]!))
-  .digest("hex");
 const config: SharedGatewayConfig = {
-  build,
   port: bridgePort,
   token: bridgeToken,
   stateFile,
@@ -72,8 +64,11 @@ const config: SharedGatewayConfig = {
 };
 
 try {
+  const entryPoint = process.argv[1]!;
+  const build = gatewayBuild(entryPoint);
   if (process.argv.includes("--shared-owner")) {
     const owner = await startSharedGatewayOwner(config, {
+      build,
       onIdle: () => {
         void owner?.close();
       },
@@ -95,9 +90,13 @@ try {
     }
   } else {
     const connect = () =>
-      connectSharedGateway(config, async () => {
-        await launchSharedOwner(process.argv[1]!, config);
-      });
+      connectSharedGateway(
+        config,
+        async () => {
+          await launchSharedOwner(entryPoint, config);
+        },
+        build.id,
+      );
     await proxyMcpStdio(await connect(), connect);
   }
 } catch (error) {

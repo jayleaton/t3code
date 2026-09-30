@@ -10,7 +10,7 @@ import { startWebhookDeliveryWorker } from "./deliver.ts";
 import { createGatewayEventStore, type GatewayEventStore } from "./events.ts";
 import { hasGatewayScopes } from "./port.ts";
 import { createMcpGateway } from "./server.ts";
-import { acceptMcpSession } from "./sharedTransport.ts";
+import { acceptMcpSession, rejectRetiring, type GatewayBuild } from "./sharedTransport.ts";
 
 export interface SharedGatewayConfig {
   readonly port: number;
@@ -19,11 +19,6 @@ export interface SharedGatewayConfig {
   readonly retentionEvents: number;
   readonly repositoryAllowlist: ReadonlyArray<string>;
   readonly initialGrants: GatewayGrants;
-  /**
-   * Identifies the gateway code. Sessions from another build retire the owner
-   * so it cannot keep serving old tools; it is not part of the configuration.
-   */
-  readonly build?: string;
 }
 
 export function sharedGatewayConfiguration(config: SharedGatewayConfig): string {
@@ -43,17 +38,39 @@ export function sharedGatewayConfiguration(config: SharedGatewayConfig): string 
     .digest("hex");
 }
 
+function fileHash(file: string): string {
+  return NodeCrypto.createHash("sha256").update(NodeFS.readFileSync(file)).digest("hex");
+}
+
+/** The running script's identity; it stops being current when the file on disk is replaced. */
+export function gatewayBuild(entryPoint: string): GatewayBuild {
+  const id = fileHash(entryPoint);
+  return {
+    id,
+    isCurrent: () => {
+      try {
+        return fileHash(entryPoint) === id;
+      } catch {
+        return false;
+      }
+    },
+  };
+}
+
+const UNKNOWN_BUILD: GatewayBuild = { id: "unknown", isCurrent: () => true };
+
 /** One owner holds the runtime bridge, SQLite store and webhook worker for all MCP sessions. */
 export async function startSharedGatewayOwner(
   config: SharedGatewayConfig,
   options: {
     readonly idleTimeoutMs?: number;
     readonly onIdle?: () => void;
-    /** A session from another build retired this owner; it has already closed. */
-    readonly onRetire?: () => void;
+    /** Launchers from a newer install retire this owner once its own script is replaced. */
+    readonly build?: GatewayBuild;
   } = {},
 ) {
   const configuration = sharedGatewayConfiguration(config);
+  const build = options.build ?? UNKNOWN_BUILD;
   const sessions = new Map<WebSocket, ReturnType<typeof createMcpGateway>>();
   const statusListeners = new Set<() => void>();
   let events: GatewayEventStore | undefined;
@@ -73,20 +90,20 @@ export async function startSharedGatewayOwner(
       { once: true },
     );
   };
-  let unsubscribeStatus = () => {};
+  let unsubscribeStatus: (() => void) | undefined;
   let delivery: ReturnType<typeof startWebhookDeliveryWorker> | undefined;
-  async function close() {
+  const close = async () => {
     if (closing) return;
     closing = true;
     idleController?.abort();
-    unsubscribeStatus();
+    unsubscribeStatus?.();
     await Promise.allSettled([
       delivery?.stop(),
       ...[...sessions.values()].map((gateway) => gateway.close()),
     ]);
     await bridge.close();
     events?.close();
-  }
+  };
   const store = () => {
     if (events === undefined) throw new Error("Shared gateway store is not ready.");
     return events;
@@ -105,10 +122,15 @@ export async function startSharedGatewayOwner(
       };
     },
     onMcpConnection: (socket) => {
+      if (closing) {
+        rejectRetiring(socket);
+        return;
+      }
       void acceptMcpSession(
         socket,
         config.token,
         configuration,
+        build,
         async (transport) => {
           if (closing) throw new Error("Shared gateway is shutting down.");
           const gateway = createMcpGateway({
@@ -118,6 +140,7 @@ export async function startSharedGatewayOwner(
             repositoryAllowlist: config.repositoryAllowlist,
             events: store(),
             health: bridge.getHealth,
+            waitForRuntime: bridge.waitForClient,
           });
           sessions.set(socket, gateway);
           idleController?.abort();
@@ -128,9 +151,10 @@ export async function startSharedGatewayOwner(
           });
           await gateway.connect(transport);
         },
-        config.build === undefined
-          ? undefined
-          : { build: config.build, retire: () => void close().then(options.onRetire) },
+        () => {
+          // Sessions on the replaced build end; their hosts relaunch the installed script.
+          void close();
+        },
       ).catch(() => socket.terminate());
     },
   });

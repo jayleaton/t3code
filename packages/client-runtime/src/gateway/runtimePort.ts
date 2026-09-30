@@ -40,6 +40,7 @@ import {
   createThread,
   respondToThreadApproval,
   respondToThreadApprovals,
+  respondToThreadUserInput,
   startThreadTurn,
   settleThread,
   unsettleThread,
@@ -443,6 +444,32 @@ function gatewayActivity(
   };
 }
 
+/**
+ * Questions the agent is waiting on, with every option, so an MCP client can
+ * read them aloud and answer through respondToUserInput.
+ */
+function gatewayPendingQuestions(
+  userInputs: ReturnType<typeof derivePendingRequests>["userInputs"],
+) {
+  return userInputs.map((request) => ({
+    questionRequestId: request.requestId,
+    askedAt: request.createdAt,
+    questions: request.questions.slice(0, 20).map((question) => ({
+      questionId: question.id,
+      header: question.header.slice(0, 512),
+      question: question.question.slice(0, 4_000),
+      multiSelect: question.multiSelect === true,
+      // Matches the composer: free text is allowed unless the provider forbids it.
+      allowsFreeText: question.allowCustomAnswer !== false,
+      options: question.options.slice(0, 50).map((option) => ({
+        label: option.label.slice(0, 512),
+        description: option.description.slice(0, 2_000),
+        ...(option.value === undefined ? {} : { value: option.value }),
+      })),
+    })),
+  }));
+}
+
 const decodeProfile = Schema.decodeUnknownSync(McpGatewayProfile);
 const decodeProfiles = Schema.decodeUnknownEffect(Schema.Array(McpGatewayProfile));
 
@@ -465,6 +492,7 @@ export function gatewayThreadProjection(thread: OrchestrationThreadDetailSnapsho
     }),
     hasPendingApprovals: pending.hasPendingApprovals,
     hasPendingUserInput: pending.hasPendingUserInput,
+    pendingQuestions: gatewayPendingQuestions(requests.userInputs),
     modelSelection: thread.modelSelection,
     profileSnapshot: thread.profileSnapshot,
     parentThreadId: thread.parentThreadId ?? null,
@@ -1289,6 +1317,27 @@ export function createGatewayRuntimePort(
               threadId: ThreadId.make(input.threadId),
               requestId: ApprovalRequestId.make(input.approvalRequestId),
               decision: input.decision,
+            }),
+          );
+          return {
+            requestId: input.requestId,
+            commandId: input.requestId,
+            status: "accepted" as const,
+            threadId: input.threadId,
+          };
+        }),
+      ),
+    respondToUserInput: (input) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          yield* registry.run(
+            EnvironmentId.make(input.environmentId),
+            respondToThreadUserInput({
+              commandId: CommandId.make(input.requestId),
+              threadId: ThreadId.make(input.threadId),
+              requestId: ApprovalRequestId.make(input.userInputRequestId),
+              answers: input.answers,
             }),
           );
           return {
