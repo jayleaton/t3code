@@ -2,6 +2,7 @@ import {
   makeClientFocusDispatcher,
   makeClientFocusLayer,
 } from "@t3tools/client-runtime/client-focus";
+import { EnvironmentRegistry } from "@t3tools/client-runtime/connection";
 import {
   EnvironmentId,
   ThreadId,
@@ -9,6 +10,7 @@ import {
   type DesktopBridge,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import type * as Layer from "effect/Layer";
 
 import { clientFocusIdentity } from "./connection/clientMetadata";
 import { getClientId } from "./lib/backgroundActivityReporter";
@@ -18,25 +20,26 @@ import type { AppRouter } from "./router";
 const dispatcher = makeClientFocusDispatcher();
 export const setClientFocusHandler = dispatcher.setHandler;
 
-export const clientFocusLayer = makeClientFocusLayer({
-  host: Effect.sync(() =>
-    typeof window === "undefined"
-      ? null
-      : {
-          clientId: getClientId(),
-          clientKind: window.desktopBridge ? "desktop-renderer" : "web",
-          ...clientFocusIdentity({
-            identity: {
-              userAgent: navigator.userAgent,
-              platform: navigator.platform,
-              maxTouchPoints: navigator.maxTouchPoints,
-            },
-            desktopBridge: window.desktopBridge,
-          }),
-        },
-  ),
-  onRequest: dispatcher.onRequest,
-});
+export const clientFocusLayer: Layer.Layer<never, never, EnvironmentRegistry.EnvironmentRegistry> =
+  makeClientFocusLayer({
+    host: Effect.sync(() =>
+      typeof window === "undefined"
+        ? null
+        : {
+            clientId: getClientId(),
+            clientKind: window.desktopBridge ? "desktop-renderer" : "web",
+            ...clientFocusIdentity({
+              identity: {
+                userAgent: navigator.userAgent,
+                platform: navigator.platform,
+                maxTouchPoints: navigator.maxTouchPoints,
+              },
+              desktopBridge: window.desktopBridge,
+            }),
+          },
+    ),
+    onRequest: dispatcher.onRequest,
+  });
 
 /** Shows what an agent asked for and brings the window forward where the platform allows. */
 export async function applyClientFocusRequest(

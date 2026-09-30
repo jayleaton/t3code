@@ -9,29 +9,23 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { listLinkedPullRequestThreads } from "../../pullRequest/linkedThreads.ts";
-import { EventSinkV2, layer as eventSinkLayer } from "../EventSink.ts";
-import { layer as eventStoreLayer } from "../EventStore.ts";
-import {
-  LegacyV1ThreadImporter,
-  layer as legacyV1ThreadImporterLayer,
-} from "./LegacyV1ThreadImporter.ts";
-import {
-  ProjectionMaintenanceV2,
-  layer as projectionMaintenanceLayer,
-} from "../ProjectionMaintenance.ts";
-import { ProjectionStoreV2, layer as projectionStoreLayer } from "../ProjectionStore.ts";
+import * as EventSink from "../EventSink.ts";
+import * as EventStore from "../EventStore.ts";
+import * as LegacyV1ThreadImporter from "./LegacyV1ThreadImporter.ts";
+import * as ProjectionMaintenance from "../ProjectionMaintenance.ts";
+import * as ProjectionStore from "../ProjectionStore.ts";
 
 const encodeProfileSnapshot = Schema.encodeEffect(Schema.fromJsonString(ThreadProfileSnapshot));
 
 const databaseLayer = SqlitePersistenceMemory;
-const eventStoreProvided = eventStoreLayer.pipe(Layer.provideMerge(databaseLayer));
-const projectionStoreProvided = projectionStoreLayer.pipe(Layer.provideMerge(databaseLayer));
+const eventStoreProvided = EventStore.layer.pipe(Layer.provideMerge(databaseLayer));
+const projectionStoreProvided = ProjectionStore.layer.pipe(Layer.provideMerge(databaseLayer));
 const storesProvided = Layer.mergeAll(databaseLayer, eventStoreProvided, projectionStoreProvided);
-const eventSinkProvided = eventSinkLayer.pipe(Layer.provide(storesProvided));
-const importerProvided = legacyV1ThreadImporterLayer.pipe(
+const eventSinkProvided = EventSink.layer.pipe(Layer.provide(storesProvided));
+const importerProvided = LegacyV1ThreadImporter.layer.pipe(
   Layer.provide(Layer.mergeAll(storesProvided, eventSinkProvided)),
 );
-const projectionMaintenanceProvided = projectionMaintenanceLayer.pipe(
+const projectionMaintenanceProvided = ProjectionMaintenance.layer.pipe(
   Layer.provide(storesProvided),
 );
 const TestLayer = Layer.mergeAll(
@@ -45,7 +39,7 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
   it.effect("uses the created-thread index for startup migration checks", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      const importer = yield* LegacyV1ThreadImporter;
+      const importer = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
       const statements: string[] = [];
       const tracer = Tracer.make({
         span(options) {
@@ -87,10 +81,10 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
   it.effect("imports lightweight shells, hydrates transcripts, and remains idempotent", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      const importer = yield* LegacyV1ThreadImporter;
-      const maintenance = yield* ProjectionMaintenanceV2;
-      const projections = yield* ProjectionStoreV2;
-      const eventSink = yield* EventSinkV2;
+      const importer = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const eventSink = yield* EventSink.EventSinkV2;
       const threadId = ThreadId.make("thread:legacy-import");
 
       yield* sql`
@@ -444,10 +438,10 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
   it.effect("repairs newly added metadata after an earlier metadata repair", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      const importer = yield* LegacyV1ThreadImporter;
-      const maintenance = yield* ProjectionMaintenanceV2;
-      const projections = yield* ProjectionStoreV2;
-      const eventSink = yield* EventSinkV2;
+      const importer = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const eventSink = yield* EventSink.EventSinkV2;
       const threadId = ThreadId.make("thread:legacy-metadata-upgrade");
       const previousRepairId = EventId.make(`migration:v1:thread:${threadId}:metadata-repair`);
 
@@ -545,9 +539,9 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
       assert.deepStrictEqual(replayed.thread, repaired.thread);
       assert.deepStrictEqual(
         yield* Effect.gen(function* () {
-          const restartedImporter = yield* LegacyV1ThreadImporter;
+          const restartedImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
           return yield* restartedImporter.reconcileShells;
-        }).pipe(Effect.provide(legacyV1ThreadImporterLayer)),
+        }).pipe(Effect.provide(LegacyV1ThreadImporter.layer)),
         { importedThreadCount: 0, importedMessageCount: 0 },
       );
       const eventsAfterRestart = yield* sql<{ readonly event_id: string }>`
