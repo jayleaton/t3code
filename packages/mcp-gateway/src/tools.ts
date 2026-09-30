@@ -436,6 +436,19 @@ type GatewayListPage = {
   readonly snapshotAt: string;
 };
 
+/**
+ * Drops the system prompt from a listed thread's profile snapshot. Listings repeat the same
+ * few-KB prompt per chat; t3_get_thread still returns it for one chat.
+ */
+function withoutSystemPrompt(thread: Record<string, unknown>): Record<string, unknown> {
+  const snapshot = thread.profileSnapshot;
+  if (typeof snapshot !== "object" || snapshot === null || !("systemPrompt" in snapshot)) {
+    return thread;
+  }
+  const { systemPrompt: _systemPrompt, ...rest } = snapshot as Record<string, unknown>;
+  return { ...thread, profileSnapshot: rest };
+}
+
 function tagged(target: DiscoveryTarget, page: GatewayListPage): GatewayListPage {
   return { ...page, items: page.items.map((item) => ({ ...item, ...target })) };
 }
@@ -453,17 +466,19 @@ async function listGatewayThreads(
   const profileId = typeof input.profileId === "string" ? input.profileId : undefined;
   const parentThreadId =
     typeof input.parentThreadId === "string" ? input.parentThreadId : undefined;
-  const items = page.items.filter((thread) => {
-    const snapshot = thread.profileSnapshot as { profileId?: string } | undefined;
-    return (
-      (projectId === undefined || thread.projectId === projectId) &&
-      (parentThreadId === undefined || thread.parentThreadId === parentThreadId) &&
-      (profileId === undefined || snapshot?.profileId === profileId) &&
-      (state === "all" ||
-        (state === "settled" ? thread.settledAt != null : thread.settledAt == null)) &&
-      (executionState === undefined || readThreadExecutionState(thread) === executionState)
-    );
-  });
+  const items = page.items
+    .filter((thread) => {
+      const snapshot = thread.profileSnapshot as { profileId?: string } | undefined;
+      return (
+        (projectId === undefined || thread.projectId === projectId) &&
+        (parentThreadId === undefined || thread.parentThreadId === parentThreadId) &&
+        (profileId === undefined || snapshot?.profileId === profileId) &&
+        (state === "all" ||
+          (state === "settled" ? thread.settledAt != null : thread.settledAt == null)) &&
+        (executionState === undefined || readThreadExecutionState(thread) === executionState)
+      );
+    })
+    .map(withoutSystemPrompt);
   if (input.includeQuestions !== true) return tagged(target, { ...page, items });
   // Only chats waiting on a question need a detail read; the rest pass through.
   return tagged(target, {
@@ -1534,8 +1549,13 @@ export async function callGatewayTool(
       };
     }
     case "t3_list_agents": {
-      const discovered = await discover(context, input, (target) =>
-        availableProfiles(context, target.environmentId),
+      const includeSystemPrompt = input.includeSystemPrompt === true;
+      const discovered = await discover(context, input, async (target) =>
+        (await availableProfiles(context, target.environmentId)).map((profile) => {
+          if (includeSystemPrompt) return profile;
+          const { systemPrompt: _systemPrompt, ...rest } = profile;
+          return rest;
+        }),
       );
       if (discovered.coverage === undefined) {
         return { items: discovered.results[0]!.value, snapshotAt: "runtime" };

@@ -193,7 +193,7 @@ describe("MCP gateway server", () => {
     });
     const agents = await client.callTool({
       name: "t3_list_agents",
-      arguments: { environmentId: "local" },
+      arguments: { environmentId: "local", includeSystemPrompt: true },
     });
     expect(agents.isError).not.toBe(true);
     const board = await client.callTool({

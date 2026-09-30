@@ -2657,6 +2657,43 @@ describe("agent profile tools", () => {
       callGatewayTool({ port, grants: {} }, "t3_open_agents", { environmentId: "local" }),
     ).rejects.toMatchObject({ code: "unknown_environment" });
   });
+
+  it("keeps system prompts out of listings unless one chat or an opt-in asks", async () => {
+    const port = profilesPort();
+    const context = { port, grants: { local: ["admin", "read"] } as const };
+    await callGatewayTool(context, "t3_create_agent", { ...input, systemPrompt: "Long prompt" });
+    const thread = {
+      id: "chat",
+      projectId: "p",
+      profileSnapshot: {
+        profileId: "write",
+        profileName: "Write",
+        revision: 2,
+        systemPrompt: "Long prompt",
+      },
+    };
+    port.listThreads = async () => ({ snapshotAt: "now", items: [thread] });
+    port.getThread = async () => thread;
+
+    const listed = await callGatewayTool(context, "t3_list_threads", { environmentId: "local" });
+    expect(listed).toMatchObject({
+      items: [{ profileSnapshot: { profileId: "write", profileName: "Write", revision: 2 } }],
+    });
+    expect(JSON.stringify(listed)).not.toContain("Long prompt");
+    expect(
+      await callGatewayTool(context, "t3_get_thread", { environmentId: "local", threadId: "chat" }),
+    ).toMatchObject({ profileSnapshot: { systemPrompt: "Long prompt" } });
+
+    const agents = await callGatewayTool(context, "t3_list_agents", { environmentId: "local" });
+    expect(agents).toMatchObject({ items: [{ profileId: "write", name: "Write" }] });
+    expect(JSON.stringify(agents)).not.toContain("Long prompt");
+    expect(
+      await callGatewayTool(context, "t3_list_agents", {
+        environmentId: "local",
+        includeSystemPrompt: true,
+      }),
+    ).toMatchObject({ items: [{ systemPrompt: "Long prompt" }] });
+  });
 });
 
 describe("agent handoff permissions", () => {
