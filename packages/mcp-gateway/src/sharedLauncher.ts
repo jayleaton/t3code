@@ -3,6 +3,7 @@
 import * as NodeChildProcess from "node:child_process";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 
 import { sharedGatewayConfiguration, type SharedGatewayConfig } from "./sharedOwner.ts";
 import {
@@ -109,10 +110,29 @@ export async function connectSharedGateway(
   }
 }
 
-/** Proxy complete MCP messages, keeping request ids and notifications scoped to this session. */
-export async function proxyMcpStdio(remote: Transport): Promise<void> {
+const isRequest = (message: JSONRPCMessage) => "method" in message && "id" in message;
+const isResponse = (message: JSONRPCMessage) => "id" in message && !("method" in message);
+const RECONNECT_INITIALIZE_ID = "t3-gateway-reconnect";
+
+/**
+ * Proxy complete MCP messages, keeping request ids and notifications scoped to
+ * this session. When the owner stops (an update retired it, or it crashed) and
+ * `reconnect` is given, the session moves to the next owner: calls in flight
+ * fail with a retry hint, the client's initialize handshake is replayed, and
+ * the client is told the tool list changed so it picks up the new build's tools.
+ */
+export async function proxyMcpStdio(
+  initial: Transport,
+  reconnect?: () => Promise<Transport>,
+): Promise<void> {
   const stdio = new StdioServerTransport();
+  let remote = initial;
   let stopping = false;
+  let initialize: JSONRPCMessage | undefined;
+  let initialized: JSONRPCMessage | undefined;
+  const inFlight = new Set<string | number>();
+  // Messages the client sends while the session moves to the next owner.
+  let held: JSONRPCMessage[] | undefined;
   const report = (error: Error) => {
     process.stderr.write(`t3-mcp-gateway: ${error.message}\n`);
     process.exitCode = 1;
@@ -129,25 +149,77 @@ export async function proxyMcpStdio(remote: Transport): Promise<void> {
   const onEnd = () => {
     void shutdown();
   };
-  process.stdin.once("end", onEnd);
-  process.once("SIGINT", onEnd);
-  process.once("SIGTERM", onEnd);
-  stdio.onmessage = (message) => {
+  const forward = (message: JSONRPCMessage) => {
+    if (isRequest(message)) inFlight.add((message as { id: string | number }).id);
     void remote.send(message).catch(report);
   };
-  remote.onmessage = (message) => {
-    void stdio.send(message).catch(report);
+  const attach = async (transport: Transport, onReplayed?: () => void) => {
+    remote = transport;
+    transport.onmessage = (message) => {
+      if (isResponse(message) && (message as { id: unknown }).id === RECONNECT_INITIALIZE_ID) {
+        onReplayed?.();
+        return;
+      }
+      if (isResponse(message)) inFlight.delete((message as { id: string | number }).id);
+      void stdio.send(message).catch(report);
+    };
+    transport.onerror = report;
+    transport.onclose = () => {
+      if (stopping || transport !== remote) return;
+      void moveToNextOwner();
+    };
+    await transport.start();
   };
-  stdio.onerror = report;
-  remote.onerror = report;
-  remote.onclose = () => {
-    if (!stopping)
+  const moveToNextOwner = async () => {
+    for (const id of inFlight) {
+      void stdio
+        .send({
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code: -32603,
+            message: "The T3 gateway restarted during this call. Retry it.",
+          },
+        })
+        .catch(() => undefined);
+    }
+    inFlight.clear();
+    if (reconnect === undefined || initialize === undefined) {
       report(
         new Error(
           "Shared gateway owner stopped. Reconnect this MCP session; in-flight work is not automatically replayed.",
         ),
       );
+      return;
+    }
+    held = [];
+    try {
+      const next = await reconnect();
+      const replayed = Promise.withResolvers<void>();
+      await attach(next, replayed.resolve);
+      await next.send({ ...initialize, id: RECONNECT_INITIALIZE_ID } as JSONRPCMessage);
+      await replayed.promise;
+      if (initialized !== undefined) await next.send(initialized);
+      const pending = held;
+      held = undefined;
+      for (const message of pending) forward(message);
+      await stdio.send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+    } catch (error) {
+      report(error instanceof Error ? error : new Error(String(error)));
+    }
   };
-  await remote.start();
+  process.stdin.once("end", onEnd);
+  process.once("SIGINT", onEnd);
+  process.once("SIGTERM", onEnd);
+  stdio.onmessage = (message) => {
+    if ("method" in message && message.method === "initialize") initialize = message;
+    if ("method" in message && message.method === "notifications/initialized") {
+      initialized = message;
+    }
+    if (held !== undefined) held.push(message);
+    else forward(message);
+  };
+  stdio.onerror = report;
+  await attach(initial);
   await stdio.start();
 }

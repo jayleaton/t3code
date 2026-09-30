@@ -7,6 +7,7 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import * as Crypto from "effect/Crypto";
@@ -822,6 +823,49 @@ describe("shared MCP gateway", () => {
     });
     await transport.close();
   });
+
+  it("moves a running stdio session to the next owner and announces the tool change", async () => {
+    const input = await config();
+    const entryPoint =
+      process.env.T3_MCP_TEST_ENTRYPOINT ??
+      NodeURL.fileURLToPath(new URL("./bin.ts", import.meta.url));
+    const first = await owner(input);
+    const client = new Client({ name: "owner-handover", version: "1.0.0" });
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [entryPoint],
+      stderr: "pipe",
+      env: {
+        T3_MCP_BRIDGE_PORT: String(input.port),
+        T3_MCP_BRIDGE_TOKEN: input.token,
+        T3_MCP_STATE_FILE: input.stateFile,
+        T3_MCP_EVENT_RETENTION: String(input.retentionEvents),
+        T3_MCP_REPOSITORY_ALLOWLIST: input.repositoryAllowlist.join(","),
+        T3_MCP_GRANTS: "{}",
+      },
+    });
+    cleanup.push(() => client.close());
+    await client.connect(transport);
+    const changed = Promise.withResolvers<void>();
+    client.setNotificationHandler(ToolListChangedNotificationSchema, () => changed.resolve());
+    expect((await client.listTools()).tools.length).toBeGreaterThan(0);
+
+    await first!.close();
+    await changed.promise;
+    // The session launched a detached owner. Let it finish its normal idle shutdown once the
+    // session closes; never find or kill a PID by port.
+    const desktop = await runtime(input);
+    const ownerClosed = new Promise<void>((resolve) =>
+      desktop.socket.once("close", () => resolve()),
+    );
+    cleanup.push(async () => {
+      await client.close();
+      await ownerClosed;
+    });
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toContain(
+      "t3_set_thread_parent",
+    );
+  }, 30_000);
 });
 
 it("shares lifecycle grant updates and chat focus across already-connected MCP sessions", async () => {

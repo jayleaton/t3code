@@ -89,14 +89,15 @@ try {
       process.once("SIGTERM", stop);
     }
   } else {
-    const remote = await connectSharedGateway(
-      config,
-      async () => {
-        await launchSharedOwner(entryPoint, config);
-      },
-      build.id,
-    );
-    await proxyMcpStdio(remote);
+    const connect = () =>
+      connectSharedGateway(
+        config,
+        async () => {
+          await launchSharedOwner(entryPoint, config);
+        },
+        build.id,
+      );
+    await proxyMcpStdio(await connect(), connect);
   }
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
