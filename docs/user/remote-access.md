@@ -230,6 +230,11 @@ machine with `environmentId` and `environmentLabel`, and `environments` lists an
 was skipped (disconnected or without read access) or failed, so a missing chat is not mistaken
 for one that does not exist. Pass `environmentId` to list one machine.
 
+Listings stay small by leaving out agent system prompts. A chat's `profileSnapshot` in
+`t3_list_threads` keeps the agent's `profileId`, `profileName`, and `revision`; read the chat with
+`t3_get_thread` to see the prompt it runs with. Pass `includeSystemPrompt: true` to
+`t3_list_agents` when you need each agent's current prompt, for example before `t3_update_agent`.
+
 ### Answer an agent's questions through MCP
 
 When an agent asks a question with answer options, its chat shows `waiting-input`, and
