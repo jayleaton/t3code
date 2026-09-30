@@ -81,9 +81,10 @@ async function mcp(
   launch = async () => {
     await owner(input);
   },
+  build?: string,
 ) {
   const client = new Client({ name: "shared-gateway-test", version: "1.0.0" });
-  const transport = await connectSharedGateway(input, launch);
+  const transport = await connectSharedGateway(input, launch, build);
   await client.connect(transport);
   cleanup.push(() => client.close());
   return client;
@@ -752,6 +753,55 @@ describe("shared MCP gateway", () => {
     const replay = await reconnected.callTool(request);
     expect(body(replay).data).toEqual(body(accepted).data);
     expect(sends).toBe(1);
+  });
+
+  it("retires an owner whose script was replaced when a launcher on the new build connects", async () => {
+    const input = await config();
+    await owner(input, { build: { id: "old", isCurrent: () => false } });
+    await runtime(input);
+    const stale = await mcp(input);
+    const staleClosed = Promise.withResolvers<void>();
+    // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client exposes an onclose callback rather than a DOM event API.
+    stale.onclose = staleClosed.resolve;
+    const launch = vi.fn(async () => {
+      await owner(input, { build: { id: "new", isCurrent: () => true } });
+    });
+    const fresh = await mcp(input, launch, "new");
+    await staleClosed.promise;
+    expect(launch).toHaveBeenCalledTimes(1);
+    // The desktop reconnects to the replacement; the first call waits for it instead of failing.
+    const status = fresh.callTool({
+      name: "t3_get_environment_status",
+      arguments: { environmentId: "local" },
+    });
+    await runtime(input);
+    expect(body(await status).data).toMatchObject({ environmentId: "local" });
+  });
+
+  it("keeps a current owner when a launcher from another install connects", async () => {
+    const input = await config();
+    await owner(input, { build: { id: "installed", isCurrent: () => true } });
+    await runtime(input);
+    const launch = vi.fn(async () => undefined);
+    const client = await mcp(input, launch, "other-install");
+    expect(launch).not.toHaveBeenCalled();
+    expect(
+      body(await client.callTool({ name: "t3_get_gateway_health", arguments: {} })).data,
+    ).toMatchObject({ bridge: "connected" });
+  });
+
+  it("resolves grants from the desktop for a session opened before the desktop configures", async () => {
+    const input = await config();
+    await owner(input);
+    const early = await mcp(input);
+    const status = early.callTool({
+      name: "t3_get_environment_status",
+      arguments: { environmentId: "local" },
+    });
+    await runtime(input);
+    const result = await status;
+    expect(result.isError).not.toBe(true);
+    expect(body(result).data).toMatchObject({ environmentId: "local" });
   });
 
   it("releases an idle owner and permits a fresh owner without changing durable state", async () => {
