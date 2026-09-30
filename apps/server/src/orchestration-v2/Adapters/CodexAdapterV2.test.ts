@@ -605,6 +605,24 @@ describe("CodexAdapterV2 runtime policy", () => {
       assert.equal(params.cwd, "/workspace/model-options");
       assert.equal(params.collaborationMode?.settings.model, "gpt-5.4");
       assert.equal(params.collaborationMode?.settings.reasoning_effort, "xhigh");
+
+      // ChatGPT token sharing rejects service tiers, so managed sessions drop a stale pick.
+      const managed = yield* buildCodexTurnStartParams({
+        nativeThreadId: "native-model-options",
+        codexInput: [{ type: "text", text: "test" }],
+        runtimePolicy: {
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: "/workspace/model-options",
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.4",
+          options: [{ id: "serviceTier", value: "priority" }],
+        },
+        omitServiceTier: true,
+      });
+      assert.equal(managed.serviceTier, undefined);
     }),
   );
 });

@@ -125,3 +125,6 @@ export const CLOSE_MANAGED_MCP_GATEWAY_SESSION_CHANNEL =
   "desktop:close-managed-mcp-gateway-session";
 export const MANAGED_MCP_GATEWAY_EVENT_CHANNEL = "desktop:managed-mcp-gateway-event";
 export const PREVIEW_RECORDING_INPUT_CHANNEL = "desktop:preview-recording-input";
+
+export const RECEIVE_PROVIDER_AUTH_CALLBACK_CHANNEL = "desktop:receive-provider-auth-callback";
+export const CANCEL_PROVIDER_AUTH_CALLBACK_CHANNEL = "desktop:cancel-provider-auth-callback";

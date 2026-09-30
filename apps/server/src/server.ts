@@ -11,11 +11,7 @@ import * as NodeHttp from "node:http";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import {
-  EnvironmentHttpApi,
-  ProviderDriverKind,
-  type RepositoryIdentity,
-} from "@t3tools/contracts";
+import { EnvironmentHttpApi, type RepositoryIdentity } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
@@ -88,6 +84,7 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import { AntigravityInstallation } from "./provider/AntigravityInstallation.ts";
+import { CodexInstallation } from "./provider/CodexInstallation.ts";
 import { ProviderInstanceRegistry } from "./provider/Services/ProviderInstanceRegistry.ts";
 import { layerFromProviderInstanceRegistry as providerAdapterRegistryLayerFromProviderInstances } from "./orchestration-v2/ProviderAdapterRegistry.ts";
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
@@ -478,22 +475,27 @@ const ThreadPullRequestWorkerLive = Layer.effectDiscard(
   ThreadPullRequestService.make.pipe(Effect.flatMap((service) => service.start())),
 ).pipe(Layer.provide(PullRequestServiceLive));
 
-const AntigravityInstallationRefreshLive = Layer.effectDiscard(
+const ProviderInstallationRefreshLive = Layer.effectDiscard(
   Effect.gen(function* () {
-    const installation = yield* AntigravityInstallation;
+    const antigravity = yield* AntigravityInstallation;
+    const codex = yield* CodexInstallation;
     const instances = yield* ProviderInstanceRegistry;
     const providers = yield* ProviderRegistry;
-    yield* installation.changes.pipe(
-      Stream.map((state) => state.installedVersion),
-      Stream.changes,
-      Stream.drop(1),
-      Stream.runForEach(() =>
+    yield* Stream.merge(
+      antigravity.changes.pipe(
+        Stream.changesWith((a, b) => a.installedVersion === b.installedVersion),
+        Stream.drop(1),
+      ),
+      codex.changes.pipe(
+        Stream.changesWith((a, b) => a.installedVersion === b.installedVersion),
+        Stream.drop(1),
+      ),
+    ).pipe(
+      Stream.runForEach((state) =>
         instances.listInstances.pipe(
           Effect.flatMap((entries) =>
             Effect.forEach(
-              entries.filter(
-                (instance) => instance.driverKind === ProviderDriverKind.make("antigravity"),
-              ),
+              entries.filter((instance) => instance.driverKind === state.driver),
               (instance) => providers.refreshInstance(instance.instanceId),
               { discard: true },
             ),
@@ -525,7 +527,7 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   // Subscribes to `account.rate-limits.updated` so usage bars track live
   // telemetry instead of waiting for the next status probe.
   ProviderUsageLimitsIngestionLive,
-  AntigravityInstallationRefreshLive,
+  ProviderInstallationRefreshLive,
   ReplayMarkers.layer,
 ).pipe(
   // Core Services
@@ -551,7 +553,7 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   // `providerInstances` hydration merges `settings.providers.<kind>`
   // with explicit `providerInstances` entries on boot.
   Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
-  Layer.provideMerge(AntigravityInstallation.layer),
+  Layer.provideMerge(Layer.mergeAll(AntigravityInstallation.layer, CodexInstallation.layer)),
 );
 
 const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesBaseLive.pipe(
