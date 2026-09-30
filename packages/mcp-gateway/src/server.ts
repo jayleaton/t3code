@@ -753,6 +753,8 @@ export function createMcpGateway(input: {
   readonly repositoryAllowlist?: ReadonlyArray<string>;
   readonly events?: import("./events.ts").GatewayEventStore;
   readonly health?: GatewayToolContext["health"];
+  /** Holds calls while the desktop runtime is (re)connecting, so grants are not read too early. */
+  readonly waitForRuntime?: () => Promise<void>;
 }) {
   const server = new McpServer({ name: "t3-code", version: "3.0.0" });
   const context: GatewayToolContext = {
@@ -890,6 +892,7 @@ export function createMcpGateway(input: {
         const caller = gatewayCaller(extra._meta);
         const responseContext = requestContext(args);
         try {
+          if (name !== "t3_get_gateway_health") await input.waitForRuntime?.();
           const aliasAction = LIFECYCLE_ALIASES[name];
           const toolName = aliasAction === undefined ? name : "t3_control_thread";
           const normalizedArgs =

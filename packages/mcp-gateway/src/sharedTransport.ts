@@ -48,15 +48,35 @@ function socketTransport(socket: WebSocket): Transport {
   return transport;
 }
 
-/** MCP authentication cannot replace or configure the desktop runtime connection. */
+/** Identifies the gateway script an owner or launcher is running. */
+export interface GatewayBuild {
+  readonly id: string;
+  /** False once the installed script no longer matches the running one, e.g. after an app update. */
+  readonly isCurrent: () => boolean;
+}
+
+/** A retiring owner is releasing the port; the launcher should start a fresh one. */
+export class GatewayRetiringError extends Error {}
+
+/** Tell a connecting launcher to retry against the next owner, then drop the socket. */
+export function rejectRetiring(socket: WebSocket): void {
+  socket.send(JSON.stringify({ type: "retiring" }), () => socket.close(1012, "Gateway retiring."));
+}
+
+/**
+ * MCP authentication cannot replace or configure the desktop runtime connection.
+ * A launcher on a different build may ask a stale owner to retire instead of attaching.
+ */
 export async function acceptMcpSession(
   socket: WebSocket,
   token: string,
   configuration: string,
+  build: GatewayBuild,
   attach: (transport: Transport) => Promise<void>,
+  retire: () => void,
 ): Promise<void> {
   const nonce = NodeCrypto.randomBytes(32).toString("hex");
-  await new Promise<void>((resolve, reject) => {
+  const retireIfStale = await new Promise<boolean>((resolve, reject) => {
     const timeout = AbortSignal.timeout(AUTH_TIMEOUT_MS);
     const cleanup = () => {
       timeout.removeEventListener("abort", fail);
@@ -84,7 +104,7 @@ export async function acceptMcpSession(
           return;
         }
         cleanup();
-        resolve();
+        resolve("retireIfStale" in message && message.retireIfStale === true);
       } catch {
         fail();
       }
@@ -93,9 +113,23 @@ export async function acceptMcpSession(
     socket.on("error", fail);
     socket.once("close", fail);
     socket.on("message", authenticate);
-    socket.send(JSON.stringify({ type: "challenge", protocol: PROTOCOL, nonce, configuration }));
+    socket.send(
+      JSON.stringify({
+        type: "challenge",
+        protocol: PROTOCOL,
+        nonce,
+        configuration,
+        build: build.id,
+      }),
+    );
   });
   if (socket.readyState !== WebSocket.OPEN) throw new Error("MCP session closed during startup.");
+  // Only the owner's own script decides, so two installed builds cannot evict each other.
+  if (retireIfStale && !build.isCurrent()) {
+    rejectRetiring(socket);
+    retire();
+    return;
+  }
   await attach(socketTransport(socket));
   socket.send(
     JSON.stringify({ type: "ready", proof: proof(token, "server", nonce, configuration) }),
@@ -109,6 +143,8 @@ export function connectMcpSession(input: {
   readonly port: number;
   readonly token: string;
   readonly configuration: string;
+  /** This launcher's build; a differing owner is asked to retire if its script changed. */
+  readonly build?: string;
 }): Promise<Transport> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(`ws://127.0.0.1:${input.port}/mcp`, { maxPayload: 1024 * 1024 });
@@ -149,6 +185,10 @@ export function connectMcpSession(input: {
           throw new Error("Invalid handshake.");
         }
         const message = value as Record<string, unknown>;
+        if (message.type === "retiring") {
+          fail(new GatewayRetiringError("The shared gateway owner is retiring."));
+          return;
+        }
         if (nonce === undefined) {
           if (message.type !== "challenge" || typeof message.nonce !== "string") {
             fail(
@@ -179,6 +219,9 @@ export function connectMcpSession(input: {
             JSON.stringify({
               type: "authenticate",
               proof: proof(input.token, "client", nonce, input.configuration),
+              ...(input.build !== undefined && message.build !== input.build
+                ? { retireIfStale: true }
+                : {}),
             }),
           );
           return;

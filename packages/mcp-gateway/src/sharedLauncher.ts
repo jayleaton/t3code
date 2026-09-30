@@ -5,7 +5,11 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 import { sharedGatewayConfiguration, type SharedGatewayConfig } from "./sharedOwner.ts";
-import { connectMcpSession, GatewayUnavailableError } from "./sharedTransport.ts";
+import {
+  connectMcpSession,
+  GatewayRetiringError,
+  GatewayUnavailableError,
+} from "./sharedTransport.ts";
 
 export function launchSharedOwner(
   entryPoint: string,
@@ -68,22 +72,41 @@ export function launchSharedOwner(
   });
 }
 
+/**
+ * Joins the running owner, or launches one. An owner retiring for a newer build releases the
+ * port, so the launcher retries until it can start or join the replacement.
+ */
 export async function connectSharedGateway(
   config: SharedGatewayConfig,
   launch: () => Promise<void>,
+  build?: string,
 ): Promise<Transport> {
   const input = {
     port: config.port,
     token: config.token,
     configuration: sharedGatewayConfiguration(config),
+    ...(build === undefined ? {} : { build }),
   };
-  try {
-    return await connectMcpSession(input);
-  } catch (error) {
-    if (!(error instanceof GatewayUnavailableError)) throw error;
+  const deadline = AbortSignal.timeout(15_000);
+  let launched = false;
+  for (;;) {
+    try {
+      return await connectMcpSession(input);
+    } catch (error) {
+      if (deadline.aborted) throw error;
+      if (error instanceof GatewayRetiringError) {
+        launched = false;
+        await new Promise((resolve) =>
+          AbortSignal.timeout(50).addEventListener("abort", resolve, { once: true }),
+        );
+      } else if (error instanceof GatewayUnavailableError && !launched) {
+        await launch();
+        launched = true;
+      } else {
+        throw error;
+      }
+    }
   }
-  await launch();
-  return connectMcpSession(input);
 }
 
 /** Proxy complete MCP messages, keeping request ids and notifications scoped to this session. */
