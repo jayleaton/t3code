@@ -171,3 +171,34 @@ it.effect("stamps tool calls with the calling thread, replacing any agent-suppli
     }),
   ).pipe(Effect.provide(NodeServices.layer)),
 );
+
+it.effect("closes a provider's previous gateway session when it initializes a new one", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* make;
+      const ready = yield* Deferred.make<void>();
+      const closed = yield* Queue.unbounded<string>();
+      yield* broker.connect("desktop").pipe(
+        Stream.runForEach((event) =>
+          event.type === "connected"
+            ? Deferred.succeed(ready, undefined)
+            : event.type === "close"
+              ? Queue.offer(closed, event.sessionId)
+              : Effect.void,
+        ),
+        Effect.forkScoped,
+      );
+      yield* Deferred.await(ready);
+      const caller = { environmentId: "env", threadId: "thread" };
+      const abandoned = yield* broker.open("provider", caller);
+      const other = yield* broker.open("other-provider", caller);
+      // MCP clients re-initialize on reconnect without deleting the old session.
+      const current = yield* broker.open("provider", caller);
+      expect(yield* Queue.take(closed)).toBe(abandoned);
+      expect(broker.lookup(abandoned, "provider")).toBeUndefined();
+      expect(broker.lookup(current, "provider")).toBeDefined();
+      expect(broker.lookup(other, "other-provider")).toBeDefined();
+      expect(yield* Queue.size(closed)).toBe(0);
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);

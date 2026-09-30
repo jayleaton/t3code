@@ -7,6 +7,7 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import * as Crypto from "effect/Crypto";
@@ -81,9 +82,10 @@ async function mcp(
   launch = async () => {
     await owner(input);
   },
+  build?: string,
 ) {
   const client = new Client({ name: "shared-gateway-test", version: "1.0.0" });
-  const transport = await connectSharedGateway(input, launch);
+  const transport = await connectSharedGateway(input, launch, build);
   await client.connect(transport);
   cleanup.push(() => client.close());
   return client;
@@ -754,6 +756,55 @@ describe("shared MCP gateway", () => {
     expect(sends).toBe(1);
   });
 
+  it("retires an owner whose script was replaced when a launcher on the new build connects", async () => {
+    const input = await config();
+    await owner(input, { build: { id: "old", isCurrent: () => false } });
+    await runtime(input);
+    const stale = await mcp(input);
+    const staleClosed = Promise.withResolvers<void>();
+    // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client exposes an onclose callback rather than a DOM event API.
+    stale.onclose = staleClosed.resolve;
+    const launch = vi.fn(async () => {
+      await owner(input, { build: { id: "new", isCurrent: () => true } });
+    });
+    const fresh = await mcp(input, launch, "new");
+    await staleClosed.promise;
+    expect(launch).toHaveBeenCalledTimes(1);
+    // The desktop reconnects to the replacement; the first call waits for it instead of failing.
+    const status = fresh.callTool({
+      name: "t3_get_environment_status",
+      arguments: { environmentId: "local" },
+    });
+    await runtime(input);
+    expect(body(await status).data).toMatchObject({ environmentId: "local" });
+  });
+
+  it("keeps a current owner when a launcher from another install connects", async () => {
+    const input = await config();
+    await owner(input, { build: { id: "installed", isCurrent: () => true } });
+    await runtime(input);
+    const launch = vi.fn(async () => undefined);
+    const client = await mcp(input, launch, "other-install");
+    expect(launch).not.toHaveBeenCalled();
+    expect(
+      body(await client.callTool({ name: "t3_get_gateway_health", arguments: {} })).data,
+    ).toMatchObject({ bridge: "connected" });
+  });
+
+  it("resolves grants from the desktop for a session opened before the desktop configures", async () => {
+    const input = await config();
+    await owner(input);
+    const early = await mcp(input);
+    const status = early.callTool({
+      name: "t3_get_environment_status",
+      arguments: { environmentId: "local" },
+    });
+    await runtime(input);
+    const result = await status;
+    expect(result.isError).not.toBe(true);
+    expect(body(result).data).toMatchObject({ environmentId: "local" });
+  });
+
   it("releases an idle owner and permits a fresh owner without changing durable state", async () => {
     const input = await config();
     const idle = Promise.withResolvers<void>();
@@ -772,6 +823,49 @@ describe("shared MCP gateway", () => {
     });
     await transport.close();
   });
+
+  it("moves a running stdio session to the next owner and announces the tool change", async () => {
+    const input = await config();
+    const entryPoint =
+      process.env.T3_MCP_TEST_ENTRYPOINT ??
+      NodeURL.fileURLToPath(new URL("./bin.ts", import.meta.url));
+    const first = await owner(input);
+    const client = new Client({ name: "owner-handover", version: "1.0.0" });
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [entryPoint],
+      stderr: "pipe",
+      env: {
+        T3_MCP_BRIDGE_PORT: String(input.port),
+        T3_MCP_BRIDGE_TOKEN: input.token,
+        T3_MCP_STATE_FILE: input.stateFile,
+        T3_MCP_EVENT_RETENTION: String(input.retentionEvents),
+        T3_MCP_REPOSITORY_ALLOWLIST: input.repositoryAllowlist.join(","),
+        T3_MCP_GRANTS: "{}",
+      },
+    });
+    cleanup.push(() => client.close());
+    await client.connect(transport);
+    const changed = Promise.withResolvers<void>();
+    client.setNotificationHandler(ToolListChangedNotificationSchema, () => changed.resolve());
+    expect((await client.listTools()).tools.length).toBeGreaterThan(0);
+
+    await first!.close();
+    await changed.promise;
+    // The session launched a detached owner. Let it finish its normal idle shutdown once the
+    // session closes; never find or kill a PID by port.
+    const desktop = await runtime(input);
+    const ownerClosed = new Promise<void>((resolve) =>
+      desktop.socket.once("close", () => resolve()),
+    );
+    cleanup.push(async () => {
+      await client.close();
+      await ownerClosed;
+    });
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toContain(
+      "t3_set_thread_parent",
+    );
+  }, 30_000);
 });
 
 it("shares lifecycle grant updates and chat focus across already-connected MCP sessions", async () => {

@@ -115,6 +115,11 @@ export const make = Effect.gen(function* () {
           "Enable MCP Gateway in a connected desktop before starting this agent session.",
         ),
       );
+    // MCP clients re-initialize on reconnect without deleting the old session, and each
+    // session holds a desktop gateway process, so a provider keeps only its newest one.
+    for (const [id, session] of sessions) {
+      if (session.providerSessionId === providerSessionId) yield* close(id);
+    }
     const sessionId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
     const notifications = yield* Queue.unbounded<Message, Cause.Done>();
     sessions.set(sessionId, {

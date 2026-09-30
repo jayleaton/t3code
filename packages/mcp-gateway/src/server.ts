@@ -151,8 +151,15 @@ const TOOL_SPECS = {
     { environmentId, skillId: z.string().trim().min(1) },
   ],
   t3_list_agents: [
-    "List agents from the shared Agents library, including specialization descriptions, instructions and model settings. Across environments each agent appears once with availableEnvironmentIds. Use t3_get_agents_view to find their chats/runs. Use profileId to create chats or hand work to an agent.",
-    { environmentId: discoveryEnvironmentId, ...optionalRequestContext },
+    "List agents from the shared Agents library, including specialization descriptions and model settings. System prompts are left out unless includeSystemPrompt is true (pass environmentId too when you only need one machine). Across environments each agent appears once with availableEnvironmentIds. Use t3_get_agents_view to find their chats/runs. Use profileId to create chats or hand work to an agent.",
+    {
+      environmentId: discoveryEnvironmentId,
+      includeSystemPrompt: z
+        .boolean()
+        .optional()
+        .describe("Include each agent's full systemPrompt, e.g. before t3_update_agent."),
+      ...optionalRequestContext,
+    },
   ],
   t3_get_agents_view: [
     "List the Agents board across environments (or one): agent specializations and their chat/run summaries, including thread IDs and status. Use this to find an agent’s running or completed work without searching unrelated threads. Filter by profileId, state (active means unsettled, including completed chats), and executionState (for example running or waiting-input). Use t3_get_thread or t3_open_thread with a returned threadId for details.",
@@ -227,7 +234,7 @@ const TOOL_SPECS = {
     { environmentId: discoveryEnvironmentId, ...optionalRequestContext },
   ],
   t3_list_threads: [
-    "List chats across every connected T3 environment (or one), optionally filtered by agent profileId, project, parentThreadId, active/settled state, and executionState. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly. hasPendingUserInput marks a chat waiting on a question; pass includeQuestions to attach each one's pendingQuestions (full text and options, as t3_get_pending_questions returns).",
+    "List chats across every connected T3 environment (or one), optionally filtered by agent profileId, project, parentThreadId, active/settled state, and executionState. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly. hasPendingUserInput marks a chat waiting on a question; pass includeQuestions to attach each one's pendingQuestions (full text and options, as t3_get_pending_questions returns). profileSnapshot omits systemPrompt; read it with t3_get_thread.",
     {
       environmentId: discoveryEnvironmentId,
       state: z.enum(["all", "active", "settled"]).optional(),
@@ -332,7 +339,7 @@ const TOOL_SPECS = {
     { environmentId, taskId: z.string().trim().min(1) },
   ],
   t3_get_thread: [
-    "Read one T3 chat and its messages.",
+    "Read one T3 chat and its messages, including the full profileSnapshot with its systemPrompt.",
     { environmentId, threadId, ...optionalRequestContext },
   ],
   t3_summarize_thread: [
@@ -753,6 +760,8 @@ export function createMcpGateway(input: {
   readonly repositoryAllowlist?: ReadonlyArray<string>;
   readonly events?: import("./events.ts").GatewayEventStore;
   readonly health?: GatewayToolContext["health"];
+  /** Holds calls while the desktop runtime is (re)connecting, so grants are not read too early. */
+  readonly waitForRuntime?: () => Promise<void>;
 }) {
   const server = new McpServer({ name: "t3-code", version: "3.0.0" });
   const context: GatewayToolContext = {
@@ -890,6 +899,7 @@ export function createMcpGateway(input: {
         const caller = gatewayCaller(extra._meta);
         const responseContext = requestContext(args);
         try {
+          if (name !== "t3_get_gateway_health") await input.waitForRuntime?.();
           const aliasAction = LIFECYCLE_ALIASES[name];
           const toolName = aliasAction === undefined ? name : "t3_control_thread";
           const normalizedArgs =
