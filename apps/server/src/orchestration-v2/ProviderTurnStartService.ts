@@ -807,7 +807,10 @@ export const layer: Layer.Layer<
         sameSelection ||
         (previousSelection !== undefined &&
           session.canReuseContextUsage?.(previousSelection, run.modelSelection) === true);
-      const knownModelWindow = session.getModelContextWindow?.(run.modelSelection);
+      const knownModelWindow = session.getModelContextWindow?.(
+        run.modelSelection,
+        resolvedRuntimePolicy.cwd,
+      );
       // Persist before delivery. Keep this native transcript's measured
       // occupancy. A different model drops compaction telemetry and uses the
       // new window when that window is known.

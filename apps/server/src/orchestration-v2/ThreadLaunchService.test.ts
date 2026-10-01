@@ -43,6 +43,7 @@ import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import { makeProviderRegistryLayer } from "../provider/testUtils/providerRegistryMock.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
@@ -94,6 +95,7 @@ const adapter = {
 } as ProviderAdapterV2Shape;
 
 interface HarnessOptions {
+  readonly managedFolders?: Layer.Layer<ManagedProjectFolders.ManagedProjectFolders>;
   readonly createWorktree?: GitWorkflow.GitWorkflowService["Service"]["createWorktree"];
   readonly fetchRemote?: GitWorkflow.GitWorkflowService["Service"]["fetchRemote"];
   readonly renameBranch?: GitWorkflow.GitWorkflowService["Service"]["renameBranch"];
@@ -175,6 +177,11 @@ function makeHarness(options: HarnessOptions = {}) {
     }),
     ServerSettings.layerTest(options.serverSettings),
     makeProviderRegistryLayer(options.providers),
+    options.managedFolders ??
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+        namedProjectsRoot: "/projects",
+        folderForThread: () => Effect.succeed(Option.none()),
+      }),
   );
   const launch = ThreadLaunch.layer.pipe(
     Layer.provide(Layer.mergeAll(externalServices, threadManagement, receipts, IdAllocator.layer)),
@@ -1012,6 +1019,59 @@ it.effect("falls back when the source control writer is unavailable", () =>
         harness.generateBranchName.mock.calls[0]?.[0]?.modelSelection,
         DEFAULT_SERVER_SETTINGS.textGenerationModelSelection,
       );
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("runs a Scratch thread launched at the root in its own folder", () =>
+  Effect.gen(function* () {
+    // Only `projectId` stands in for the Scratch project here.
+    const claimed: Array<{ readonly threadId: ThreadId; readonly text: string }> = [];
+    const harness = makeHarness({
+      managedFolders: Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+        namedProjectsRoot: "/projects",
+        folderForThread: (input) =>
+          Effect.sync(() => {
+            if (input.projectId !== projectId) return Option.none();
+            claimed.push({ threadId: input.threadId, text: input.text });
+            return Option.some(`/scratch/folder-${claimed.length}`);
+          }),
+      }),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const input = launchInput({
+        command: "command:launch:scratch",
+        thread: "thread:launch:scratch",
+        message: "Convert these PNGs",
+      });
+      const launched = yield* launches.launch(input);
+      assert.deepEqual(claimed, [{ threadId: launched.threadId, text: "Convert these PNGs" }]);
+      assert.equal(launched.projection.thread.worktreePath, "/scratch/folder-1");
+      yield* waitUntil(() => Effect.sync(() => harness.runSetup.mock.calls.length === 1));
+      assert.equal(harness.runSetup.mock.calls[0]?.[0]?.worktreePath, "/scratch/folder-1");
+      assert.equal(harness.createWorktree.mock.calls.length, 0);
+
+      // A retry replays the first attempt and claims no second folder.
+      const retried = yield* launches.launch(input);
+      assert.isTrue(retried.resumed);
+      assert.lengthOf(claimed, 1);
+      assert.equal(
+        (yield* threads.getThreadProjection(launched.threadId)).thread.worktreePath,
+        "/scratch/folder-1",
+      );
+
+      const other = yield* launches.launch({
+        ...launchInput({
+          command: "command:launch:scratch-other",
+          thread: "thread:launch:scratch-other",
+          message: "Elsewhere",
+        }),
+        projectId: otherProjectId,
+      });
+      assert.lengthOf(claimed, 1);
+      assert.isNull(other.projection.thread.worktreePath);
     }).pipe(Effect.provide(harness.layer));
   }),
 );

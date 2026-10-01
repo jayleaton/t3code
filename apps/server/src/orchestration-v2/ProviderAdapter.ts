@@ -508,8 +508,15 @@ export interface ProviderAdapterV2SessionRuntime {
   readonly hasPendingBackgroundWorkForThread?: (
     providerThread: OrchestrationV2ProviderThread,
   ) => Effect.Effect<boolean>;
-  /** Capacity for the requested model/options, independent of native thread usage. */
-  readonly getModelContextWindow?: (modelSelection: ModelSelection) => number | undefined;
+  /**
+   * Capacity for the requested model/options, independent of native thread usage.
+   * `cwd` is the thread's working directory, for providers whose project config
+   * can change a model's limits.
+   */
+  readonly getModelContextWindow?: (
+    modelSelection: ModelSelection,
+    cwd?: string | null,
+  ) => number | undefined;
   /** Whether an option-only change preserves measured native usage and capacity.
    * Compaction thresholds are still discarded. Unknown transitions invalidate usage.
    */

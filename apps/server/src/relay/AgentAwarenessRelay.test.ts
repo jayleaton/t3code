@@ -844,7 +844,7 @@ describe("AgentAwarenessRelay", () => {
   );
 });
 
-describe.sequential("startup catch-up", () => {
+describe("startup catch-up", { concurrent: false }, () => {
   const link = (secrets: ServerSecretStore.ServerSecretStore["Service"]) =>
     Effect.all(
       [

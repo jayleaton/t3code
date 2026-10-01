@@ -87,6 +87,14 @@ describe("provider compatibility", () => {
       assert.strictEqual(advisory?.status, expected, `OpenCode ${version}`);
       assert.strictEqual(advisory?.recommendedRange, ">=2.0.18");
     }
+    // The advisory rides beside the probe: a ready 1.x instance stays ready and selectable.
+    const ready = applyProviderCompatibility(
+      { ...provider, driver: opencode, version: "1.18.33", status: "ready", message: undefined },
+      undefined,
+      ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
+    );
+    assert.strictEqual(ready.status, "ready");
+    assert.strictEqual(ready.compatibilityAdvisory?.status, "graceful");
   });
 
   it("compares Cursor build dates without treating semver prereleases as stable", () => {

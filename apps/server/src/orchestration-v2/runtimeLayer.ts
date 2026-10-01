@@ -10,6 +10,7 @@ import { layer as agentSessionImporterLayer } from "../project/AgentSessionImpor
 import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
 import { layer as projectServiceLayer } from "../project/ProjectService.ts";
 import { layer as projectSetupScriptRunnerLayer } from "../project/ProjectSetupScriptRunner.ts";
+import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import { layer as checkpointCaptureServiceLayer } from "./CheckpointCaptureService.ts";
 import { layer as checkpointServiceLayer } from "./CheckpointService.ts";
 import { layer as checkpointRollbackServiceLayer } from "./CheckpointRollbackService.ts";
@@ -229,11 +230,15 @@ const threadManagementProvided = threadManagementServiceLayer.pipe(
 export const ProjectSetupScriptRunnerLayerLive = projectSetupScriptRunnerLayer.pipe(
   Layer.provide(ProjectServiceLayerLive),
 );
+const managedProjectFoldersProvided = ManagedProjectFolders.layer.pipe(
+  Layer.provide(ProjectServiceLayerLive),
+);
 const threadLaunchProvided = threadLaunchServiceLayer.pipe(
   Layer.provide(
     Layer.mergeAll(
       ProjectServiceLayerLive,
       ProjectSetupScriptRunnerLayerLive,
+      managedProjectFoldersProvided,
       threadManagementProvided,
       commandReceiptStoreProvided,
       idAllocatorLayer,
@@ -297,6 +302,7 @@ export const OrchestrationV2LayerLive = Layer.mergeAll(
 export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   OrchestrationV2LayerLive.pipe(Layer.provide(ProjectServiceLayerLive)),
   ProjectServiceLayerLive,
+  managedProjectFoldersProvided,
   threadLaunchProvided,
   threadLifecycleProvided,
   scheduledTaskProvided,

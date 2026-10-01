@@ -1,4 +1,4 @@
-import type { Event as OpenCodeEvent, OpencodeClient } from "@opencode-ai/sdk/v2";
+import type { OpencodeClient } from "@opencode-ai/sdk/v2";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProviderReplayEntry, type ProviderReplayTranscript } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -119,21 +119,31 @@ function materializeMessageIds(value: unknown, messageIds: ReadonlyMap<string, s
   return Object.fromEntries(
     Object.entries(record).map(([key, entry]) => [
       key,
-      typeof entry === "string" && (key === "id" || key === "messageID" || key === "parentID")
+      typeof entry === "string" &&
+      (key === "id" ||
+        key === "messageID" ||
+        key === "parentID" ||
+        key === "inboxID" ||
+        key === "before")
         ? (messageIds.get(entry) ?? entry)
         : materializeMessageIds(entry, messageIds),
     ]),
   );
 }
 
-class OpenCodeReplayController {
+/**
+ * Replays one transcript at a client boundary: each outbound call must match the
+ * next `expect_outbound`, then answers with its `sdk.response`; `sdk.event`
+ * frames feed the event stream. Shared by the 1.x SDK and 2.x HTTP transports.
+ */
+export class OpenCodeReplayController {
   private cursor = 0;
   private readonly waiters = new Set<() => void>();
   private failure: unknown = null;
-  private readonly transcript: OpenCodeSdkReplayTranscript;
+  private readonly transcript: ProviderReplayTranscript;
   private messageIds = new Map<string, string>();
 
-  constructor(transcript: OpenCodeSdkReplayTranscript) {
+  constructor(transcript: ProviderReplayTranscript) {
     this.transcript = transcript;
   }
 
@@ -144,12 +154,16 @@ class OpenCodeReplayController {
       const actualFrame = frameRecord(actual);
       const messageIds = new Map(this.messageIds);
       let conflictingMessageId = false;
+      // A message id the client picks (1.x prompts, 2.x steers) replaces the
+      // recorded one everywhere after it, so replies and events carry the live id.
+      const idKey = expectedFrame?.type === "session.promptAsync" ? "messageID" : "id";
       if (
-        expectedFrame?.type === "session.promptAsync" &&
+        (expectedFrame?.type === "session.promptAsync" ||
+          expectedFrame?.type === "session.prompt") &&
         actualFrame?.type === expectedFrame.type
       ) {
-        const recordedId = frameRecord(expectedFrame.input)?.messageID;
-        const actualId = frameRecord(actualFrame.input)?.messageID;
+        const recordedId = frameRecord(expectedFrame.input)?.[idKey];
+        const actualId = frameRecord(actualFrame.input)?.[idKey];
         if (
           typeof recordedId === "string" &&
           typeof actualId === "string" &&
@@ -214,7 +228,37 @@ class OpenCodeReplayController {
     }
   }
 
-  async *events(signal?: AbortSignal): AsyncIterable<OpenCodeEvent> {
+  /**
+   * Resolves once the server events recorded before the next entry have been
+   * delivered. For transports whose events and requests travel separately, a
+   * request is matched at its recorded point instead of racing those events.
+   */
+  async untilEventsDelivered(): Promise<void> {
+    while (true) {
+      this.throwFailure();
+      const entry = this.transcript.entries[this.cursor];
+      if (entry?.type !== "emit_inbound" || frameRecord(entry.frame)?.type !== "sdk.event") return;
+      await this.changed();
+    }
+  }
+
+  /**
+   * Like {@link untilEventsDelivered}, but also waits for recorded responses to
+   * be taken: over HTTP a request can start while an earlier one's answer is
+   * still in flight, and must not be matched against that answer.
+   */
+  async untilInboundDelivered(): Promise<void> {
+    while (true) {
+      this.throwFailure();
+      if (this.transcript.entries[this.cursor]?.type !== "emit_inbound") return;
+      await this.changed();
+    }
+  }
+
+  async *events(
+    signal?: AbortSignal,
+    beforeEmit?: (label: string | undefined) => Promise<void>,
+  ): AsyncIterable<unknown> {
     while (true) {
       if (signal?.aborted === true) return;
       this.throwFailure();
@@ -222,10 +266,12 @@ class OpenCodeReplayController {
       if (entry?.type === "emit_inbound") {
         const frame = frameRecord(entry.frame);
         if (frame?.type === "sdk.event") {
+          // A scenario can hold an event until it has done what happened meanwhile.
+          if (beforeEmit !== undefined) await beforeEmit(entry.label);
           if (entry.afterMs !== undefined && entry.afterMs > 0) {
             await Effect.runPromise(Effect.sleep(Duration.millis(entry.afterMs)));
           }
-          const event = materializeMessageIds(frame.event, this.messageIds) as OpenCodeEvent;
+          const event = materializeMessageIds(frame.event, this.messageIds);
           this.advance();
           yield event;
           continue;
