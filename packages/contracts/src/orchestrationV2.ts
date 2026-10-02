@@ -2861,6 +2861,19 @@ const OrchestrationV2InternalCommand = Schema.Union([
     requestId: CommandId,
     message: TrimmedNonEmptyString,
   }),
+  /**
+   * Follows a Stop once its provider returned: background work the settled
+   * thread still shows on that provider thread is no longer reported by any
+   * provider process, so it is marked interrupted. Only the stopped turn's run
+   * and older runs are settled; a later run's work is its own.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.background-work.settle"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    providerThreadId: ProviderThreadId,
+    providerTurnId: ProviderTurnId,
+  }),
 ]);
 export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalCommand.Type;
 

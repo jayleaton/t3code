@@ -469,6 +469,7 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       headers: {
         Authorization: "Bearer secret-claude-token",
       },
+      timeout: ClaudeAdapterV2.CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
     },
   } as const;
 
@@ -686,6 +687,7 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
             headers: {
               Authorization: "Bearer secret-claude-token",
             },
+            timeout: ClaudeAdapterV2.CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
           },
         },
       });
@@ -3480,6 +3482,51 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         });
 
         assert.equal(closes, 1, "Stop must close the CLI process that owns the task");
+        yield* awaitUntil(
+          () =>
+            (providerThreadRosterEvents(harness.events).at(-1)?.providerThread
+              .pendingBackgroundTasks?.length ?? 0) === 0,
+          "roster clear after Stop",
+        );
+        assert.isFalse(yield* harness.hasPendingBackgroundWork);
+        assert.lengthOf(harness.continuationRequests, 0);
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  // The CLI process exits on its own after the turn settled (idle, crash),
+  // leaving its background task on the roster. Stop must succeed so the
+  // orchestrator goes on to settle what the thread still shows.
+  it.effect("a settled Stop with no CLI process left succeeds and clears the roster", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarnessWithOptions();
+        const now = yield* DateTime.now;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-settled-stop-no-process"),
+            text: "Run the build in the background.",
+            attachments: [],
+          }),
+        );
+        yield* Queue.offer(harness.sdkMessages, wakeTaskStarted);
+        yield* Queue.offer(harness.sdkMessages, turnOneResult);
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "first turn terminal");
+        const settledThread = providerThreadRosterEvents(harness.events).at(-1)?.providerThread;
+        assert.equal(settledThread?.pendingBackgroundTasks?.[0]?.taskId, WAKE_TASK_ID);
+
+        yield* Queue.shutdown(harness.sdkMessages);
+        let quietYields = 0;
+        yield* awaitUntil(() => quietYields++ >= 50, "query exit");
+
+        yield* harness.runtime.interruptTurn({
+          providerThread: settledThread ?? harness.providerThread,
+          providerTurnId: harness.terminalEvents()[0]!.providerTurnId,
+          requestRuntimeRestart: true,
+        });
         yield* awaitUntil(
           () =>
             (providerThreadRosterEvents(harness.events).at(-1)?.providerThread

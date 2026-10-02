@@ -267,16 +267,10 @@ for (const storage of ["sqlite", "memory"] as const) {
       assert.instanceOf(missingThread, ProjectionStore.ProjectionStoreThreadNotFoundError);
 
       const calls: string[] = [];
-      let hasBackgroundWork = false;
       const sessions = Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
         get: () =>
           Effect.succeed(
             Option.some({
-              hasPendingBackgroundWorkForThread: (target: { id: ProviderThreadId }) =>
-                Effect.sync(() => {
-                  assert.equal(target.id, providerThreadId);
-                  return hasBackgroundWork;
-                }),
               interruptTurn: () =>
                 Effect.sync(() => {
                   calls.push("interrupt");
@@ -338,9 +332,8 @@ for (const storage of ["sqlite", "memory"] as const) {
           occurredAt: now,
           payload: { ...turn, status: "completed", completedAt: now },
         });
-        yield* control.interrupt({ threadId, providerThreadId, providerTurnId, providerSessionId });
-        assert.lengthOf(calls, 3);
-        hasBackgroundWork = true;
+        // A settled turn's Stop still reaches the adapter, which alone knows
+        // whether it runs background work for the thread.
         yield* control.interrupt({ threadId, providerThreadId, providerTurnId, providerSessionId });
         assert.deepEqual(calls, ["interrupt", "Use the smaller fix.", "reply", "interrupt"]);
       }).pipe(

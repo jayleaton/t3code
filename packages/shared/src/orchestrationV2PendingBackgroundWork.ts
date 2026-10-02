@@ -172,6 +172,29 @@ function nativeTaskIdFromTurnItem(item: PendingBackgroundWorkTurnItem): string {
 }
 
 /**
+ * The turn items the pending-work list names, without its settled-run gate.
+ * Stop ends exactly these, so the list and Stop cannot disagree.
+ */
+export function pendingBackgroundTurnItems<Item extends PendingBackgroundWorkTurnItem>(input: {
+  readonly turnItems: ReadonlyArray<Item>;
+  readonly runs?: ReadonlyArray<PendingBackgroundWorkRun>;
+}): ReadonlyArray<Item> {
+  const rolledBackRunIds = new Set(
+    (input.runs ?? []).filter((run) => run.status === "rolled_back").map((run) => String(run.id)),
+  );
+  return input.turnItems.filter(
+    (item) =>
+      BACKGROUND_TURN_ITEM_TYPES.has(item.type) &&
+      isOrchestrationV2WorkActive(item.status) &&
+      !(item.type === "dynamic_tool" && isPersistentDynamicToolInput(item.input)) &&
+      // Null/absent run id stays eligible; only known rolled_back runs drop.
+      (item.runId === undefined ||
+        item.runId === null ||
+        !rolledBackRunIds.has(String(item.runId))),
+  );
+}
+
+/**
  * Derive one normalized pending-background-work list for post-settlement UI.
  *
  * Sources:
@@ -212,9 +235,6 @@ export function derivePendingBackgroundWork(input: {
   }
 
   const byTaskId = new Map<string, PendingBackgroundWorkTask>();
-  const rolledBackRunIds = new Set(
-    (input.runs ?? []).filter((run) => run.status === "rolled_back").map((run) => String(run.id)),
-  );
 
   const providerThreads =
     input.activeProviderThreadId === undefined || input.activeProviderThreadId === null
@@ -235,22 +255,7 @@ export function derivePendingBackgroundWork(input: {
     }
   }
 
-  for (const item of input.turnItems) {
-    if (!BACKGROUND_TURN_ITEM_TYPES.has(item.type)) {
-      continue;
-    }
-    if (!isOrchestrationV2WorkActive(item.status)) {
-      continue;
-    }
-    if (item.type === "dynamic_tool" && isPersistentDynamicToolInput(item.input)) {
-      continue;
-    }
-    // Null/absent run id stays eligible; only known rolled_back runs drop.
-    const itemRunId = item.runId;
-    if (itemRunId !== undefined && itemRunId !== null && rolledBackRunIds.has(String(itemRunId))) {
-      continue;
-    }
-
+  for (const item of pendingBackgroundTurnItems(input)) {
     const taskId = nativeTaskIdFromTurnItem(item);
     if (byTaskId.has(taskId)) {
       continue;

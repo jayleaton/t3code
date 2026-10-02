@@ -176,12 +176,10 @@ export const layer: Layer.Layer<
             ? loaded.session
             : yield* sessions.get(input.providerSessionId);
           if (Option.isNone(session)) return;
-          if (
-            loaded.providerTurn.status !== "running" &&
-            (session.value.hasPendingBackgroundWorkForThread === undefined ||
-              !(yield* session.value.hasPendingBackgroundWorkForThread(loaded.providerThread)))
-          )
-            return;
+          // A settled turn reaches its adapter too: only the adapter knows
+          // whether it still runs work for the thread, and each one either
+          // stops it or reports there is nothing left to stop. Background work
+          // the projection still shows is settled by the orchestrator after.
           yield* session.value.interruptTurn({
             providerThread: loaded.providerThread,
             providerTurnId: loaded.providerTurn.id,

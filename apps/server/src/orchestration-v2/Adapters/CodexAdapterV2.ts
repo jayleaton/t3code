@@ -2042,10 +2042,19 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
 
         const terminateBackgroundTerminal = Effect.fn("CodexAdapterV2.terminateBackgroundTerminal")(
           function* (nativeThreadId: string, processId: string) {
-            const response = yield* client.raw.request("thread/backgroundTerminals/terminate", {
-              threadId: nativeThreadId,
-              processId,
-            });
+            const response = yield* client.raw
+              .request("thread/backgroundTerminals/terminate", {
+                threadId: nativeThreadId,
+                processId,
+              })
+              .pipe(
+                // The app-server that ran the terminal is gone, and with it
+                // the only handle to the terminal: nothing is left to stop.
+                Effect.catchTags({
+                  CodexAppServerProcessExitedError: () => Effect.succeed({ terminated: true }),
+                  CodexAppServerInputStreamEndedError: () => Effect.succeed({ terminated: true }),
+                }),
+              );
             const result = yield* decodeCodexBackgroundTerminalTerminateResponse(response);
             if (result.terminated) return;
             let cursor: string | null = null;
@@ -5653,6 +5662,9 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                     )
                   : undefined);
               if (activeTurn === undefined) {
+                // Stop on a settled turn this process retains nothing for
+                // (released, restarted, or every command already reported).
+                if (turnInput.requestRuntimeRestart === true) return;
                 return yield* toProtocolError(
                   `Provider turn ${turnInput.providerTurnId} is not active and cannot be interrupted.`,
                 );

@@ -904,6 +904,13 @@ export const CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = [
   "mcp__t3-code__t3_queue_read",
 ];
 
+// Claude Code aborts an HTTP MCP call after 60 s ("The operation timed out.")
+// unless the server config sets `timeout`. T3's wait tools (t3_thread_wait,
+// delegate_task mode=wait) legitimately block for up to an hour
+// (MAX_WAIT_TIMEOUT_MS in OrchestratorMcpService), so the budget sits just
+// above that and the server's own wait timeout is what ends a long call.
+export const CLAUDE_T3_MCP_TOOL_TIMEOUT_MS = 65 * 60 * 1_000;
+
 // The SDK's `allowedTools` only pre-approves tool calls; availability is the
 // separate `tools` option. Attaching the t3-code MCP server therefore always
 // pre-approves its tools (headless modes like `dontAsk` deny anything that is
@@ -934,6 +941,7 @@ export function claudeMcpQueryOverrides(input: {
         headers: {
           Authorization: session.authorizationHeader,
         },
+        timeout: CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
       },
     },
   };
@@ -6973,22 +6981,23 @@ export function makeClaudeAdapterV2(
         const interruptTurn = Effect.fn("ClaudeAdapterV2.interruptTurn")(
           function* (turnInput: ProviderAdapter.ProviderAdapterV2InterruptInput) {
             const existing = yield* Ref.get(queryContext);
-            if (existing === null) {
-              return yield* new ProviderAdapter.ProviderAdapterProtocolError({
-                driver: CLAUDE_PROVIDER,
-                detail: `Claude provider thread ${turnInput.providerThread.id} has no live query.`,
-              });
-            }
             const currentTurn = yield* Ref.get(activeTurn);
             const nativeThreadId = turnInput.providerThread.nativeThreadRef?.nativeId ?? null;
-            if (
-              currentTurn === null &&
-              turnInput.requestRuntimeRestart === true &&
-              nativeThreadId !== null &&
-              existing.nativeThreadId === nativeThreadId
-            ) {
-              // Stop after the turn settled: the background shells belong to
-              // the CLI process, so closing its query is what stops them.
+            if (currentTurn === null && turnInput.requestRuntimeRestart === true) {
+              // Stop after the turn settled. With no CLI process of this
+              // native thread left, nothing it started is still running: its
+              // roster is not authoritative any more, and the orchestrator
+              // settles the items the thread still shows.
+              if (nativeThreadId === null) return;
+              if (existing === null || existing.nativeThreadId !== nativeThreadId) {
+                yield* clearWakeStateForNativeThread(nativeThreadId);
+                yield* resetBackgroundTaskStateForNativeThreadProcess(nativeThreadId, {
+                  status: "idle",
+                });
+                return;
+              }
+              // The background shells belong to the CLI process, so closing
+              // its query is what stops them.
               yield* closeLiveQueryForNativeThread(nativeThreadId);
               // A turn started while the close was pending may have opened a
               // replacement process. Its Waiting and wake state are its own.
@@ -7000,6 +7009,12 @@ export function makeClaudeAdapterV2(
                 });
               }
               return;
+            }
+            if (existing === null) {
+              return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+                driver: CLAUDE_PROVIDER,
+                detail: `Claude provider thread ${turnInput.providerThread.id} has no live query.`,
+              });
             }
             if (currentTurn?.providerTurnId !== turnInput.providerTurnId) {
               return yield* new ProviderAdapter.ProviderAdapterProtocolError({

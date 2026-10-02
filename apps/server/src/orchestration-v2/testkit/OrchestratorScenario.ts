@@ -48,6 +48,11 @@ export type OrchestratorV2ScenarioStep =
       readonly threadId: ThreadId;
     }
   | {
+      /** Waits until the thread's Waiting strip lists no background work. */
+      readonly type: "await_no_background_work";
+      readonly threadId: ThreadId;
+    }
+  | {
       readonly type: "await_run_steerable";
       readonly threadId: ThreadId;
       readonly runId: OrchestrationV2Run["id"];
@@ -348,6 +353,30 @@ export function runOrchestratorV2Scenario(
           return yield* waitForThreadIdle(threadId, attemptsRemaining - 1, deadlineAt);
         });
 
+      const waitForNoBackgroundWork = (
+        threadId: ThreadId,
+        attemptsRemaining = SCENARIO_WAIT_ATTEMPTS,
+        deadlineAt = scenarioWaitDeadline(),
+      ): Effect.Effect<
+        void,
+        Orchestrator.OrchestratorV2Error | OrchestratorV2ScenarioStepError,
+        never
+      > =>
+        Effect.gen(function* () {
+          const pending = (yield* orchestrator.getThreadShell(threadId))?.pendingBackgroundTasks;
+          if ((pending?.length ?? 0) === 0) {
+            return;
+          }
+          if (scenarioWaitExhausted(attemptsRemaining, deadlineAt)) {
+            return yield* new OrchestratorV2ScenarioStepError({
+              scenario: scenario.name,
+              step: `await_no_background_work:${threadId}:pending=${pending?.map((task) => task.taskId).join(",")}`,
+            });
+          }
+          yield* yieldToRuntime;
+          return yield* waitForNoBackgroundWork(threadId, attemptsRemaining - 1, deadlineAt);
+        });
+
       const waitForRunSteerable = (
         threadId: ThreadId,
         runId: OrchestrationV2Run["id"],
@@ -622,6 +651,9 @@ export function runOrchestratorV2Scenario(
             break;
           case "await_thread_idle":
             yield* waitForThreadIdle(step.threadId);
+            break;
+          case "await_no_background_work":
+            yield* waitForNoBackgroundWork(step.threadId);
             break;
           case "await_run_steerable":
             yield* waitForRunSteerable(step.threadId, step.runId);

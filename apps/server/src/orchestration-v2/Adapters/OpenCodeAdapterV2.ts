@@ -3385,6 +3385,17 @@ export function makeOpenCodeAdapterV2(
               const sessionId = nativeThreadId(interruptInput.providerThread);
               const state = threads.get(sessionId);
               const turn = state?.activeTurn;
+              // Stop on a settled turn: a background task child can outlive
+              // it (busySessionIds), and aborting the descendants ends it.
+              if (
+                (turn === undefined || turn === null) &&
+                interruptInput.requestRuntimeRestart === true
+              ) {
+                for (const controller of commandControllers.get(sessionId) ?? [])
+                  controller.abort();
+                yield* abortDescendants(sessionId);
+                return;
+              }
               if (
                 turn === undefined ||
                 turn === null ||

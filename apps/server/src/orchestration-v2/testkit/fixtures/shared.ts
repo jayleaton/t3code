@@ -263,6 +263,11 @@ export type OrchestratorFixtureInputStep =
       readonly waitForTurnItemType?: OrchestrationV2TurnItem["type"];
     }
   | {
+      /** The Waiting strip's Stop: interrupts a settled run's leftover background work. */
+      readonly type: "stop_background_work";
+      readonly targetRunIndex: number;
+    }
+  | {
       readonly type: "release_replay_gate_after_waiting";
       readonly label: string;
       readonly targetRunIndex: number;
@@ -865,6 +870,24 @@ export function materializeFixtureInput(input: {
           }
           steps.push({ type: "advance_clock", duration: "1 millis" });
           steps.push({ type: "await_thread_idle", threadId: ids.threadId });
+          break;
+        case "stop_background_work":
+          steps.push({ type: "await_thread_idle", threadId: ids.threadId });
+          steps.push({ type: "capture_shell_snapshot", key: "before-stop" });
+          pushDispatch(
+            {
+              type: "run.interrupt",
+              commandId: yield* idAllocator.allocate.command({
+                fixtureName: input.scenario,
+                commandName: `stop-background-work-${step.targetRunIndex}`,
+              }),
+              threadId: ids.threadId,
+              runId: runIdFor(step.targetRunIndex),
+              holdQueue: true,
+            },
+            { advanceClockAfter: false },
+          );
+          steps.push({ type: "await_no_background_work", threadId: ids.threadId });
           break;
         case "release_replay_gate_after_waiting":
           steps.push({

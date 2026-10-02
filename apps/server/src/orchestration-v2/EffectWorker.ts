@@ -166,6 +166,18 @@ export const executorLayer: Layer.Layer<
                 providerTurnId: effect.request.providerTurnId,
               })
               .pipe(
+                // The provider has stopped what it still ran and reported it.
+                // Whatever the thread still shows on that provider thread is
+                // work no process will report on, so the Stop ends it too.
+                Effect.andThen(
+                  threads.dispatch({
+                    type: "thread.background-work.settle",
+                    commandId: CommandId.make(`${effect.commandId}:background-work-settled`),
+                    threadId: effect.threadId,
+                    providerThreadId: effect.request.providerThreadId,
+                    providerTurnId: effect.request.providerTurnId,
+                  }),
+                ),
                 Effect.mapError(
                   (cause) =>
                     new OrchestrationEffectExecutionError({

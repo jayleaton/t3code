@@ -9,6 +9,10 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
+  ProviderThreadId,
+  ProviderTurnId,
+  RunAttemptId,
+  RunId,
   RuntimeRequestId,
   ThreadId,
   TurnItemId,
@@ -327,5 +331,206 @@ it.effect("implements a proposed plan that the command projection leaves out", (
     });
 
     assert.equal((yield* projections.getPlan(threadId, planId))?.status, "completed");
+  }).pipe(Effect.provide(testLayer)),
+);
+
+// Stop's settle follow-up runs after the provider interrupt returns, possibly
+// long after the Stop (retries) or again (an effect replayed after a crash).
+// A later run's background work is not that Stop's to end.
+it.effect("settles only the stopped run's background work, once", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const threadId = ThreadId.make("thread:settle-binding");
+    const providerThreadId = ProviderThreadId.make("provider-thread:settle-binding");
+    const now = yield* DateTime.now;
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create-settle-binding"),
+      threadId,
+      projectId: ProjectId.make("project:settle-binding"),
+      title: "Settle binding",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    yield* projections.apply({
+      id: EventId.make("settle-binding:provider-thread"),
+      type: "provider-thread.updated",
+      threadId,
+      occurredAt: now,
+      payload: {
+        id: providerThreadId,
+        driver: adapter.driver,
+        providerInstanceId: instanceId,
+        providerSessionId: null,
+        appThreadId: threadId,
+        ownerNodeId: null,
+        nativeThreadRef: null,
+        nativeConversationHeadRef: null,
+        status: "idle",
+        firstRunOrdinal: 1,
+        lastRunOrdinal: 2,
+        handoffIds: [],
+        forkedFrom: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+    const commandItem = (ordinal: number) => TurnItemId.make(`turn-item:settle-binding:${ordinal}`);
+    for (const ordinal of [1, 2]) {
+      const runId = RunId.make(`run:settle-binding:${ordinal}`);
+      const attemptId = RunAttemptId.make(`attempt:settle-binding:${ordinal}`);
+      const nodeId = NodeId.make(`node:settle-binding:${ordinal}`);
+      const providerTurnId = ProviderTurnId.make(`provider-turn:settle-binding:${ordinal}`);
+      yield* projections.apply({
+        id: EventId.make(`settle-binding:run:${ordinal}`),
+        type: "run.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: runId,
+          threadId,
+          ordinal,
+          providerInstanceId: instanceId,
+          modelSelection,
+          providerThreadId,
+          userMessageId: MessageId.make(`message:settle-binding:${ordinal}`),
+          rootNodeId: nodeId,
+          activeAttemptId: attemptId,
+          status: "completed",
+          requestedAt: now,
+          startedAt: now,
+          completedAt: now,
+          checkpointId: null,
+          contextHandoffId: null,
+        },
+      });
+      yield* projections.apply({
+        id: EventId.make(`settle-binding:attempt:${ordinal}`),
+        type: "run-attempt.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: attemptId,
+          runId,
+          attemptOrdinal: 1,
+          rootNodeId: nodeId,
+          providerInstanceId: instanceId,
+          providerThreadId,
+          providerTurnId,
+          reason: "initial",
+          status: "completed",
+          startedAt: now,
+          completedAt: now,
+        },
+      });
+      yield* projections.apply({
+        id: EventId.make(`settle-binding:turn:${ordinal}`),
+        type: "provider-turn.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: providerTurnId,
+          providerThreadId,
+          nodeId,
+          runAttemptId: attemptId,
+          nativeTurnRef: null,
+          ordinal,
+          status: "completed",
+          startedAt: now,
+          completedAt: now,
+        },
+      });
+      yield* projections.apply({
+        id: EventId.make(`settle-binding:item:${ordinal}`),
+        type: "turn-item.updated",
+        threadId,
+        runId,
+        occurredAt: now,
+        payload: {
+          id: commandItem(ordinal),
+          threadId,
+          runId,
+          nodeId,
+          providerThreadId,
+          providerTurnId,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: ordinal * 10,
+          status: "running",
+          title: `Background command ${ordinal}`,
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+          type: "command_execution",
+          input: `sleep ${ordinal}`,
+        },
+      });
+    }
+    const itemStatuses = Effect.map(projections.getThreadProjection(threadId), (projection) =>
+      projection.turnItems
+        .flatMap((item) => (item.type === "command_execution" ? [`${item.id}:${item.status}`] : []))
+        .toSorted(),
+    );
+    // The settle that followed a Stop of run 1's turn, dispatched only after
+    // run 2 had settled with work of its own.
+    const settle = {
+      type: "thread.background-work.settle",
+      commandId: CommandId.make("stop-run-1:background-work-settled"),
+      threadId,
+      providerThreadId,
+      providerTurnId: ProviderTurnId.make("provider-turn:settle-binding:1"),
+    } as const;
+    yield* orchestrator.dispatch(settle);
+    assert.deepEqual(yield* itemStatuses, [
+      `${commandItem(1)}:interrupted`,
+      `${commandItem(2)}:running`,
+    ]);
+
+    // A settle that found nothing to end replays as a no-op, even after work
+    // it would match appears: its receipt is recorded with no events.
+    const emptySettle = {
+      ...settle,
+      commandId: CommandId.make("stop-run-1-again:background-work-settled"),
+    };
+    const first = yield* orchestrator.dispatch(emptySettle);
+    assert.lengthOf(first.storedEvents, 0);
+    yield* projections.apply({
+      id: EventId.make("settle-binding:item:late"),
+      type: "turn-item.updated",
+      threadId,
+      runId: RunId.make("run:settle-binding:1"),
+      occurredAt: now,
+      payload: {
+        id: commandItem(3),
+        threadId,
+        runId: RunId.make("run:settle-binding:1"),
+        nodeId: NodeId.make("node:settle-binding:1"),
+        providerThreadId,
+        providerTurnId: ProviderTurnId.make("provider-turn:settle-binding:1"),
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 30,
+        status: "running",
+        title: "Late background command",
+        startedAt: now,
+        completedAt: null,
+        updatedAt: now,
+        type: "command_execution",
+        input: "sleep 3",
+      },
+    });
+    const replayed = yield* orchestrator.dispatch(emptySettle);
+    assert.lengthOf(replayed.storedEvents, 0);
+    assert.deepEqual(yield* itemStatuses, [
+      `${commandItem(1)}:interrupted`,
+      `${commandItem(2)}:running`,
+      `${commandItem(3)}:running`,
+    ]);
   }).pipe(Effect.provide(testLayer)),
 );

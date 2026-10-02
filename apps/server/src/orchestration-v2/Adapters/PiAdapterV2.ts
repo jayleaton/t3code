@@ -2466,6 +2466,9 @@ export function makePiAdapterV2(
         interruptTurn: (interruptInput) =>
           Effect.gen(function* () {
             const turn = threadState?.activeTurn ?? null;
+            // Stop on a settled turn: Pi runs nothing between prompts, so
+            // nothing of that turn is left to stop.
+            if (turn === null && interruptInput.requestRuntimeRestart === true) return;
             if (turn === null || turn.providerTurn.id !== interruptInput.providerTurnId) {
               return yield* protocolError(`Pi turn ${interruptInput.providerTurnId} is not active`);
             }

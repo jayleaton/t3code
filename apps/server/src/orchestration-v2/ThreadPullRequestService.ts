@@ -345,8 +345,9 @@ export const make = Effect.gen(function* () {
               }).pipe(Effect.tap(() => Effect.sync(() => failBackfill(group)))),
           ),
         ),
-      // Match a batched summary read so host lookups arrive together.
-      { concurrency: 25, discard: true },
+      // Wide enough that a sweep's GitHub branch lookups reach GitHubCli together and share one
+      // GraphQL document, instead of one `gh pr list` per branch.
+      { concurrency: 32, discard: true },
     );
   });
 

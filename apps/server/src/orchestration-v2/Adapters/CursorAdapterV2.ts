@@ -2429,6 +2429,9 @@ export function makeCursorAdapterV2(
           interruptTurn: Effect.fn("CursorAdapterV2.interruptTurn")(
             function* (turnInput: ProviderAdapter.ProviderAdapterV2InterruptInput) {
               const context = yield* Ref.get(activeTurn);
+              // Stop on a settled turn: finalization already ended its tools
+              // and subagents, so nothing of it is left running to stop.
+              if (context === null && turnInput.requestRuntimeRestart === true) return;
               if (context?.providerTurnId !== turnInput.providerTurnId) {
                 return yield* new ProviderAdapter.ProviderAdapterProtocolError({
                   driver: CursorAgentSdk.CURSOR_PROVIDER,
