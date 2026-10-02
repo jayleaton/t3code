@@ -92,6 +92,10 @@ export const OPENCODE2_BACKGROUND_PROMPT =
   "Use the subagent tool with background enabled to delegate to the general subagent with the prompt: 'Run the shell command `sleep 20` with the bash tool and then reply exactly CHILD_OK.' As soon as it is launched, reply exactly PARENT_OK and end your turn without waiting for it.";
 export const OPENCODE2_COMPACTION_FIRST_PROMPT = "Remember the codeword PAPAYA. Reply OK.";
 export const OPENCODE2_COMPACTION_RECALL_PROMPT = "What was the codeword? One word.";
+export const OPENCODE2_RESTART_PROMPT =
+  "Run the shell command `sleep 25 && echo RESUMED` with the bash tool, then reply with its output.";
+export const OPENCODE2_RESTART_RECALL_PROMPT =
+  "What did I last ask you to run? Answer in one short sentence.";
 export const OPENCODE2_COMMAND_PROMPT = "/hello WORLD";
 export const OPENCODE2_SKILL_PROMPT = "Use $greet to say hi in three words.";
 export const TURN_INTERRUPT_PROMPT =
@@ -1155,6 +1159,20 @@ export function assertProviderNativeSubagentRootTurns(result: OrchestratorV2Scen
       const roots = child.nodes.filter((node) => node.kind === "root_turn");
       assert.isNotEmpty(roots, `child ${childThreadId} must have a root turn`);
       for (const root of roots) assert.isNull(root.runId);
+
+      // One run ingests a child thread at a time, so no update is stored by two.
+      const runByChildUpdate = new Map<string, string | undefined>();
+      for (const event of result.domainEvents) {
+        if (event.threadId !== childThreadId) continue;
+        const update = `${event.type}:${JSON.stringify(event.payload)}`;
+        const storedBy = runByChildUpdate.get(update);
+        if (runByChildUpdate.has(update) && storedBy !== event.runId) {
+          assert.fail(
+            `child ${childThreadId} stored ${event.type} in ${storedBy} and ${event.runId}`,
+          );
+        }
+        runByChildUpdate.set(update, event.runId);
+      }
 
       const rootEvents = result.domainEvents.flatMap((event, index) =>
         event.type === "node.updated" &&
