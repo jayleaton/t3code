@@ -1,38 +1,27 @@
-# Agents on orchestrator V2 (experimental)
+# Agents on orchestrator V2
 
 The Agents board is a profile-indexed view of native V2 threads. It must not own
 another run state machine, provider process, event log, or transcript. A profile
 is a settings record; creation resolves its revision and freezes its instructions
 on the native thread. Later library edits affect new threads only. The common
 provider turn boundary supplies these instructions, including after a provider
-switch. This draft supplies them as a delimited prompt prefix, not as a native
+switch. The fork supplies them as a delimited prompt prefix, not as a native
 provider system/developer message; provider-specific instruction priority still
 needs acceptance testing.
 
-## Prerequisites and upstream movement
+## Upstream relationship
 
-This draft imports pingdotgg/t3code#2829 at
-`d6dcd101a349fffd90730f0bea589abfd5ce03f7` (reviewed while open on 2026-09-23),
-then integrates fork main `1423c895a78dab152e5019cba362a0c126017084`.
-Upstream rewrites this branch: use the previous reviewed tree
-`1ee1d0464271295d7b389cff343c5862caf31afa` as the explicit three-way base.
-Keep the upstream import and fork integration in separate merge commits;
-do not infer the reviewed changes from a linear upstream commit range.
-
-Do not install this draft over an existing installation. V2's event format,
-projection layout, receipt semantics, provider runtime, and client protocol are
-still moving. A V1 client/server mixture is not a supported deployment. Track
-upstream by fetching the PR head, recording both SHAs in the draft PR, and
-reviewing the intervening changes before updating the import. Re-run copied-data
-import/replay, gateway routing/grant tests, composer checks, and scoped typechecks
-on every update. Revisit this decision when V2 lands instead of carrying a
-permanent frozen copy of its runtime.
+V2 landed upstream as pingdotgg/t3code#2829 (squash commit `de34391427`), and
+upstream main is an ancestor of this work, so track upstream main with ordinary
+merges. The fork keeps its own migration numbering (below); do not adopt
+upstream's V2 migration ids. A V1 client/server mixture is not a supported
+deployment.
 
 ## Data boundary
 
 Fork releases own migrations through 58, including its upgrade repair, title
 state, viewed PR files, scheduled tasks, auto-settle, and thread parents. V2 is
-registered as **59**, followed by upstream index cleanup as **60**. A preflight guard rejects older draft V2 migration numbers before writes.
+registered as **59**, followed by upstream index cleanup as **60**. A preflight guard rejects V2 migration numbers from earlier preview builds before writes.
 This is a fork migration history, not interchangeable with an upstream V2 database.
 Fork 56 created a differently shaped `scheduled_tasks`; migration 59 renames it to
 `legacy_scheduled_tasks` before upstream's `CREATE TABLE IF NOT EXISTS` would keep the
@@ -91,7 +80,7 @@ boundary; their bodies never enter shell projections or gateway summaries. Keep 
 snapshot, profile revision/tombstone settings merge, client grant/delivery store,
 and machine-aware navigation. Desktop branding, fork release feed, bundled build
 version, and branded startup route remain independent of orchestration. Official
-T3 Connect/auth/relay configuration is retained; this draft requires no fork cloud.
+T3 Connect/auth/relay configuration is retained; the fork requires no cloud of its own.
 
 V2 now owns durable queued runs, queued editing, worktree preparation, and draft
 promotion. The fork's V1 browser-local message queue and worktree activity recovery
