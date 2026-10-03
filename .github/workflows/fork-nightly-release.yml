@@ -6,6 +6,9 @@ on:
   workflow_dispatch:
 
 permissions:
+  # release-desktop.yml declares actions: read so Windows builds can wait for the Linux CLI
+  # archive; a called workflow cannot request more than its caller grants.
+  actions: read
   contents: read
 
 concurrency:
