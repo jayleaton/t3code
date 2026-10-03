@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
+  EnvironmentId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -84,6 +85,67 @@ it.effect("links chats under a parent, rejects cycles and missing parents, and d
     assert.equal(yield* parentOf("deps"), "coordinator");
     yield* setParent("deps", null);
     assert.isNull(yield* parentOf("deps"));
+  }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("links chats under a parent on another environment and clears it on relink", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* OrchestratorV2;
+    const projections = yield* ProjectionStoreV2;
+    const remote = EnvironmentId.make("environment-pc");
+    const linkOf = (id: string) =>
+      projections.getThreadShell(ThreadId.make(id)).pipe(
+        Effect.map((shell) => ({
+          parentThreadId: shell?.parentThreadId ?? null,
+          parentEnvironmentId: shell?.parentEnvironmentId ?? null,
+        })),
+      );
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create:remote-child"),
+      threadId: ThreadId.make("remote-child"),
+      projectId: ProjectId.make("project:parents"),
+      title: "remote-child",
+      modelSelection: { instanceId, model: "gpt-5.1-codex" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "agent",
+      creationSource: "mcp",
+      // The coordinating chat lives on the other machine, so this server cannot look it up.
+      parentThreadId: ThreadId.make("pc-coordinator"),
+      parentEnvironmentId: remote,
+    });
+    assert.deepEqual(yield* linkOf("remote-child"), {
+      parentThreadId: ThreadId.make("pc-coordinator"),
+      parentEnvironmentId: remote,
+    });
+
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create:local-parent"),
+      threadId: ThreadId.make("local-parent"),
+      projectId: ProjectId.make("project:parents"),
+      title: "local-parent",
+      modelSelection: { instanceId, model: "gpt-5.1-codex" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.metadata.update",
+      commandId: CommandId.make("relink:remote-child"),
+      threadId: ThreadId.make("remote-child"),
+      parentThreadId: ThreadId.make("local-parent"),
+    });
+    assert.deepEqual(yield* linkOf("remote-child"), {
+      parentThreadId: ThreadId.make("local-parent"),
+      parentEnvironmentId: null,
+    });
   }).pipe(Effect.provide(testLayer)),
 );
 

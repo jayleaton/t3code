@@ -47,7 +47,10 @@ export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
                     ? null
                     : runByKey.get(
                         scopedThreadKey(
-                          scopeThreadRef(thread.environmentId, thread.parentThreadId),
+                          scopeThreadRef(
+                            thread.parentEnvironmentId ?? thread.environmentId,
+                            thread.parentThreadId,
+                          ),
                         ),
                       )
                 }

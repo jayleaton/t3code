@@ -385,14 +385,14 @@ describe("gateway chat tools", () => {
     expect(read.items[0]).toMatchObject({ text: `hello from ${environmentId}` });
   });
 
-  it("parents chats created by a T3 chat in its own environment", async () => {
+  it("parents chats a T3 chat creates on any environment", async () => {
     const base = makePort();
-    const parents: Array<string | undefined> = [];
+    const parents: Array<[string | undefined, string | undefined]> = [];
     const context = {
       port: {
         ...base,
         createThread: async (request: Parameters<typeof base.createThread>[0]) => {
-          parents.push(request.parentThreadId);
+          parents.push([request.parentThreadId, request.parentEnvironmentId]);
           return base.createThread(request);
         },
       },
@@ -432,7 +432,14 @@ describe("gateway chat tools", () => {
       invocation,
     );
 
-    expect(parents).toEqual(["coordinator", "other-parent", undefined, undefined, "coordinator"]);
+    expect(parents).toEqual([
+      ["coordinator", undefined],
+      ["other-parent", undefined],
+      [undefined, undefined],
+      // A chat on another machine records which environment its parent is on.
+      ["coordinator", "local"],
+      ["coordinator", undefined],
+    ]);
   });
 
   it.each(["constructor", "toString", "__proto__"])(

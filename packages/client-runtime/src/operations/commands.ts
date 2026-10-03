@@ -24,6 +24,7 @@ import {
   type RunId,
   type RuntimeMode,
   type RuntimeRequestId,
+  type EnvironmentId,
   type ThreadId,
   type ThreadEnvMode,
   type UploadChatAttachment,
@@ -135,6 +136,8 @@ export interface UpdateThreadMetadataInput extends ThreadCommandInput {
   readonly linkedPullRequest?: ThreadLinkedPullRequest | null;
   /** Nest under another chat on the Agents board, or detach with null. */
   readonly parentThreadId?: ThreadId | null;
+  /** With `parentThreadId`, the parent's environment when it is another machine. */
+  readonly parentEnvironmentId?: EnvironmentId | null;
 }
 
 export interface SetThreadRuntimeModeInput extends ThreadCommandInput {
@@ -597,6 +600,9 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
           ? {}
           : { linkedPullRequest: input.linkedPullRequest }),
         ...(input.parentThreadId === undefined ? {} : { parentThreadId: input.parentThreadId }),
+        ...(input.parentEnvironmentId == null
+          ? {}
+          : { parentEnvironmentId: input.parentEnvironmentId }),
       });
     }
     if (input.modelSelection !== undefined) {

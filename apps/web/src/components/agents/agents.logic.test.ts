@@ -14,6 +14,7 @@ import {
   resolveAgentTaskProject,
   nestAgentRuns,
   agentRunLinkTargets,
+  agentRunParentKey,
   agentRunDropZone,
   agentRunReorderOver,
 } from "./agents.logic";
@@ -373,36 +374,60 @@ describe("nestAgentRuns", () => {
 });
 
 describe("agentRunLinkTargets", () => {
-  const run = (id: string, parentThreadId: string | null, environmentId = "local") => ({
+  const run = (
+    id: string,
+    parentThreadId: string | null,
+    environmentId = "local",
+    parentEnvironmentId?: string,
+  ) => ({
     environmentId: EnvironmentId.make(environmentId),
     id: ThreadId.make(id),
     parentThreadId: parentThreadId === null ? null : ThreadId.make(parentThreadId),
+    ...(parentEnvironmentId === undefined
+      ? {}
+      : { parentEnvironmentId: EnvironmentId.make(parentEnvironmentId) }),
   });
   const root = run("root", null);
   const child = run("child", "root");
-  const grandchild = run("grandchild", "child");
+  // A sub-run on another machine, nested under a local chat.
+  const remoteChild = run("remote-child", "child", "remote", "local");
   const loose = run("loose", null);
   const remote = run("remote", null, "remote");
-  const all = [root, child, grandchild, loose, remote];
+  const all = [root, child, remoteChild, loose, remote];
 
-  it("offers every run in the same environment outside the dragged run's own tree", () => {
+  it("offers every run on any environment outside the dragged run's own tree", () => {
     expect([...agentRunLinkTargets(loose, all)].toSorted()).toEqual([
       "local:child",
-      "local:grandchild",
       "local:root",
+      "remote:remote",
+      "remote:remote-child",
     ]);
-    expect([...agentRunLinkTargets(grandchild, all)].toSorted()).toEqual([
+    expect([...agentRunLinkTargets(remote, all)].toSorted()).toEqual([
+      "local:child",
       "local:loose",
       "local:root",
+      "remote:remote-child",
     ]);
   });
 
-  it("rejects cycles, the current parent, and other environments", () => {
-    // root cannot move under its own sub-runs.
-    expect([...agentRunLinkTargets(root, all)]).toEqual(["local:loose"]);
-    // child is already under root and cannot move under grandchild.
-    expect([...agentRunLinkTargets(child, all)]).toEqual(["local:loose"]);
-    expect(agentRunLinkTargets(remote, all).size).toBe(0);
+  it("rejects cycles that cross environments, and the current parent", () => {
+    // root cannot move under its own sub-runs, including the one on the other machine.
+    expect([...agentRunLinkTargets(root, all)].toSorted()).toEqual([
+      "local:loose",
+      "remote:remote",
+    ]);
+    // remote-child is already under child.
+    expect([...agentRunLinkTargets(remoteChild, all)].toSorted()).toEqual([
+      "local:loose",
+      "local:root",
+      "remote:remote",
+    ]);
+  });
+
+  it("resolves parents on another environment by both IDs", () => {
+    expect(agentRunParentKey(remoteChild)).toBe("local:child");
+    expect(agentRunParentKey(child)).toBe("local:root");
+    expect(agentRunParentKey(root)).toBeNull();
   });
 });
 

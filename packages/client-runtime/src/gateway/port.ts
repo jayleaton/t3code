@@ -380,11 +380,12 @@ export interface GatewayRuntimePort {
   handoffThread?(input: AgentHandoffInput): Promise<AgentHandoffResult>;
   unsettleThread?(environmentId: string, threadId: string): Promise<{ status: "succeeded" }>;
   settleThread?(environmentId: string, threadId: string): Promise<{ status: "succeeded" }>;
-  /** Links a chat under the chat that owns its work, or unlinks it with null. */
+  /** Links a chat under the chat that owns its work, which may be on another environment. */
   setThreadParent?(
     environmentId: string,
     threadId: string,
     parentThreadId: string | null,
+    parentEnvironmentId?: string,
   ): Promise<{ status: "succeeded" }>;
   openAgents?(environmentId: string): Promise<{ status: "succeeded" }>;
   createProfile?(environmentId: string, profile: GatewayProfileInput): Promise<GatewayProfile>;
@@ -473,6 +474,8 @@ export interface GatewayRuntimePort {
     readonly workspaceMode?: "checkout" | "worktree";
     readonly baseBranch?: string;
     readonly parentThreadId?: string;
+    /** Environment of `parentThreadId` when it is another machine's chat. */
+    readonly parentEnvironmentId?: string;
     readonly requestId: string;
     readonly profileSelection?: {
       readonly profileId: string;
