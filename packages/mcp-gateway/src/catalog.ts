@@ -732,3 +732,29 @@ export async function runGatewayTool(
     return { ok: false as const, error, result: failure(error, responseContext) };
   }
 }
+
+/**
+ * JSON Schema for a tool's input. With `environmentDefault`, `environmentId` becomes optional:
+ * a T3 server hosting the tools fills in its own environment.
+ */
+export function toolInputJsonSchema(
+  name: string,
+  options: { readonly environmentDefault?: boolean } = {},
+): Record<string, unknown> {
+  const spec = (TOOL_SPECS as Record<string, ToolSpec>)[name];
+  if (spec === undefined) throw new Error(`Unknown gateway tool ${name}.`);
+  const shape = spec[1];
+  const environment = shape.environmentId as z.ZodType | undefined;
+  const input =
+    options.environmentDefault === true && environment !== undefined
+      ? {
+          ...shape,
+          environmentId: environment
+            .optional()
+            .describe(
+              "Environment to act on. Omit to use the machine this chat runs on; pass another environment's ID to act there through your connected T3 app.",
+            ),
+        }
+      : shape;
+  return z.toJSONSchema(z.strictObject(input)) as Record<string, unknown>;
+}

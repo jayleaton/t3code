@@ -3784,6 +3784,72 @@ const makeWsRpcLayer = (
     }),
   );
 
+/** Services every WebSocket RPC session needs beyond the handlers' own dependencies. */
+const provideWsRpcDependencies = <A, E, R>(
+  handlers: Layer.Layer<A, E, R>,
+  services: {
+    readonly sql: SqlClient.SqlClient;
+    readonly serverSelfUpdate: ServerSelfUpdate.ServerSelfUpdate["Service"];
+    readonly pullRequests: PullRequestService.PullRequestService["Service"];
+  },
+) => {
+  const { sql, serverSelfUpdate, pullRequests } = services;
+  return handlers.pipe(
+    Layer.provideMerge(RpcSerialization.layerJson),
+    Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
+    Layer.provide(AgentSessionScanner.layer),
+    Layer.provide(ProviderMaintenanceRunner.layer),
+    Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
+    // One server-lifetime service means clients share the same PR caches, and a WS
+    // mutation invalidates the HTTP diff cache that every client reads from.
+    Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
+    Layer.provide(
+      SourceControlDiscovery.layer.pipe(
+        Layer.provide(
+          SourceControlProviderRegistry.layer.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                AzureDevOpsCli.layer,
+                BitbucketApi.layer,
+                GitHubCli.layer,
+                GitLabCli.layer,
+                ForgejoCli.layer,
+              ),
+            ),
+            Layer.provideMerge(GitVcsDriver.layer),
+            Layer.provide(VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer))),
+          ),
+        ),
+      ),
+    ),
+  );
+};
+
+/**
+ * Builds the WebSocket RPC handlers for a session the server defines itself, so
+ * server-side callers (the T3 Agents MCP tools) use the same API as remote clients.
+ */
+export const makeInProcessWsRpcLayer = (session: EnvironmentAuth.AuthenticatedSession) =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      return provideWsRpcDependencies(
+        makeWsRpcLayer(
+          session,
+          {},
+          {},
+          yield* PreviewAutomationBroker.PreviewAutomationBroker,
+          yield* McpGatewayBroker.McpGatewayBroker,
+          yield* ClientFocusBroker.ClientFocusBroker,
+        ),
+        {
+          sql: yield* SqlClient.SqlClient,
+          serverSelfUpdate: yield* ServerSelfUpdate.ServerSelfUpdate,
+          pullRequests: yield* PullRequestService.PullRequestService,
+        },
+      );
+    }),
+  );
+
 export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
@@ -3836,43 +3902,16 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           return httpEffect;
         }).pipe(
           Effect.provide(
-            makeWsRpcLayer(
-              session,
-              clientOrigin,
-              clientAnalyticsProps,
-              previewAutomationBroker,
-              mcpGatewayBroker,
-              clientFocusBroker,
-            ).pipe(
-              Layer.provideMerge(RpcSerialization.layerJson),
-              Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
-              Layer.provide(AgentSessionScanner.layer),
-              Layer.provide(ProviderMaintenanceRunner.layer),
-              Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
-              // One server-lifetime service means clients share the same PR caches, and a WS
-              // mutation invalidates the HTTP diff cache that every client reads from.
-              Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
-              Layer.provide(
-                SourceControlDiscovery.layer.pipe(
-                  Layer.provide(
-                    SourceControlProviderRegistry.layer.pipe(
-                      Layer.provide(
-                        Layer.mergeAll(
-                          AzureDevOpsCli.layer,
-                          BitbucketApi.layer,
-                          GitHubCli.layer,
-                          GitLabCli.layer,
-                          ForgejoCli.layer,
-                        ),
-                      ),
-                      Layer.provideMerge(GitVcsDriver.layer),
-                      Layer.provide(
-                        VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer)),
-                      ),
-                    ),
-                  ),
-                ),
+            provideWsRpcDependencies(
+              makeWsRpcLayer(
+                session,
+                clientOrigin,
+                clientAnalyticsProps,
+                previewAutomationBroker,
+                mcpGatewayBroker,
+                clientFocusBroker,
               ),
+              { sql, serverSelfUpdate, pullRequests },
             ),
           ),
         );
