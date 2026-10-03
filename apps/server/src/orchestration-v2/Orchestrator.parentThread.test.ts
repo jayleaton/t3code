@@ -2,20 +2,28 @@ import { assert, it } from "@effect/vitest";
 import {
   CommandId,
   EnvironmentId,
+  EventId,
+  MessageId,
+  NodeId,
+  type OrchestrationV2AppThread,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import { EventSinkV2 } from "./EventSink.ts";
 import { OrchestratorV2 } from "./Orchestrator.ts";
 import { ProjectionStoreV2, layer as projectionLayer } from "./ProjectionStore.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
+import { makeSubagentChildThread } from "./SubagentProjection.ts";
 import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
@@ -211,4 +219,119 @@ it.effect(
       assert.isNull(yield* settledAt("helper"));
       assert.deepEqual(yield* settledAt("earlier"), earlierAt);
     }).pipe(Effect.provide(Layer.provideMerge(ThreadManagement.layer, testLayer))),
+);
+
+it("a sub-run nests under the chat that spawned it, not that chat's parent", () => {
+  const now = DateTime.makeUnsafe("2026-10-01T00:00:00.000Z");
+  const parentThread = {
+    id: ThreadId.make("spawner"),
+    parentThreadId: ThreadId.make("spawner-parent"),
+    parentEnvironmentId: EnvironmentId.make("environment-pc"),
+    pinnedAt: now,
+    autoSettleDisabledAt: now,
+    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: "spawner" },
+  } as unknown as OrchestrationV2AppThread;
+  const child = makeSubagentChildThread({
+    parentThread,
+    childThreadId: ThreadId.make("sub-run"),
+    parentNodeId: NodeId.make("task"),
+    activeProviderThreadId: null,
+    providerInstanceId: instanceId,
+    modelSelection: { instanceId, model: "gpt-5.1-codex" },
+    title: "sub-run",
+    now,
+    createdBy: "agent",
+    creationSource: "mcp",
+  });
+  assert.equal(child.parentThreadId, "spawner");
+  assert.isNull(child.parentEnvironmentId);
+  assert.isNull(child.pinnedAt);
+  assert.isNull(child.autoSettleDisabledAt);
+});
+
+it.effect("an agent sub-run settles when its run completes and again after each reuse", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* OrchestratorV2;
+    const projections = yield* ProjectionStoreV2;
+    const sink = yield* EventSinkV2;
+    const create = (id: string, parentThreadId?: string) =>
+      orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`create:${id}`),
+        threadId: ThreadId.make(id),
+        projectId: ProjectId.make("project:parents"),
+        title: id,
+        modelSelection: { instanceId, model: "gpt-5.1-codex" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "agent",
+        creationSource: "mcp",
+        ...(parentThreadId === undefined ? {} : { parentThreadId: ThreadId.make(parentThreadId) }),
+      });
+    // Starts a run on the thread, which is what a parent re-sending to a sub-run does.
+    const send = (id: string, turn: number) =>
+      orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`send:${id}:${turn}`),
+        threadId: ThreadId.make(id),
+        messageId: MessageId.make(`message:${id}:${turn}`),
+        text: `Task ${turn}`,
+        attachments: [],
+        dispatchMode: { type: "defer_start" },
+        createdBy: "agent",
+        creationSource: "mcp",
+      });
+    const completeLatestRun = (id: string) =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.make(id);
+        const run = (yield* projections.getThreadRecords(threadId, ["runs"])).runs.at(-1)!;
+        const now = yield* DateTime.now;
+        yield* sink.write({
+          events: [
+            {
+              id: EventId.make(`event:complete:${run.id}`),
+              type: "run.updated",
+              threadId,
+              runId: run.id,
+              ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
+              providerInstanceId: instanceId,
+              occurredAt: now,
+              payload: { ...run, status: "completed", completedAt: now },
+            },
+          ],
+        });
+      });
+    // Settling runs off the terminal-run worker; wait for its event, not a timer.
+    const waitForSettled = (id: string, afterSequence: number) =>
+      sink.stream({ afterSequence, eventType: "thread.settled" }).pipe(
+        Stream.filter((stored) => stored.event.threadId === id),
+        Stream.runHead,
+      );
+    const settledOverride = (id: string) =>
+      projections.getThread(ThreadId.make(id)).pipe(Effect.map((thread) => thread.settledOverride));
+
+    yield* create("orchestrator");
+    yield* create("sub-run", "orchestrator");
+    yield* send("orchestrator", 1);
+    yield* send("sub-run", 1);
+
+    let before = yield* sink.latestSequence();
+    // The worker handles terminal runs in order, so once the sub-run settles
+    // the top-level chat's earlier completion has been handled too.
+    yield* completeLatestRun("orchestrator");
+    yield* completeLatestRun("sub-run");
+    yield* waitForSettled("sub-run", before);
+    assert.equal(yield* settledOverride("sub-run"), "settled");
+    assert.isNull(yield* settledOverride("orchestrator"));
+
+    yield* send("sub-run", 2);
+    assert.isNull(yield* settledOverride("sub-run"));
+
+    before = yield* sink.latestSequence();
+    yield* completeLatestRun("sub-run");
+    yield* waitForSettled("sub-run", before);
+    assert.equal(yield* settledOverride("sub-run"), "settled");
+  }).pipe(Effect.provide(testLayer)),
 );

@@ -1691,6 +1691,7 @@ const make = Effect.gen(function* () {
                     index,
                   }),
                   threadId,
+                  parentThreadId: scope.threadId,
                   projectId: parent.thread.projectId,
                   title,
                   modelSelection: target.modelSelection,

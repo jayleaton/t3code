@@ -113,6 +113,7 @@ export const ProjectHandlersLive = ProjectToolkit.toLayer({
         ...(profile === undefined ? {} : { profileSelection: profile.selection }),
         commandId,
         threadId,
+        parentThreadId: scope.threadId,
         projectId,
         title: input.title,
         modelSelection: input.modelSelection ?? caller.modelSelection,
