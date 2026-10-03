@@ -12,6 +12,7 @@ import type {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Cause from "effect/Cause";
+import * as Schema from "effect/Schema";
 
 import type { IdAllocatorV2Shape } from "./IdAllocator.ts";
 import { ContextHandoffBudgetError } from "./ContextHandoffDelivery.ts";
@@ -20,6 +21,20 @@ export const MAX_PROVIDER_FAILURE_MESSAGE_LENGTH = 4_096;
 export const MAX_PROVIDER_FAILURE_CODE_LENGTH = 128;
 
 const DEFAULT_PROVIDER_FAILURE_MESSAGE = "Provider turn failed.";
+
+/**
+ * T3 Code stopped a live provider session on purpose (workspace change,
+ * archive, logout). The detail is server-authored, so a run cut short by it
+ * can say why instead of reporting an unexplained stream close.
+ */
+export class ProviderSessionStoppedError extends Schema.TaggedError<ProviderSessionStoppedError>()(
+  "ProviderSessionStoppedError",
+  { detail: Schema.String },
+) {
+  override get message(): string {
+    return `T3 Code stopped the provider session: ${this.detail} Retry the turn.`;
+  }
+}
 
 /** Translate known categories without exposing arbitrary provider defect text. */
 function causeMessage(cause: unknown): string | undefined {
@@ -37,6 +52,7 @@ function causeMessage(cause: unknown): string | undefined {
         case "ContextHandoffBudgetError":
           return new ContextHandoffBudgetError().message;
         case "ClaudeBackgroundWorkBlocksQueryReplacementError":
+        case "ProviderSessionStoppedError":
           return stringField(cause, "message");
         case "ContextHandoffDeliveryUncertainError":
           return "T3 could not confirm whether conversation history reached the provider. Retry the turn to recover the session.";

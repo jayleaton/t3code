@@ -114,7 +114,11 @@ function makeHarness(options: HarnessOptions = {}) {
     registry,
     { databaseLayer: database, runEffectWorker: false },
   );
-  const threadManagement = ThreadManagement.layer.pipe(Layer.provide(orchestrator));
+  const settings = ServerSettings.layerTest(options.serverSettings);
+  const providers = makeProviderRegistryLayer(options.providers);
+  const threadManagement = ThreadManagement.layer.pipe(
+    Layer.provide(Layer.mergeAll(orchestrator, WorktreeSetupTracker.layer, settings, providers)),
+  );
   const receipts = CommandReceiptStore.layer.pipe(Layer.provide(database));
   const outbox = EffectOutbox.layer.pipe(Layer.provide(database));
   const createWorktree = vi.fn(
@@ -175,8 +179,8 @@ function makeHarness(options: HarnessOptions = {}) {
       generateThreadTitle,
       generateBranchName,
     }),
-    ServerSettings.layerTest(options.serverSettings),
-    makeProviderRegistryLayer(options.providers),
+    settings,
+    providers,
     options.managedFolders ??
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
         namedProjectsRoot: "/projects",
@@ -1292,6 +1296,114 @@ it.effect("shows the fetch diagnosis when preparing a worktree from origin fails
     assert.equal(harness.runSetup.mock.calls.length, 0);
   }).pipe(Effect.provide(harness.layer));
 });
+
+it.effect("holds a message sent while a message-less launch is still binding its worktree", () =>
+  Effect.gen(function* () {
+    const allowWorktree = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      createWorktree: (input) =>
+        Deferred.await(allowWorktree).pipe(
+          Effect.as({
+            worktree: { path: "/repo-worktrees/held", refName: input.newRefName, headSha: "abc" },
+          } as never),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "command:launch:held-send",
+          thread: "thread:launch:held-send",
+          workspace: { type: "worktree", baseRef: "main" },
+        }),
+      );
+      assert.isNull(launched.projection.thread.worktreePath);
+      const sent = yield* threads.sendToThread({
+        projectId,
+        commandId: CommandId.make("command:launch:held-send:first"),
+        threadId: launched.threadId,
+        messageId: MessageId.make("message:launch:held-send:first"),
+        text: "Start in the worktree",
+        attachments: [],
+        mode: "auto",
+        createdBy: "agent",
+        creationSource: "mcp",
+      });
+      assert.equal(sent.run.status, "preparing");
+      assert.equal(sent.delivery, "started");
+
+      yield* Deferred.succeed(allowWorktree, undefined);
+      yield* waitUntil(() =>
+        threads
+          .getThreadProjection(launched.threadId)
+          .pipe(Effect.map((projection) => projection.runs[0]?.status === "starting")),
+      );
+      const projection = yield* threads.getThreadProjection(launched.threadId);
+      assert.equal(projection.thread.worktreePath, "/repo-worktrees/held");
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("fails a held message with the worktree failure that blocked it", () =>
+  Effect.gen(function* () {
+    const allowWorktree = yield* Deferred.make<void>();
+    const detail = "fatal: a branch named 'feature' already exists";
+    const harness = makeHarness({
+      createWorktree: () =>
+        Deferred.await(allowWorktree).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new GitCommandError({
+                operation: "GitVcsDriver.createWorktree",
+                command: "git",
+                cwd: project.workspaceRoot,
+                detail,
+                exitCode: 128,
+              }),
+            ),
+          ),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "command:launch:held-fail",
+          thread: "thread:launch:held-fail",
+          workspace: { type: "worktree", baseRef: "main" },
+        }),
+      );
+      const sent = yield* threads.sendToThread({
+        projectId,
+        commandId: CommandId.make("command:launch:held-fail:first"),
+        threadId: launched.threadId,
+        messageId: MessageId.make("message:launch:held-fail:first"),
+        text: "Start in the worktree",
+        attachments: [],
+        mode: "auto",
+        createdBy: "agent",
+        creationSource: "mcp",
+      });
+      assert.equal(sent.run.status, "preparing");
+
+      yield* Deferred.succeed(allowWorktree, undefined);
+      yield* threads.streamStoredEventsFrom({ threadId: launched.threadId }).pipe(
+        Stream.filter(
+          (stored) =>
+            stored.event.type === "run.updated" && stored.event.payload.status === "failed",
+        ),
+        Stream.runHead,
+      );
+      const projection = yield* threads.getThreadProjection(launched.threadId);
+      assert.include(
+        projection.turnItems.find((item) => item.type === "error")?.failure.message ?? "",
+        detail,
+      );
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
 
 it.effect.each(["worktree", "setup"] as const)(
   "%s failure keeps the thread and message visible and emits failure items",
