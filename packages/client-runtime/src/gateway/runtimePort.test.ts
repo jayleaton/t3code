@@ -18,7 +18,12 @@ import * as Deferred from "effect/Deferred";
 import * as TestClock from "effect/testing/TestClock";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import { v2Projection, v2ThreadShell, v2Now } from "../state/orchestrationV2TestFixtures.ts";
+import {
+  v2Project,
+  v2Projection,
+  v2ThreadShell,
+  v2Now,
+} from "../state/orchestrationV2TestFixtures.ts";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
@@ -438,6 +443,16 @@ it.effect(
       const launches: Array<{ environmentId: string; input: OrchestrationV2ThreadLaunchInput }> =
         [];
       const supervisors = new Map<string, EnvironmentSupervisor["Service"]>();
+      const repositoryIdentity = {
+        canonicalKey: "github.com/acme/app",
+        locator: {
+          source: "git-remote" as const,
+          remoteName: "origin",
+          remoteUrl: "git@x:acme/app",
+        },
+        owner: "acme",
+        name: "app",
+      };
       for (const environmentId of ["machine-a", "machine-b"]) {
         const session = yield* SubscriptionRef.make(
           Option.some({
@@ -459,7 +474,7 @@ it.effect(
                   kind: "snapshot",
                   snapshot: {
                     threads: [{ ...v2ThreadShell, title: environmentId }],
-                    projects: [],
+                    projects: [{ ...v2Project, repositoryIdentity }],
                   },
                 }),
               [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
@@ -489,6 +504,11 @@ it.effect(
         expect((yield* Effect.promise(() => port.listThreads("machine-b"))).items[0]?.title).toBe(
           "machine-b",
         );
+        // Git and pull request tools need the project's repository identity.
+        expect(
+          (yield* Effect.promise(() => port.listProjects("machine-b"))).items[0]
+            ?.repositoryIdentity,
+        ).toEqual(repositoryIdentity);
         yield* Effect.promise(() =>
           port.sendMessage({
             environmentId: "machine-b",
