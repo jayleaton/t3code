@@ -38,6 +38,8 @@
     "@opencode/client": "2.0.18",
     "@opencode/protocol": "2.0.18",
     "@opencode/schema": "2.0.18",
+    "@t3tools/client-runtime": "workspace:*",
+    "@t3tools/mcp-gateway": "workspace:*",
     "diff": "8.0.3",
     "effect": "catalog:",
     "jose": "catalog:",

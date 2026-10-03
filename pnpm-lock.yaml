@@ -547,6 +547,12 @@ importers:
       '@opencode/schema':
         specifier: 2.0.18
         version: 2.0.18
+      '@t3tools/client-runtime':
+        specifier: workspace:*
+        version: link:../../packages/client-runtime
+      '@t3tools/mcp-gateway':
+        specifier: workspace:*
+        version: link:../../packages/mcp-gateway
       diff:
         specifier: 8.0.3
         version: 8.0.3
