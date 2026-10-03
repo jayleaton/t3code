@@ -36,7 +36,7 @@ export interface GatewayToolContext {
   };
 }
 
-/** The T3 chat whose agent made a relayed tool call, as stamped by its server. */
+/** The T3 chat whose agent made a tool call, when it came from a thread. */
 export interface GatewayCaller {
   readonly environmentId: string;
   readonly threadId: string;
@@ -44,19 +44,6 @@ export interface GatewayCaller {
 
 export interface GatewayInvocation {
   readonly caller?: GatewayCaller | undefined;
-}
-
-/** Reads the caller the environment server stamps into `_meta` of relayed tool calls. */
-export function gatewayCaller(meta: unknown): GatewayCaller | undefined {
-  const caller =
-    typeof meta === "object" && meta !== null
-      ? (meta as Record<string, unknown>)["t3code/caller"]
-      : undefined;
-  if (typeof caller !== "object" || caller === null) return undefined;
-  const { environmentId, threadId } = caller as Record<string, unknown>;
-  return typeof environmentId === "string" && typeof threadId === "string"
-    ? { environmentId, threadId }
-    : undefined;
 }
 
 export const handoffInputSchema = z.object({

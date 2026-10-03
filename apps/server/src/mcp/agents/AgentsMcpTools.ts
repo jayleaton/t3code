@@ -1,10 +1,14 @@
-import { GATEWAY_SCOPE_VALUES } from "@t3tools/client-runtime/gateway";
+import {
+  createRoutedGatewayPort,
+  GATEWAY_SCOPE_VALUES,
+  type GatewayScope,
+} from "@t3tools/client-runtime/gateway";
 import type { GatewayToolContext } from "@t3tools/mcp-gateway";
-import { McpGatewayUnavailableError } from "@t3tools/contracts";
 import {
   failure,
+  GATEWAY_ONLY_TOOLS,
   requestContext,
-  ROUTER_TOOLS,
+  requiresEnvironment,
   runGatewayTool,
   TOOL_SPECS,
   toolInputJsonSchema,
@@ -13,8 +17,10 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { McpSchema, McpServer } from "effect/unstable/ai";
 
+import { McpGatewayBroker } from "../McpGatewayBroker.ts";
 import * as McpInvocationContext from "../McpInvocationContext.ts";
 import { LocalGatewayPort } from "./LocalGatewayPort.ts";
 
@@ -24,32 +30,27 @@ type ToolResult = {
   readonly structuredContent: unknown;
 };
 
-/**
- * Runs a T3 Agents tool on another environment through a connected client. Absent when no
- * client can relay, in which case such calls fail with a clear message.
- */
-export class AgentsRemoteRelay extends Context.Service<
-  AgentsRemoteRelay,
-  {
-    readonly call: (input: {
-      readonly environmentId: string;
-      readonly tool: string;
-      readonly args: Record<string, unknown>;
-      readonly caller: { readonly environmentId: string; readonly threadId: string };
-    }) => Effect.Effect<ToolResult, McpGatewayUnavailableError>;
-  }
->()("t3/mcp/agents/AgentsMcpTools/AgentsRemoteRelay") {}
-
-// Agents in a thread act with every gateway scope on their own machine; other machines apply
-// the grants the user set on the relaying client.
+// Agents in a thread act with every scope on their own machine; other machines apply the
+// grants the user set on the T3 app relaying the call.
 const LOCAL_GRANTS = [...GATEWAY_SCOPE_VALUES];
+const isScope = (scope: string): scope is GatewayScope =>
+  (GATEWAY_SCOPE_VALUES as ReadonlyArray<string>).includes(scope);
 
-const toCallToolResult = (result: ToolResult) =>
-  new McpSchema.CallToolResult({
+const decodeJsonText = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+
+// Gateway envelopes can hold `undefined` fields, which MCP's JSON schema rejects. Their text
+// content is the same body as JSON, so structured content is read back from it.
+const toCallToolResult = (result: ToolResult) => {
+  const content = result.content as McpSchema.CallToolResult["content"];
+  const [first] = content;
+  return new McpSchema.CallToolResult({
     isError: result.isError === true,
-    structuredContent: result.structuredContent as Record<string, unknown>,
-    content: result.content as McpSchema.CallToolResult["content"],
+    structuredContent: (first?.type === "text"
+      ? decodeJsonText(first.text)
+      : result.structuredContent) as Record<string, unknown>,
+    content,
   });
+};
 
 const registerAgentsTools = Effect.gen(function* () {
   const server = yield* McpServer.McpServer;
@@ -57,14 +58,26 @@ const registerAgentsTools = Effect.gen(function* () {
   // Servers composed without the in-process port (for example MCP tests) host no agent tools.
   if (Option.isNone(localOption)) return;
   const local = localOption.value;
-  const relay = yield* Effect.serviceOption(AgentsRemoteRelay);
+  const broker = Option.getOrUndefined(yield* Effect.serviceOption(McpGatewayBroker));
+  const relay = broker && {
+    invoke: (method: string, args: ReadonlyArray<unknown>, environmentIds: ReadonlyArray<string>) =>
+      Effect.runPromise(broker.invoke(method, args, environmentIds)),
+  };
   const context: GatewayToolContext = {
-    port: local.port,
-    grants: { [local.environmentId]: LOCAL_GRANTS },
+    port: createRoutedGatewayPort(local.environmentId, local.port, () =>
+      relay && broker.available() ? relay : undefined,
+    ),
+    grants: () => {
+      const relayed = Object.entries(broker?.grants() ?? {}).map(
+        ([environmentId, scopes]) => [environmentId, scopes.filter(isScope)] as const,
+      );
+      return { ...Object.fromEntries(relayed), [local.environmentId]: LOCAL_GRANTS };
+    },
   };
 
   for (const [name, [description]] of Object.entries(TOOL_SPECS)) {
-    if (ROUTER_TOOLS.has(name)) continue;
+    if (GATEWAY_ONLY_TOOLS.has(name)) continue;
+    const defaultEnvironment = requiresEnvironment(name);
     yield* server.addTool({
       tool: new McpSchema.Tool({
         name,
@@ -80,13 +93,10 @@ const registerAgentsTools = Effect.gen(function* () {
             fiber.context,
             McpInvocationContext.McpInvocationContext,
           );
-          const rawArgs = (payload ?? {}) as Record<string, unknown>;
-          const environmentId =
-            typeof rawArgs.environmentId === "string" && rawArgs.environmentId.length > 0
-              ? rawArgs.environmentId
-              : local.environmentId;
-          const args = { ...rawArgs, environmentId };
-          const caller = { environmentId: local.environmentId, threadId: invocation.threadId };
+          const args = { ...(payload as Record<string, unknown> | undefined) };
+          if (defaultEnvironment && typeof args.environmentId !== "string") {
+            args.environmentId = local.environmentId;
+          }
           if (!invocation.capabilities.has("orchestration")) {
             return Effect.succeed(
               toCallToolResult(
@@ -97,26 +107,7 @@ const registerAgentsTools = Effect.gen(function* () {
               ),
             );
           }
-          if (environmentId !== local.environmentId) {
-            if (Option.isNone(relay)) {
-              return Effect.succeed(
-                toCallToolResult(
-                  failure(
-                    new Error(
-                      `Environment ${environmentId} is not reachable from this chat. Open T3 Agents on a device connected to it.`,
-                    ),
-                    requestContext(args),
-                  ),
-                ),
-              );
-            }
-            return relay.value.call({ environmentId, tool: name, args, caller }).pipe(
-              Effect.map(toCallToolResult),
-              Effect.catch((error) =>
-                Effect.succeed(toCallToolResult(failure(error, requestContext(args)))),
-              ),
-            );
-          }
+          const caller = { environmentId: local.environmentId, threadId: invocation.threadId };
           return Effect.promise(() => runGatewayTool(context, name, args, { caller })).pipe(
             Effect.map((run) => toCallToolResult(run.result)),
           );
