@@ -9,8 +9,8 @@ import {
   ThreadId,
   ProjectId,
   ProviderInstanceId,
-  ORCHESTRATION_WS_METHODS,
-  type ClientOrchestrationCommand,
+  ORCHESTRATION_V2_WS_METHODS,
+  type OrchestrationV2ThreadLaunchInput,
   EnvironmentId,
   WS_METHODS,
   mergeAgentLibraries,
@@ -74,7 +74,7 @@ it.effect(
         ],
       };
       let writes = 0;
-      const dispatched: ClientOrchestrationCommand[] = [];
+      const dispatched: OrchestrationV2ThreadLaunchInput[] = [];
       const makeSupervisor = Effect.fnUntraced(function* (id: EnvironmentId) {
         const target = new PrimaryConnectionTarget({
           environmentId: id,
@@ -83,7 +83,7 @@ it.effect(
           wsBaseUrl: "ws://localhost",
         });
         const client = {
-          [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command: ClientOrchestrationCommand) =>
+          [ORCHESTRATION_V2_WS_METHODS.launchThread]: (command: OrchestrationV2ThreadLaunchInput) =>
             Effect.sync(() => {
               dispatched.push(command);
               expect(local.mcpGatewayProfiles[0]?.systemPrompt).toBe("New rules");
@@ -199,11 +199,7 @@ it.effect(
         ),
       );
       expect(dispatched[0]).toMatchObject({
-        bootstrap: {
-          createThread: {
-            profileSelection: { profileId: "randy", revision: 2, overrideFields: [] },
-          },
-        },
+        profileSelection: { profileId: "randy", revision: 2, overrideFields: [] },
       });
       expect(local.mcpGatewayProfiles[0]?.systemPrompt).toBe("New rules");
       expect(local.agentSkills[0]?.content).toBe("New skill");

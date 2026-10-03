@@ -37,17 +37,23 @@ describe("scheduled task repeat presets", () => {
   it("describes schedules and names foreign time zones", () => {
     const at = (iso: string) => `at ${iso}`;
     expect(
-      describeSchedule({ kind: "cron", expression: "0 7 * * 1-5", timezone: "UTC" }, at, "UTC"),
+      describeSchedule({ type: "cron", expression: "0 7 * * 1-5", timezone: "UTC" }, at, "UTC"),
     ).toBe("Weekdays at 07:00");
     expect(
       describeSchedule(
-        { kind: "cron", expression: "30 6 * * 0", timezone: "Asia/Bangkok" },
+        { type: "cron", expression: "30 6 * * 0", timezone: "Asia/Bangkok" },
         at,
         "UTC",
       ),
     ).toBe("Every Sunday at 06:30 (Asia/Bangkok)");
-    expect(describeSchedule({ kind: "once", runAt: "2026-09-25T02:00:00.000Z" }, at, "UTC")).toBe(
+    expect(describeSchedule({ type: "once", runAt: "2026-09-25T02:00:00.000Z" }, at, "UTC")).toBe(
       "Once · at 2026-09-25T02:00:00.000Z",
     );
+    expect(describeSchedule({ type: "interval", everyMs: 7_200_000 }, at, "UTC")).toBe(
+      "Every 2 hours",
+    );
+    expect(
+      describeSchedule({ type: "fixed_time", timeOfDay: "09:30", weekdays: [1, 3] }, at, "UTC"),
+    ).toBe("Monday, Wednesday at 09:30");
   });
 });

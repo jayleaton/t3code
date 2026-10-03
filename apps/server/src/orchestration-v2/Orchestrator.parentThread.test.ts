@@ -1,0 +1,214 @@
+import { assert, it } from "@effect/vitest";
+import {
+  CommandId,
+  EnvironmentId,
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
+import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import { OrchestratorV2 } from "./Orchestrator.ts";
+import { ProjectionStoreV2, layer as projectionLayer } from "./ProjectionStore.ts";
+import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
+import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
+import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
+import * as ThreadManagement from "./ThreadManagementService.ts";
+
+const instanceId = ProviderInstanceId.make("codex");
+const adapter = {
+  instanceId,
+  driver: ProviderDriverKind.make("codex"),
+  getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
+  planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
+  openSession: () => Effect.die("No provider process needed for thread parents"),
+} as ProviderAdapterV2Shape;
+const database = SqlitePersistenceMemory;
+const testLayer = Layer.mergeAll(
+  database,
+  projectionLayer.pipe(Layer.provide(database)),
+  makeOrchestratorV2ReplayLayerWithRegistry(
+    { name: "parent-thread" },
+    ProviderAdapterRegistry.makeLayer([adapter]),
+    { databaseLayer: database, runEffectWorker: false },
+  ),
+);
+
+it.effect("links chats under a parent, rejects cycles and missing parents, and detaches", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* OrchestratorV2;
+    const projections = yield* ProjectionStoreV2;
+    const create = (id: string, parentThreadId?: string) =>
+      orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`create:${id}`),
+        threadId: ThreadId.make(id),
+        projectId: ProjectId.make("project:parents"),
+        title: id,
+        modelSelection: { instanceId, model: "gpt-5.1-codex" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "agent",
+        creationSource: "mcp",
+        ...(parentThreadId === undefined ? {} : { parentThreadId: ThreadId.make(parentThreadId) }),
+      });
+    const setParent = (id: string, parentThreadId: string | null) =>
+      orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make(`parent:${id}:${parentThreadId}`),
+        threadId: ThreadId.make(id),
+        parentThreadId: parentThreadId === null ? null : ThreadId.make(parentThreadId),
+      });
+    const parentOf = (id: string) =>
+      projections
+        .getThreadShell(ThreadId.make(id))
+        .pipe(Effect.map((shell) => shell?.parentThreadId ?? null));
+
+    yield* create("coordinator");
+    yield* create("tests", "coordinator");
+    yield* create("deps", "tests");
+    assert.equal(yield* parentOf("deps"), "tests");
+
+    const missing = yield* create("orphan", "nowhere").pipe(Effect.flip);
+    assert.include(String(missing.cause), "Parent thread nowhere does not exist");
+    const cycle = yield* setParent("coordinator", "deps").pipe(Effect.flip);
+    assert.include(String(cycle.cause), "cannot be its own ancestor");
+    assert.isNull(yield* parentOf("coordinator"));
+
+    yield* setParent("deps", "coordinator");
+    assert.equal(yield* parentOf("deps"), "coordinator");
+    yield* setParent("deps", null);
+    assert.isNull(yield* parentOf("deps"));
+  }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("links chats under a parent on another environment and clears it on relink", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* OrchestratorV2;
+    const projections = yield* ProjectionStoreV2;
+    const remote = EnvironmentId.make("environment-pc");
+    const linkOf = (id: string) =>
+      projections.getThreadShell(ThreadId.make(id)).pipe(
+        Effect.map((shell) => ({
+          parentThreadId: shell?.parentThreadId ?? null,
+          parentEnvironmentId: shell?.parentEnvironmentId ?? null,
+        })),
+      );
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create:remote-child"),
+      threadId: ThreadId.make("remote-child"),
+      projectId: ProjectId.make("project:parents"),
+      title: "remote-child",
+      modelSelection: { instanceId, model: "gpt-5.1-codex" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "agent",
+      creationSource: "mcp",
+      // The coordinating chat lives on the other machine, so this server cannot look it up.
+      parentThreadId: ThreadId.make("pc-coordinator"),
+      parentEnvironmentId: remote,
+    });
+    assert.deepEqual(yield* linkOf("remote-child"), {
+      parentThreadId: ThreadId.make("pc-coordinator"),
+      parentEnvironmentId: remote,
+    });
+
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create:local-parent"),
+      threadId: ThreadId.make("local-parent"),
+      projectId: ProjectId.make("project:parents"),
+      title: "local-parent",
+      modelSelection: { instanceId, model: "gpt-5.1-codex" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.metadata.update",
+      commandId: CommandId.make("relink:remote-child"),
+      threadId: ThreadId.make("remote-child"),
+      parentThreadId: ThreadId.make("local-parent"),
+    });
+    assert.deepEqual(yield* linkOf("remote-child"), {
+      parentThreadId: ThreadId.make("local-parent"),
+      parentEnvironmentId: null,
+    });
+  }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect(
+  "settling a chat settles idle sub-runs at every depth; unsettling returns only those",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const projections = yield* ProjectionStoreV2;
+      const create = (id: string, parentThreadId?: string) =>
+        orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`create:${id}`),
+          threadId: ThreadId.make(id),
+          projectId: ProjectId.make("project:parents"),
+          title: id,
+          modelSelection: { instanceId, model: "gpt-5.1-codex" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "agent",
+          creationSource: "mcp",
+          ...(parentThreadId === undefined
+            ? {}
+            : { parentThreadId: ThreadId.make(parentThreadId) }),
+        });
+      const settledAt = (id: string) =>
+        projections.getThread(ThreadId.make(id)).pipe(Effect.map((thread) => thread.settledAt));
+
+      yield* create("lead");
+      yield* create("worker", "lead");
+      yield* create("helper", "worker");
+      yield* create("earlier", "lead");
+      yield* threads.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("settle:earlier"),
+        threadId: ThreadId.make("earlier"),
+      });
+      const earlierAt = yield* settledAt("earlier");
+      yield* TestClock.adjust("1 minute");
+
+      yield* threads.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("settle:lead"),
+        threadId: ThreadId.make("lead"),
+      });
+      const leadAt = yield* settledAt("lead");
+      assert.isNotNull(leadAt);
+      assert.deepEqual(yield* settledAt("worker"), leadAt);
+      assert.deepEqual(yield* settledAt("helper"), leadAt);
+      assert.deepEqual(yield* settledAt("earlier"), earlierAt);
+
+      yield* threads.dispatch({
+        type: "thread.unsettle",
+        commandId: CommandId.make("unsettle:lead"),
+        threadId: ThreadId.make("lead"),
+        reason: "user",
+      });
+      assert.isNull(yield* settledAt("lead"));
+      assert.isNull(yield* settledAt("worker"));
+      assert.isNull(yield* settledAt("helper"));
+      assert.deepEqual(yield* settledAt("earlier"), earlierAt);
+    }).pipe(Effect.provide(Layer.provideMerge(ThreadManagement.layer, testLayer))),
+);

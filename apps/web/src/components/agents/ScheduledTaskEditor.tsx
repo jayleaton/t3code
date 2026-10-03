@@ -1,22 +1,25 @@
 import { useState } from "react";
 import {
+  defaultScheduledTaskTitle,
+  resolveScheduledTaskProfileRouting,
+} from "@t3tools/client-runtime/gateway";
+import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
   EnvironmentId,
   ProjectId,
-  ScheduledTaskId,
   type McpGatewayProfile,
   type ScheduledTaskSchedule,
 } from "@t3tools/contracts";
 
+import { useClientSettings } from "../../hooks/useSettings";
+import { formatUpcomingTimestamp } from "../../timestampFormat";
 import { useEnvironments } from "../../state/environments";
 import { useProjects } from "../../state/entities";
-import {
-  scheduledTaskEnvironment,
-  type EnvironmentScheduledTask,
-} from "../../state/scheduledTasks";
+import { type EnvironmentScheduledTask } from "../../state/scheduledTasks";
+import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import {
@@ -31,6 +34,7 @@ import {
 import { agentMachineUnavailableReason } from "./agentMachineAvailability";
 import {
   cronToRepeatForm,
+  describeSchedule,
   isoToLocalInput,
   localInputToIso,
   localTimeZone,
@@ -50,7 +54,7 @@ const REPEAT_PRESETS: ReadonlyArray<readonly [RepeatPreset, string]> = [
 
 /** Compares at the editor's minute precision, so an untouched runAt with seconds is not a change. */
 function scheduleChanged(before: ScheduledTaskSchedule, after: ScheduledTaskSchedule): boolean {
-  if (before.kind === "once" && after.kind === "once") {
+  if (before.type === "once" && after.type === "once") {
     return isoToLocalInput(before.runAt) !== isoToLocalInput(after.runAt);
   }
   return JSON.stringify(before) !== JSON.stringify(after);
@@ -85,27 +89,28 @@ export function ScheduledTaskEditor({
   );
   const [chosenMachine, setMachine] = useState<string>(task?.environmentId ?? "");
   const [projectId, setProjectId] = useState<string>(existing?.projectId ?? "");
-  const [kind, setKind] = useState<ScheduledTaskSchedule["kind"]>(
-    existing?.schedule.kind ?? "cron",
+  const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
+  // Interval and fixed-time schedules come from Settings; the editor keeps them as they are.
+  const [kind, setKind] = useState<ScheduledTaskSchedule["type"]>(
+    existing?.schedule.type ?? "cron",
   );
   const [runAt, setRunAt] = useState(
-    existing?.schedule.kind === "once"
+    existing?.schedule.type === "once"
       ? isoToLocalInput(existing.schedule.runAt)
       : nextHourLocalInput(),
   );
   const [repeat, setRepeat] = useState<RepeatForm>(
-    existing?.schedule.kind === "cron"
+    existing?.schedule.type === "cron"
       ? cronToRepeatForm(existing.schedule.expression)
       : { preset: "daily", time: "07:00", weekday: 1, expression: "0 7 * * *" },
   );
   const [timezone, setTimezone] = useState(
-    existing?.schedule.kind === "cron" ? existing.schedule.timezone : localTimeZone(),
+    existing?.schedule.type === "cron" ? existing.schedule.timezone : localTimeZone(),
   );
   const [enabled, setEnabled] = useState(existing?.enabled ?? true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const create = useAtomCommand(scheduledTaskEnvironment.create, { reportFailure: false });
-  const update = useAtomCommand(scheduledTaskEnvironment.update, { reportFailure: false });
+  const upsert = useAtomCommand(serverEnvironment.upsertScheduledTask, { reportFailure: false });
 
   const profile = profiles.find((item) => item.profileId === profileId);
   const machines = environments
@@ -127,11 +132,14 @@ export function ScheduledTaskEditor({
   const buildSchedule = (): ScheduledTaskSchedule | string => {
     if (kind === "once") {
       const iso = localInputToIso(runAt);
-      return iso === null ? "Pick a date and time." : { kind: "once", runAt: iso };
+      return iso === null ? "Pick a date and time." : { type: "once", runAt: iso };
+    }
+    if (kind !== "cron") {
+      return existing?.schedule.type === kind ? existing.schedule : "Choose a schedule.";
     }
     const expression = repeatFormToCron(repeat);
     if (expression === "") return "Enter a cron expression.";
-    return { kind: "cron", expression, timezone: timezone.trim() || localTimeZone() };
+    return { type: "cron", expression, timezone: timezone.trim() || localTimeZone() };
   };
 
   const save = async () => {
@@ -140,39 +148,41 @@ export function ScheduledTaskEditor({
     if (!target || !profile || projectId === "" || prompt.trim() === "") {
       return setError("Choose an agent, machine, and project, and write a prompt.");
     }
+    // Existing tasks keep their model and modes until the agent changes.
+    const routing =
+      existing && profileId === existing.profileId
+        ? {
+            profileId,
+            modelSelection: existing.modelSelection,
+            runtimeMode: existing.runtimeMode,
+            interactionMode: existing.interactionMode,
+          }
+        : resolveScheduledTaskProfileRouting(
+            profiles,
+            profileId,
+            target.serverConfig?.providers ?? [],
+          );
+    if (typeof routing === "string") return setError(routing);
     setSaving(true);
     setError("");
-    const environmentId = EnvironmentId.make(target.environmentId);
-    const trimmedTitle = title.trim();
-    const result = existing
-      ? await update({
-          environmentId,
-          input: {
-            taskId: ScheduledTaskId.make(existing.taskId),
-            // Only send what changed: resending an unchanged one-time schedule would try to re-arm it.
-            patch: {
-              ...(trimmedTitle !== "" && trimmedTitle !== existing.title
-                ? { title: trimmedTitle }
-                : {}),
-              ...(prompt.trim() !== existing.prompt ? { prompt: prompt.trim() } : {}),
-              ...(profileId !== existing.profileId ? { profileId } : {}),
-              ...(projectId !== existing.projectId ? { projectId: ProjectId.make(projectId) } : {}),
-              ...(scheduleChanged(existing.schedule, schedule) ? { schedule } : {}),
-              ...(enabled !== existing.enabled ? { enabled } : {}),
-            },
-          },
-        })
-      : await create({
-          environmentId,
-          input: {
-            ...(trimmedTitle === "" ? {} : { title: trimmedTitle }),
-            prompt: prompt.trim(),
-            profileId,
-            projectId: ProjectId.make(projectId),
-            schedule,
-            enabled,
-          },
-        });
+    const trimmedPrompt = prompt.trim();
+    const result = await upsert({
+      environmentId: EnvironmentId.make(target.environmentId),
+      input: {
+        ...(existing
+          ? { id: existing.id, requireExisting: true, threadId: existing.threadId }
+          : {}),
+        title: title.trim() || defaultScheduledTaskTitle(trimmedPrompt),
+        prompt: trimmedPrompt,
+        enabled,
+        // Resending an untouched one-time schedule at minute precision would re-arm it.
+        schedule:
+          existing && !scheduleChanged(existing.schedule, schedule) ? existing.schedule : schedule,
+        projectId: ProjectId.make(projectId),
+        workspaceStrategy: existing?.workspaceStrategy ?? { type: "root" },
+        ...routing,
+      },
+    });
     setSaving(false);
     if (result._tag === "Success") return onClose();
     if (isAtomCommandInterrupted(result)) return;
@@ -282,10 +292,18 @@ export function ScheduledTaskEditor({
                 Runs
                 <select
                   value={kind}
-                  onChange={(event) => setKind(event.target.value as ScheduledTaskSchedule["kind"])}
+                  onChange={(event) => setKind(event.target.value as ScheduledTaskSchedule["type"])}
                 >
                   <option value="cron">On a schedule</option>
                   <option value="once">Once</option>
+                  {(existing?.schedule.type === "interval" ||
+                    existing?.schedule.type === "fixed_time") && (
+                    <option value={existing.schedule.type}>
+                      {describeSchedule(existing.schedule, (iso) =>
+                        formatUpcomingTimestamp(iso, timestampFormat),
+                      )}
+                    </option>
+                  )}
                 </select>
               </label>
               {kind === "once" ? (
@@ -297,7 +315,7 @@ export function ScheduledTaskEditor({
                     onChange={(event) => setRunAt(event.target.value)}
                   />
                 </label>
-              ) : (
+              ) : kind !== "cron" ? null : (
                 <label>
                   Repeat
                   <select

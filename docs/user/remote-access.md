@@ -160,7 +160,8 @@ expires.
 To remove an environment from T3 Connect, open your account menu's **T3 Connect**
 page, or **Settings → T3 Connect** on mobile, and choose **Deregister**. This
 revokes its cloud access and frees its host space even when the environment is
-offline or has been wiped.
+offline or has been wiped. Removing an environment from a device's connection
+settings only forgets it on that device; it stays registered to your account.
 
 When idle tunnel cleanup is enabled, T3 Connect removes a linked environment's
 tunnel after it stays offline for several minutes. The environment stays linked
@@ -200,11 +201,11 @@ devices. For server version warnings, follow [Updating T3 Code](./updating.md).
 
 ## Use MCP with connected environments
 
-Enable **Settings → MCP Gateway** in the desktop app, then grant access to the environments
-that your agents need. New T3-managed agent sessions on granted environments receive the
-gateway tools automatically, including sessions running on remote machines. Restart existing
-agent sessions to attach the gateway. Keep this desktop connected while the agents use it.
-Disabling the gateway disconnects managed gateway sessions immediately.
+Agents in T3 Code chats always have the T3 Agents tools for the machine they run on. To let
+them act on your other machines too, enable **Settings → MCP Gateway** in the desktop app and
+grant access to each environment involved, including the one the chat runs on. Keep this
+desktop connected while agents use it; calls for other machines go through it, under the
+grants you set. Disabling the gateway stops those calls immediately.
 
 For assistants outside T3 Code, copy the external MCP host configuration from the same page.
 For standalone OpenCode, merge **Copy OpenCode config** into `~/.config/opencode/opencode.jsonc`
@@ -319,11 +320,12 @@ board in the connected desktop window with read access.
 
 When an agent's chat creates chats through the MCP gateway (`t3_create_thread` or
 `t3_create_and_start_thread`), each new chat is recorded as a sub-run of the chat that created
-it. This happens without the agent doing anything extra. Pass `parentThreadId` to attach a
-new chat to another chat in the same environment, or `parentThreadId: null` for a standalone
-chat. `t3_list_threads` accepts `parentThreadId` to list a chat's sub-runs. To regroup existing
-chats, `t3_set_thread_parent` moves a chat under another chat, or detaches it with
-`parentThreadId: null`; it needs lifecycle access.
+it. This happens without the agent doing anything extra. This works across machines too. Pass `parentThreadId` (with
+`parentEnvironmentId` when that chat is on another machine) to attach a new chat to another
+chat, or `parentThreadId: null` for a standalone chat. `t3_list_threads` accepts `parentThreadId` to list a chat's sub-runs. To regroup existing
+chats, `t3_set_thread_parent` moves a chat under another chat on any machine, or detaches it
+with `parentThreadId: null`; it needs lifecycle access. On the board, drag a run onto a card
+from any connected machine.
 
 On the Agents board, sub-runs appear inside the card of the run that created them, including
 runs by other agents. Each one shows its agent, title, and status; click it to open that chat.

@@ -1,21 +1,40 @@
-import { EnvironmentId, type OrchestrationEvent, type ServerProvider } from "@t3tools/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  WS_METHODS,
+  type OrchestrationV2ThreadLaunchInput,
+  EnvironmentId,
+  MessageId,
+  ORCHESTRATION_V2_WS_METHODS,
+  type ServerProvider,
+  type OrchestrationV2Command,
+  NodeId,
+  ProviderSessionId,
+  RuntimeRequestId,
+  TurnItemId,
+} from "@t3tools/contracts";
 import { describe, expect, it, vi } from "@effect/vitest";
+import * as Fiber from "effect/Fiber";
 import * as Deferred from "effect/Deferred";
 import * as TestClock from "effect/testing/TestClock";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
+import {
+  v2Project,
+  v2Projection,
+  v2ThreadShell,
+  v2Now,
+} from "../state/orchestrationV2TestFixtures.ts";
+import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import {
-  approvalResponsesFromModifications,
   createGatewayRuntimePort,
   createGatewayRuntimePortFromContext,
-  enrichGatewayRuntimeEventStream,
-  gatewayEventFromOrchestration,
+  gatewayEventFromV2,
   resolveGatewayProfileModelSelection,
   gatewayThreadProjection,
   gatewayStatusFromThread,
@@ -29,8 +48,9 @@ const testCrypto = Crypto.make({
 });
 
 describe("Gateway Runtime Port", () => {
-  for (const operation of ["listProjects", "getThread"] as const) {
-    it.effect(`interrupts an offline ${operation} snapshot after the request deadline`, () =>
+  it.effect.each(["listProjects", "getThread"] as const)(
+    "interrupts an offline %s snapshot after the request deadline",
+    (operation) =>
       Effect.gen(function* () {
         const started = yield* Deferred.make<void>();
         let released = false;
@@ -61,8 +81,7 @@ describe("Gateway Runtime Port", () => {
         expect(result._tag).toBe("Failure");
         expect(released).toBe(true);
       }),
-    );
-  }
+  );
   it("resolves readable labels only when one live provider/model pair matches", () => {
     const profile = {
       profileId: "profile-andy",
@@ -165,572 +184,90 @@ describe("Gateway Runtime Port", () => {
     }
   });
 
-  it("projects bounded authoritative lifecycle metadata without leaking raw activity payloads", () => {
-    const projected = gatewayEventFromOrchestration(
-      environmentId,
-      {
-        eventId: "event-1",
-        sequence: 4,
-        occurredAt: "2026-09-04T00:00:00.000Z",
-        type: "thread.activity-appended",
-        aggregateKind: "thread",
-        aggregateId: "thread-1",
-        correlationId: "corr-1",
-        payload: {
-          activity: {
-            kind: "approval.requested",
-            summary: "Approval required for two file changes",
-            payload: {
-              requestId: "approval-1",
-              providerOutput: "secret output",
-              hostPath: "/home/user/private",
-              detail: "provider said secret output from /home/user/private",
-            },
-          },
-        },
-      } as never,
-      {
-        machine: "Build machine",
-        project: { id: "project-1", title: "T3 Code" },
-        thread: { title: "Fix gateway", status: "waiting-approval" },
-      },
-    );
-
-    expect(projected).toMatchObject({
-      environmentId: "remote-1",
-      type: "approval.requested",
-      threadId: "thread-1",
-      data: {
-        machine: "Build machine",
-        project: { id: "project-1", title: "T3 Code" },
-        threadTitle: "Fix gateway",
-        status: "waiting-approval",
-        summary: "Approval required for two file changes",
-        nextAction: "approve_actions",
-        blocker: { kind: "approval", requestId: "approval-1" },
-        serverSequence: 4,
-        serverEventType: "thread.activity-appended",
-        activityKind: "approval.requested",
-        requestId: "approval-1",
-      },
-    });
-    expect(JSON.stringify(projected)).not.toContain("secret output");
-    expect(JSON.stringify(projected)).not.toContain("/home/user/private");
-  });
-
-  it.effect("refreshes create, rename, and status context after an event stream starts", () =>
-    Effect.gen(function* () {
-      const snapshot = (sequence: number, title: string, status: "queued" | "running") =>
-        ({
-          snapshotSequence: sequence,
-          projects: [{ id: "project-1", title: "T3 Code" }],
-          threads: [
-            {
-              id: "thread-1",
-              projectId: "project-1",
-              title,
-              latestTurn: status === "running" ? { state: "running" } : null,
-              session: null,
-            },
-          ],
-          updatedAt: `2026-09-04T00:00:0${sequence}.000Z`,
-        }) as never;
-      const snapshots = [
-        snapshot(1, "Initial title", "queued"),
-        snapshot(2, "Renamed title", "queued"),
-        snapshot(3, "Renamed title", "running"),
-      ];
-      const events = [
+  it("exposes V2 association and bounded messages without profile instructions or provider session secrets", () => {
+    const profileSnapshot = {
+      profileId: "code",
+      profileName: "Cody",
+      revision: 1,
+      systemPrompt: "private specialization instructions",
+      skills: [
         {
-          eventId: "event-create",
-          sequence: 1,
-          occurredAt: "2026-09-04T00:00:01.000Z",
-          type: "thread.created",
-          aggregateKind: "thread",
-          aggregateId: "thread-1",
-          correlationId: null,
-          payload: { projectId: "project-1", title: "Initial title" },
+          skillId: "private-skill",
+          name: "Private skill",
+          description: "Test",
+          content: "private skill resource",
+          resources: [],
+          revision: 1,
+          createdAt: "2026-09-23T00:00:00.000Z",
+          updatedAt: "2026-09-23T00:00:00.000Z",
         },
-        {
-          eventId: "event-rename",
-          sequence: 2,
-          occurredAt: "2026-09-04T00:00:02.000Z",
-          type: "thread.meta-updated",
-          aggregateKind: "thread",
-          aggregateId: "thread-1",
-          correlationId: null,
-          payload: { threadId: "thread-1", title: "Renamed title" },
-        },
-        {
-          eventId: "event-status",
-          sequence: 3,
-          occurredAt: "2026-09-04T00:00:03.000Z",
-          type: "thread.message-sent",
-          aggregateKind: "thread",
-          aggregateId: "thread-1",
-          correlationId: null,
-          payload: {},
-        },
-      ] as const;
-      const loadSnapshot = vi.fn((event: { readonly sequence: number }) =>
-        Effect.succeed(Option.some(snapshots[event.sequence - 1] as never)),
-      );
-
-      const projected = yield* enrichGatewayRuntimeEventStream({
-        environmentId,
-        machine: "Build machine",
-        initialSnapshot: {
-          snapshotSequence: 0,
-          projects: [],
-          threads: [],
-          updatedAt: "2026-09-04T00:00:00.000Z",
-        } as never,
-        events: Stream.fromIterable(events as unknown as OrchestrationEvent[]).pipe(
-          Stream.rechunk(1),
-        ),
-        loadSnapshot,
-      }).pipe(Stream.runCollect);
-
-      expect(Array.from(projected)).toMatchObject([
-        {
-          data: {
-            project: { id: "project-1", title: "T3 Code" },
-            threadTitle: "Initial title",
-          },
-        },
-        { data: { threadTitle: "Renamed title" } },
-        { data: { threadTitle: "Renamed title", status: "running" } },
-      ]);
-      expect(loadSnapshot).toHaveBeenCalledTimes(3);
-    }),
-  );
-
-  it.each(["pause", "stop", "cancel"])(
-    "does not report %s as finished from an acknowledgement",
-    (action) => {
-      const projected = gatewayEventFromOrchestration(
-        environmentId,
-        {
-          eventId: "event-lifecycle-1",
-          sequence: 5,
-          occurredAt: "2026-09-04T00:00:01.000Z",
-          type: "thread.activity-appended",
-          aggregateKind: "thread",
-          aggregateId: "thread-1",
-          correlationId: null,
-          payload: {
-            activity: {
-              kind: `lifecycle.${action}.completed`,
-              summary: "Pause accepted",
-              payload: { action: "pause", attemptId: "attempt-pause-1" },
-            },
-          },
-        } as never,
-        {
-          machine: "Build machine",
-          project: { id: "project-1", title: "T3 Code" },
-          thread: { title: "Fix gateway", status: "running" },
-        },
-      );
-
-      expect(projected).toMatchObject({
-        type: "thread.progress",
-        data: {
-          status: "running",
-          nextAction: "await_event",
-          activityKind: `lifecycle.${action}.completed`,
-        },
-      });
-    },
-  );
-
-  it.each([
-    ["starting", "completed", null, "running"],
-    ["running", "interrupted", null, "running"],
-    ["stopped", "running", null, "stopped"],
-    ["interrupted", "running", null, "interrupted"],
-    ["ready", "completed", "2026-09-07T00:00:01.000Z", "queued"],
-    ["stopped", "completed", "2026-09-07T00:00:01.000Z", "queued"],
-    ["ready", "completed", null, "completed"],
-    ["ready", null, null, "idle"],
-  ] as const)(
-    "reports %s session with %s turn and message %s as %s",
-    (session, turn, messageAt, expected) => {
-      expect(
-        gatewayStatusFromThread(
-          {
-            session: { status: session },
-            latestTurn:
-              turn === null
-                ? null
-                : {
-                    state: turn,
-                    requestedAt: "2026-09-07T00:00:00.000Z",
-                    startedAt: "2026-09-07T00:00:00.000Z",
-                    completedAt: turn === "completed" ? "2026-09-07T00:00:00.500Z" : null,
-                  },
-            latestUserMessageAt: messageAt,
-          } as Parameters<typeof gatewayStatusFromThread>[0],
-          "2026-09-07T00:00:02.000Z",
-        ),
-      ).toBe(expected);
-    },
-  );
-
-  it("reports pending approval and user input ahead of live session state", () => {
-    const running = {
-      session: { status: "running" },
-      latestTurn: {
-        state: "running",
-        requestedAt: "2026-09-07T00:00:00.000Z",
-        startedAt: "2026-09-07T00:00:00.000Z",
-        completedAt: null,
+      ],
+      effectiveSource: {
+        modelSelection: "profile",
+        runtimeMode: "profile",
+        interactionMode: "profile",
+        reasoningEffort: "profile",
       },
-      latestUserMessageAt: null,
-    } as Parameters<typeof gatewayStatusFromThread>[0];
-    expect(gatewayStatusFromThread({ ...running, hasPendingApprovals: true })).toBe(
-      "waiting-approval",
-    );
-    expect(
-      gatewayStatusFromThread({
-        ...running,
-        hasPendingApprovals: false,
-        hasPendingUserInput: true,
-      }),
-    ).toBe("waiting-input");
-  });
-
-  it("derives a waiting status for a single chat from its activity window", () => {
-    const base = {
-      id: "thread-1",
-      projectId: "project-1",
-      title: "Thread",
-      settledAt: null,
-      modelSelection: { instanceId: "codex", model: "gpt" },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      latestTurn: null,
-      session: null,
-      messages: [],
-      checkpoints: [],
-      artifacts: [],
-    };
-    const requested = {
-      id: "activity-1",
-      sequence: 1,
-      turnId: null,
-      tone: "approval",
-      kind: "approval.requested",
-      summary: "Approve",
-      payload: { requestId: "a1" },
-      createdAt: "2026-01-01T00:00:00.000Z",
-    };
-    expect(gatewayThreadProjection({ ...base, activities: [requested] } as never).status).toBe(
-      "waiting-approval",
-    );
-    expect(
-      gatewayThreadProjection({
-        ...base,
-        activities: [{ ...requested, id: "activity-2", sequence: 2, kind: "approval.resolved" }],
-      } as never).status,
-    ).toBe("idle");
-  });
-
-  it("projects the questions a chat waits on with every option until they are answered", () => {
-    const asked = {
-      id: "asked",
-      sequence: 1,
-      turnId: null,
-      tone: "info",
-      kind: "user-input.requested",
-      summary: "Question",
-      createdAt: "2026-01-01T00:00:00.000Z",
-      payload: {
-        requestId: "r1",
-        questions: [
-          {
-            id: "approach",
-            header: "Approach",
-            question: "Which approach?",
-            options: [
-              { label: "Shared layer", description: "In-process" },
-              { label: "Loopback", description: "Over HTTP", value: "loopback" },
-            ],
-          },
-          {
-            id: "surfaces",
-            header: "Surfaces",
-            question: "Which clients?",
-            multiSelect: true,
-            allowCustomAnswer: false,
-            options: [{ label: "Web", description: "" }],
-          },
-        ],
-      },
-    };
-    const project = (activities: unknown[]) =>
-      gatewayThreadProjection({
-        id: "chat",
-        projectId: "p",
-        title: "Chat",
-        session: { status: "running" },
-        latestTurn: null,
-        messages: [],
-        checkpoints: [],
-        artifacts: [],
-        activities,
-      } as never);
-    expect(project([asked]).pendingQuestions).toEqual([
-      {
-        questionRequestId: "r1",
-        askedAt: "2026-01-01T00:00:00.000Z",
-        questions: [
-          {
-            questionId: "approach",
-            header: "Approach",
-            question: "Which approach?",
-            multiSelect: false,
-            allowsFreeText: true,
-            options: [
-              { label: "Shared layer", description: "In-process" },
-              { label: "Loopback", description: "Over HTTP", value: "loopback" },
-            ],
-          },
-          {
-            questionId: "surfaces",
-            header: "Surfaces",
-            question: "Which clients?",
-            multiSelect: true,
-            allowsFreeText: false,
-            options: [{ label: "Web", description: "" }],
-          },
-        ],
-      },
-    ]);
-    const resolved = { ...asked, id: "resolved", sequence: 2, kind: "user-input.resolved" };
-    expect(project([asked, resolved]).pendingQuestions).toEqual([]);
-  });
-
-  it.each([
-    ["approval", "stale pending approval request"],
-    ["approval", "unknown pending permission request"],
-    ["user-input", "unknown pending user-input request"],
-    ["user-input", "unknown pending codex user input request"],
-  ])("clears stale %s requests while preserving retryable failures (%s)", (kind, detail) => {
-    const request = {
-      id: "request",
-      sequence: 1,
-      turnId: null,
-      tone: "info",
-      kind: `${kind}.requested`,
-      summary: "Request",
-      createdAt: "2026-01-01T00:00:00.000Z",
-      payload: {
-        requestId: "r1",
-        questions: [
-          {
-            id: "q",
-            header: "Choice",
-            question: "Continue?",
-            options: [{ label: "Yes", description: "Continue" }],
-          },
-        ],
-      },
-    };
-    const failure = {
-      ...request,
-      id: "failure",
-      sequence: 2,
-      kind: `provider.${kind}.respond.failed`,
-      payload: { requestId: "r1", detail },
-    };
-    const project = (activities: unknown[]) =>
-      gatewayThreadProjection({
-        id: "chat",
-        projectId: "p",
-        title: "Chat",
-        session: { status: "running" },
-        latestTurn: null,
-        messages: [],
-        checkpoints: [],
-        artifacts: [],
-        activities,
-      } as never);
-    expect(project([request]).status).toBe(
-      kind === "approval" ? "waiting-approval" : "waiting-input",
-    );
-    for (const activities of [
-      [request, failure],
-      [failure, request],
-    ]) {
-      expect(project(activities)).toMatchObject({
-        status: "running",
-        hasPendingApprovals: false,
-        hasPendingUserInput: false,
-      });
-    }
-    expect(
-      project([
-        request,
-        { ...failure, payload: { requestId: "r1", detail: "Temporary network failure" } },
-      ]).status,
-    ).toBe(kind === "approval" ? "waiting-approval" : "waiting-input");
-    expect(
-      project([request, { ...failure, payload: { requestId: "another", detail } }]).status,
-    ).toBe(kind === "approval" ? "waiting-approval" : "waiting-input");
-  });
-
-  it.each(["interrupted", "stopped"])("publishes observed %s session state", (status) => {
-    const event = gatewayEventFromOrchestration(
-      environmentId,
-      {
-        type: "thread.session-set",
-        aggregateKind: "thread",
-        aggregateId: "thread-1",
-        eventId: "session-event",
-        sequence: 6,
-        occurredAt: "2026-09-07T00:00:02.000Z",
-        correlationId: null,
-        payload: {},
-      } as never,
-      { machine: "dev-box", thread: { title: "Audit", status } },
-    );
-    expect(event).toMatchObject({ type: "thread.state_changed", data: { status } });
-  });
-
-  it("redacts raw provider output and host paths before the bridge boundary", () => {
-    const projected = gatewayEventFromOrchestration(environmentId, {
-      eventId: "event-1",
-      sequence: 4,
-      occurredAt: "2026-09-04T00:00:00.000Z",
-      type: "thread.activity-appended",
-      aggregateKind: "thread",
-      aggregateId: "thread-1",
-      correlationId: "corr-1",
-      payload: {
-        activity: {
-          kind: "approval.requested",
-          payload: {
-            requestId: "approval-1",
-            providerOutput: "secret output",
-            hostPath: "/home/user/private",
-            detail: "provider said secret output from /home/user/private",
-          },
-        },
-      },
-    } as never);
-
-    expect(projected).toMatchObject({
-      environmentId: "remote-1",
-      type: "approval.requested",
-      threadId: "thread-1",
-      data: {
-        serverSequence: 4,
-        serverEventType: "thread.activity-appended",
-        activityKind: "approval.requested",
-        requestId: "approval-1",
-      },
-    });
-    expect(projected.data).not.toHaveProperty("summary");
-    expect(JSON.stringify(projected)).not.toContain("secret output");
-    expect(JSON.stringify(projected)).not.toContain("/home/user/private");
-  });
-
-  it("converts approval modifications into one validated server batch", () => {
-    expect(
-      approvalResponsesFromModifications([
-        { actionId: "approval-1", fields: { decision: "decline" } },
-        { actionId: "approval-2", fields: { decision: "acceptForSession" } },
-      ]),
-    ).toEqual([
-      { approvalRequestId: "approval-1", decision: "decline" },
-      { approvalRequestId: "approval-2", decision: "acceptForSession" },
-    ]);
-    expect(() =>
-      approvalResponsesFromModifications([
-        { actionId: "approval-1", fields: { decision: "invalid" } },
-      ]),
-    ).toThrow("Invalid approval modification");
-  });
-
-  it("bounds thread DTOs and removes host-sensitive fields", () => {
-    const projected = gatewayThreadProjection({
-      id: "thread-1",
-      projectId: "project-1",
-      title: "Thread",
-      profileSnapshot: { profileId: "write", revision: 1 },
-      settledAt: "2026-09-07T00:00:00.000Z",
-      modelSelection: { instanceId: "codex", model: "gpt" },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      latestTurn: null,
-      session: {
-        status: "running",
-        runtimeMode: "full-access",
-        activeTurnId: null,
-        lastError: "provider failed at /home/user/secret",
-        updatedAt: "2026-01-01T00:00:00.000Z",
-      },
+    } as const;
+    const result = gatewayThreadProjection({
+      ...v2Projection,
+      thread: { ...v2Projection.thread, profileSnapshot },
       messages: [
         {
-          id: "message-1",
-          role: "assistant",
-          text: "ok",
+          id: MessageId.make("message"),
+          threadId: v2Projection.thread.id,
+          runId: null,
+          nodeId: null,
+          role: "user",
+          text: "x".repeat(120_100),
           attachments: [],
-          turnId: null,
           streaming: false,
-          createdAt: "2026-01-01T00:00:00.000Z",
-          updatedAt: "2026-01-01T00:00:00.000Z",
+          createdBy: "user",
+          creationSource: "web",
+          createdAt: v2Now,
+          updatedAt: v2Now,
         },
       ],
-      activities: [
-        {
-          id: "activity-1",
-          sequence: 1,
-          turnId: null,
-          tone: "tool",
-          kind: "tool.completed",
-          summary: "done",
-          payload: { rawOutput: "secret", hostPath: "/home/user/secret" },
-          createdAt: "2026-01-01T00:00:00.000Z",
-        },
-      ],
-      checkpoints: [],
-      artifacts: [
-        {
-          artifactId: "workspace-turn-1-0",
-          kind: "workspace-file",
-          sourceId: "turn-1",
-          name: "secret",
-          path: "/home/user/secret",
-          createdAt: "2026-01-01T00:00:00.000Z",
-          availability: "available",
-        },
-        {
-          artifactId: "workspace-turn-1-1",
-          kind: "workspace-file",
-          sourceId: "turn-1",
-          name: "index.ts",
-          path: "src/index.ts",
-          createdAt: "2026-01-01T00:00:00.000Z",
-          availability: "available",
-        },
-      ],
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-    } as never);
-    expect(projected.settledAt).toBe("2026-09-07T00:00:00.000Z");
-    expect(projected.profileSnapshot).toEqual({ profileId: "write", revision: 1 });
-
-    expect(projected.session).not.toHaveProperty("lastError");
-    expect(projected.activities[0]?.payload).toEqual({});
-    expect(projected.artifacts).toHaveLength(1);
-    expect(projected.artifacts[0]).toMatchObject({ path: "src/index.ts" });
-    expect(JSON.stringify(projected)).not.toContain("/home/user/secret");
+    });
+    expect(result.profileSnapshot?.profileId).toBe("code");
+    expect(result.messages[0]?.text).toHaveLength(120_000);
+    expect(JSON.stringify(result)).not.toContain("private specialization instructions");
+    expect(JSON.stringify(result)).not.toContain("private skill resource");
+    expect(result).not.toHaveProperty("providerSessions");
   });
 
-  for (const operation of ["listProjects", "getThread"] as const) {
-    it.effect(`interrupts an offline ${operation} snapshot subscription at its deadline`, () =>
+  it("keeps identical thread IDs on different machines distinct in V2 events", () => {
+    const update = {
+      kind: "thread.updated",
+      sequence: 7,
+      location: "active",
+      thread: v2ThreadShell,
+    } as const;
+    const local = gatewayEventFromV2(EnvironmentId.make("local"), update)!;
+    const remote = gatewayEventFromV2(EnvironmentId.make("remote"), update)!;
+    expect(local.eventId).not.toBe(remote.eventId);
+    expect(local.threadId).toBe(remote.threadId);
+    expect(remote.environmentId).toBe("remote");
+    expect(remote.sequence).toBe(7);
+    expect(remote.data).toMatchObject({ projectId: v2ThreadShell.projectId });
+  });
+
+  it.each([
+    ["preparing", "queued"],
+    ["starting", "queued"],
+    ["running", "running"],
+    ["failed", "failed"],
+    ["cancelled", "stopped"],
+    ["rolled_back", "stopped"],
+    ["waiting", "running"],
+    ["completed", "completed"],
+  ] as const)("maps V2 %s to %s", (status, expected) => {
+    expect(gatewayStatusFromThread({ status, pendingRuntimeRequest: null })).toBe(expected);
+  });
+
+  it.effect.each(["listProjects", "getThread"] as const)(
+    "interrupts an offline %s snapshot subscription at its deadline",
+    (operation) =>
       Effect.gen(function* () {
         const entered = yield* Deferred.make<void>();
         const released = yield* Deferred.make<void>();
@@ -759,8 +296,7 @@ describe("Gateway Runtime Port", () => {
         yield* Deferred.await(released);
         expect(yield* Effect.promise(() => pending)).toBe(true);
       }),
-    );
-  }
+  );
 
   it.effect("projects the existing registry without starting or replacing it", () =>
     Effect.gen(function* () {
@@ -881,13 +417,12 @@ it("retains settlement state in the thread list used by agent filters", async ()
     runPromise: async () => ({
       threads: [
         {
+          ...v2ThreadShell,
           id: "chat",
           projectId: "project",
           profileSnapshot: { profileId: "code" },
           title: "Done",
-          settledAt: "2026-09-07T00:00:00.000Z",
-          session: null,
-          latestTurn: null,
+          settledAt: DateTime.makeUnsafe("2026-09-07T00:00:00.000Z"),
         },
       ],
       updatedAt: "now",
@@ -899,6 +434,128 @@ it("retains settlement state in the thread list used by agent filters", async ()
     ],
   });
 });
+
+it.effect(
+  "routes V2 reads and message commands through the selected machine even when thread IDs collide",
+  () =>
+    Effect.gen(function* () {
+      const writes: Array<{ environmentId: string; command: OrchestrationV2Command }> = [];
+      const launches: Array<{ environmentId: string; input: OrchestrationV2ThreadLaunchInput }> =
+        [];
+      const supervisors = new Map<string, EnvironmentSupervisor["Service"]>();
+      const repositoryIdentity = {
+        canonicalKey: "github.com/acme/app",
+        locator: {
+          source: "git-remote" as const,
+          remoteName: "origin",
+          remoteUrl: "git@x:acme/app",
+        },
+        owner: "acme",
+        name: "app",
+      };
+      for (const environmentId of ["machine-a", "machine-b"]) {
+        const session = yield* SubscriptionRef.make(
+          Option.some({
+            initialConfig: Effect.succeed({
+              environment: { capabilities: { serverResolvedCommandContext: true } },
+            }),
+            client: {
+              [WS_METHODS.serverGetConfig]: () => Effect.succeed({ providers: [] }),
+              [WS_METHODS.serverGetSettings]: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
+              [ORCHESTRATION_V2_WS_METHODS.launchThread]: (
+                input: OrchestrationV2ThreadLaunchInput,
+              ) =>
+                Effect.sync(() => {
+                  launches.push({ environmentId, input });
+                  return { threadId: input.threadId, projection: v2Projection, resumed: false };
+                }),
+              [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: () =>
+                Stream.make({
+                  kind: "snapshot",
+                  snapshot: {
+                    threads: [{ ...v2ThreadShell, title: environmentId }],
+                    projects: [{ ...v2Project, repositoryIdentity }],
+                  },
+                }),
+              [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
+                Effect.sync(() => {
+                  writes.push({ environmentId, command });
+                  return { sequence: 1, storedEvents: [] };
+                }),
+            },
+          }),
+        );
+        supervisors.set(environmentId, {
+          target: { environmentId: EnvironmentId.make(environmentId), label: environmentId },
+          session,
+        } as unknown as EnvironmentSupervisor["Service"]);
+      }
+      const registry = {
+        run: <A, E>(id: EnvironmentId, effect: Effect.Effect<A, E, EnvironmentSupervisor>) => {
+          const supervisor = supervisors.get(id);
+          return supervisor
+            ? effect.pipe(Effect.provideService(EnvironmentSupervisor, supervisor))
+            : Effect.die("Unknown environment");
+        },
+      } as unknown as EnvironmentRegistry["Service"];
+      yield* Effect.gen(function* () {
+        const context = yield* Effect.context<EnvironmentRegistry | Crypto.Crypto>();
+        const port = createGatewayRuntimePortFromContext(context);
+        expect((yield* Effect.promise(() => port.listThreads("machine-b"))).items[0]?.title).toBe(
+          "machine-b",
+        );
+        // Git and pull request tools need the project's repository identity.
+        expect(
+          (yield* Effect.promise(() => port.listProjects("machine-b"))).items[0]
+            ?.repositoryIdentity,
+        ).toEqual(repositoryIdentity);
+        yield* Effect.promise(() =>
+          port.sendMessage({
+            environmentId: "machine-b",
+            threadId: v2ThreadShell.id,
+            requestId: "routed-command",
+            messageId: "routed-message",
+            text: "Remote follow-up",
+          }),
+        );
+        yield* Effect.promise(() =>
+          port.createThread({
+            environmentId: "machine-b",
+            projectId: "shared-project",
+            threadId: "shared-thread",
+            title: "Worktree test",
+            requestId: "launch-test",
+            workspaceMode: "worktree",
+            baseBranch: "main",
+            modelSelection: { instanceId: "codex", model: "test" },
+          }),
+        );
+        expect(launches).toEqual([
+          {
+            environmentId: "machine-b",
+            input: expect.objectContaining({
+              projectId: "shared-project",
+              threadId: "shared-thread",
+              workspaceStrategy: { type: "worktree", baseRef: "main" },
+            }),
+          },
+        ]);
+        expect(writes).toEqual([
+          {
+            environmentId: "machine-b",
+            command: expect.objectContaining({
+              type: "message.dispatch",
+              threadId: v2ThreadShell.id,
+              text: "Remote follow-up",
+            }),
+          },
+        ]);
+      }).pipe(
+        Effect.provideService(EnvironmentRegistry, registry),
+        Effect.provideService(Crypto.Crypto, testCrypto),
+      );
+    }),
+);
 
 describe("resolveGatewayDevice", () => {
   const device = (deviceId: string, label: string) => ({
@@ -919,5 +576,126 @@ describe("resolveGatewayDevice", () => {
   it("names the connected devices when the choice is ambiguous or missing", () => {
     expect(() => resolveGatewayDevice(devices, "pc")).toThrow(/Several devices.*win-1.*win-2/);
     expect(() => resolveGatewayDevice(devices, "iPhone")).toThrow(/not connected.*Studio Mac/);
+  });
+});
+
+describe("gateway pending questions", () => {
+  it("projects a waiting question with its options for MCP answers", () => {
+    const requestId = RuntimeRequestId.make("question-1");
+    const nodeId = NodeId.make("question-node");
+    const projected = gatewayThreadProjection({
+      ...v2Projection,
+      runtimeRequests: [
+        {
+          id: requestId,
+          nodeId,
+          providerTurnId: null,
+          nativeRequestRef: null,
+          kind: "user_input",
+          status: "pending",
+          responseCapability: { type: "message" },
+          createdAt: v2Now,
+          resolvedAt: null,
+        },
+      ],
+      turnItems: [
+        {
+          id: TurnItemId.make("question-item"),
+          threadId: v2Projection.thread.id,
+          runId: null,
+          nodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 0,
+          status: "completed",
+          title: null,
+          startedAt: v2Now,
+          completedAt: v2Now,
+          updatedAt: v2Now,
+          type: "user_input_request",
+          requestId,
+          questions: [
+            {
+              id: "target",
+              header: "Target",
+              question: "Which environment?",
+              allowCustomAnswer: false,
+              options: [{ label: "Staging", value: "staging", description: "Safe first" }],
+            },
+          ],
+        },
+      ],
+    });
+    expect(projected.hasPendingUserInput).toBe(true);
+    expect(projected.pendingQuestions).toEqual([
+      {
+        questionRequestId: "question-1",
+        askedAt: DateTime.formatIso(v2Now),
+        questions: [
+          {
+            questionId: "target",
+            header: "Target",
+            question: "Which environment?",
+            multiSelect: false,
+            allowsFreeText: false,
+            options: [{ label: "Staging", description: "Safe first", value: "staging" }],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("projects a pending approval with the prompt the composer shows", () => {
+    const requestId = RuntimeRequestId.make("approval-1");
+    const nodeId = NodeId.make("approval-node");
+    const projected = gatewayThreadProjection({
+      ...v2Projection,
+      runtimeRequests: [
+        {
+          id: requestId,
+          nodeId,
+          providerTurnId: null,
+          nativeRequestRef: null,
+          kind: "command",
+          status: "pending",
+          responseCapability: { type: "live", providerSessionId: ProviderSessionId.make("s") },
+          createdAt: v2Now,
+          resolvedAt: null,
+        },
+      ],
+      turnItems: [
+        {
+          id: TurnItemId.make("approval-item"),
+          threadId: v2Projection.thread.id,
+          runId: null,
+          nodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 0,
+          status: "running",
+          title: null,
+          startedAt: v2Now,
+          completedAt: null,
+          updatedAt: v2Now,
+          type: "approval_request",
+          requestId,
+          requestKind: "command",
+          prompt: "rm -rf build",
+        },
+      ],
+    });
+    expect(projected.hasPendingApprovals).toBe(true);
+    expect(projected.pendingApprovals).toEqual([
+      {
+        requestId: "approval-1",
+        requestKind: "command",
+        createdAt: DateTime.formatIso(v2Now),
+        detail: "rm -rf build",
+      },
+    ]);
   });
 });

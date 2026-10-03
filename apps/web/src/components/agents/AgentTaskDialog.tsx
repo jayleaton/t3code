@@ -101,6 +101,9 @@ export function AgentTaskDialog({
         interactionMode: profile.interactionMode,
       },
     );
+    // V2 implicit drafts inherit project defaults; an agent starts with explicit profile choices.
+    store.setRuntimeMode(draftId, profile.runtimeMode);
+    store.setInteractionMode(draftId, profile.interactionMode);
     const options = withReasoningEffortOption(
       modelSelection.options,
       profile.reasoningEffort,

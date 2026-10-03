@@ -1,11 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-  EnvironmentId,
-  OrchestrationThreadShell,
-  ThreadId,
-  type McpGatewayProfile,
-} from "@t3tools/contracts";
-import * as Schema from "effect/Schema";
+import { EnvironmentId, ThreadId, RunId, type McpGatewayProfile } from "@t3tools/contracts";
+import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { v2ThreadShell } from "./agents.testFixtures";
+import * as DateTime from "effect/DateTime";
 import {
   planAgentThreadMove,
   agentThreadStatus,
@@ -17,6 +14,7 @@ import {
   resolveAgentTaskProject,
   nestAgentRuns,
   agentRunLinkTargets,
+  agentRunParentKey,
   agentRunDropZone,
   agentRunReorderOver,
 } from "./agents.logic";
@@ -31,27 +29,13 @@ const profile: McpGatewayProfile = {
   createdAt: "2026-09-06T00:00:00.000Z",
   updatedAt: "2026-09-06T00:00:00.000Z",
 };
-const decodeThread = Schema.decodeUnknownSync(OrchestrationThreadShell);
-const thread = (id: string, profileId: string | null, settledAt: string | null = null) => ({
-  environmentId: EnvironmentId.make("local"),
-  ...decodeThread({
-    id,
-    projectId: "p",
+const thread = (id: string, profileId: string | null, settledAt: string | null = null) =>
+  presentThreadShell(EnvironmentId.make("local"), {
+    ...v2ThreadShell,
+    id: ThreadId.make(id),
     title: id,
-    modelSelection: { instanceId: "codex", model: "old-gpt" },
-    runtimeMode: "approval-required",
-    interactionMode: "default",
-    branch: null,
-    worktreePath: null,
-    latestTurn: null,
-    session: null,
-    createdAt: "2026-09-06T00:00:00.000Z",
-    updatedAt: "2026-09-06T00:00:00.000Z",
-    latestUserMessageAt: null,
-    hasPendingApprovals: false,
-    hasPendingUserInput: false,
-    hasActionableProposedPlan: false,
-    settledAt,
+    modelSelection: { ...v2ThreadShell.modelSelection, model: "old-gpt" },
+    settledAt: settledAt === null ? null : DateTime.makeUnsafe(settledAt),
     ...(profileId
       ? {
           profileSnapshot: {
@@ -67,8 +51,7 @@ const thread = (id: string, profileId: string | null, settledAt: string | null =
           },
         }
       : {}),
-  }),
-});
+  });
 describe("agent thread grouping", () => {
   it("keeps old revisions grouped, retains removed agents, and recedes settled work", () => {
     const old = thread("old-model", "write");
@@ -87,9 +70,9 @@ describe("agent thread grouping", () => {
 describe("agent chat focus", () => {
   const completed = () => ({
     ...thread("complete", "write"),
-    latestTurn: {
-      turnId: "turn" as NonNullable<ReturnType<typeof thread>["latestTurn"]>["turnId"],
-      state: "completed" as const,
+    latestRun: {
+      runId: RunId.make("run"),
+      status: "completed" as const,
       requestedAt: "2026-09-06T00:00:00.000Z",
       startedAt: "2026-09-06T00:00:00.000Z",
       completedAt: "2026-09-06T00:02:00.000Z",
@@ -108,7 +91,7 @@ describe("agent chat focus", () => {
     expect(isAgentChatInFocus(thread("idle", "write"), undefined, false)).toBe(true);
     const running = {
       ...completed(),
-      latestTurn: { ...completed().latestTurn, state: "running" as const, completedAt: null },
+      latestRun: { ...completed().latestRun, status: "running" as const, completedAt: null },
     };
     expect(agentThreadStatus(running)).toBe("running");
     expect(isAgentChatInFocus(running, "2026-09-06T00:03:00.000Z", false)).toBe(true);
@@ -120,12 +103,19 @@ describe("agent chat focus", () => {
     expect(isAgentChatInFocus(settled, undefined, true)).toBe(true);
   });
   it("keeps a chat with background work live after its turn completes", () => {
-    const watching = { ...completed(), backgroundLiveness: "monitoring" as const };
+    const watching = {
+      ...completed(),
+      pendingBackgroundTasks: [
+        { taskId: "watch", description: "Watch CI", kind: "monitor" as const },
+      ],
+    };
     expect(agentThreadStatus(watching)).toBe("monitoring");
     expect(isAgentChatInFocus(watching, "2026-09-06T00:03:00.000Z", false)).toBe(true);
-    expect(agentThreadStatus({ ...completed(), backgroundLiveness: "working" as const })).toBe(
-      "running",
-    );
+    const delegating = {
+      ...completed(),
+      pendingBackgroundTasks: [{ taskId: "review", kind: "subagent" as const }],
+    };
+    expect(agentThreadStatus(delegating)).toBe("running");
   });
 });
 
@@ -133,12 +123,12 @@ describe("agent workspace selection", () => {
   it("includes completed unsettled work across environments, filters by agent, and clears back to All", () => {
     const done = {
       ...thread("completed task", "write"),
-      latestTurn: {
-        turnId: "turn" as NonNullable<ReturnType<typeof thread>["latestTurn"]>["turnId"],
-        state: "completed" as const,
-        requestedAt: "2026-09-06T00:00:00.000Z",
+      latestRun: {
+        runId: RunId.make("done"),
+        status: "completed" as const,
+        requestedAt: "2026-09-06T00:00:00Z",
         startedAt: null,
-        completedAt: "2026-09-06T00:02:00.000Z",
+        completedAt: "2026-09-06T00:02:00Z",
         assistantMessageId: null,
       },
     };
@@ -285,11 +275,12 @@ describe("agent active card order", () => {
     const plan = planAgentThreadMove(items, items, remote, "up")!;
     const arranged = items.map((item) => ({
       ...item,
-      activeOrderKey: plan.find(
-        (assignment) =>
-          assignment.thread.id === item.id &&
-          assignment.thread.environmentId === item.environmentId,
-      )?.orderKey,
+      activeOrderKey:
+        plan.find(
+          (assignment) =>
+            assignment.thread.id === item.id &&
+            assignment.thread.environmentId === item.environmentId,
+        )?.orderKey ?? null,
     }));
     expect(plan.every(({ thread }) => thread.pinnedAt == null && thread.settledAt === null)).toBe(
       true,
@@ -383,36 +374,60 @@ describe("nestAgentRuns", () => {
 });
 
 describe("agentRunLinkTargets", () => {
-  const run = (id: string, parentThreadId: string | null, environmentId = "local") => ({
+  const run = (
+    id: string,
+    parentThreadId: string | null,
+    environmentId = "local",
+    parentEnvironmentId?: string,
+  ) => ({
     environmentId: EnvironmentId.make(environmentId),
     id: ThreadId.make(id),
     parentThreadId: parentThreadId === null ? null : ThreadId.make(parentThreadId),
+    ...(parentEnvironmentId === undefined
+      ? {}
+      : { parentEnvironmentId: EnvironmentId.make(parentEnvironmentId) }),
   });
   const root = run("root", null);
   const child = run("child", "root");
-  const grandchild = run("grandchild", "child");
+  // A sub-run on another machine, nested under a local chat.
+  const remoteChild = run("remote-child", "child", "remote", "local");
   const loose = run("loose", null);
   const remote = run("remote", null, "remote");
-  const all = [root, child, grandchild, loose, remote];
+  const all = [root, child, remoteChild, loose, remote];
 
-  it("offers every run in the same environment outside the dragged run's own tree", () => {
+  it("offers every run on any environment outside the dragged run's own tree", () => {
     expect([...agentRunLinkTargets(loose, all)].toSorted()).toEqual([
       "local:child",
-      "local:grandchild",
       "local:root",
+      "remote:remote",
+      "remote:remote-child",
     ]);
-    expect([...agentRunLinkTargets(grandchild, all)].toSorted()).toEqual([
+    expect([...agentRunLinkTargets(remote, all)].toSorted()).toEqual([
+      "local:child",
       "local:loose",
       "local:root",
+      "remote:remote-child",
     ]);
   });
 
-  it("rejects cycles, the current parent, and other environments", () => {
-    // root cannot move under its own sub-runs.
-    expect([...agentRunLinkTargets(root, all)]).toEqual(["local:loose"]);
-    // child is already under root and cannot move under grandchild.
-    expect([...agentRunLinkTargets(child, all)]).toEqual(["local:loose"]);
-    expect(agentRunLinkTargets(remote, all).size).toBe(0);
+  it("rejects cycles that cross environments, and the current parent", () => {
+    // root cannot move under its own sub-runs, including the one on the other machine.
+    expect([...agentRunLinkTargets(root, all)].toSorted()).toEqual([
+      "local:loose",
+      "remote:remote",
+    ]);
+    // remote-child is already under child.
+    expect([...agentRunLinkTargets(remoteChild, all)].toSorted()).toEqual([
+      "local:loose",
+      "local:root",
+      "remote:remote",
+    ]);
+  });
+
+  it("resolves parents on another environment by both IDs", () => {
+    expect(agentRunParentKey(remoteChild)).toBe("local:child");
+    expect(agentRunParentKey(child)).toBe("local:root");
+    expect(agentRunParentKey(root)).toBeNull();
   });
 });
 

@@ -8,9 +8,9 @@ import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
-import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopAssets from "./DesktopAssets.ts";
 import * as NodeURL from "node:url";
+import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import { makeComponentLogger } from "./DesktopObservability.ts";
 
 // Linux ships as an AppImage, so the .desktop entry users end up with is
@@ -19,9 +19,9 @@ import { makeComponentLogger } from "./DesktopObservability.ts";
 // Electron's app.setAsDefaultProtocolClient resolves the desktop id from
 // setDesktopName, which cannot match those files — so the browser keeps
 // prompting "Choose an application" for every OAuth callback. Instead, write
-// our own handler entry pointing at the current AppImage and claim the
-// scheme default via xdg-mime, exactly what the file manager's "set as
-// default" checkbox would record in mimeapps.list.
+// our own handler entry pointing at the current AppImage, refresh the desktop
+// MIME cache so desktop environments recognize that entry as a handler, and
+// use xdg-mime to record it as the scheme default in mimeapps.list.
 const { logInfo, logWarning } = makeComponentLogger("desktop-linux-url-handler");
 
 export class DesktopLinuxUrlHandlerRegistrationError extends Schema.TaggedError<DesktopLinuxUrlHandlerRegistrationError>()(
@@ -41,6 +41,23 @@ export class DesktopLinuxUrlHandlerRegistrationError extends Schema.TaggedError<
 }
 
 const isRegistrationError = Schema.is(DesktopLinuxUrlHandlerRegistrationError);
+
+export class DesktopLinuxUrlHandlerCacheRefreshError extends Schema.TaggedError<DesktopLinuxUrlHandlerCacheRefreshError>()(
+  "DesktopLinuxUrlHandlerCacheRefreshError",
+  {
+    applicationsDir: Schema.String,
+    exitCode: Schema.optionalKey(Schema.Number),
+    cause: Schema.optionalKey(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    const exitCode =
+      this.exitCode === undefined ? "" : `, update-desktop-database exit code ${this.exitCode}`;
+    return `Failed to refresh the desktop MIME cache at ${this.applicationsDir}${exitCode}.`;
+  }
+}
+
+const isCacheRefreshError = Schema.is(DesktopLinuxUrlHandlerCacheRefreshError);
 
 const escapeDesktopEntryString = (value: string): string =>
   value
@@ -65,28 +82,26 @@ export function escapeDesktopEntryExecArgument(value: string): string {
   return escapeDesktopEntryString(`"${quoted}"`);
 }
 
-// Official builds retain a hidden URL handler for external AppImage integration.
-// Agents supplies its own visible launcher when a persistent icon is available.
+// The AppImage integration entry owns the window identity, so this URL-only entry stays
+// hidden and must not compete for StartupWMClass matching. T3 Agents builds pass `wmClass`
+// to make it their visible launcher instead.
 export function renderUrlHandlerDesktopEntry(input: {
   readonly displayName: string;
   readonly execTarget: string;
   readonly scheme: string;
-  readonly iconPath?: string | undefined;
-  readonly wmClass?: string | undefined;
+  readonly iconPath?: string;
+  readonly wmClass?: string;
 }): string {
   return [
     "[Desktop Entry]",
     "Type=Application",
     `Name=${escapeDesktopEntryString(input.displayName)}`,
     `Exec=${escapeDesktopEntryExecArgument(input.execTarget)} %U`,
+    ...(input.iconPath === undefined ? [] : [`Icon=${escapeDesktopEntryString(input.iconPath)}`]),
     "Terminal=false",
-    ...(input.iconPath
-      ? [
-          `Icon=${escapeDesktopEntryString(input.iconPath)}`,
-          `StartupWMClass=${input.wmClass}`,
-          "Categories=Development;",
-        ]
-      : ["NoDisplay=true"]),
+    ...(input.wmClass === undefined
+      ? ["NoDisplay=true"]
+      : [`StartupWMClass=${input.wmClass}`, "Categories=Development;"]),
     "StartupNotify=false",
     `MimeType=x-scheme-handler/${input.scheme};`,
     "",
@@ -105,65 +120,35 @@ export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const assets = yield* DesktopAssets.DesktopAssets;
 
   const scheme = ElectronProtocol.getDesktopScheme(environment.isDevelopment);
   const desktopEntryPath = environment.path.join(
     environment.linuxApplicationsDir,
     environment.linuxDesktopEntryName,
   );
+  const iconsDir = environment.path.join(environment.linuxApplicationsDir, "..", "icons");
+  const iconPath = environment.path.join(iconsDir, `${environment.linuxDesktopEntryName}.png`);
+  const agentsLauncher =
+    environment.isPackaged &&
+    environment.linuxDesktopEntryName === "com.jayleaton.t3agents.desktop";
 
   const writeDesktopEntry = Effect.gen(function* () {
     // Inside the mounted AppImage, process.execPath points at a transient
     // /tmp/.mount_* path — the handler must launch the AppImage itself.
     const execTarget = Option.getOrElse(environment.appImagePath, () => process.execPath);
-    let iconPath: string | undefined;
-    if (
-      environment.isPackaged &&
-      environment.linuxDesktopEntryName === "com.jayleaton.t3agents.desktop"
-    ) {
-      const source = yield* DesktopAssets.resolveResourcePath("icon.png").pipe(
-        Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
-        Effect.provideService(FileSystem.FileSystem, fileSystem),
-      );
-      if (Option.isSome(source)) {
-        const iconDirectory = environment.path.join(
-          environment.linuxApplicationsDir,
-          "..",
-          "icons",
-        );
-        iconPath = environment.path.join(iconDirectory, "t3agents.png");
-        yield* fileSystem.makeDirectory(iconDirectory, { recursive: true });
-        yield* fileSystem.copyFile(source.value, iconPath);
-      }
-    }
     const content = renderUrlHandlerDesktopEntry({
       displayName: environment.displayName,
       execTarget,
       scheme,
-      iconPath,
-      wmClass: environment.linuxWmClass,
+      ...(environment.isPackaged ? { iconPath } : {}),
+      ...(agentsLauncher ? { wmClass: environment.linuxWmClass } : {}),
     });
     // Pre-ready setup normally wrote this already. Avoid truncating a valid
     // entry while the portal may be reading it during startup.
     const existing = yield* fileSystem
       .readFileString(desktopEntryPath)
       .pipe(Effect.orElseSucceed(() => null));
-    const appImagePath = Option.getOrUndefined(environment.appImagePath);
-    if (iconPath && appImagePath) {
-      const iconUrl = NodeURL.pathToFileURL(iconPath).href;
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const handle = yield* spawner.spawn(
-            ChildProcess.make(
-              "gio",
-              ["set", "-t", "string", appImagePath, "metadata::custom-icon", iconUrl],
-              { stdin: "ignore", stdout: "ignore", stderr: "ignore" },
-            ),
-          );
-          yield* handle.exitCode;
-        }),
-      ).pipe(Effect.ignore);
-    }
     if (existing === content) return;
     yield* fileSystem.makeDirectory(environment.linuxApplicationsDir, { recursive: true });
     yield* fileSystem.writeFileString(desktopEntryPath, content);
@@ -176,6 +161,37 @@ export const make = Effect.gen(function* () {
           desktopEntryPath,
           cause,
         }),
+    ),
+  );
+
+  const updateDesktopDatabase = Effect.scoped(
+    Effect.gen(function* () {
+      const command = ChildProcess.make(
+        "update-desktop-database",
+        [environment.linuxApplicationsDir],
+        {
+          stdin: "ignore",
+          stdout: "ignore",
+          stderr: "ignore",
+        },
+      );
+      const handle = yield* spawner.spawn(command);
+      const exitCode = yield* handle.exitCode.pipe(Effect.timeout("5 seconds"));
+      if (exitCode !== 0) {
+        return yield* new DesktopLinuxUrlHandlerCacheRefreshError({
+          applicationsDir: environment.linuxApplicationsDir,
+          exitCode,
+        });
+      }
+    }),
+  ).pipe(
+    Effect.mapError((error) =>
+      isCacheRefreshError(error)
+        ? error
+        : new DesktopLinuxUrlHandlerCacheRefreshError({
+            applicationsDir: environment.linuxApplicationsDir,
+            cause: error,
+          }),
     ),
   );
 
@@ -218,6 +234,57 @@ export const make = Effect.gen(function* () {
     }
     yield* writeDesktopEntry;
     if (!environment.isPackaged) return;
+
+    yield* Effect.gen(function* () {
+      const { png } = yield* assets.iconPaths;
+      if (Option.isNone(png)) return;
+      // The AppImage mount is temporary; the chooser needs the icon after exit.
+      yield* fileSystem.makeDirectory(iconsDir, { recursive: true });
+      yield* fileSystem.copyFile(png.value, iconPath);
+    }).pipe(
+      Effect.catch((error) =>
+        logWarning("URL handler icon copy failed", { iconPath, category: error.reason._tag }),
+      ),
+    );
+
+    // File managers show the AppImage itself with the launcher's icon.
+    const appImagePath = Option.getOrUndefined(environment.appImagePath);
+    if (agentsLauncher && appImagePath !== undefined) {
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const handle = yield* spawner.spawn(
+            ChildProcess.make(
+              "gio",
+              [
+                "set",
+                "-t",
+                "string",
+                appImagePath,
+                "metadata::custom-icon",
+                NodeURL.pathToFileURL(iconPath).href,
+              ],
+              { stdin: "ignore", stdout: "ignore", stderr: "ignore" },
+            ),
+          );
+          yield* handle.exitCode;
+        }),
+      ).pipe(Effect.ignore);
+    }
+
+    yield* updateDesktopDatabase.pipe(
+      // Some MIME implementations, including GIO, use mimeinfo.cache to verify
+      // that a desktop entry is associated with a scheme. Cache refresh is
+      // independently best-effort so a missing update-desktop-database executable
+      // does not prevent xdg-mime from recording the requested default.
+      Effect.catch((error) =>
+        logWarning("desktop MIME cache refresh failed", {
+          applicationsDir: environment.linuxApplicationsDir,
+          message: error.message,
+          ...(error.exitCode === undefined ? {} : { exitCode: error.exitCode }),
+        }),
+      ),
+    );
+
     yield* setDefaultHandler;
     yield* logInfo("registered URL scheme handler", { scheme });
   }).pipe(

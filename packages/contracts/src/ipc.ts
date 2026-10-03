@@ -1,4 +1,3 @@
-import type { McpGatewayDesktopEvent, McpGatewayDesktopMessage } from "./mcpGateway.ts";
 import * as Schema from "effect/Schema";
 
 import {
@@ -11,7 +10,7 @@ import {
   PreviewAutomationTypeInput,
   PreviewAutomationWaitForInput,
 } from "./previewAutomation.ts";
-import { SnapShotSource } from "./orchestration.ts";
+import { SnapShotSource } from "./chatAttachment.ts";
 import { EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
 import type {
@@ -1132,9 +1131,6 @@ export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
   getMcpGatewayLaunchConfig?: () => McpGatewayLaunchConfig | null;
   configureManagedMcpGateway?: (input: { token: string; port: number } | null) => Promise<void>;
-  sendManagedMcpGatewayMessage?: (input: McpGatewayDesktopMessage) => Promise<void>;
-  closeManagedMcpGatewaySession?: (sessionId: string) => Promise<void>;
-  onManagedMcpGatewayEvent?: (listener: (event: McpGatewayDesktopEvent) => void) => () => void;
   getMcpGatewayBridgeToken?: () => string | null;
   /** Absolute path of a dropped or picked file; absent on desktop builds predating it. */
   getPathForFile?: (file: File) => string;
@@ -1227,6 +1223,9 @@ export interface DesktopBridge {
     items: readonly ContextMenuItem<T>[],
     position?: { x: number; y: number },
   ) => Promise<T | null>;
+  /** Receives a local OAuth code for a sign-in owned by a remote environment. */
+  receiveProviderAuthCallback?: (authorizationUrl: string) => Promise<string>;
+  cancelProviderAuthCallback?: (authorizationUrl: string) => Promise<void>;
   openExternal: (url: string) => Promise<boolean>;
   /**
    * Open a System Settings pane by identifier. Optional: older desktop builds

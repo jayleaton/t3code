@@ -34,7 +34,7 @@ A voice agent or other authorized MCP client can, without polling:
 3. Receive ordered live lifecycle/progress/completion events through a webhook or durable subscription.
 4. Reconnect after gateway/client/network interruption and replay events from a cursor without duplicate side effects.
 5. Retrieve authorized artifacts such as screenshots, images, files, patches, logs, documents, and PR links.
-6. Approve, reject, or modify grouped approval actions, with an explicit confirmation gate for destructive actions.
+6. Approve or reject pending approval requests, with an explicit confirmation gate for destructive actions.
 7. Pause, resume, stop, cancel, retry, or restart work idempotently.
 8. Execute a complete fork/upstream PR and review loop, including unresolved review state and checks.
 9. Ask for a current summary and next action based on server history rather than reconstructing state by polling.
@@ -137,7 +137,7 @@ Expose lifecycle commands as MCP tools and equivalent Gateway Runtime Port metho
 - `t3_pause_thread` / `t3_resume_thread`
 - `t3_retry_thread` — retry the failed/interrupted operation with a new attempt ID, retaining history.
 - `t3_restart_thread` — start a fresh execution attempt from the thread's selected restart point; never erase history.
-- `t3_get_thread`, `t3_get_messages`, `t3_get_thread_history`
+- `t3_get_thread`, `t3_get_messages`
 - `t3_summarize_thread` — return status, summary, blockers, artifacts, approvals, PR state, and next action from the authoritative snapshot.
 
 Mutating tools require an explicit `requestId` and are idempotent. Repeating the same command with the same `(environmentId, threadId, requestId)` returns the original receipt/result. Reusing a request ID for a different payload is `idempotency_conflict`. Commands against an unknown or terminal-incompatible state return a typed, non-retryable error rather than silently changing state.
@@ -200,7 +200,6 @@ Artifacts are durable records attached to a thread, operation, approval, or PR. 
   "createdAt": "...",
   "source": { "type": "workspace", "relativePath": "artifacts/preview.png" },
   "availability": "available",
-  "download": { "method": "t3_get_artifact", "expiresAt": "..." },
   "metadata": { "redacted": false }
 }
 ```
@@ -269,12 +268,9 @@ Risky operations produce an approval plan before execution. The plan groups rela
 
 MCP tools:
 
-- `t3_get_approval_plan`
-- `t3_approve_actions` (all or selected action IDs)
-- `t3_reject_actions`
-- `t3_modify_actions` (only fields declared modifiable by the plan)
+- `t3_respond_to_approval` (one pending request at a time; `t3_summarize_thread` reports the current plan)
 
-Approval decisions are idempotent by `requestId`, actor, and plan revision. Group approval must fail closed if the plan revision changed. Destructive actions (deleting files, force-push, publishing non-draft changes, terminating processes, changing access, or equivalent provider actions) require a separate explicit `confirmDestructive: true`; ordinary approval cannot satisfy that gate. Every decision emits `approval.updated` with approved/rejected/modified/pending counts.
+Approval decisions are idempotent by `requestId` and actor, and fail closed when the request is no longer pending. Destructive actions (deleting files, force-push, publishing non-draft changes, terminating processes, changing access, or equivalent provider actions) require a separate explicit `confirmDestructive: true`; ordinary approval cannot satisfy that gate. Every decision emits `approval.updated` with approved/rejected/modified/pending counts.
 
 ## 11. Git, PR, and code review workflow
 
@@ -300,7 +296,7 @@ Provide:
 - `t3_list_environments` with connection route type, machine label, OS, T3 version, capabilities, and authorization summary.
 - `t3_get_environment_health` with connection phase, last successful probe, provider/runtime readiness, event-stream readiness, artifact store readiness, and degraded reasons.
 - `t3_get_gateway_health` with bridge, MCP transport, webhook queue, event retention, and clock status.
-- `t3_get_operation_history` and `t3_get_thread_history` with bounded pagination/cursors.
+- `t3_get_operation_history` with bounded pagination/cursors.
 
 Health must distinguish disconnected, connecting, connected-but-degraded, and healthy. Do not report cached data as live. Observability records correlation ID, request ID, environment/thread IDs, latency, retry count, result code, and actor while redacting text, secrets, tokens, and file contents by default. Metrics include command acceptance latency, event lag, webhook delivery/retry/failure, replay count, duplicate suppression, and approval wait duration.
 
@@ -337,7 +333,7 @@ The release is accepted only when all of these pass against production builds an
 5. Repeat a create/send/stop/approve request with the same request ID and verify exactly one side effect and the original receipt.
 6. Pause/resume, stop/cancel, retry a failure, and restart an interrupted thread; verify canonical states and durable history.
 7. Retrieve an image, screenshot, file, patch, log/document, and PR link from the owning remote environment with authorization enforced.
-8. Submit grouped approval, reject one action, modify one allowed action, and verify destructive confirmation is separately required.
+8. Approve one pending action, reject another, and verify destructive confirmation is separately required.
 9. Create a draft PR on `jayleaton/t3code`, return URL/checks/unresolved count, apply a review fix, push it, and verify comments remain unresolved until refreshed against the pushed commit.
 10. Exercise disconnected, degraded, webhook retry, cursor-expired, unauthorized, stale-plan, stale-comment, and artifact-failed paths with typed errors.
 11. Disable MCP and verify no MCP socket/session/credential is created and ordinary T3 local/remote/relay operation remains unaffected.
