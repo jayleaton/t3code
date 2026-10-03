@@ -88,6 +88,8 @@ export interface EnvironmentThreadShell {
   readonly profileSnapshot?: OrchestrationV2ThreadShell["profileSnapshot"];
   /** Chat this one nests under on the Agents board; null when it stands alone. */
   readonly parentThreadId: ThreadId | null;
+  /** Environment of `parentThreadId` when it is another machine's chat. */
+  readonly parentEnvironmentId: EnvironmentId | null;
   readonly environmentId: EnvironmentId;
   readonly id: ThreadId;
   readonly projectId: ProjectId;
@@ -275,6 +277,7 @@ export function presentThreadShell(
     deletedAt: nullableIso(thread.deletedAt),
     ...(thread.profileSnapshot === undefined ? {} : { profileSnapshot: thread.profileSnapshot }),
     parentThreadId: thread.parentThreadId ?? null,
+    parentEnvironmentId: thread.parentEnvironmentId ?? null,
     source: thread,
   };
 }

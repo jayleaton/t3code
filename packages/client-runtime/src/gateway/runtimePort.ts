@@ -264,6 +264,7 @@ function gatewayThreadShellProjection(thread: OrchestrationV2ThreadShell) {
     title: thread.title,
     profileSnapshot: profileAssociation(thread.profileSnapshot),
     parentThreadId: thread.parentThreadId ?? null,
+    parentEnvironmentId: thread.parentEnvironmentId ?? null,
     settledAt: iso(thread.settledAt),
     status: gatewayStatusFromThread(thread),
     hasPendingApprovals:
@@ -295,6 +296,7 @@ export function gatewayThreadProjection(projection: OrchestrationV2ThreadProject
     modelSelection: thread.modelSelection,
     profileSnapshot: profileAssociation(thread.profileSnapshot),
     parentThreadId: thread.parentThreadId ?? null,
+    parentEnvironmentId: thread.parentEnvironmentId ?? null,
     settledAt: iso(thread.settledAt),
     runtimeMode: thread.runtimeMode,
     interactionMode: thread.interactionMode,
@@ -598,7 +600,7 @@ export function createGatewayRuntimePort(
           return { status: "succeeded" as const };
         }),
       ),
-    setThreadParent: (environmentId, threadId, parentThreadId) =>
+    setThreadParent: (environmentId, threadId, parentThreadId, parentEnvironmentId) =>
       run(
         Effect.gen(function* () {
           const registry = yield* EnvironmentRegistry;
@@ -608,6 +610,11 @@ export function createGatewayRuntimePort(
             updateThreadMetadata({
               threadId: ThreadId.make(threadId),
               parentThreadId: parentThreadId === null ? null : ThreadId.make(parentThreadId),
+              ...(parentThreadId === null ||
+              parentEnvironmentId === undefined ||
+              parentEnvironmentId === environmentId
+                ? {}
+                : { parentEnvironmentId: EnvironmentId.make(parentEnvironmentId) }),
               commandId: CommandId.make(yield* crypto.randomUUIDv4),
             }),
           );
@@ -1006,6 +1013,11 @@ export function createGatewayRuntimePort(
               ...(input.parentThreadId === undefined
                 ? {}
                 : { parentThreadId: ThreadId.make(input.parentThreadId) }),
+              ...(input.parentThreadId === undefined ||
+              input.parentEnvironmentId === undefined ||
+              input.parentEnvironmentId === input.environmentId
+                ? {}
+                : { parentEnvironmentId: EnvironmentId.make(input.parentEnvironmentId) }),
               commandId: CommandId.make(input.requestId),
               threadId: ThreadId.make(input.threadId),
               projectId: ProjectId.make(input.projectId),

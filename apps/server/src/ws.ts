@@ -1913,6 +1913,9 @@ const makeWsRpcLayer = (
                   ...(input.parentThreadId === undefined
                     ? {}
                     : { parentThreadId: input.parentThreadId }),
+                  ...(input.parentEnvironmentId === undefined
+                    ? {}
+                    : { parentEnvironmentId: input.parentEnvironmentId }),
                   commandId: input.commandId,
                   ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
                   ...(input.reuseExistingThread === undefined

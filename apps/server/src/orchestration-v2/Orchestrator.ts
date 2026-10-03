@@ -2068,7 +2068,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       "orchestration_v2.driver": command.modelSelection.instanceId,
     });
 
-    if (command.parentThreadId !== undefined) {
+    // A parent on another environment cannot be checked here; clients resolve it by both IDs.
+    if (command.parentThreadId !== undefined && command.parentEnvironmentId === undefined) {
       yield* requireValidParentThread(command, command.parentThreadId);
     }
     const now = yield* DateTime.now;
@@ -2082,6 +2083,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ? {}
         : { profileSnapshot: command.profileSnapshot }),
       ...(command.parentThreadId === undefined ? {} : { parentThreadId: command.parentThreadId }),
+      ...(command.parentThreadId === undefined || command.parentEnvironmentId === undefined
+        ? {}
+        : { parentEnvironmentId: command.parentEnvironmentId }),
       title: command.title,
       providerInstanceId: command.modelSelection.instanceId,
       modelSelection: command.modelSelection,
@@ -2239,7 +2243,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Thread ${command.threadId} is deleted.`,
       });
     }
-    if (command.type === "thread.metadata.update" && command.parentThreadId != null) {
+    if (
+      command.type === "thread.metadata.update" &&
+      command.parentThreadId != null &&
+      command.parentEnvironmentId == null
+    ) {
       yield* requireValidParentThread(command, command.parentThreadId);
     }
     if (
@@ -2702,9 +2710,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 : {}),
             ...(command.branch === undefined ? {} : { branch: command.branch }),
             ...(command.worktreePath === undefined ? {} : { worktreePath: command.worktreePath }),
+            // Relinking or detaching also replaces the parent's environment.
             ...(command.parentThreadId === undefined
               ? {}
-              : { parentThreadId: command.parentThreadId }),
+              : {
+                  parentThreadId: command.parentThreadId,
+                  parentEnvironmentId:
+                    command.parentThreadId === null ? null : (command.parentEnvironmentId ?? null),
+                }),
             ...(command.linkedPullRequest === undefined
               ? {}
               : {

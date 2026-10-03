@@ -5,6 +5,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
   CommandId,
   type ChatAttachment,
+  type EnvironmentId,
   type ThreadProfileSelection,
   type MessageId,
   type ModelSelection,
@@ -70,6 +71,7 @@ export interface ThreadLaunchInitialMessage {
 export interface ThreadLaunchInput {
   readonly profileSelection?: ThreadProfileSelection;
   readonly parentThreadId?: ThreadId;
+  readonly parentEnvironmentId?: EnvironmentId;
   readonly commandId: CommandId;
   readonly threadId?: ThreadId;
   readonly reuseExistingThread?: boolean;
@@ -713,6 +715,9 @@ const make = Effect.gen(function* () {
                 ...(input.parentThreadId === undefined
                   ? {}
                   : { parentThreadId: input.parentThreadId }),
+                ...(input.parentEnvironmentId === undefined
+                  ? {}
+                  : { parentEnvironmentId: input.parentEnvironmentId }),
                 commandId: input.commandId,
                 threadId: candidateThreadId,
                 projectId: input.projectId,

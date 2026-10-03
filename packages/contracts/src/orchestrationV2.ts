@@ -11,6 +11,7 @@ import {
   CommandId,
   ContextHandoffId,
   ContextTransferId,
+  EnvironmentId,
   EventId,
   IsoDateTime,
   MessageId,
@@ -358,9 +359,11 @@ export const OrchestrationV2AppThread = Schema.Struct({
   profileSnapshot: Schema.optional(ThreadProfileSnapshot),
   /**
    * Chat that owns this one's work on the Agents board, such as the chat whose agent created it.
-   * Organizational only and same-environment; unlike `lineage` it can be changed or cleared.
+   * Organizational only; unlike `lineage` it can be changed or cleared.
    */
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  /** Environment of `parentThreadId` when it lives on another machine; absent means this one. */
+  parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
@@ -1675,6 +1678,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
     ThreadProfileSnapshot.mapFields(({ skills: _skills, ...fields }) => fields),
   ),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
@@ -2429,6 +2433,7 @@ export const OrchestrationV2Command = Schema.Union([
     profileSelection: Schema.optional(ThreadProfileSelection),
     profileSnapshot: Schema.optional(ThreadProfileSnapshot),
     parentThreadId: Schema.optional(ThreadId),
+    parentEnvironmentId: Schema.optional(EnvironmentId),
     ...OrchestrationV2CreationFields,
     commandId: CommandId,
     threadId: ThreadId,
@@ -2571,6 +2576,8 @@ export const OrchestrationV2Command = Schema.Union([
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
     /** Nest under another chat on the Agents board, or detach with null. */
     parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+    /** With `parentThreadId`, the parent's environment when it is another machine. */
+    parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.pull-request.link"),
@@ -2945,6 +2952,7 @@ export type OrchestrationV2ThreadLaunchWorkspaceStrategy =
 export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
   profileSelection: Schema.optional(ThreadProfileSelection),
   parentThreadId: Schema.optional(ThreadId),
+  parentEnvironmentId: Schema.optional(EnvironmentId),
   commandId: CommandId,
   creationSource: Schema.optional(OrchestrationV2CreationSource),
   threadId: Schema.optional(ThreadId),

@@ -408,12 +408,17 @@ async function listGatewayThreads(
   const profileId = typeof input.profileId === "string" ? input.profileId : undefined;
   const parentThreadId =
     typeof input.parentThreadId === "string" ? input.parentThreadId : undefined;
+  const parentEnvironmentId =
+    typeof input.parentEnvironmentId === "string" ? input.parentEnvironmentId : undefined;
   const items = page.items
     .filter((thread) => {
       const snapshot = thread.profileSnapshot as { profileId?: string } | undefined;
       return (
         (projectId === undefined || thread.projectId === projectId) &&
-        (parentThreadId === undefined || thread.parentThreadId === parentThreadId) &&
+        (parentThreadId === undefined ||
+          (thread.parentThreadId === parentThreadId &&
+            (parentEnvironmentId === undefined ||
+              (thread.parentEnvironmentId ?? environmentId) === parentEnvironmentId))) &&
         (profileId === undefined || snapshot?.profileId === profileId) &&
         (state === "all" ||
           (state === "settled" ? thread.settledAt != null : thread.settledAt == null)) &&
@@ -1230,10 +1235,13 @@ export async function callGatewayTool(
         throw new Error("Linking chats is unavailable in this runtime.");
       const parentThreadId =
         input.parentThreadId === null ? null : requiredString(input, "parentThreadId");
+      const parentEnvironmentId =
+        typeof input.parentEnvironmentId === "string" ? input.parentEnvironmentId : undefined;
       return context.port.setThreadParent(
         environmentId,
         requiredString(input, "threadId"),
         parentThreadId,
+        ...(parentEnvironmentId === undefined ? [] : [parentEnvironmentId]),
       );
     }
     case "t3_list_skills": {
@@ -1717,15 +1725,21 @@ export async function callGatewayTool(
     case "t3_create_thread": {
       const environmentId = environmentWithScope(context, input, "create");
       const idempotencyKey = requiredIdempotencyKey(input);
-      // Explicit null opts out; otherwise a chat creating chats in its own environment parents them.
+      // Explicit null opts out; otherwise a chat creating chats, on any environment, parents them.
       const parentThreadId =
         input.parentThreadId === null
           ? undefined
           : typeof input.parentThreadId === "string"
             ? input.parentThreadId.trim()
-            : invocation.caller?.environmentId === environmentId
-              ? invocation.caller.threadId
-              : undefined;
+            : invocation.caller?.threadId;
+      const parentEnvironmentId =
+        parentThreadId === undefined
+          ? undefined
+          : typeof input.parentThreadId === "string"
+            ? typeof input.parentEnvironmentId === "string"
+              ? input.parentEnvironmentId.trim()
+              : undefined
+            : invocation.caller?.environmentId;
       const profileName = typeof input.profile === "string" ? input.profile.trim() : "";
       const profileIdInput = typeof input.profileId === "string" ? input.profileId.trim() : "";
       const legacyIdentity = {
@@ -1882,6 +1896,9 @@ export async function callGatewayTool(
             ? {}
             : { baseBranch: requiredString(input, "baseBranch") }),
           ...(parentThreadId === undefined ? {} : { parentThreadId }),
+          ...(parentEnvironmentId === undefined || parentEnvironmentId === environmentId
+            ? {}
+            : { parentEnvironmentId }),
           ...(authoritativeProfileRef === undefined
             ? {}
             : {

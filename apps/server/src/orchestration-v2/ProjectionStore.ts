@@ -1349,6 +1349,9 @@ export function threadShellFromProjection(
     ...(projection.thread.parentThreadId == null
       ? {}
       : { parentThreadId: projection.thread.parentThreadId }),
+    ...(projection.thread.parentEnvironmentId == null
+      ? {}
+      : { parentEnvironmentId: projection.thread.parentEnvironmentId }),
     title: projection.thread.title,
     providerInstanceId: projection.thread.providerInstanceId,
     modelSelection: projection.thread.modelSelection,
@@ -1587,6 +1590,9 @@ function shellFromState(input: {
     ...(input.state.thread.parentThreadId == null
       ? {}
       : { parentThreadId: input.state.thread.parentThreadId }),
+    ...(input.state.thread.parentEnvironmentId == null
+      ? {}
+      : { parentEnvironmentId: input.state.thread.parentEnvironmentId }),
     title: input.state.thread.title,
     providerInstanceId: input.state.thread.providerInstanceId,
     modelSelection: input.state.thread.modelSelection,

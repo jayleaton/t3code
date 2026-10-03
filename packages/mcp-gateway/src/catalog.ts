@@ -117,8 +117,14 @@ const createThreadFields = {
     .nullable()
     .optional()
     .describe(
-      "Chat to show this one under, in the same environment. When a T3 chat calls this tool, omitting it makes the calling chat the parent; pass null for a standalone chat.",
+      "Chat to show this one under, on any environment. When a T3 chat calls this tool, omitting it makes the calling chat the parent; pass null for a standalone chat.",
     ),
+  parentEnvironmentId: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe("Environment of parentThreadId when the parent chat is on another machine."),
   idempotencyKey,
   correlationId: optionalRequestContext.correlationId,
 };
@@ -196,7 +202,7 @@ export const TOOL_SPECS = {
     { environmentId, threadId },
   ],
   t3_set_thread_parent: [
-    "Make a chat a sub-run of another chat in the same environment, or pass parentThreadId null to detach it. Sub-runs show inside their parent's card on the Agents board. Requires lifecycle scope. A chat cannot move under itself or one of its own sub-runs. Does not start or stop a turn.",
+    "Make a chat a sub-run of another chat, on this or another environment (pass parentEnvironmentId), or pass parentThreadId null to detach it. Sub-runs show inside their parent's card on the Agents board. Requires lifecycle scope. A chat cannot move under itself or one of its own sub-runs. Does not start or stop a turn.",
     {
       environmentId,
       threadId,
@@ -206,6 +212,12 @@ export const TOOL_SPECS = {
         .min(1)
         .nullable()
         .describe("The chat to nest under, or null to detach."),
+      parentEnvironmentId: z
+        .string()
+        .trim()
+        .min(1)
+        .optional()
+        .describe("Environment of parentThreadId when the parent chat is on another machine."),
     },
   ],
   t3_open_agents: [
@@ -243,6 +255,12 @@ export const TOOL_SPECS = {
         .min(1)
         .optional()
         .describe("Only chats created under this chat."),
+      parentEnvironmentId: z
+        .string()
+        .trim()
+        .min(1)
+        .optional()
+        .describe("With parentThreadId, the parent chat's environment."),
       includeQuestions: z
         .boolean()
         .optional()
