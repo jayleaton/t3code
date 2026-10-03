@@ -242,7 +242,7 @@ export const TOOL_SPECS = {
     { environmentId: discoveryEnvironmentId, ...optionalRequestContext },
   ],
   t3_list_threads: [
-    "List chats across every connected T3 environment (or one), optionally filtered by agent profileId, project, parentThreadId, active/settled state, and executionState. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly. hasPendingUserInput marks a chat waiting on a question; pass includeQuestions to attach each one's pendingQuestions (full text and options, as t3_get_pending_questions returns). profileSnapshot omits systemPrompt; read it with t3_get_thread.",
+    "List chats across every connected T3 environment (or one), optionally filtered by agent profileId, project, parentThreadId, active/settled state, and executionState. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly. hasPendingUserInput marks a chat waiting on a question; pass includeQuestions to attach each one's pendingQuestions (full text and options, as t3_get_pending_questions returns). profileSnapshot omits systemPrompt; read it with t3_list_agents includeSystemPrompt.",
     {
       environmentId: discoveryEnvironmentId,
       state: z.enum(["all", "active", "settled"]).optional(),

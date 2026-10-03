@@ -230,6 +230,8 @@ function gatewayProjectProjection(project: OrchestrationV2ShellSnapshot["project
     id: project.id,
     title: project.title,
     workspaceRoot: project.workspaceRoot,
+    // Git and pull request tools check requests against this identity.
+    repositoryIdentity: project.repositoryIdentity ?? null,
     defaultModelSelection: project.defaultModelSelection,
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
