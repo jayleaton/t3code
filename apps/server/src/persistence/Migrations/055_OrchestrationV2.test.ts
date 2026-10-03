@@ -13,21 +13,20 @@ layer("055_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        Array.from({ length: 56 }, (_, index) => index + 1),
+        Array.from({ length: 60 }, (_, index) => index + 1),
       );
     }),
   );
 
-  it.effect("upgrades released schema 53 through the latest migrations", () =>
+  it.effect("upgrades released schema 58 through the latest migrations", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 53 });
+      yield* runMigrations({ toMigrationInclusive: 58 });
 
       const executed = yield* runMigrations();
       assert.deepStrictEqual(executed, [
-        [54, "ProjectionThreadsAutoSettleDisabledAt"],
-        [55, "OrchestrationV2"],
-        [56, "RemoveRedundantProjectionIndexes"],
+        [59, "OrchestrationV2"],
+        [60, "RemoveRedundantProjectionIndexes"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
 
@@ -45,11 +44,15 @@ layer("055_OrchestrationV2", (it) => {
         { migration_id: 49, name: "ProjectionThreadsActiveOrderKey" },
         { migration_id: 50, name: "ProjectionThreadPullRequests" },
         { migration_id: 51, name: "ProjectionThreadMessageContext" },
-        { migration_id: 52, name: "ProjectionThreadTitleState" },
-        { migration_id: 53, name: "PullRequestFilesViewed" },
-        { migration_id: 54, name: "ProjectionThreadsAutoSettleDisabledAt" },
-        { migration_id: 55, name: "OrchestrationV2" },
-        { migration_id: 56, name: "RemoveRedundantProjectionIndexes" },
+        { migration_id: 52, name: "AgentProfileAndPullRequestCompatibility" },
+        { migration_id: 53, name: "RepairAgentUpgradeSchema" },
+        { migration_id: 54, name: "ProjectionThreadTitleState" },
+        { migration_id: 55, name: "PullRequestFilesViewed" },
+        { migration_id: 56, name: "ScheduledTasks" },
+        { migration_id: 57, name: "ProjectionThreadsAutoSettleDisabledAt" },
+        { migration_id: 58, name: "ProjectionThreadsParentThreadId" },
+        { migration_id: 59, name: "OrchestrationV2" },
+        { migration_id: 60, name: "RemoveRedundantProjectionIndexes" },
       ]);
 
       const tables = yield* sql<{ readonly name: string }>`

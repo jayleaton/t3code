@@ -22,6 +22,7 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
  * runtime failure.
  */
 export const RPC_REQUIRED_SCOPES = {
+  [ORCHESTRATION_V2_WS_METHODS.getCommandReceipts]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.getTurnDiff]: AuthOrchestrationReadScope,
@@ -34,6 +35,8 @@ export const RPC_REQUIRED_SCOPES = {
   [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: AuthOrchestrationReadScope,
   [WS_METHODS.projectsMutate]: AuthOrchestrationOperateScope,
+  [WS_METHODS.mcpGatewayConnect]: AuthOrchestrationOperateScope,
+  [WS_METHODS.mcpGatewayRespond]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverProbe]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetConfig]: AuthOrchestrationReadScope,
   [WS_METHODS.serverRefreshProviders]: AuthOrchestrationOperateScope,
@@ -160,6 +163,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.vcsListRefs]: AuthOrchestrationReadScope,
   [WS_METHODS.vcsCreateWorktree]: AuthOrchestrationOperateScope,
   [WS_METHODS.vcsRemoveWorktree]: AuthOrchestrationOperateScope,
+  [WS_METHODS.vcsApplyPatch]: AuthOrchestrationOperateScope,
   [WS_METHODS.vcsCreateRef]: AuthOrchestrationOperateScope,
   [WS_METHODS.vcsSwitchRef]: AuthOrchestrationOperateScope,
   [WS_METHODS.vcsInit]: AuthOrchestrationOperateScope,
@@ -182,6 +186,9 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.previewList]: AuthOrchestrationReadScope,
   [WS_METHODS.previewReportStatus]: AuthOrchestrationOperateScope,
   [WS_METHODS.previewAutomationConnect]: AuthOrchestrationOperateScope,
+  [WS_METHODS.clientsConnectFocus]: AuthOrchestrationReadScope,
+  [WS_METHODS.clientsList]: AuthOrchestrationReadScope,
+  [WS_METHODS.clientsFocus]: AuthOrchestrationOperateScope,
   [WS_METHODS.previewAutomationRespond]: AuthOrchestrationOperateScope,
   [WS_METHODS.previewAutomationFocusHost]: AuthOrchestrationOperateScope,
   [WS_METHODS.subscribePreviewEvents]: AuthOrchestrationReadScope,

@@ -18,7 +18,7 @@ import {
 const primaryId = EnvironmentId.make("env-primary");
 const laptopId = EnvironmentId.make("env-laptop");
 const boxId = EnvironmentId.make("env-box");
-const restartCapabilities = { threadRestartContinuation: true };
+const restartCapabilities = { threadRestartContinuation: true, agentSkillsSync: true };
 
 describe("supportsSharedSettingsSync", () => {
   it("accepts only connected servers that advertise the shared-settings capability", () => {
@@ -123,8 +123,12 @@ describe("pickSharedServerSettings", () => {
     expect(
       Object.keys(pickSharedServerSettings(DEFAULT_SERVER_SETTINGS, restartCapabilities)).sort(),
     ).toEqual([
+      "agentSkillDeletedAt",
+      "agentSkills",
       "autoResumeLimitedThreads",
       "continueThreadsAfterServerUpdate",
+      "mcpGatewayProfileDeletedAt",
+      "mcpGatewayProfiles",
       "newWorktreesStartFromOrigin",
       "sidebarAutoSettleAfterDays",
       "sidebarAutoSettleOnMerge",
@@ -401,4 +405,44 @@ describe("findSharedSettingsMismatches", () => {
     });
     expect(mismatches).toEqual([]);
   });
+});
+
+it("shares the complete profile list, detects revisions drifting, and propagates deletions", () => {
+  const profiles = [
+    {
+      profileId: "write",
+      name: "Write",
+      revision: 2,
+      providerLabel: "Codex",
+      modelLabel: "GPT",
+      runtimeMode: "approval-required" as const,
+      interactionMode: "default" as const,
+      createdAt: "2026-09-06T00:00:00.000Z",
+      updatedAt: "2026-09-06T01:00:00.000Z",
+    },
+  ];
+  expect(splitSharedServerPatch({ mcpGatewayProfiles: profiles })).toEqual({
+    sharedPatch: { mcpGatewayProfiles: profiles },
+    localPatch: {},
+  });
+  expect(splitSharedServerPatch({ mcpGatewayProfiles: [] }).sharedPatch).toEqual({
+    mcpGatewayProfiles: [],
+  });
+  expect(
+    findSharedSettingsMismatches({
+      primaryEnvironmentId: primaryId,
+      primarySettings: { ...DEFAULT_SERVER_SETTINGS, mcpGatewayProfiles: profiles },
+      environments: [
+        {
+          environmentId: laptopId,
+          label: "Laptop",
+          syncEligible: true,
+          settings: {
+            ...DEFAULT_SERVER_SETTINGS,
+            mcpGatewayProfiles: [{ ...profiles[0]!, revision: 1 }],
+          },
+        },
+      ],
+    }),
+  ).toEqual([{ environmentId: laptopId, label: "Laptop" }]);
 });

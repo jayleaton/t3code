@@ -1,3 +1,4 @@
+import { resolveEnvironmentLabel } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import {
   connectionCatalogDisplayUrl,
@@ -24,7 +25,7 @@ export function projectEnvironmentPresentation(
   return {
     ...presentation,
     environmentId,
-    label: presentation.entry.target.label,
+    label: resolveEnvironmentLabel(presentation.serverConfig, presentation.entry.target.label),
     displayUrl: connectionCatalogDisplayUrl(presentation.entry),
     relayManaged: presentation.entry.target._tag === "RelayConnectionTarget",
   };

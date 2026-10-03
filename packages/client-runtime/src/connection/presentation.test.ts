@@ -92,6 +92,7 @@ describe("connection presentation", () => {
     ).toEqual({
       phase: "reconnecting",
       error: "Socket closed.",
+      failureReason: "transport",
       traceId: "trace-previous",
     });
     expect(
@@ -110,6 +111,7 @@ describe("connection presentation", () => {
     ).toEqual({
       phase: "reconnecting",
       error: "Disconnected.",
+      failureReason: "transport",
       traceId: "trace-1",
     });
   });
@@ -131,6 +133,7 @@ describe("connection presentation", () => {
     ).toEqual({
       phase: "reconnecting",
       error: "Relay connection timed out.",
+      failureReason: "transport",
       traceId: "trace-retry",
     });
   });

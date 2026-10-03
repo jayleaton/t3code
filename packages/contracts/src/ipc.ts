@@ -1,3 +1,4 @@
+import type { McpGatewayDesktopEvent, McpGatewayDesktopMessage } from "./mcpGateway.ts";
 import * as Schema from "effect/Schema";
 
 import {
@@ -91,6 +92,12 @@ export type DesktopRuntimeArch = "arm64" | "x64" | "other";
 export type DesktopTheme = "light" | "dark" | "system";
 export type DesktopUpdateChannel = "latest" | "nightly";
 export type DesktopAppStageLabel = "Alpha" | "Dev" | "Nightly";
+
+export interface McpGatewayLaunchConfig {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly env: Readonly<Record<string, string>>;
+}
 
 export const DesktopUpdateStatusSchema = Schema.Literals([
   "disabled",
@@ -1123,10 +1130,18 @@ export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
+  getMcpGatewayLaunchConfig?: () => McpGatewayLaunchConfig | null;
+  configureManagedMcpGateway?: (input: { token: string; port: number } | null) => Promise<void>;
+  sendManagedMcpGatewayMessage?: (input: McpGatewayDesktopMessage) => Promise<void>;
+  closeManagedMcpGatewaySession?: (sessionId: string) => Promise<void>;
+  onManagedMcpGatewayEvent?: (listener: (event: McpGatewayDesktopEvent) => void) => () => void;
+  getMcpGatewayBridgeToken?: () => string | null;
   /** Absolute path of a dropped or picked file; absent on desktop builds predating it. */
   getPathForFile?: (file: File) => string;
   /** The desktop client's OS platform, read from Electron's preload process. */
   getClientPlatform?: () => string;
+  /** The desktop machine's hostname; absent on desktop builds predating it. */
+  getClientDeviceName?: () => string | null;
   setNotificationBadge?: (badge: { count: number; image: string | null }) => Promise<void>;
   onNotificationBadgeClear?: (listener: () => void) => () => void;
   onTrackpadScrollEnd?: (listener: () => void) => () => void;
@@ -1237,6 +1252,7 @@ export interface DesktopBridge {
    * them.
    */
   onQuitShortcut?: (listener: (event: QuitShortcutHintEvent) => void) => () => void;
+  revealWindow?: () => Promise<void>;
   getWindowFullscreenState: () => boolean;
   onWindowFullscreenStateChange: (listener: (fullscreen: boolean) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;

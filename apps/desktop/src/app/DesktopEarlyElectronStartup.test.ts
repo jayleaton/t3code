@@ -4,6 +4,8 @@ import { assert, describe, it } from "@effect/vitest";
 
 import {
   resolveEarlyLinuxElectronOptions,
+  resolveLinuxDesktopEntryName,
+  resolveLinuxWmClass,
   resolveEarlyLinuxPasswordStorePreference,
 } from "./DesktopEarlyElectronStartup.ts";
 
@@ -120,4 +122,10 @@ describe("DesktopEarlyElectronStartup", () => {
 
     assert.equal(preference, "gnome-libsecret");
   });
+});
+
+it("keeps the Agents Linux desktop identity separate from official T3 Code", () => {
+  assert.equal(resolveLinuxDesktopEntryName(false, "agents"), "com.jayleaton.t3agents.desktop");
+  assert.equal(resolveLinuxWmClass(false, "agents"), "t3agents");
+  assert.equal(resolveLinuxDesktopEntryName(false, "t3"), "com.t3tools.T3Code.desktop");
 });

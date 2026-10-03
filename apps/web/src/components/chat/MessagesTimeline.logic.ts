@@ -1197,6 +1197,7 @@ export function deriveMessagesTimelineRows(input: {
   liveAgentTaskIds?: ReadonlySet<string> | undefined;
   /** Live bootstrap progress. Renders a stage card under the first user message. */
   worktreeSetup?: WorktreeSetupSnapshot | null;
+  /** Messages sent during the running turn, rendered after the live rows. */
 }): MessagesTimelineRow[] {
   const timelineEntries = withoutSubagentDelegationRows(
     settleSupersededReasoning(input.timelineEntries),

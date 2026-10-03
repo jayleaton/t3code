@@ -11,6 +11,7 @@ export function buildRuntimeInstructions(runtime: {
   readonly model?: string | undefined;
   readonly modelName?: string | undefined;
   readonly reasoningEffort?: string | undefined;
+  readonly threadMcpTools?: boolean | undefined;
 }): string {
   const harness = toSingleLine(runtime.harness);
   const model = toSingleLine(runtime.model ?? "");
@@ -20,9 +21,23 @@ export function buildRuntimeInstructions(runtime: {
     modelName && modelName !== model ? `${modelName} (model slug: ${model})` : model;
   const modelInfo = model && model !== "auto" && model !== "default" ? `, as ${modelLabel}` : "";
   const effortInfo = effort ? ` with ${effort} reasoning effort` : "";
-  return `<runtime_info>In case you're asked: you are running in T3 Code through the ${harness} harness${modelInfo}${effortInfo}. No need to mention this otherwise. You can embed images and videos in your response using Markdown with absolute file paths.</runtime_info>\n\n${PULL_REQUEST_LINKING_INSTRUCTIONS}`;
+  const toolInstructions =
+    runtime.threadMcpTools === false
+      ? `<tool_availability>T3 Code does not inject its per-thread MCP tools into this harness. Use only tools actually exposed by your tool catalog. If link_pull_request or list_thread_pull_requests is unavailable, skip thread linking and return the PR URL in your response. Do not repeatedly search for unavailable tools or try to invoke them through shell commands.</tool_availability>`
+      : PULL_REQUEST_LINKING_INSTRUCTIONS;
+  return `<runtime_info>In case you're asked: you are running in T3 Code through the ${harness} harness${modelInfo}${effortInfo}. No need to mention this otherwise. You can embed images and videos in your response using Markdown with absolute file paths.</runtime_info>\n\n${toolInstructions}`;
 }
 
 function toSingleLine(value: string): string {
   return value.replaceAll(/\s+/g, " ").trim();
+}
+
+/** Keep the saved agent role separate from harness-owned operating instructions. */
+export function withAgentInstructions(
+  runtimeInstructions: string,
+  agentInstructions?: string,
+): string {
+  return agentInstructions?.trim()
+    ? `${runtimeInstructions}\n\n# Assigned agent instructions\n\n${agentInstructions.trim()}`
+    : runtimeInstructions;
 }

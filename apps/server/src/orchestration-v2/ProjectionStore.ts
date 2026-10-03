@@ -337,6 +337,10 @@ export interface ProjectionStoreV2Shape {
   readonly getThread: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2AppThread, ProjectionStoreV2Error>;
+  /** Live, unarchived chats nested directly under a thread on the Agents board. */
+  readonly getChildThreads: (
+    parentThreadId: ThreadId,
+  ) => Effect.Effect<ReadonlyArray<OrchestrationV2AppThread>, ProjectionStoreV2Error>;
   readonly getLimitRecoveryCandidates: (options: {
     readonly now: DateTime.Utc;
     readonly autoResume: boolean;
@@ -1339,6 +1343,12 @@ export function threadShellFromProjection(
     creationSource: projection.thread.creationSource,
     id: projection.thread.id,
     projectId: projection.thread.projectId,
+    ...(projection.thread.profileSnapshot === undefined
+      ? {}
+      : { profileSnapshot: shellProfileSnapshot(projection.thread.profileSnapshot) }),
+    ...(projection.thread.parentThreadId == null
+      ? {}
+      : { parentThreadId: projection.thread.parentThreadId }),
     title: projection.thread.title,
     providerInstanceId: projection.thread.providerInstanceId,
     modelSelection: projection.thread.modelSelection,
@@ -1571,6 +1581,12 @@ function shellFromState(input: {
     creationSource: input.state.thread.creationSource,
     id: input.state.thread.id,
     projectId: input.state.thread.projectId,
+    ...(input.state.thread.profileSnapshot === undefined
+      ? {}
+      : { profileSnapshot: shellProfileSnapshot(input.state.thread.profileSnapshot) }),
+    ...(input.state.thread.parentThreadId == null
+      ? {}
+      : { parentThreadId: input.state.thread.parentThreadId }),
     title: input.state.thread.title,
     providerInstanceId: input.state.thread.providerInstanceId,
     modelSelection: input.state.thread.modelSelection,
@@ -4019,6 +4035,20 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         ),
       );
 
+    const getChildThreads: ProjectionStoreV2Shape["getChildThreads"] = (parentThreadId) =>
+      sql<PayloadRow>`
+        SELECT payload_json FROM orchestration_v2_projection_threads
+        WHERE deleted_at IS NULL AND archived_at IS NULL
+          AND json_extract(payload_json, '$.parentThreadId') = ${parentThreadId}
+      `.pipe(
+        Effect.flatMap((rows) =>
+          Effect.forEach(rows, (row) => decodeThreadPayload(row.payload_json)),
+        ),
+        Effect.mapError(
+          (cause) => new ProjectionStoreReadError({ threadId: parentThreadId, cause }),
+        ),
+      );
+
     const getThread: ProjectionStoreV2Shape["getThread"] = (threadId) =>
       Effect.gen(function* () {
         const rows = yield* sql<PayloadRow>`
@@ -5445,6 +5475,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getShellSnapshot,
       getThreadShell,
       getThread,
+      getChildThreads,
       getSettlementCandidates,
       getThreadsWithPullRequests,
       getThreadProjection,
@@ -5546,6 +5577,19 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             .pipe(Effect.map(threadShellFromProjection));
           return shell.deletedAt === null ? shell : null;
         }),
+      getChildThreads: (parentThreadId) =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) =>
+            [...state.projections.values()]
+              .map((projection) => projection.thread)
+              .filter(
+                (thread) =>
+                  thread.parentThreadId === parentThreadId &&
+                  thread.deletedAt === null &&
+                  thread.archivedAt === null,
+              ),
+          ),
+        ),
       getThread: (threadId) =>
         Effect.gen(function* () {
           const projection = (yield* Ref.get(replayState)).projections.get(threadId);
@@ -6065,3 +6109,10 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
     return service;
   }),
 );
+
+function shellProfileSnapshot({
+  skills: _skills,
+  ...association
+}: import("@t3tools/contracts").ThreadProfileSnapshot) {
+  return association;
+}

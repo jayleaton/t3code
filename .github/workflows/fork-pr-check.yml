@@ -1,0 +1,42 @@
+name: Fork PR check
+
+# Runs the same gate as the fork nightly release on every PR into the release
+# branch, on GitHub-hosted runners (the upstream CI workflow needs Blacksmith
+# runners this fork does not have). Branch protection requires this check.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-pr-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate release
+    if: github.repository == 'jayleaton/t3code'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          run-install: false
+      - name: Install dependencies
+        env:
+          NODE_ENV: development
+        run: vp install --frozen-lockfile
+      - name: Install Electron before parallel tests
+        working-directory: apps/desktop
+        run: node -e "require('electron')"
+      - name: Validate release
+        run: scripts/fork-release-validate.sh

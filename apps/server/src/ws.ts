@@ -1,4 +1,6 @@
+import { OrchestrationCommandReceiptRepository } from "./persistence/Services/OrchestrationCommandReceipts.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
+import * as McpGatewayBroker from "./mcp/McpGatewayBroker.ts";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as NodeCrypto from "node:crypto";
@@ -7,14 +9,12 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Encoding from "effect/Encoding";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
-import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
@@ -197,13 +197,13 @@ import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts
 import * as ProjectService from "./project/ProjectService.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
 import { projectMutationOperation } from "./project/ProjectMutation.ts";
-import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as ClientFocusBroker from "./clients/ClientFocusBroker.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { requiredScopeForRpcMethod, requiredScopeForDeviceList } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
@@ -1086,6 +1086,8 @@ const makeWsRpcLayer = (
   clientOrigin: OrchestrationClientOrigin,
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
+  mcpGatewayBroker: McpGatewayBroker.McpGatewayBroker["Service"],
+  clientFocusBroker: ClientFocusBroker.ClientFocusBroker["Service"],
 ) =>
   ServerWsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -1127,6 +1129,7 @@ const makeWsRpcLayer = (
       const deviceHostContext =
         yield* Effect.context<Effect.Services<ReturnType<typeof remoteSshDeviceHosts>>>();
       const orchestrationEngine = yield* Orchestrator.OrchestratorV2;
+      const commandReceipts = yield* OrchestrationCommandReceiptRepository;
       const crypto = yield* Crypto.Crypto;
       const serverCommandId = (tag: string) =>
         crypto.randomUUIDv4.pipe(
@@ -1144,7 +1147,6 @@ const makeWsRpcLayer = (
             );
       const usage = yield* UsageService.UsageService;
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
-      const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const worktreeSetupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
       const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
       const repositoryIdentityResolver =
@@ -1751,6 +1753,23 @@ const makeWsRpcLayer = (
       });
 
       const handlers = ServerWsRpcGroup.of({
+        [ORCHESTRATION_V2_WS_METHODS.getCommandReceipts]: ({ commandIds }) =>
+          Effect.forEach(commandIds, (id) => commandReceipts.getByCommandId({ commandId: id }), {
+            concurrency: 8,
+          }).pipe(
+            Effect.map((receipts) => ({
+              receipts: receipts.flatMap((receipt) =>
+                Option.isSome(receipt) ? [receipt.value] : [],
+              ),
+            })),
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationDispatchCommandError({
+                  message: "Could not read command receipts",
+                  cause,
+                }),
+            ),
+          ),
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
@@ -1888,6 +1907,12 @@ const makeWsRpcLayer = (
             startup
               .enqueueCommand(
                 ThreadMessageIntake.launchThread({
+                  ...(input.profileSelection === undefined
+                    ? {}
+                    : { profileSelection: input.profileSelection }),
+                  ...(input.parentThreadId === undefined
+                    ? {}
+                    : { parentThreadId: input.parentThreadId }),
                   commandId: input.commandId,
                   ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
                   ...(input.reuseExistingThread === undefined
@@ -2499,7 +2524,11 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "server",
             },
           ),
-        [WS_METHODS.serverUpdateSettings]: ({ patch, providerInstanceMutation }) =>
+        [WS_METHODS.serverUpdateSettings]: ({
+          patch,
+          providerInstanceMutation,
+          replicateProfiles,
+        }) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateSettings,
             Effect.gen(function* () {
@@ -2510,7 +2539,7 @@ const makeWsRpcLayer = (
                 : undefined;
               const nextPatch = { ...patch, ...(deviceHosts ? { deviceHosts } : {}) };
               const settings = yield* providerInstanceMutation === undefined
-                ? serverSettings.updateSettings(nextPatch)
+                ? serverSettings.updateSettings(nextPatch, replicateProfiles)
                 : serverSettings.updateProviderInstance(providerInstanceMutation, nextPatch);
               return ServerSettings.redactServerSettingsForClient(settings);
             }),
@@ -2595,6 +2624,25 @@ const makeWsRpcLayer = (
               ),
             ),
           ),
+        [WS_METHODS.clientsConnectFocus]: (input, metadata) =>
+          observeRpcStreamEffect(
+            WS_METHODS.clientsConnectFocus,
+            clientFocusBroker.connect(
+              { sessionId: currentSessionId, rpcClientId: RpcClientId.make(metadata.client.id) },
+              input,
+            ),
+            { "rpc.aggregate": "clients" },
+          ),
+        [WS_METHODS.clientsList]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.clientsList,
+            Effect.map(clientFocusBroker.list, (clients) => ({ clients })),
+            { "rpc.aggregate": "clients" },
+          ),
+        [WS_METHODS.clientsFocus]: (input) =>
+          observeRpcEffect(WS_METHODS.clientsFocus, clientFocusBroker.focus(input), {
+            "rpc.aggregate": "clients",
+          }),
         [WS_METHODS.serverReportHostPowerState]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverReportHostPowerState,
@@ -3315,6 +3363,12 @@ const makeWsRpcLayer = (
             gitWorkflow.removeWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
             { "rpc.aggregate": "vcs" },
           ),
+        [WS_METHODS.vcsApplyPatch]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.vcsApplyPatch,
+            gitWorkflow.applyPatch(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            { "rpc.aggregate": "vcs" },
+          ),
         [WS_METHODS.vcsCreateRef]: (input) =>
           observeRpcEffect(
             WS_METHODS.vcsCreateRef,
@@ -3430,6 +3484,18 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.previewReportStatus, previewManager.reportStatus(input), {
             "rpc.aggregate": "preview",
           }),
+        [WS_METHODS.mcpGatewayConnect]: () =>
+          observeRpcStream(
+            WS_METHODS.mcpGatewayConnect,
+            mcpGatewayBroker.connect(currentSessionId),
+            { "rpc.aggregate": "mcp-gateway" },
+          ),
+        [WS_METHODS.mcpGatewayRespond]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.mcpGatewayRespond,
+            mcpGatewayBroker.respond(currentSessionId, input),
+            { "rpc.aggregate": "mcp-gateway" },
+          ),
         [WS_METHODS.previewAutomationConnect]: (input) =>
           observeRpcStreamEffect(
             WS_METHODS.previewAutomationConnect,
@@ -3721,6 +3787,8 @@ const makeWsRpcLayer = (
 export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+    const mcpGatewayBroker = yield* McpGatewayBroker.McpGatewayBroker;
+    const clientFocusBroker = yield* ClientFocusBroker.ClientFocusBroker;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const sql = yield* SqlClient.SqlClient;
@@ -3773,6 +3841,8 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               clientOrigin,
               clientAnalyticsProps,
               previewAutomationBroker,
+              mcpGatewayBroker,
+              clientFocusBroker,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),

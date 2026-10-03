@@ -54,6 +54,7 @@ export const ProviderSession = Schema.Struct({
 export type ProviderSession = typeof ProviderSession.Type;
 
 export const ProviderSessionStartInput = Schema.Struct({
+  agentInstructions: Schema.optional(Schema.String),
   threadId: ThreadId,
   provider: Schema.optional(ProviderDriverKind),
   // See ProviderSession for the migration story.
@@ -69,6 +70,7 @@ export const ProviderSessionStartInput = Schema.Struct({
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
 
 export const ProviderSendTurnInput = Schema.Struct({
+  agentInstructions: Schema.optional(Schema.String),
   threadId: ThreadId,
   /** Internal recovery signal. Allows an empty turn only for adapters that
       explicitly support promptless continuation. */

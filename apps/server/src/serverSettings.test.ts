@@ -31,6 +31,7 @@ import * as ServerSettingsModule from "./serverSettings.ts";
 import { resolveProviderInstanceTerminalEnvironment } from "./terminal/Manager.ts";
 
 const decodeSettingsPatch = Schema.decodeUnknownEffect(ServerSettingsPatch);
+const decodeSavedSettings = Schema.decodeUnknownEffect(Schema.fromJsonString(ServerSettings));
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 const decodeServerSettingsJson = Schema.decodeUnknownEffect(Schema.fromJsonString(ServerSettings));
 
@@ -193,6 +194,21 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("persists and resets a machine name without changing its chosen icon", () =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* settings.updateSettings({
+        environmentLabel: "Build laptop",
+        environmentIcon: "laptop",
+      });
+      assert.equal((yield* settings.getSettings).environmentLabel, "Build laptop");
+      yield* settings.updateSettings({ environmentLabel: null });
+      const reset = yield* settings.getSettings;
+      assert.isNull(reset.environmentLabel);
+      assert.equal(reset.environmentIcon, "laptop");
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("decodes nested settings patches", () =>
     Effect.gen(function* () {
       assert.deepEqual(
@@ -235,6 +251,138 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           options: [{ id: "reasoningEffort", value: "low" }],
         });
       }),
+  );
+
+  it.effect("owns gateway profile revisions and timestamps on the server", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const requested = {
+        profileId: "profile-andy",
+        name: "Andy",
+        revision: 99,
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6" },
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        createdAt: "2000-01-01T00:00:00.000Z",
+        updatedAt: "2000-01-01T00:00:00.000Z",
+      };
+
+      const created = yield* serverSettings.updateSettings({ mcpGatewayProfiles: [requested] });
+      assert.equal(created.mcpGatewayProfiles[0]?.revision, 1);
+      assert.notEqual(created.mcpGatewayProfiles[0]?.createdAt, requested.createdAt);
+
+      const updated = yield* serverSettings.updateSettings({
+        mcpGatewayProfiles: [{ ...requested, name: "Andy 2", revision: 1 }],
+      });
+      assert.equal(updated.mcpGatewayProfiles[0]?.revision, 2);
+      assert.equal(
+        updated.mcpGatewayProfiles[0]?.createdAt,
+        created.mcpGatewayProfiles[0]?.createdAt,
+      );
+      assert.notEqual(updated.mcpGatewayProfiles[0]?.updatedAt, requested.updatedAt);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("replicates stamped profile revisions and resumes local revision ownership", () =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      const profile = {
+        profileId: "shared-write",
+        name: "Write",
+        revision: 7,
+        providerLabel: "Codex",
+        modelLabel: "GPT",
+        runtimeMode: "approval-required" as const,
+        interactionMode: "default" as const,
+        createdAt: "2026-09-01T00:00:00.000Z",
+        updatedAt: "2026-09-06T00:00:00.000Z",
+      };
+      const replicated = yield* settings.updateSettings({ mcpGatewayProfiles: [profile] }, true);
+      assert.deepEqual(replicated.mcpGatewayProfiles, [profile]);
+      const edited = yield* settings.updateSettings({
+        mcpGatewayProfiles: [{ ...profile, name: "Review" }],
+      });
+      assert.equal(edited.mcpGatewayProfiles[0]?.revision, 8);
+      const repeated = yield* settings.updateSettings(
+        { mcpGatewayProfiles: edited.mcpGatewayProfiles },
+        true,
+      );
+      assert.deepEqual(repeated.mcpGatewayProfiles, edited.mcpGatewayProfiles);
+      const deleted = yield* settings.updateSettings({ mcpGatewayProfiles: [] });
+      assert.deepEqual(deleted.mcpGatewayProfiles, []);
+      const stale = yield* settings.updateSettings({ mcpGatewayProfiles: [profile] }, true);
+      assert.deepEqual(stale.mcpGatewayProfiles, []);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("owns skill revisions and retains deletion tombstones across stale replicas", () =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      const skill = {
+        skillId: "review",
+        name: "Review",
+        description: "Review code",
+        content: "First",
+        resources: [{ path: "scripts/check.sh", contentBase64: "b2s=", executable: true }],
+        revision: 4,
+        createdAt: "2026-01-01",
+        updatedAt: "2026-01-01",
+      };
+      const replicated = yield* settings.updateSettings({ agentSkills: [skill] }, true);
+      assert.deepEqual(replicated.agentSkills, [skill]);
+      const edited = yield* settings.updateSettings({
+        agentSkills: [{ ...skill, content: "Second" }],
+      });
+      assert.equal(edited.agentSkills[0]?.revision, 5);
+      assert.equal(edited.agentSkills[0]?.content, "Second");
+      const same = yield* settings.updateSettings({ agentSkills: edited.agentSkills });
+      assert.deepEqual(same.agentSkills, edited.agentSkills);
+      const fs = yield* FileSystem.FileSystem;
+      const { settingsPath } = yield* ServerConfig.ServerConfig;
+      const saved = yield* decodeSavedSettings(yield* fs.readFileString(settingsPath));
+      assert.deepEqual(saved.agentSkills, edited.agentSkills);
+      const textOnly = yield* settings.updateSettings({
+        agentSkills: edited.agentSkills.map(({ resources: _resources, ...skill }) => skill),
+      });
+      assert.deepEqual(textOnly.agentSkills, edited.agentSkills);
+      const cleared = yield* settings.updateSettings({
+        agentSkills: edited.agentSkills.map((skill) => ({ ...skill, resources: [] })),
+      });
+      assert.deepEqual(cleared.agentSkills[0]?.resources, []);
+      assert.equal(cleared.agentSkills[0]?.revision, 6);
+      const deleted = yield* settings.updateSettings({ agentSkills: [] });
+      assert.isString(deleted.agentSkillDeletedAt.review);
+      const stale = yield* settings.updateSettings({ agentSkills: [skill] }, true);
+      assert.deepEqual(stale.agentSkills, []);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("rejects duplicate gateway profile names at the server boundary", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const base = {
+        name: "Andy",
+        revision: 0,
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6" },
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        createdAt: "2000-01-01T00:00:00.000Z",
+        updatedAt: "2000-01-01T00:00:00.000Z",
+      };
+
+      const error = yield* serverSettings
+        .updateSettings({
+          mcpGatewayProfiles: [
+            { ...base, profileId: "profile-andy-1" },
+            { ...base, profileId: "profile-andy-2" },
+          ],
+        })
+        .pipe(Effect.flip);
+
+      assert.equal(error.operation, "normalize");
+      assert.match(String(error.cause), /Duplicate MCP gateway profile name: Andy/);
+      assert.deepEqual((yield* serverSettings.getSettings).mcpGatewayProfiles, []);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
   it.effect("deep merges nested settings updates without dropping siblings", () =>

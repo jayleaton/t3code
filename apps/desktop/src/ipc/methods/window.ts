@@ -17,6 +17,7 @@ import { WORKSPACE_IMAGE_PREVIEW_EXTENSIONS } from "@t3tools/shared/filePreview"
 import { resolveEditorCommand } from "@t3tools/shared/editor";
 import * as HostProcess from "@t3tools/shared/hostProcess";
 import * as NodeOS from "node:os";
+
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
@@ -40,6 +41,8 @@ import * as MacPermissions from "../../permissions/MacPermissions.ts";
 import { safariPermissionCheck } from "../../preview/BrowserImport/SafariPermission.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
+import { resolveMcpGatewayLaunchConfig } from "../../mcpGatewayLaunchConfig.ts";
+import { readMcpGatewayBridgeTokenFromProcess } from "../../mcpGatewayCredential.ts";
 import {
   extractDistroFromUncPath,
   resolveWslPickFolderDefaultPath,
@@ -56,6 +59,12 @@ const ContextMenuInput = Schema.Struct({
   position: Schema.optionalKey(ContextMenuPosition),
 });
 
+const McpGatewayLaunchConfigSchema = Schema.Struct({
+  command: Schema.String,
+  args: Schema.Array(Schema.String),
+  env: Schema.Record(Schema.String, Schema.String),
+});
+
 function toWebSocketBaseUrl(httpBaseUrl: URL): string {
   const url = new URL(httpBaseUrl.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -68,6 +77,60 @@ export const getAppBranding = DesktopIpc.makeSyncIpcMethod({
   handler: Effect.fn("desktop.ipc.window.getAppBranding")(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     return environment.branding;
+  }),
+});
+
+export const getMcpGatewayLaunchConfig = DesktopIpc.makeSyncIpcMethod({
+  channel: IpcChannels.GET_MCP_GATEWAY_LAUNCH_CONFIG_CHANNEL,
+  result: Schema.NullOr(McpGatewayLaunchConfigSchema),
+  handler: Effect.fn("desktop.ipc.window.getMcpGatewayLaunchConfig")(function* () {
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    // Electron is the packaged Node runtime when ELECTRON_RUN_AS_NODE is set.
+    return resolveMcpGatewayLaunchConfig({
+      isPackaged: environment.isPackaged,
+      executablePath: process.execPath,
+      resourcesPath: environment.resourcesPath,
+      stateFile: environment.path.join(environment.baseDir, "mcp-gateway-v3.sqlite"),
+    });
+  }),
+});
+
+export const getMcpGatewayBridgeToken = DesktopIpc.makeSyncIpcMethod({
+  channel: IpcChannels.GET_MCP_GATEWAY_BRIDGE_TOKEN_CHANNEL,
+  result: Schema.NullOr(Schema.String),
+  handler: Effect.fn("desktop.ipc.window.getMcpGatewayBridgeToken")(function* () {
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    return readMcpGatewayBridgeTokenFromProcess(environment.homeDirectory);
+  }),
+});
+
+/** The machine's hostname, so agents can tell this desktop apart from the user's other devices. */
+export const getClientDeviceName = DesktopIpc.makeSyncIpcMethod({
+  channel: IpcChannels.GET_CLIENT_DEVICE_NAME_CHANNEL,
+  result: Schema.NullOr(Schema.String),
+  handler: () => Effect.sync(() => NodeOS.hostname().trim() || null),
+});
+
+class DesktopWindowUnavailable extends Schema.TaggedError<DesktopWindowUnavailable>()(
+  "DesktopWindowUnavailable",
+  { message: Schema.String },
+) {}
+
+export const revealWindow = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.REVEAL_WINDOW_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.window.revealWindow")(function* (_input, event) {
+    const electronWindow = yield* ElectronWindow.ElectronWindow;
+    const window = event?.sender
+      ? yield* electronWindow.fromWebContents(event.sender)
+      : Option.none();
+    if (Option.isNone(window) || window.value.isDestroyed()) {
+      return yield* new DesktopWindowUnavailable({
+        message: "The requesting desktop window is unavailable.",
+      });
+    }
+    yield* electronWindow.reveal(window.value);
   }),
 });
 

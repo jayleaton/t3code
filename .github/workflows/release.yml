@@ -49,6 +49,7 @@ jobs:
   # published nightly, so stable only ever ships a build that nightly users
   # have already run. Scheduled runs also decide here whether a nightly is due.
   resolve_commit:
+    if: github.repository == 'pingdotgg/t3code'
     name: Resolve release commit
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 5
@@ -530,6 +531,14 @@ jobs:
           path: |
             apps/server/dist
             apps/desktop/dist-electron
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload MCP gateway bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: mcp-gateway-bundle
+          path: packages/mcp-gateway/dist
           if-no-files-found: error
           retention-days: 1
 

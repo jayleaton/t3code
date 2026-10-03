@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
+import { ArrowLeftIcon, BotIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
@@ -6,7 +6,7 @@ import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { usePullRequestsSupported } from "../../state/environments";
-import { T3Wordmark } from "../T3Wordmark";
+import { BrandMark } from "../BrandMark";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -24,7 +24,11 @@ import {
 } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
-import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
+import {
+  isSidebarUtilityPage,
+  useNavigateToMainApp,
+  useToggleWorkspaceView,
+} from "./mainAppLocation";
 import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
@@ -76,25 +80,30 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
 });
 
 function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
+  // A utility page opened from the Agents view returns there, not to threads.
+  const isOnUtilityPage = useLocation({
+    select: (location) => isSidebarUtilityPage(location.pathname),
+  });
+  const navigateToMainApp = useNavigateToMainApp();
   return (
     <Link
-      aria-label="Go to threads"
+      aria-label={isOnUtilityPage ? "Back" : "Go to threads"}
       className={cn(
         "relative z-10 ml-[var(--workspace-titlebar-content-left)] hidden h-7 w-fit min-w-0 shrink-0 items-center overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2 md:flex",
         onBackdrop ? "text-white" : "text-foreground",
       )}
       to="/"
+      onClick={(event) => {
+        if (!isOnUtilityPage || event.metaKey || event.ctrlKey || event.shiftKey) return;
+        event.preventDefault();
+        void navigateToMainApp();
+      }}
     >
       {/* Center the visible capitals, without the font's ascender/descender space. */}
-      <span className="inline-flex min-w-0 items-baseline gap-1 text-sm font-medium tracking-tight">
-        <T3Wordmark aria-label="T3" className="h-[1cap] w-auto shrink-0" />
-        <span
-          className={cn(
-            "truncate [text-box:trim-both_cap_alphabetic]",
-            onBackdrop ? "text-white/70" : "text-muted-foreground",
-          )}
-        >
-          Code
+      <span className="inline-flex min-w-0 items-center gap-1.5 text-sm font-medium tracking-tight">
+        <BrandMark className="size-3.5" />
+        <span className={cn("truncate", onBackdrop ? "text-white/70" : "text-muted-foreground")}>
+          Agents
         </span>
       </span>
     </Link>
@@ -129,6 +138,7 @@ function SidebarUtilityItem({
 export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const navigate = useNavigate();
   const navigateToMainApp = useNavigateToMainApp();
+  const toggleWorkspaceView = useToggleWorkspaceView();
   const { isMobile, setOpenMobile } = useSidebar();
   const isOnUtilityPage = useLocation({
     select: (location) => isSidebarUtilityPage(location.pathname),
@@ -174,6 +184,18 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
         </SidebarMenuItem>
       ) : (
         <>
+          <SidebarMenuItem className="min-w-0 flex-1">
+            <SidebarMenuButton
+              onClick={() => {
+                closeMobileSidebar();
+                void toggleWorkspaceView("agents");
+              }}
+              aria-label="Open agents"
+            >
+              <BotIcon />
+              <span>Agents</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
           <SidebarUtilityItem
             icon={<SettingsIcon />}
             label="Settings"

@@ -1,0 +1,328 @@
+name: Fork nightly release
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-nightly-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 'jayleaton/t3code' && vars.FORK_RELEASE_ENABLED == 'true' && (github.event_name == 'workflow_dispatch' || github.ref_name == (vars.FORK_RELEASE_BRANCH || 'main'))
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      ref: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Require production configuration and stable Mac signing
+        env:
+          APP_ID: ${{ vars.FORK_APP_ID || 'com.jayleaton.t3agents' }}
+          PRODUCT_NAME: ${{ vars.FORK_PRODUCT_NAME || 'T3 Agents' }}
+          CLERK_KEY: ${{ vars.T3CODE_CLERK_PUBLISHABLE_KEY }}
+          JWT_TEMPLATE: ${{ vars.T3CODE_CLERK_JWT_TEMPLATE }}
+          OAUTH_CLIENT: ${{ vars.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID }}
+          RELAY_URL: ${{ vars.T3CODE_RELAY_URL }}
+          TEAM: ${{ vars.APPLE_TEAM_ID }}
+          CERTIFICATE: ${{ secrets.CSC_LINK }}
+          CERTIFICATE_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          PROFILE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
+        run: |
+          set -euo pipefail
+          for key in APP_ID PRODUCT_NAME CLERK_KEY JWT_TEMPLATE OAUTH_CLIENT RELAY_URL TEAM CERTIFICATE CERTIFICATE_PASSWORD APPLE_KEY APPLE_KEY_ID APPLE_ISSUER PROFILE; do
+            if [[ -z "${!key}" ]]; then
+              echo "Missing release setting: $key" >&2
+              exit 1
+            fi
+          done
+          if [[ "$APP_ID" == com.t3tools.t3code ]]; then
+            echo "Use the fork's own permanent Apple app identifier." >&2
+            exit 1
+          fi
+      - name: Choose immutable nightly version
+        id: version
+        run: |
+          base=$(node -p 'JSON.parse(require("fs").readFileSync("apps/desktop/package.json", "utf8")).version.split("-")[0]')
+          echo "version=$base-nightly.$(date -u +%Y%m%d).$((GITHUB_RUN_NUMBER * 1000 + GITHUB_RUN_ATTEMPT))" >> "$GITHUB_OUTPUT"
+
+  build_bundle:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    env:
+      NODE_ENV: production
+      T3CODE_DESKTOP_BRAND: agents
+      APP_VERSION: ${{ needs.prepare.outputs.version }}
+      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ vars.T3CODE_CLERK_PUBLISHABLE_KEY }}
+      T3CODE_CLERK_JWT_TEMPLATE: ${{ vars.T3CODE_CLERK_JWT_TEMPLATE }}
+      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID }}
+      T3CODE_RELAY_URL: ${{ vars.T3CODE_RELAY_URL }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          run-install: false
+      - name: Install build dependencies
+        env:
+          NODE_ENV: development
+        run: vp install --frozen-lockfile
+      - name: Install Electron before parallel tests
+        working-directory: apps/desktop
+        run: node -e "require('electron')"
+      - name: Validate Agents and packaging
+        run: scripts/fork-release-validate.sh
+      - run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+      - run: node scripts/update-release-package-versions.ts "$APP_VERSION"
+      - run: vp run build:desktop
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: js-bundle
+          path: |
+            apps/server/dist
+            apps/desktop/dist-electron
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload MCP gateway bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: mcp-gateway-bundle
+          path: packages/mcp-gateway/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  desktop_mac_arm64:
+    name: Desktop macOS arm64
+    needs: [prepare, build_bundle]
+    uses: ./.github/workflows/release-desktop.yml
+    secrets: inherit
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      ref: ${{ needs.prepare.outputs.ref }}
+      release_channel: nightly
+      relay_client_tracing: false
+      brand: agents
+      app_id: ${{ vars.FORK_APP_ID || 'com.jayleaton.t3agents' }}
+      product_name: ${{ vars.FORK_PRODUCT_NAME || 'T3 Agents' }}
+      update_repository: ${{ github.repository }}
+      clerk_publishable_key: ${{ vars.T3CODE_CLERK_PUBLISHABLE_KEY }}
+      clerk_jwt_template: ${{ vars.T3CODE_CLERK_JWT_TEMPLATE }}
+      clerk_cli_oauth_client_id: ${{ vars.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID }}
+      relay_url: ${{ vars.T3CODE_RELAY_URL }}
+      label: macOS arm64
+      runner: macos-15
+      platform: mac
+      target: dmg
+      arch: arm64
+      rust_target: aarch64-apple-darwin
+      resource_key: darwin-arm64
+      cli_archive: true
+
+  desktop_mac_x64:
+    name: Desktop macOS x64
+    needs: [prepare, build_bundle]
+    uses: ./.github/workflows/release-desktop.yml
+    secrets: inherit
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      ref: ${{ needs.prepare.outputs.ref }}
+      release_channel: nightly
+      relay_client_tracing: false
+      brand: agents
+      app_id: ${{ vars.FORK_APP_ID || 'com.jayleaton.t3agents' }}
+      product_name: ${{ vars.FORK_PRODUCT_NAME || 'T3 Agents' }}
+      update_repository: ${{ github.repository }}
+      clerk_publishable_key: ${{ vars.T3CODE_CLERK_PUBLISHABLE_KEY }}
+      clerk_jwt_template: ${{ vars.T3CODE_CLERK_JWT_TEMPLATE }}
+      clerk_cli_oauth_client_id: ${{ vars.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID }}
+      relay_url: ${{ vars.T3CODE_RELAY_URL }}
+      label: macOS x64
+      runner: macos-15-intel
+      platform: mac
+      target: dmg
+      arch: x64
+      rust_target: x86_64-apple-darwin
+      resource_key: darwin-x64
+      # No CLI archive: Node single-executables are unsupported on x64 macOS
+      # (the SEA docs list macOS as arm64 only) and the built binary segfaults
+      # on start. The x64 desktop app is Electron and unaffected.
+      cli_archive: false
+
+  desktop_linux_x64:
+    name: Desktop Linux x64
+    needs: [prepare, build_bundle]
+    uses: ./.github/workflows/release-desktop.yml
+    secrets: inherit
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      ref: ${{ needs.prepare.outputs.ref }}
+      release_channel: nightly
+      relay_client_tracing: false
+      brand: agents
+      app_id: ${{ vars.FORK_APP_ID || 'com.jayleaton.t3agents' }}
+      product_name: ${{ vars.FORK_PRODUCT_NAME || 'T3 Agents' }}
+      update_repository: ${{ github.repository }}
+      clerk_publishable_key: ${{ vars.T3CODE_CLERK_PUBLISHABLE_KEY }}
+      clerk_jwt_template: ${{ vars.T3CODE_CLERK_JWT_TEMPLATE }}
+      clerk_cli_oauth_client_id: ${{ vars.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID }}
+      relay_url: ${{ vars.T3CODE_RELAY_URL }}
+      label: Linux x64
+      runner: ubuntu-24.04
+      platform: linux
+      target: AppImage
+      arch: x64
+      rust_target: x86_64-unknown-linux-gnu
+      resource_key: linux-x64
+      cli_archive: true
+
+  # node-pty has no Linux prebuild and compiles from source, so the arm64 app
+  # and archive are built on arm64 hardware rather than cross-built.
+  desktop_linux_arm64:
+    name: Desktop Linux arm64
+    needs: [prepare, build_bundle]
+    uses: ./.github/workflows/release-desktop.yml
+    secrets: inherit
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      ref: ${{ needs.prepare.outputs.ref }}
+      release_channel: nightly
+      relay_client_tracing: false
+      brand: agents
+      app_id: ${{ vars.FORK_APP_ID || 'com.jayleaton.t3agents' }}
+      product_name: ${{ vars.FORK_PRODUCT_NAME || 'T3 Agents' }}
+      update_repository: ${{ github.repository }}
+      clerk_publishable_key: ${{ vars.T3CODE_CLERK_PUBLISHABLE_KEY }}
+      clerk_jwt_template: ${{ vars.T3CODE_CLERK_JWT_TEMPLATE }}
+      clerk_cli_oauth_client_id: ${{ vars.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID }}
+      relay_url: ${{ vars.T3CODE_RELAY_URL }}
+      label: Linux arm64
+      runner: ubuntu-24.04-arm
+      platform: linux
+      target: AppImage
+      arch: arm64
+      rust_target: aarch64-unknown-linux-gnu
+      resource_key: linux-arm64
+      cli_archive: true
+
+  # The Windows jobs embed the same-arch Linux CLI archive as the WSL runtime.
+  # `!cancelled()` (not `!failure()`) still lets them start when that Linux job
+  # failed; the download step inside then fails this single platform if the
+  # archive is missing.
+  desktop_win_x64:
+    name: Desktop Windows x64
+    needs: [prepare, build_bundle, desktop_linux_x64]
+    uses: ./.github/workflows/release-desktop.yml
+    secrets: inherit
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      ref: ${{ needs.prepare.outputs.ref }}
+      release_channel: nightly
+      relay_client_tracing: false
+      brand: agents
+      app_id: ${{ vars.FORK_APP_ID || 'com.jayleaton.t3agents' }}
+      product_name: ${{ vars.FORK_PRODUCT_NAME || 'T3 Agents' }}
+      update_repository: ${{ github.repository }}
+      clerk_publishable_key: ${{ vars.T3CODE_CLERK_PUBLISHABLE_KEY }}
+      clerk_jwt_template: ${{ vars.T3CODE_CLERK_JWT_TEMPLATE }}
+      clerk_cli_oauth_client_id: ${{ vars.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID }}
+      relay_url: ${{ vars.T3CODE_RELAY_URL }}
+      label: Windows x64
+      runner: windows-2025
+      platform: win
+      target: nsis
+      arch: x64
+      rust_target: x86_64-pc-windows-msvc
+      resource_key: win32-x64
+      cli_archive: true
+
+  desktop_win_arm64:
+    name: Desktop Windows arm64
+    needs: [prepare, build_bundle, desktop_linux_arm64]
+    uses: ./.github/workflows/release-desktop.yml
+    secrets: inherit
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      ref: ${{ needs.prepare.outputs.ref }}
+      release_channel: nightly
+      relay_client_tracing: false
+      brand: agents
+      app_id: ${{ vars.FORK_APP_ID || 'com.jayleaton.t3agents' }}
+      product_name: ${{ vars.FORK_PRODUCT_NAME || 'T3 Agents' }}
+      update_repository: ${{ github.repository }}
+      clerk_publishable_key: ${{ vars.T3CODE_CLERK_PUBLISHABLE_KEY }}
+      clerk_jwt_template: ${{ vars.T3CODE_CLERK_JWT_TEMPLATE }}
+      clerk_cli_oauth_client_id: ${{ vars.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID }}
+      relay_url: ${{ vars.T3CODE_RELAY_URL }}
+      label: Windows arm64
+      runner: windows-11-arm
+      platform: win
+      target: nsis
+      arch: arm64
+      rust_target: aarch64-pc-windows-msvc
+      resource_key: win32-arm64
+      cli_archive: true
+
+  publish:
+    if: github.ref_name == (vars.FORK_RELEASE_BRANCH || 'main')
+    needs:
+      [
+        prepare,
+        desktop_mac_arm64,
+        desktop_mac_x64,
+        desktop_linux_x64,
+        desktop_linux_arm64,
+        desktop_win_x64,
+        desktop_win_arm64,
+      ]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_COMMIT: ${{ needs.prepare.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          run-install: false
+      - run: vp install --frozen-lockfile --filter @t3tools/scripts...
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: release-assets
+      - name: Merge architecture update manifests
+        run: |
+          set -euo pipefail
+          node scripts/merge-update-manifests.ts --platform mac release-assets/nightly-mac.yml release-assets/nightly-mac-x64.yml
+          rm release-assets/nightly-mac-x64.yml
+          node scripts/merge-update-manifests.ts --platform win release-assets/nightly-win-x64.yml release-assets/nightly-win-arm64.yml
+          mv release-assets/nightly-win-x64.yml release-assets/nightly.yml
+          rm release-assets/nightly-win-arm64.yml
+          rm -f release-assets/builder-debug.yml
+      - name: Publish complete update atomically
+        run: |
+          set -euo pipefail
+          printf 'Community fork build from `%s`. Uses T3 hosted auth and Connect; this is not an official T3 release.\n' "$RELEASE_COMMIT" > "$RUNNER_TEMP/release-notes.md"
+          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --target "$RELEASE_COMMIT" --title "T3 Agents Nightly $VERSION" --notes-file "$RUNNER_TEMP/release-notes.md" --prerelease --draft
+          gh release upload "v$VERSION" release-assets/* --repo "$GITHUB_REPOSITORY"
+          gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease

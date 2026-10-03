@@ -36,6 +36,22 @@ on:
       AZURE_TRUSTED_SIGNING_PUBLISHER_NAME:
         required: false
     inputs:
+      brand:
+        required: false
+        default: t3
+        type: string
+      app_id:
+        required: false
+        default: com.t3tools.t3code
+        type: string
+      product_name:
+        required: false
+        default: ""
+        type: string
+      update_repository:
+        required: false
+        default: ""
+        type: string
       label:
         required: true
         type: string
@@ -129,6 +145,23 @@ jobs:
           git sparse-checkout set --no-cone '/*' '!/.repos/'
           git -c checkout.workers=0 checkout --detach FETCH_HEAD
 
+      - name: Configure fork distribution
+        shell: bash
+        env:
+          BRAND: ${{ inputs.brand }}
+          APP_ID: ${{ inputs.app_id }}
+          PRODUCT_NAME: ${{ inputs.product_name }}
+          UPDATE_REPOSITORY: ${{ inputs.update_repository }}
+        run: |
+          echo "T3CODE_DESKTOP_BRAND=$BRAND" >> "$GITHUB_ENV"
+          echo "T3CODE_DESKTOP_APP_ID=$APP_ID" >> "$GITHUB_ENV"
+          if [[ -n "$PRODUCT_NAME" ]]; then
+            echo "T3CODE_DESKTOP_PRODUCT_NAME=$PRODUCT_NAME" >> "$GITHUB_ENV"
+          fi
+          if [[ -n "$UPDATE_REPOSITORY" ]]; then
+            echo "T3CODE_DESKTOP_UPDATE_REPOSITORY=$UPDATE_REPOSITORY" >> "$GITHUB_ENV"
+          fi
+
       # Windows installs straight from the registry. There, linking the packages
       # takes the time, not downloading them, so a ~700 MB package cache did not
       # pay for its own restore. Across recent nightlies, restore plus install
@@ -155,6 +188,26 @@ jobs:
         env:
           pnpm_config_cache_dir: ${{ runner.temp }}/pnpm-metadata
         run: vp install --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
+
+      - name: Verify Windows shared profile and legacy Agents credentials
+        if: inputs.platform == 'win' && inputs.brand == 'agents'
+        timeout-minutes: 5
+        env:
+          NODE_ENV: test
+          T3CODE_NATIVE_STORAGE_TESTS: "1"
+        run: |
+          node apps/desktop/scripts/ensure-electron-runtime.mjs
+          vp test run apps/desktop/src/app/WindowsSharedProfile.test.ts apps/desktop/src/app/WindowsSharedProfile.windows.test.ts apps/desktop/src/app/SharedSafeStorage.native.test.ts
+
+      - name: Verify macOS shared encryption and legacy Agents credentials
+        if: inputs.platform == 'mac' && inputs.brand == 'agents'
+        timeout-minutes: 5
+        env:
+          NODE_ENV: test
+          T3CODE_NATIVE_STORAGE_TESTS: "1"
+        run: |
+          node apps/desktop/scripts/ensure-electron-runtime.mjs
+          vp test run apps/desktop/src/app/SharedSafeStorage.native.test.ts
 
       - name: Cache resource monitor
         id: resource_monitor_cache
@@ -202,6 +255,12 @@ jobs:
       # The artifact root is `apps/` (upload-artifact keeps the least common
       # ancestor of its paths), so extracting into `apps` restores
       # apps/server/dist and apps/desktop/dist-electron at their build paths.
+      - name: Download MCP gateway bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: mcp-gateway-bundle
+          path: packages/mcp-gateway/dist
+
       - name: Download JS bundle
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -246,6 +305,25 @@ jobs:
           else
               convert -version
           fi
+
+      - name: Verify Linux shared encryption and legacy Agents credentials
+        if: inputs.platform == 'linux' && inputs.brand == 'agents'
+        timeout-minutes: 5
+        shell: bash
+        env:
+          NODE_ENV: test
+          T3CODE_NATIVE_STORAGE_TESTS: "1"
+          XDG_CURRENT_DESKTOP: GNOME
+        run: |
+          sudo apt-get install -y gnome-keyring dbus-x11 xvfb libnss3 libgbm1 libasound2t64
+          node apps/desktop/scripts/ensure-electron-runtime.mjs
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/t3-storage-keyring"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          dbus-run-session -- xvfb-run -a bash -euc '
+            printf "disposable-test-keyring" | gnome-keyring-daemon --unlock --components=secrets
+            vp test run apps/desktop/src/app/SharedSafeStorage.native.test.ts
+          '
 
       - name: Prepare Azure Trusted Signing
         if: inputs.platform == 'win'
@@ -454,6 +532,15 @@ jobs:
           fi
 
           vp run dist:desktop:artifact "${args[@]}"
+
+      - name: Verify Agents installer isolation
+        if: inputs.platform == 'win' && inputs.brand == 'agents'
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem release/T3-Agents-*.exe)
+          if ($installers.Count -ne 1) { throw 'Expected exactly one Agents installer.' }
+          ./scripts/test-agents-windows-installer.ps1 -Installer $installers[0].FullName
 
       # The single-executable is built with a Node that supports --build-sea
       # (25.7+); the repo itself stays on the engines.node version. It always

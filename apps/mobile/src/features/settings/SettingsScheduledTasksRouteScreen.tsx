@@ -85,7 +85,13 @@ const DAYS = [
   { index: 0, label: "Sun" },
 ] as const;
 
-function describeSchedule(task: ScheduledTask): string {
+function describeSchedule(task: Pick<ScheduledTask, "schedule">): string {
+  if (task.schedule.type === "cron") {
+    return `Cron ${task.schedule.expression} (${task.schedule.timezone})`;
+  }
+  if (task.schedule.type === "once") {
+    return `Once at ${new Date(task.schedule.runAt).toLocaleString()}`;
+  }
   if (task.schedule.type === "interval") return formatScheduledTaskInterval(task.schedule.everyMs);
   const days = task.schedule.weekdays?.length ? repeatLabel(task.schedule.weekdays) : "Every day";
   return `${days} at ${formatTime(task.schedule.timeOfDay)}`;
@@ -793,8 +799,9 @@ function TaskForm({
         <View className="px-4 py-3">
           <SegmentedControl
             options={[
-              { value: "fixed_time", label: "At a time" },
-              { value: "interval", label: "Every interval" },
+              ...(draft.schedule.kept ? [{ value: "kept" as const, label: "Current" }] : []),
+              { value: "fixed_time" as const, label: "At a time" },
+              { value: "interval" as const, label: "Every interval" },
             ]}
             selected={draft.schedule.mode}
             onSelect={(mode) => {
@@ -803,7 +810,12 @@ function TaskForm({
             }}
           />
         </View>
-        {draft.schedule.mode === "fixed_time" ? (
+        {draft.schedule.mode === "kept" && draft.schedule.kept ? (
+          <Text className="border-t border-border-subtle px-4 py-3 text-base text-foreground-muted">
+            {describeSchedule({ schedule: draft.schedule.kept })}. Edit it from the Agents board, or
+            pick another schedule type.
+          </Text>
+        ) : draft.schedule.mode === "fixed_time" ? (
           <>
             <Pressable
               accessibilityRole="button"

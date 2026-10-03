@@ -22,7 +22,10 @@ interface EarlyDesktopSettingsInput {
   readonly readFileString: (path: string) => string;
 }
 
-type EarlyLinuxElectronOptionsInput = EarlyDesktopSettingsInput;
+declare const __T3CODE_DESKTOP_BRAND__: string | undefined;
+const desktopBrand =
+  typeof __T3CODE_DESKTOP_BRAND__ === "undefined" ? "t3" : __T3CODE_DESKTOP_BRAND__;
+type EarlyLinuxElectronOptionsInput = EarlyDesktopSettingsInput & { readonly brand?: string };
 
 export interface EarlyLinuxElectronOptions {
   readonly isDevelopment: boolean;
@@ -31,8 +34,20 @@ export interface EarlyLinuxElectronOptions {
   readonly passwordStore: LinuxPasswordStoreSwitch | null;
 }
 
-export const resolveLinuxDesktopEntryName = (isDevelopment: boolean): string =>
-  isDevelopment ? "com.t3tools.T3Code.Development.desktop" : "com.t3tools.T3Code.desktop";
+export const resolveLinuxDesktopEntryName = (
+  isDevelopment: boolean,
+  brand = desktopBrand,
+): string =>
+  brand === "agents"
+    ? isDevelopment
+      ? "com.jayleaton.t3agents.dev.desktop"
+      : "com.jayleaton.t3agents.desktop"
+    : isDevelopment
+      ? "com.t3tools.T3Code.Development.desktop"
+      : "com.t3tools.T3Code.desktop";
+
+export const resolveLinuxWmClass = (isDevelopment: boolean, brand = desktopBrand): string =>
+  `${brand === "agents" ? "t3agents" : "t3code"}${isDevelopment ? "-dev" : ""}`;
 
 const trimNonEmpty = (value: string | undefined): string | null => {
   const trimmed = value?.trim();
@@ -88,8 +103,8 @@ export function resolveEarlyLinuxElectronOptions(
   const isDevelopment = isDevelopmentEnvironment(input.env);
   return {
     isDevelopment,
-    linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",
-    linuxDesktopEntryName: resolveLinuxDesktopEntryName(isDevelopment),
+    linuxWmClass: resolveLinuxWmClass(isDevelopment, input.brand),
+    linuxDesktopEntryName: resolveLinuxDesktopEntryName(isDevelopment, input.brand),
     passwordStore: resolveLinuxPasswordStoreSwitch({
       preference,
       env: input.env,

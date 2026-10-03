@@ -394,6 +394,10 @@ export function applyServerSettingsPatch(
           ),
         }
       : {}),
+    ...(patch.agentSkills !== undefined ? { agentSkills: patch.agentSkills } : {}),
+    ...(patch.mcpGatewayProfiles !== undefined
+      ? { mcpGatewayProfiles: patch.mcpGatewayProfiles }
+      : {}),
     ...(patch.sourceControlWriterModelSelection !== undefined
       ? { sourceControlWriterModelSelection: patch.sourceControlWriterModelSelection }
       : {}),

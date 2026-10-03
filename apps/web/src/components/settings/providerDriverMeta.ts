@@ -2,6 +2,7 @@ import {
   AcpRegistrySettings,
   AntigravitySettings,
   ClaudeSettings,
+  CommandCodeSettings,
   CodexSettings,
   CursorSettings,
   GrokSettings,
@@ -47,6 +48,12 @@ export interface ProviderEnvironmentFieldDefinition {
 }
 
 const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
+  {
+    value: ProviderDriverKind.make("commandcode"),
+    label: "Command Code",
+    settingsSchema: CommandCodeSettings,
+    badgeLabel: "Early Access",
+  },
   {
     value: ProviderDriverKind.make("codex"),
     label: "Codex",

@@ -1,5 +1,6 @@
 "use client";
 
+import { isAgentsPage, useToggleWorkspaceView } from "./sidebar/mainAppLocation";
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 
@@ -686,6 +687,7 @@ function OpenCommandPaletteDialog(props: {
 }) {
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
+  const toggleWorkspaceView = useToggleWorkspaceView();
   const { clearOpenIntent, openIntent, openOverlayMode, setOpen } = props;
   const [query, setQuery] = useState(openIntent?.kind === "search" ? openIntent.query : "");
   const [linkedThreadSearch, setLinkedThreadSearch] = useState(
@@ -2238,6 +2240,21 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
+  const onAgents = isAgentsPage(pathname);
+  actionItems.push({
+    kind: "action",
+    value: "action:agents",
+    searchTerms: onAgents
+      ? ["Open threads", "switch", "view", "sidebar", "chats"]
+      : ["Open agents", "switch", "view", "board", "profiles", "specialists"],
+    title: onAgents ? "Switch to threads" : "Switch to agents",
+    icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
+    shortcutCommand: "workspace.toggleView",
+    run: async () => {
+      await toggleWorkspaceView(onAgents ? "threads" : "agents");
+    },
+  });
+
   // Target the active thread or draft's project, falling back to the first sidebar group.
   const contextualProjectGroup =
     (contextualProjectRef
@@ -2387,6 +2404,11 @@ function OpenCommandPaletteDialog(props: {
         cwd,
       );
       if (existing) {
+        if (pathname === "/agents" || pathname.startsWith("/agents/")) {
+          await navigate({ to: "/agents" });
+          setOpen(false);
+          return;
+        }
         const latestThread = getLatestThreadForProject(
           threads.filter((thread) => thread.environmentId === existing.environmentId),
           existing.id,
@@ -2444,6 +2466,17 @@ function OpenCommandPaletteDialog(props: {
         return;
       }
 
+      if (pathname === "/agents" || pathname.startsWith("/agents/")) {
+        await navigate({ to: "/agents" });
+        setOpen(false);
+        toastManager.add({
+          type: "success",
+          title: "Project added",
+          description: "Select it when starting your next agent chat.",
+        });
+        return;
+      }
+
       const navigationResult = await settlePromise(() =>
         handleNewThread(scopeProjectRef(input.environmentId, projectId)),
       );
@@ -2461,6 +2494,7 @@ function OpenCommandPaletteDialog(props: {
       setOpen(false);
     },
     [
+      pathname,
       handleNewThread,
       createProject,
       environments,

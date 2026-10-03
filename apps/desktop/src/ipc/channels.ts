@@ -1,3 +1,4 @@
+export const REVEAL_WINDOW_CHANNEL = "desktop:reveal-window";
 export const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
 export const SET_NOTIFICATION_BADGE_CHANNEL = "desktop:set-notification-badge";
 export const PICK_PROJECT_FAVICON_CHANNEL = "desktop:pick-project-favicon";
@@ -24,6 +25,9 @@ export const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 export const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
 export const UPDATE_CHECK_CHANNEL = "desktop:update-check";
 export const GET_APP_BRANDING_CHANNEL = "desktop:get-app-branding";
+export const GET_MCP_GATEWAY_LAUNCH_CONFIG_CHANNEL = "desktop:get-mcp-gateway-launch-config";
+export const GET_MCP_GATEWAY_BRIDGE_TOKEN_CHANNEL = "desktop:get-mcp-gateway-bridge-token";
+export const GET_CLIENT_DEVICE_NAME_CHANNEL = "desktop:get-client-device-name";
 export const GET_SYSTEM_LOCALE_CHANNEL = "desktop:get-system-locale";
 export const GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL = "desktop:get-local-environment-bootstraps";
 export const GET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL = "desktop:get-local-environment-enabled";
@@ -115,6 +119,11 @@ export const MAC_PERMISSION_HELPER_CHANNEL = "desktop:mac-permission-helper";
 
 export const CHECK_SYSTEM_PERMISSION_CHANNEL = "desktop:check-system-permission";
 
+export const CONFIGURE_MANAGED_MCP_GATEWAY_CHANNEL = "desktop:configure-managed-mcp-gateway";
+export const SEND_MANAGED_MCP_GATEWAY_MESSAGE_CHANNEL = "desktop:send-managed-mcp-gateway-message";
+export const CLOSE_MANAGED_MCP_GATEWAY_SESSION_CHANNEL =
+  "desktop:close-managed-mcp-gateway-session";
+export const MANAGED_MCP_GATEWAY_EVENT_CHANNEL = "desktop:managed-mcp-gateway-event";
 export const PREVIEW_RECORDING_INPUT_CHANNEL = "desktop:preview-recording-input";
 
 export const RECEIVE_PROVIDER_AUTH_CALLBACK_CHANNEL = "desktop:receive-provider-auth-callback";

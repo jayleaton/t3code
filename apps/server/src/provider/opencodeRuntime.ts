@@ -510,6 +510,9 @@ export function buildOpenCodePermissionRules(runtimeMode: RuntimeMode): Permissi
     return [
       { permission: "*", pattern: "*", action: "allow" },
       { permission: "external_directory", pattern: "*", action: "allow" },
+      // Unattended full-access must still not run away on repeated identical tool calls.
+      // `ask` would be auto-approved here, so the doom loop guard has to be a deny.
+      { permission: "doom_loop", pattern: "*", action: "deny" },
     ];
   }
 

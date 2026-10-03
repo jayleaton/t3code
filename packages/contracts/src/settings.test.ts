@@ -249,6 +249,52 @@ describe("ClaudeSettings auto-compaction", () => {
   });
 });
 
+describe("ServerSettings MCP gateway profiles", () => {
+  it("preserves optional specializations and allows clearing them", () => {
+    const profile = {
+      profileId: "review",
+      name: "Reviewer",
+      revision: 1,
+      runtimeMode: "read-only",
+      interactionMode: "default",
+      createdAt: "now",
+      updatedAt: "now",
+    };
+    for (const description of [undefined, "Reviews code", ""]) {
+      const value = { ...profile, ...(description !== undefined ? { description } : {}) };
+      expect(decodeServerSettings({ mcpGatewayProfiles: [value] }).mcpGatewayProfiles[0]).toEqual(
+        value,
+      );
+    }
+    expect(() =>
+      decodeServerSettings({ mcpGatewayProfiles: [{ ...profile, description: "x".repeat(281) }] }),
+    ).toThrow();
+  });
+
+  it("stores revisioned server-owned profiles including read-only profiles", () => {
+    const profile = {
+      profileId: "profile-andy",
+      name: "Andy",
+      revision: 3,
+      modelSelection: { instanceId: "codex", model: "gpt-5.6" },
+      reasoningEffort: "high",
+      runtimeMode: "read-only" as const,
+      interactionMode: "default" as const,
+      environmentIds: ["local"],
+      createdAt: "2026-09-04T00:00:00.000Z",
+      updatedAt: "2026-09-04T01:00:00.000Z",
+    };
+
+    expect(decodeServerSettings({ mcpGatewayProfiles: [profile] }).mcpGatewayProfiles).toEqual([
+      profile,
+    ]);
+    expect(decodeServerSettingsPatch({ mcpGatewayProfiles: [profile] }).mcpGatewayProfiles).toEqual(
+      [profile],
+    );
+    expect(DEFAULT_SERVER_SETTINGS.mcpGatewayProfiles).toEqual([]);
+  });
+});
+
 describe("ClientSettings notifications", () => {
   it("requires opt-in when existing settings omit notification preferences", () => {
     expect(decodeClientSettings({}).notificationMode).toBe("off");
@@ -1081,6 +1127,20 @@ it("validates remote device hosts and rejects ambiguous host ids", () => {
     decodeDeviceHostSettings({ deviceHosts: [{ ...host, target: "-oProxyCommand=bad" }] }),
   ).toThrow();
   expect(() => decodeDeviceHostSettings({ deviceHosts: [{ ...host, port: 0 }] })).toThrow();
+});
+
+describe("machine name settings", () => {
+  it("defaults old snapshots to no override and round-trips a custom name", () => {
+    expect(decodeServerSettings({}).environmentLabel).toBeNull();
+    expect(
+      encodeServerSettings(decodeServerSettings({ environmentLabel: "Build laptop" }))
+        .environmentLabel,
+    ).toBe("Build laptop");
+  });
+  it("rejects blank and oversized names", () => {
+    expect(() => decodeServerSettings({ environmentLabel: "   " })).toThrow();
+    expect(() => decodeServerSettings({ environmentLabel: "x".repeat(81) })).toThrow();
+  });
 });
 
 describe("branch naming settings", () => {

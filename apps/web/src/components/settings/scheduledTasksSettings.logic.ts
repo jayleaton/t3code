@@ -3,6 +3,7 @@ import {
   type ProjectId,
   ScheduledTaskId,
   type ScheduledTask,
+  type ScheduledTaskSchedule,
   type ModelSelection,
   type RuntimeMode,
   type ProviderInteractionMode,
@@ -43,7 +44,8 @@ export function validateScheduledTasksSearch(raw: Record<string, unknown>) {
   };
 }
 
-type ScheduleMode = "fixed" | "interval";
+/** "kept" leaves a cron or one-time schedule (set from the Agents board or MCP) unchanged. */
+type ScheduleMode = "fixed" | "interval" | "kept";
 export type WorkspaceMode = "root" | "worktree" | "existing_worktree";
 
 export interface DraftState {
@@ -55,6 +57,7 @@ export interface DraftState {
   readonly intervalMinutes: string;
   readonly timeOfDay: string;
   readonly weekdays: ReadonlySet<number>;
+  readonly keptSchedule: ScheduledTaskSchedule | null;
   readonly projectId: string;
   readonly threadId: string;
   readonly workspaceMode: WorkspaceMode;
@@ -84,11 +87,13 @@ export function taskToDraft(task: ScheduledTask): DraftState {
     title: task.title,
     prompt: task.prompt,
     enabled: task.enabled,
-    scheduleMode: schedule.type === "interval" ? "interval" : "fixed",
+    scheduleMode:
+      schedule.type === "interval" ? "interval" : schedule.type === "fixed_time" ? "fixed" : "kept",
     intervalMinutes:
       schedule.type === "interval" ? String(Math.max(1, schedule.everyMs / 60_000)) : "15",
     timeOfDay: schedule.type === "fixed_time" ? schedule.timeOfDay : "09:00",
     weekdays,
+    keptSchedule: schedule.type === "cron" || schedule.type === "once" ? schedule : null,
     projectId: task.projectId,
     threadId: task.threadId ?? "",
     workspaceMode: task.workspaceStrategy.type,

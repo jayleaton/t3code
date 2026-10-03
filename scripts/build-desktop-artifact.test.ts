@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Tests use Node's glob matcher to verify electron-builder exclusions.
 import * as NodeCrypto from "node:crypto";
 import * as NodePath from "node:path";
+import { createRequire } from "node:module";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -22,6 +23,7 @@ import {
   createStageWorkspaceConfig,
   createStagePatchedDependencies,
   createBuildConfig,
+  resolveDesktopPackageName,
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
@@ -29,6 +31,7 @@ import {
   LINUX_BROWSER_SECRET_EXTRA_RESOURCES,
   LINUX_FILE_EXCLUSIONS,
   MAC_FILE_EXCLUSIONS,
+  MCP_GATEWAY_EXTRA_RESOURCE,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
   InvalidMockUpdateServerPortError,
@@ -92,6 +95,25 @@ import {
   wslRuntimeArchiveStem,
 } from "./build-desktop-artifact.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
+
+it("gives NSIS different default folders for official T3 and T3 Agents", () => {
+  const desktopRequire = createRequire(new URL("../apps/desktop/package.json", import.meta.url));
+  const builderRequire = createRequire(desktopRequire.resolve("electron-builder"));
+  const { AppInfo } = builderRequire("app-builder-lib/out/appInfo.js");
+  const { getWindowsInstallationDirName } = builderRequire(
+    "app-builder-lib/out/targets/targetUtil.js",
+  );
+  const folder = (brand: string, productName: string, appId: string) =>
+    getWindowsInstallationDirName(
+      new AppInfo({
+        metadata: { name: resolveDesktopPackageName(brand), version: "0.0.40" },
+        config: { productName, appId },
+      }),
+      false,
+    );
+  assert.equal(folder("t3", "T3 Code (Nightly)", "com.t3tools.t3code"), "t3code");
+  assert.equal(folder("agents", "T3 Agents", "com.jayleaton.t3agents"), "t3agents");
+});
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 
@@ -378,6 +400,53 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
+  it.effect("keeps fork app identity and updates separate from the official distribution", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "0.0.41-nightly.20260915.1001",
+        true,
+        false,
+        undefined,
+        undefined,
+      );
+      assert.equal(config.appId, "com.jayleaton.t3agents");
+      assert.equal(config.productName, "T3 Agents");
+      assert.equal(config.artifactName, "T3-Agents-${version}-${arch}.${ext}");
+      assert.deepStrictEqual(config.publish, [
+        {
+          provider: "github",
+          owner: "jayleaton",
+          repo: "t3code",
+          releaseType: "prerelease",
+          channel: "nightly",
+        },
+      ]);
+      const signing = resolveMacPasskeySigningConfiguration({
+        T3CODE_DESKTOP_APP_ID: "com.jayleaton.t3agents",
+        T3CODE_APPLE_TEAM_ID: "ABC1234567",
+        T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/fork.provisionprofile",
+        T3CODE_CLERK_PASSKEY_RP_DOMAINS: "clerk.example.com",
+      });
+      assert.include(renderMacPasskeyEntitlements(signing), "ABC1234567.com.jayleaton.t3agents");
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: {
+              T3CODE_DESKTOP_APP_ID: "com.jayleaton.t3agents",
+              T3CODE_DESKTOP_PRODUCT_NAME: "T3 Agents",
+              T3CODE_DESKTOP_BRAND: "agents",
+              T3CODE_DESKTOP_UPDATE_REPOSITORY: "jayleaton/t3code",
+              GITHUB_REPOSITORY: "pingdotgg/t3code",
+            },
+          }),
+        ),
+      ),
+    ),
+  );
+
   it("stages only the desktop main-process externals", () => {
     assert.deepStrictEqual(
       resolveDesktopRuntimeDependencies(
@@ -549,6 +618,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     // forgetting the exclusion leaves the exclusion list untouched, so it still
     // matches. Assert the invariant first, where the failure names the culprit.
     for (const resource of [
+      MCP_GATEWAY_EXTRA_RESOURCE,
       ...WSL_RUNTIME_EXTRA_RESOURCES,
       ...LINUX_BROWSER_SECRET_EXTRA_RESOURCES,
     ]) {
@@ -570,6 +640,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "!apps/desktop/resources/browser-secret/**/*",
       "!apps/desktop/prod-resources/browser-secret",
       "!apps/desktop/prod-resources/browser-secret/**/*",
+      "!packages/mcp-gateway/dist/t3-mcp-gateway.mjs",
       "!apps/desktop/prod-resources/windows-server",
       "!apps/desktop/prod-resources/windows-server/**/*",
       "!apps/desktop/prod-resources/wsl-runtime.tar.gz",
@@ -638,14 +709,19 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual(win.asarUnpack, [WINDOWS_NATIVE_ASAR_UNPACK_GLOB]);
       assert.deepStrictEqual(winWithoutWslRuntime.asar, win.asar);
       assert.deepStrictEqual(winWithoutWslRuntime.asarUnpack, win.asarUnpack);
-      assert.deepStrictEqual(mac.extraResources, DESKTOP_EXTRA_RESOURCES);
+      assert.deepStrictEqual(mac.extraResources, [
+        ...DESKTOP_EXTRA_RESOURCES,
+        MCP_GATEWAY_EXTRA_RESOURCE,
+      ]);
       assert.deepStrictEqual(linux.extraResources, [
         ...DESKTOP_EXTRA_RESOURCES,
+        MCP_GATEWAY_EXTRA_RESOURCE,
         ...LINUX_CAPTURE_EXTRA_RESOURCES,
         { from: "apps/desktop/prod-resources/browser-secret", to: "browser-secret" },
       ]);
       assert.deepStrictEqual(win.extraResources, [
         ...DESKTOP_EXTRA_RESOURCES,
+        MCP_GATEWAY_EXTRA_RESOURCE,
         ...WINDOWS_SERVER_EXTRA_RESOURCES,
         ...WSL_RUNTIME_EXTRA_RESOURCES,
       ]);
@@ -653,6 +729,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       // listing it here would fail the build on a missing source file.
       assert.deepStrictEqual(winWithoutWslRuntime.extraResources, [
         ...DESKTOP_EXTRA_RESOURCES,
+        MCP_GATEWAY_EXTRA_RESOURCE,
         ...WINDOWS_SERVER_EXTRA_RESOURCES,
       ]);
       assert.deepStrictEqual(win.nsis, { differentialPackage: true });
@@ -1172,7 +1249,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
                 Effect.gen(function* () {
                   assert.equal(command._tag, "StandardCommand");
                   if (command._tag !== "StandardCommand") return mockProcess(1);
-                  assert.equal(command.command, "cargo");
+                  assert.match(path.basename(command.command), /^cargo(?:\.exe)?$/i);
                   assert.deepEqual(command.args, [
                     "build",
                     "--locked",
@@ -1200,7 +1277,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
               `${backend}-capture/t3-${backend}-snap-shot`,
             );
             assert.equal(yield* fs.readFileString(installed), `helper-${arch}`);
-            assert.equal((yield* fs.stat(installed)).mode & 0o777, 0o755);
+            if ((yield* HostProcessPlatform) !== "win32") {
+              assert.equal((yield* fs.stat(installed)).mode & 0o777, 0o755);
+            }
             if (backend === "hyprland")
               assert.equal(
                 yield* fs.readFileString(
@@ -1592,8 +1671,12 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
         });
 
+        const path = yield* Path.Path;
         assert.isFalse(
-          commands.some((command) => command.options.env?.ELECTRON_RUN_AS_NODE === "1"),
+          commands.some(
+            (command) =>
+              command.command === path.join(fixture.packagedAppDir, fixture.appExecutableName),
+          ),
         );
         assert.isTrue(
           commands.some(

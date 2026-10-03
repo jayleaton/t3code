@@ -2024,6 +2024,39 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       { concurrency: 1, discard: true },
     );
 
+  /** A parent must be a live thread that is not the child itself or one of its descendants. */
+  const requireValidParentThread = Effect.fn("orchestrationV2.requireValidParentThread")(function* (
+    command: Extract<
+      OrchestrationV2Command,
+      { readonly type: "thread.create" | "thread.metadata.update" }
+    >,
+    parentThreadId: ThreadId,
+  ) {
+    const reject = (cause: string) =>
+      new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause,
+      });
+    const parent = yield* projectionStore.getThread(parentThreadId).pipe(Effect.option);
+    if (Option.isNone(parent) || parent.value.deletedAt !== null) {
+      return yield* reject(`Parent thread ${parentThreadId} does not exist.`);
+    }
+    const visited = new Set<ThreadId>();
+    let ancestor: OrchestrationV2AppThread | undefined = parent.value;
+    while (ancestor !== undefined && !visited.has(ancestor.id)) {
+      if (ancestor.id === command.threadId) {
+        return yield* reject(`Thread ${command.threadId} cannot be its own ancestor.`);
+      }
+      visited.add(ancestor.id);
+      const nextId: ThreadId | null = ancestor.parentThreadId ?? null;
+      ancestor =
+        nextId === null
+          ? undefined
+          : Option.getOrUndefined(yield* projectionStore.getThread(nextId).pipe(Effect.option));
+    }
+  });
+
   const dispatchThreadCreate = Effect.fn("orchestrationV2.dispatch.threadCreate")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "thread.create" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -2035,6 +2068,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       "orchestration_v2.driver": command.modelSelection.instanceId,
     });
 
+    if (command.parentThreadId !== undefined) {
+      yield* requireValidParentThread(command, command.parentThreadId);
+    }
     const now = yield* DateTime.now;
     const emitEvent = emit(events, command);
     const thread: OrchestrationV2AppThread = {
@@ -2042,6 +2078,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       creationSource: command.creationSource,
       id: command.threadId,
       projectId: command.projectId,
+      ...(command.profileSnapshot === undefined
+        ? {}
+        : { profileSnapshot: command.profileSnapshot }),
+      ...(command.parentThreadId === undefined ? {} : { parentThreadId: command.parentThreadId }),
       title: command.title,
       providerInstanceId: command.modelSelection.instanceId,
       modelSelection: command.modelSelection,
@@ -2198,6 +2238,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandType: command.type,
         cause: `Thread ${command.threadId} is deleted.`,
       });
+    }
+    if (command.type === "thread.metadata.update" && command.parentThreadId != null) {
+      yield* requireValidParentThread(command, command.parentThreadId);
     }
     if (
       command.type === "thread.metadata.update" &&
@@ -2659,6 +2702,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 : {}),
             ...(command.branch === undefined ? {} : { branch: command.branch }),
             ...(command.worktreePath === undefined ? {} : { worktreePath: command.worktreePath }),
+            ...(command.parentThreadId === undefined
+              ? {}
+              : { parentThreadId: command.parentThreadId }),
             ...(command.linkedPullRequest === undefined
               ? {}
               : {

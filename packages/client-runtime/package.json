@@ -35,6 +35,10 @@
       "types": "./src/userMessage.ts",
       "default": "./src/userMessage.ts"
     },
+    "./client-focus": {
+      "types": "./src/clientFocus.ts",
+      "default": "./src/clientFocus.ts"
+    },
     "./connection": {
       "types": "./src/connection/index.ts",
       "default": "./src/connection/index.ts"
@@ -86,6 +90,10 @@
     "./rpc": {
       "types": "./src/rpc/index.ts",
       "default": "./src/rpc/index.ts"
+    },
+    "./gateway": {
+      "types": "./src/gateway/index.ts",
+      "default": "./src/gateway/index.ts"
     },
     "./operations": {
       "types": "./src/operations/index.ts",
@@ -186,6 +194,10 @@
     "./state/projects": {
       "types": "./src/state/projects.ts",
       "default": "./src/state/projects.ts"
+    },
+    "./provider-turn-steering": {
+      "types": "./src/providerTurnSteering.ts",
+      "default": "./src/providerTurnSteering.ts"
     },
     "./state/provider-instance-display": {
       "types": "./src/state/providerInstanceDisplay.ts",

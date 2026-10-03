@@ -391,4 +391,38 @@ describe("DesktopLinuxUrlHandler", () => {
       );
     }),
   );
+
+  it.effect("registers a visible Agents launcher and marks its downloaded AppImage", () => {
+    const recorded = emptyRecording();
+    const iconPath = "/home/alice/.local/share/icons/com.jayleaton.t3agents.desktop.png";
+    return Effect.gen(function* () {
+      yield* runRegister(recorded, {
+        iconSource: "/tmp/.mount_T3/resources/icon.png",
+        environment: {
+          displayName: "T3 Agents (Nightly)",
+          linuxDesktopEntryName: "com.jayleaton.t3agents.desktop",
+          linuxWmClass: "t3agents",
+          appImagePath: Option.some("/home/alice/Downloads/T3 Agents.AppImage"),
+        },
+      });
+      const launcher = recorded.files.find((file) =>
+        file.path.endsWith("com.jayleaton.t3agents.desktop"),
+      );
+      assert.isDefined(launcher);
+      assert.include(launcher!.content, `Icon=${iconPath}`);
+      assert.include(launcher!.content, "StartupWMClass=t3agents");
+      assert.notInclude(launcher!.content, "NoDisplay=true");
+      assert.deepEqual(recorded.copies, [
+        { source: "/tmp/.mount_T3/resources/icon.png", destination: iconPath },
+      ]);
+      assert.deepEqual(recorded.commands.find((command) => command.command === "gio")?.args, [
+        "set",
+        "-t",
+        "string",
+        "/home/alice/Downloads/T3 Agents.AppImage",
+        "metadata::custom-icon",
+        `file://${iconPath}`,
+      ]);
+    });
+  });
 });

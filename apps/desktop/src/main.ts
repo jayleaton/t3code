@@ -1,3 +1,4 @@
+import * as ManagedMcpGateway from "./ManagedMcpGateway.ts";
 import * as MacPermissions from "./permissions/MacPermissions.ts";
 for (const stream of [process.stdout, process.stderr]) {
   stream.on("error", (err: NodeJS.ErrnoException) => {
@@ -68,6 +69,8 @@ import * as DesktopWindow from "./window/DesktopWindow.ts";
 import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "./wsl/DesktopWslServerTree.ts";
+import { prepareSharedSafeStorage } from "./app/SharedSafeStorage.ts";
+import { relaunchWithWindowsSharedProfile } from "./app/WindowsSharedProfile.ts";
 
 const desktopEnvironmentLayer = Layer.unwrap(
   Effect.gen(function* () {
@@ -131,6 +134,7 @@ const desktopFoundationLayer = Layer.mergeAll(
   DesktopShutdown.layer,
   DesktopAppSettings.layer,
   DesktopClientSettings.layer,
+  ManagedMcpGateway.layer,
   DesktopConnectionCatalogStore.layer.pipe(Layer.provideMerge(DesktopSavedEnvironments.layer)),
   DesktopAssets.layer,
   DesktopObservability.layer,
@@ -230,4 +234,6 @@ const desktopRuntimeLayer = desktopClerkLayer.pipe(
   Layer.provideMerge(DesktopPreReadyPlatform.layer),
 );
 
-DesktopApp.program.pipe(Effect.provide(desktopRuntimeLayer), NodeRuntime.runMain);
+if (!prepareSharedSafeStorage() && !relaunchWithWindowsSharedProfile()) {
+  DesktopApp.program.pipe(Effect.provide(desktopRuntimeLayer), NodeRuntime.runMain);
+}

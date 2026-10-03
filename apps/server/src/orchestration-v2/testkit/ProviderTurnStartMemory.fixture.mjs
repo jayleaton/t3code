@@ -7,10 +7,11 @@ const mode = process.argv[3];
 const withHandoff = mode.startsWith("handoff");
 const require = NodeModule.createRequire(root + "/apps/server/package.json");
 const load = (name) => import(NodeURL.pathToFileURL(require.resolve("effect/" + name)));
-const [Effect, Layer, FileSystem] = await Promise.all([
+const [Effect, Layer, FileSystem, Path] = await Promise.all([
   load("Effect"),
   load("Layer"),
   load("FileSystem"),
+  load("Path"),
 ]);
 const app = (file) => import(NodeURL.pathToFileURL(root + "/apps/server/src/" + file + ".ts"));
 const [Start, Projection, Run, Sessions, Policy, Id, Sink, Handoff, Git, Project, Auth] =
@@ -46,6 +47,7 @@ const dependencies = Layer.mergeAll(
   Layer.mock(Handoff.ContextHandoffServiceV2)({}),
   Id.layer,
   FileSystem.layerNoop({}),
+  Path.layer,
   Layer.mock(Git.GitWorkflowService)({}),
   Layer.mock(Project.ProjectService)({}),
   Layer.mock(Auth.ProviderAuthService)({}),

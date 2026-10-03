@@ -102,6 +102,7 @@ const EMPTY_DRAFT: DraftState = {
   intervalMinutes: "15",
   timeOfDay: "09:00",
   weekdays: new Set([1, 2, 3, 4, 5]),
+  keptSchedule: null,
   projectId: "",
   threadId: "",
   workspaceMode: "worktree",
@@ -149,6 +150,7 @@ function splitModelKey(value: string): ModelSelection | null {
 }
 
 function scheduleFromDraft(draft: DraftState): ScheduledTaskSchedule {
+  if (draft.scheduleMode === "kept" && draft.keptSchedule !== null) return draft.keptSchedule;
   if (draft.scheduleMode === "interval") {
     const everyMs = Math.round(Number(draft.intervalMinutes) * 60_000);
     return { type: "interval", everyMs };
@@ -162,6 +164,8 @@ function scheduleFromDraft(draft: DraftState): ScheduledTaskSchedule {
 }
 
 export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
+  if (schedule.type === "cron") return `Cron ${schedule.expression} (${schedule.timezone})`;
+  if (schedule.type === "once") return `Once at ${new Date(schedule.runAt).toLocaleString()}`;
   if (schedule.type === "interval") {
     const minutes = schedule.everyMs / 60_000;
     return Number.isInteger(minutes)
@@ -826,16 +830,26 @@ function ScheduledTaskEditorDialog({
                   value={[draft.scheduleMode]}
                   onValueChange={(values) => {
                     const mode = values[0];
-                    if (mode === "fixed" || mode === "interval")
+                    if (
+                      mode === "fixed" ||
+                      mode === "interval" ||
+                      (mode === "kept" && draft.keptSchedule !== null)
+                    )
                       setDraft((current) => ({ ...current, scheduleMode: mode }));
                   }}
                 >
+                  {draft.keptSchedule !== null ? <Toggle value="kept">Current</Toggle> : null}
                   <Toggle value="fixed">At a time</Toggle>
                   <Toggle value="interval">Every interval</Toggle>
                 </ToggleGroup>
               </div>
 
-              {draft.scheduleMode === "fixed" ? (
+              {draft.scheduleMode === "kept" && draft.keptSchedule !== null ? (
+                <p className="text-sm text-muted-foreground">
+                  {scheduleLabel(draft.keptSchedule)}. Edit it from the Agents board, or pick
+                  another schedule type.
+                </p>
+              ) : draft.scheduleMode === "fixed" ? (
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="flex items-center gap-2">
                     <Label htmlFor="scheduled-task-time">Run at</Label>

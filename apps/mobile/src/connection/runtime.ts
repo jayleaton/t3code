@@ -15,6 +15,7 @@ import {
   mobileBackgroundActivityObserverLayer,
   mobileBackgroundActivityReporterLayer,
 } from "./background-activity";
+import { mobileClientFocusLayer } from "./client-focus";
 import { connectionPlatformLayer } from "./platform";
 
 declare const module: { readonly hot?: FoundationHotModule } | undefined;
@@ -35,7 +36,8 @@ type ConnectionLayerSource =
   | typeof runtimeContextLayer
   | typeof connectionPlatformLayer
   | typeof mobileBackgroundActivityObserverLayer
-  | typeof mobileBackgroundActivityReporterLayer;
+  | typeof mobileBackgroundActivityReporterLayer
+  | typeof mobileClientFocusLayer;
 
 const providedClientConnectionLayer = snapshotLoaderLayer.pipe(
   Layer.provideMerge(
@@ -50,9 +52,10 @@ const providedClientConnectionLayer = snapshotLoaderLayer.pipe(
   ),
 );
 
-const connectionLayer = mobileBackgroundActivityReporterLayer.pipe(
-  Layer.provideMerge(providedClientConnectionLayer),
-);
+const connectionLayer = Layer.mergeAll(
+  mobileBackgroundActivityReporterLayer,
+  mobileClientFocusLayer,
+).pipe(Layer.provideMerge(providedClientConnectionLayer));
 
 export const connectionAtomRuntime: Atom.AtomRuntime<
   Layer.Success<ConnectionLayerSource>,

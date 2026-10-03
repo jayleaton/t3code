@@ -23,6 +23,7 @@ export type SettingsPath =
   | "/settings/source-control"
   | "/settings/storage"
   | "/settings/connections"
+  | "/settings/mcp-gateway"
   | "/settings/archived";
 
 /**
@@ -95,6 +96,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/source-control": "Source Control",
   "/settings/storage": "Storage",
   "/settings/connections": "Connections",
+  "/settings/mcp-gateway": "MCP Gateway",
   "/settings/archived": "Archive",
 };
 
@@ -773,7 +775,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Environment icon",
     to: "/settings/connections",
     targetId: "connections-environment",
-    searchTerms: ["machine glyph sidebar mac mini studio laptop desktop server cloud vm"],
+    searchTerms: [
+      "machine name rename icon glyph sidebar mac mini studio laptop desktop server cloud vm",
+    ],
     localBackendManagementOnly: true,
   },
   {
@@ -847,6 +851,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["add pair backend host code ssh config agent tunnel saved t3 connect"],
   },
   {
+    id: "mcp-gateway",
+    title: "MCP Gateway",
+    to: "/settings/mcp-gateway",
+    searchTerms: ["model context protocol voice agent bridge companion"],
+  },
+  {
     id: "load-balancing",
     title: "Load balancing",
     to: "/settings/connections",
@@ -873,6 +883,7 @@ export type SettingsSearchItemId = (typeof SETTINGS_SEARCH_ITEMS)[number]["id"];
 const SEARCH_ITEMS_BY_ID = new Map(SETTINGS_SEARCH_ITEMS.map((item) => [item.id, item] as const));
 
 const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScope | null>> = {
+  "/settings/mcp-gateway": null,
   "/settings/projects": "project",
   "/settings/general": null,
   "/settings/appearance": null,

@@ -23,6 +23,7 @@ import { isModelPickerOpen } from "../modelPickerVisibility";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { resolveThreadRouteRef } from "../threadRoutes";
+import { useThreadShell } from "../state/entities";
 import { cn, isMacPlatform } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { useEnvironmentIdentificationMode, useLegacySidebarEnabled } from "../hooks/useSettings";
@@ -36,7 +37,12 @@ import { useThreadVisitedMigration } from "../hooks/useThreadVisitedMigration";
 import ThreadSidebar from "./Sidebar";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
-import { MainAppLocationTracker } from "./sidebar/mainAppLocation";
+import {
+  isAgentsPage,
+  MainAppLocationTracker,
+  readWorkspaceView,
+  useToggleWorkspaceView,
+} from "./sidebar/mainAppLocation";
 import { useSidebarStageBackdropVariant } from "./SidebarStageBackdrop";
 import { useProjects } from "../state/entities";
 import {
@@ -157,9 +163,11 @@ function SidebarControl() {
   );
 }
 
-// Moves through the app's route history like a browser's back/forward buttons.
+// Moves through the app's route history like a browser's back/forward buttons,
+// and switches between the Agents board and the threads view.
 function NavigationHistoryShortcuts() {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const toggleWorkspaceView = useToggleWorkspaceView();
   const routeThreadRef = useParams({
     strict: false,
     select: (params) => resolveThreadRouteRef(params),
@@ -192,17 +200,23 @@ function NavigationHistoryShortcuts() {
           modelPickerOpen: isModelPickerOpen(),
         },
       });
-      if (command !== "navigation.back" && command !== "navigation.forward") return;
+      if (
+        command !== "navigation.back" &&
+        command !== "navigation.forward" &&
+        command !== "workspace.toggleView"
+      )
+        return;
 
       event.preventDefault();
       event.stopPropagation();
-      if (command === "navigation.back") window.history.back();
+      if (command === "workspace.toggleView") void toggleWorkspaceView();
+      else if (command === "navigation.back") window.history.back();
       else window.history.forward();
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [keybindings, routeThreadRef]);
+  }, [keybindings, routeThreadRef, toggleWorkspaceView]);
 
   return null;
 }
@@ -227,6 +241,13 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const pathname = useLocation({ select: (location) => location.pathname });
   const panelAnimationsSuppressed = usePanelNavigationSuppression(pathname);
   const routePanelAnimationsActive = panelAnimationsActive && !panelAnimationsSuppressed;
+  const routeRef = useParams({ strict: false, select: resolveThreadRouteRef });
+  const routeThread = useThreadShell(routeRef);
+  // An agent chat on the thread route is about to move to the Agents board
+  // (see ThreadRouteView); skip the thread sidebar for that one frame.
+  const isOnAgents =
+    isAgentsPage(pathname) ||
+    (Boolean(routeThread?.profileSnapshot) && readWorkspaceView() === "agents");
   const isOnSettings = pathname === "/settings" || pathname.startsWith("/settings/");
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
   const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
@@ -253,7 +274,10 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
     "--sidebar-width": `${sidebarWidth}px`,
     "--panel-animation-duration": `${panelAnimationDurationMs}ms`,
     ...(isMacosDesktop && !isWindowFullscreen
-      ? { "--workspace-controls-left": MACOS_TRAFFIC_LIGHTS_LEFT_INSET }
+      ? {
+          "--workspace-controls-left": MACOS_TRAFFIC_LIGHTS_LEFT_INSET,
+          "--agents-titlebar-left": MACOS_TRAFFIC_LIGHTS_LEFT_INSET,
+        }
       : {}),
   } as CSSProperties;
 
@@ -299,40 +323,43 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
       <SidebarProvider
         className="h-dvh! min-h-0!"
         data-panel-animations={routePanelAnimationsActive ? "true" : "false"}
+        data-agents-view={isOnAgents ? "true" : undefined}
         defaultOpen
         style={sidebarProviderStyle}
       >
         <ProjectProjectionRetention />
-        <Sidebar
-          side="left"
-          collapsible="offcanvas"
-          data-app-sidebar=""
-          role="navigation"
-          aria-label={isOnSettings ? "Settings" : "Threads"}
-          resizable={{
-            maxWidth: sidebarMaximumWidth,
-            minWidth: THREAD_SIDEBAR_MIN_WIDTH,
-            shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
-              nextWidth <= currentWidth ||
-              wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
-            storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
-            onResize: setSidebarWidth,
-          }}
-        >
-          {isOnSettings ? (
-            <>
-              <SidebarChromeHeader isElectron={isElectron} />
-              <SettingsSidebarNav pathname={pathname} />
-            </>
-          ) : legacySidebarEnabled ? (
-            <LegacyThreadSidebar />
-          ) : (
-            <ThreadSidebar />
-          )}
-          <SidebarRail onDoubleClick={resetSidebarWidth} />
-        </Sidebar>
+        {!isOnAgents && (
+          <Sidebar
+            side="left"
+            collapsible="offcanvas"
+            data-app-sidebar=""
+            role="navigation"
+            aria-label={isOnSettings ? "Settings" : "Threads"}
+            resizable={{
+              maxWidth: sidebarMaximumWidth,
+              minWidth: THREAD_SIDEBAR_MIN_WIDTH,
+              shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
+                nextWidth <= currentWidth ||
+                wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
+              storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
+              onResize: setSidebarWidth,
+            }}
+          >
+            {isOnSettings ? (
+              <>
+                <SidebarChromeHeader isElectron={isElectron} />
+                <SettingsSidebarNav pathname={pathname} />
+              </>
+            ) : legacySidebarEnabled ? (
+              <LegacyThreadSidebar />
+            ) : (
+              <ThreadSidebar />
+            )}
+            <SidebarRail onDoubleClick={resetSidebarWidth} />
+          </Sidebar>
+        )}
         {children}
-        <SidebarControl />
+        {!isOnAgents && <SidebarControl />}
         <NavigationHistoryShortcuts />
         <MainAppLocationTracker />
       </SidebarProvider>

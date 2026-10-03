@@ -15,6 +15,7 @@ import {
 } from "./lib/brand-assets.ts";
 
 const WEB_ASSET_BRANDS = [
+  "agents",
   "development",
   "nightly",
   "production",

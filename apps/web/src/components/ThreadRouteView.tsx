@@ -3,10 +3,12 @@ import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
+import { AgentsThreadView } from "../routes/agents.$environmentId.$threadId";
 import ChatView from "./ChatView";
 import { resolveDraftPromotionNavigationTarget, threadHasStarted } from "./ChatView.logic";
 import { waitForDraftHeroTransition } from "./chat/draftHeroTransition";
 import { SidebarInset } from "./ui/sidebar";
+import { enterThreadsView, readWorkspaceView } from "./sidebar/mainAppLocation";
 import {
   finalizePromotedDraftThreadByRef,
   markPromotedDraftThreadByRef,
@@ -164,6 +166,33 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
     finalizePromotedDraftThreadByRef(target.threadRef);
   }, [draftThread, serverThreadStarted, target]);
 
+  // An agent chat opened here from the Agents view (a notification, the
+  // command palette) moves to the Agents board; from the threads view it stays
+  // put beside the thread sidebar.
+  const agentThreadRef =
+    target.kind === "server" &&
+    serverThreadShell?.profileSnapshot?.profileId &&
+    readWorkspaceView() === "agents"
+      ? target.threadRef
+      : null;
+  const agentEnvironmentId = agentThreadRef?.environmentId ?? null;
+  const agentThreadId = agentThreadRef?.threadId ?? null;
+  const threadsViewHref =
+    target.kind === "server" && serverThreadShell !== null && !agentThreadRef
+      ? `/${target.threadRef.environmentId}/${target.threadRef.threadId}`
+      : null;
+  useEffect(() => {
+    if (threadsViewHref !== null) enterThreadsView(threadsViewHref);
+  }, [threadsViewHref]);
+  useEffect(() => {
+    if (agentEnvironmentId === null || agentThreadId === null) return;
+    void navigate({
+      to: "/agents/$environmentId/$threadId",
+      params: { environmentId: agentEnvironmentId, threadId: agentThreadId },
+      replace: true,
+    });
+  }, [agentEnvironmentId, agentThreadId, navigate]);
+
   let view: React.ReactNode = null;
   if (target.kind === "draft") {
     if (draftSession) {
@@ -179,7 +208,7 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
       );
     }
   } else if (renderState === "ready" || (renderState === "loading" && serverThreadShell !== null)) {
-    view = (
+    view = agentThreadRef ? null : (
       <ChatView
         {...(nextChatViewKey ? { key: nextChatViewKey.key } : {})}
         environmentId={target.threadRef.environmentId}

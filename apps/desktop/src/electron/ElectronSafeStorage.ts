@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as Electron from "electron";
+import { decryptSharedString } from "../app/SharedSafeStorage.ts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 const electronSafeStorageErrorFields = {
@@ -80,8 +81,8 @@ export const make = Effect.gen(function* () {
         catch: (cause) => new ElectronSafeStorageEncryptError({ cause }),
       }),
     decryptString: (value) =>
-      Effect.try({
-        try: () => Electron.safeStorage.decryptString(Buffer.from(value)),
+      Effect.tryPromise({
+        try: () => decryptSharedString(value),
         catch: (cause) => new ElectronSafeStorageDecryptError({ cause }),
       }),
     selectedStorageBackend: Effect.sync(() => {

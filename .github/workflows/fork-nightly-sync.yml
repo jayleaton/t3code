@@ -1,0 +1,53 @@
+name: Fork nightly sync
+
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: fork-nightly-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'jayleaton/t3code' && vars.FORK_RELEASE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_BRANCH: ${{ vars.FORK_RELEASE_BRANCH || 'main' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ vars.FORK_RELEASE_BRANCH || 'main' }}
+          fetch-depth: 0
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+      - name: Open one upstream nightly PR
+        shell: bash
+        run: |
+          set -euo pipefail
+          pending=$(gh pr list --repo "$GITHUB_REPOSITORY" --base "$RELEASE_BRANCH" --state open --json headRefName --jq '[.[] | select(.headRefName | startswith("automation/upstream-nightly/"))] | length')
+          if [[ "$pending" != 0 ]]; then
+            echo "An upstream sync PR is already awaiting review."
+            exit 0
+          fi
+          tag=$(gh api --paginate repos/pingdotgg/t3code/releases --jq '.[] | select(.prerelease and (.draft | not)) | .tag_name' | python3 -c 'import re,sys; tags=[t.strip() for t in sys.stdin if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+\n?",t)]; print(max(tags,key=lambda t:tuple(map(int,re.findall(r"[0-9]+",t)))))')
+          git fetch --no-tags https://github.com/pingdotgg/t3code.git "refs/tags/$tag"
+          upstream=$(git rev-parse 'FETCH_HEAD^{commit}')
+          if git merge-base --is-ancestor "$upstream" HEAD; then
+            echo "The release branch already contains $tag."
+            exit 0
+          fi
+          branch="automation/upstream-nightly/$tag"
+          # The upstream tip is a normal merge PR: fork changes stay on the base.
+          # Never overwrite a branch on which someone may have resolved conflicts.
+          git push origin "$upstream:refs/heads/$branch"
+          printf 'Merge upstream nightly `%s` into `%s`. Resolve any conflicts while retaining the fork features. Merging this PR triggers the signed fork release workflow.\n' "$tag" "$RELEASE_BRANCH" > "$RUNNER_TEMP/sync-body.md"
+          gh pr create --repo "$GITHUB_REPOSITORY" --base "$RELEASE_BRANCH" --head "$branch" --title "chore: sync upstream $tag" --body-file "$RUNNER_TEMP/sync-body.md"

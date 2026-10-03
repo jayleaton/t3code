@@ -21,6 +21,7 @@ import {
   KeyboardIcon,
   Link2Icon,
   PaletteIcon,
+  ServerCogIcon,
   SearchIcon,
   Settings2Icon,
   XIcon,
@@ -88,6 +89,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/source-control": GitBranchIcon,
   "/settings/storage": HardDriveIcon,
   "/settings/connections": Link2Icon,
+  "/settings/mcp-gateway": ServerCogIcon,
   "/settings/archived": ArchiveIcon,
 };
 

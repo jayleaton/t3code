@@ -260,6 +260,10 @@ beforeAll(async () => {
   ({ MessagesTimeline, resolvePreviewAnnotationImage } = await import("./MessagesTimeline"));
 }, 30_000);
 
+// The scroll-settling test clears every global stub; mounted timeline rows
+// still touch `window` through the tooltip's focus handling.
+beforeEach(stubDomGlobals);
+
 const ACTIVE_THREAD_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 const MESSAGE_CREATED_AT = "2026-03-17T19:12:28.000Z";
 
@@ -2236,8 +2240,8 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    // The T3 wordmark replaces the generic tool icon for T3 MCP calls.
-    expect(markup).toContain('viewBox="15.5309 37 94.3941 56.96"');
+    // The fork's brand mark replaces the generic tool icon for T3 MCP calls.
+    expect(markup).toContain('src="/brand-mark.png"');
     expect(markup).toContain("Read a T3 thread");
     expect(markup).not.toContain("mcp__t3-code__t3_thread_read");
   });

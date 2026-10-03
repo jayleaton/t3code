@@ -1,10 +1,4 @@
-import {
-  ChevronsLeftRightEllipsisIcon,
-  EllipsisIcon,
-  PlusIcon,
-  QrCodeIcon,
-  TerminalIcon,
-} from "lucide-react";
+import { ChevronsLeftRightEllipsisIcon, PlusIcon, QrCodeIcon, TerminalIcon } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/unstable/reactivity";
 import {
@@ -68,7 +62,7 @@ import {
 } from "./settingsLayout";
 import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
 import { searchableSetting } from "./settingsSearch";
-import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
+import { EnvironmentActionsMenu } from "./EnvironmentActionsMenu";
 import {
   EnvironmentRow,
   environmentTransportLabel,
@@ -113,7 +107,7 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { QRCodeSvg } from "../ui/qr-code";
 import { Spinner } from "../ui/spinner";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
+import { MenuItem, MenuSeparator } from "../ui/menu";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -1626,34 +1620,20 @@ function SavedBackendListRow({
           {unsupported ? "Client not supported" : enabled ? "Switch off" : "Switch on"}
         </TooltipPopup>
       </Tooltip>
-      <Menu>
-        <MenuTrigger
-          render={
-            <Button
-              type="button"
-              variant="ghost-muted"
-              size="icon-xs"
-              disabled={isRemoving}
-              aria-label={`More actions for ${environment.label}`}
-            />
-          }
-        >
-          <EllipsisIcon className="size-3.5" />
-        </MenuTrigger>
-        <MenuPopup align="end">
-          <EnvironmentIconMenu
-            environmentId={environmentId}
-            serverConfig={environment.serverConfig}
-          />
-          {errorTraceId ? (
-            <MenuItem onClick={() => copyTraceId(errorTraceId)}>Copy trace ID</MenuItem>
-          ) : null}
-          <MenuSeparator />
-          <MenuItem variant="destructive" onClick={() => onRemove(environment)}>
-            {isRemoving ? "Removing…" : "Remove from this device…"}
-          </MenuItem>
-        </MenuPopup>
-      </Menu>
+      <EnvironmentActionsMenu
+        environmentId={environmentId}
+        label={environment.label}
+        serverConfig={environment.serverConfig}
+        disabled={isRemoving}
+      >
+        {errorTraceId ? (
+          <MenuItem onClick={() => copyTraceId(errorTraceId)}>Copy trace ID</MenuItem>
+        ) : null}
+        <MenuSeparator />
+        <MenuItem variant="destructive" onClick={() => onRemove(environment)}>
+          {isRemoving ? "Removing…" : "Remove from this device…"}
+        </MenuItem>
+      </EnvironmentActionsMenu>
     </EnvironmentRow>
   );
 }
@@ -3152,7 +3132,7 @@ export function ConnectionsSettings() {
         {desktopWslState.enabled ? (
           <SettingsRow
             title="WSL only"
-            description="Run only the WSL backend. T3 Code restarts when this changes."
+            description="Run only the WSL backend. T3 Agents restarts when this changes."
             className="bg-muted/20 pl-7 sm:pl-8"
             control={
               <Switch
@@ -3303,26 +3283,11 @@ export function ConnectionsSettings() {
             }
             headerAction={
               primaryEnvironmentId !== null ? (
-                <Menu>
-                  <MenuTrigger
-                    render={
-                      <Button
-                        type="button"
-                        variant="ghost-muted"
-                        size="icon-xs"
-                        aria-label="More actions for this machine"
-                      />
-                    }
-                  >
-                    <EllipsisIcon className="size-3.5" />
-                  </MenuTrigger>
-                  <MenuPopup align="end">
-                    <EnvironmentIconMenu
-                      environmentId={primaryEnvironmentId}
-                      serverConfig={primaryServerConfig}
-                    />
-                  </MenuPopup>
-                </Menu>
+                <EnvironmentActionsMenu
+                  environmentId={primaryEnvironmentId}
+                  label={primaryEnvironment?.label ?? "This machine"}
+                  serverConfig={primaryServerConfig}
+                />
               ) : null
             }
           >
@@ -3432,8 +3397,8 @@ export function ConnectionsSettings() {
                 </AlertDialogTitle>
                 <AlertDialogDescription>
                   {pendingDesktopServerExposureMode === "network-accessible"
-                    ? "Let your other devices connect to T3 Code over the network. Pair devices to give them access. T3 Code will restart."
-                    : "Devices connected over your local network will disconnect. Existing tunnels, such as T3 Connect or Tailscale HTTPS, keep working. T3 Code will restart."}
+                    ? "Let your other devices connect to T3 Agents over the network. Pair devices to give them access. T3 Agents will restart."
+                    : "Devices connected over your local network will disconnect. Existing tunnels, such as T3 Connect or Tailscale HTTPS, keep working. T3 Agents will restart."}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -3487,15 +3452,15 @@ export function ConnectionsSettings() {
                 <AlertDialogDescription>
                   {pendingWslChange?.kind === "disable"
                     ? pendingWslChange.wasWslOnly
-                      ? "T3 Code will restart on the Windows backend. Threads and projects opened against WSL stay safe inside the distro and become available again when you re-enable WSL."
-                      : "The WSL backend will stop. Threads and projects opened against WSL stay safe inside the distro, but they'll be unavailable in T3 Code until you re-enable WSL."
+                      ? "T3 Agents will restart on the Windows backend. Threads and projects opened against WSL stay safe inside the distro and become available again when you re-enable WSL."
+                      : "The WSL backend will stop. Threads and projects opened against WSL stay safe inside the distro, but they'll be unavailable in T3 Agents until you re-enable WSL."
                     : pendingWslChange?.kind === "distro"
-                      ? "T3 Code will restart the WSL backend on the new distro. Sessions still running on the current distro will be interrupted."
+                      ? "T3 Agents will restart the WSL backend on the new distro. Sessions still running on the current distro will be interrupted."
                       : pendingWslChange?.kind === "enable"
                         ? "Run the WSL backend alongside the Windows one, or stop the Windows backend and use only WSL? You can change this later from Settings."
                         : pendingWslChange?.nextValue
-                          ? "T3 Code will restart and start only the WSL backend. Your Windows-side projects won't be accessible until you turn this off again."
-                          : "T3 Code will restart and bring the Windows backend back up alongside WSL."}
+                          ? "T3 Agents will restart and start only the WSL backend. Your Windows-side projects won't be accessible until you turn this off again."
+                          : "T3 Agents will restart and bring the Windows backend back up alongside WSL."}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -3581,7 +3546,7 @@ export function ConnectionsSettings() {
               <AlertDialogHeader>
                 <AlertDialogTitle>Disable Tailscale HTTPS?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  T3 Code will restart the local backend without Tailscale Serve.
+                  T3 Agents will restart the local backend without Tailscale Serve.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -3619,7 +3584,7 @@ export function ConnectionsSettings() {
               <DialogHeader>
                 <DialogTitle>Set up Tailscale HTTPS?</DialogTitle>
                 <DialogDescription>
-                  T3 Code will restart the local backend with Tailscale Serve enabled and ask
+                  T3 Agents will restart the local backend with Tailscale Serve enabled and ask
                   Tailscale to proxy HTTPS traffic to this backend.
                 </DialogDescription>
               </DialogHeader>

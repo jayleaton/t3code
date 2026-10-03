@@ -9,6 +9,7 @@ import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawne
 
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import * as DesktopAssets from "./DesktopAssets.ts";
+import * as NodeURL from "node:url";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import { makeComponentLogger } from "./DesktopObservability.ts";
 
@@ -81,13 +82,15 @@ export function escapeDesktopEntryExecArgument(value: string): string {
   return escapeDesktopEntryString(`"${quoted}"`);
 }
 
-// The AppImage integration entry owns the window identity. This
-// hidden URL-only entry must not compete with it for StartupWMClass matching.
+// The AppImage integration entry owns the window identity, so this URL-only entry stays
+// hidden and must not compete for StartupWMClass matching. T3 Agents builds pass `wmClass`
+// to make it their visible launcher instead.
 export function renderUrlHandlerDesktopEntry(input: {
   readonly displayName: string;
   readonly execTarget: string;
   readonly scheme: string;
   readonly iconPath?: string;
+  readonly wmClass?: string;
 }): string {
   return [
     "[Desktop Entry]",
@@ -96,7 +99,9 @@ export function renderUrlHandlerDesktopEntry(input: {
     `Exec=${escapeDesktopEntryExecArgument(input.execTarget)} %U`,
     ...(input.iconPath === undefined ? [] : [`Icon=${escapeDesktopEntryString(input.iconPath)}`]),
     "Terminal=false",
-    "NoDisplay=true",
+    ...(input.wmClass === undefined
+      ? ["NoDisplay=true"]
+      : [`StartupWMClass=${input.wmClass}`, "Categories=Development;"]),
     "StartupNotify=false",
     `MimeType=x-scheme-handler/${input.scheme};`,
     "",
@@ -124,6 +129,9 @@ export const make = Effect.gen(function* () {
   );
   const iconsDir = environment.path.join(environment.linuxApplicationsDir, "..", "icons");
   const iconPath = environment.path.join(iconsDir, `${environment.linuxDesktopEntryName}.png`);
+  const agentsLauncher =
+    environment.isPackaged &&
+    environment.linuxDesktopEntryName === "com.jayleaton.t3agents.desktop";
 
   const writeDesktopEntry = Effect.gen(function* () {
     // Inside the mounted AppImage, process.execPath points at a transient
@@ -134,6 +142,7 @@ export const make = Effect.gen(function* () {
       execTarget,
       scheme,
       ...(environment.isPackaged ? { iconPath } : {}),
+      ...(agentsLauncher ? { wmClass: environment.linuxWmClass } : {}),
     });
     // Pre-ready setup normally wrote this already. Avoid truncating a valid
     // entry while the portal may be reading it during startup.
@@ -237,6 +246,30 @@ export const make = Effect.gen(function* () {
         logWarning("URL handler icon copy failed", { iconPath, category: error.reason._tag }),
       ),
     );
+
+    // File managers show the AppImage itself with the launcher's icon.
+    const appImagePath = Option.getOrUndefined(environment.appImagePath);
+    if (agentsLauncher && appImagePath !== undefined) {
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const handle = yield* spawner.spawn(
+            ChildProcess.make(
+              "gio",
+              [
+                "set",
+                "-t",
+                "string",
+                appImagePath,
+                "metadata::custom-icon",
+                NodeURL.pathToFileURL(iconPath).href,
+              ],
+              { stdin: "ignore", stdout: "ignore", stderr: "ignore" },
+            ),
+          );
+          yield* handle.exitCode;
+        }),
+      ).pipe(Effect.ignore);
+    }
 
     yield* updateDesktopDatabase.pipe(
       // Some MIME implementations, including GIO, use mimeinfo.cache to verify

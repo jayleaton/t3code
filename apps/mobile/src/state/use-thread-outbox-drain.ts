@@ -1,3 +1,4 @@
+import { supportsProviderTurnSteering } from "@t3tools/client-runtime/provider-turn-steering";
 import { useAtomValue } from "@effect/atom-react";
 import {
   threadRuntimeIsActive,
@@ -1160,6 +1161,15 @@ export function useThreadOutboxDrain(): void {
         (candidate) => candidate.environmentId === nextQueuedMessage.environmentId,
       );
       const shellStatus = shellStatuses.get(nextQueuedMessage.environmentId) ?? "empty";
+      const serverConfig = serverConfigs.get(nextQueuedMessage.environmentId);
+      const supportsSteering = (target: EnvironmentThreadShell | undefined) =>
+        supportsProviderTurnSteering(
+          serverConfig?.providers.find(
+            (provider) =>
+              provider.instanceId ===
+              (target?.runtime?.providerInstanceId ?? target?.modelSelection.instanceId),
+          )?.driver ?? target?.runtime?.providerName,
+        );
       const deliveryAction = resolveThreadOutboxDeliveryAction({
         isCreation: creation !== undefined,
         threadExists: thread !== undefined,
@@ -1171,7 +1181,6 @@ export function useThreadOutboxDrain(): void {
       // a message that will send. Checking earlier would restore a
       // creation whose startTurn already made the thread as a duplicate draft
       // instead of removing it.
-      const serverConfig = serverConfigs.get(nextQueuedMessage.environmentId);
       const dispatchStep = resolveThreadOutboxDispatchStep({
         deliveryAction,
         fileAttachments: nextQueuedMessage.attachments.filter(
@@ -1278,6 +1287,7 @@ export function useThreadOutboxDrain(): void {
             shellStatus,
             environmentConnected: environment?.connectionState === "connected",
             threadBusy: liveThreadBusy,
+            supportsTurnSteering: supportsSteering(liveThread),
           });
           if (liveDeliveryAction !== "send") {
             return true;

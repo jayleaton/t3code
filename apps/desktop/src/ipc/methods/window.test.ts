@@ -25,12 +25,41 @@ import * as ElectronDialog from "../../electron/ElectronDialog.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as DesktopAppSettings from "../../settings/DesktopAppSettings.ts";
 import {
+  revealWindow,
   getLocalEnvironmentBootstraps,
   getWindowFullscreenState,
   pasteAsText,
   pickProjectFavicon,
   probeRemoteEditors,
 } from "./window.ts";
+
+import { resolveMcpGatewayLaunchConfig } from "../../mcpGatewayLaunchConfig.ts";
+
+describe("resolveMcpGatewayLaunchConfig", () => {
+  it("returns an Electron-as-Node command only for packaged desktop builds", () => {
+    assert.isNull(
+      resolveMcpGatewayLaunchConfig({
+        isPackaged: false,
+        executablePath: "/app/T3 Code",
+        resourcesPath: "/app/resources",
+        stateFile: "/custom/t3/mcp-gateway-v3.sqlite",
+      }),
+    );
+    assert.deepEqual(
+      resolveMcpGatewayLaunchConfig({
+        isPackaged: true,
+        executablePath: "/app/T3 Code",
+        resourcesPath: "/app/resources",
+        stateFile: "/custom/t3/mcp-gateway-v3.sqlite",
+      }),
+      {
+        command: "/app/T3 Code",
+        args: ["/app/resources/t3-mcp-gateway.mjs"],
+        env: { ELECTRON_RUN_AS_NODE: "1", T3_MCP_STATE_FILE: "/custom/t3/mcp-gateway-v3.sqlite" },
+      },
+    );
+  });
+});
 
 const readyWslConfig: DesktopBackendManager.DesktopBackendStartConfig = {
   executablePath: "wsl.exe",
@@ -268,6 +297,34 @@ describe("pickProjectFavicon", () => {
   );
 });
 
+describe("revealWindow", () => {
+  it.effect("reveals the requesting renderer's window rather than the focused window", () => {
+    const window = { isDestroyed: () => false } as Electron.BrowserWindow;
+    const sender = {} as Electron.WebContents;
+    const reveal = vi.fn(() => Effect.void);
+    const fromWebContents = vi.fn(() => Effect.succeed(Option.some(window)));
+    return Effect.gen(function* () {
+      yield* revealWindow.handler(undefined, { sender });
+      assert.deepEqual(fromWebContents.mock.calls, [[sender]]);
+      assert.deepEqual(reveal.mock.calls, [[window]]);
+    }).pipe(Effect.provide(Layer.mock(ElectronWindow.ElectronWindow)({ fromWebContents, reveal })));
+  });
+
+  it.effect("fails when the sender has no window", () =>
+    Effect.gen(function* () {
+      const result = yield* revealWindow
+        .handler(undefined, { sender: {} as Electron.WebContents })
+        .pipe(Effect.match({ onFailure: (error) => error._tag, onSuccess: () => "succeeded" }));
+      assert.equal(result, "DesktopWindowUnavailable");
+    }).pipe(
+      Effect.provide(
+        Layer.mock(ElectronWindow.ElectronWindow)({
+          fromWebContents: () => Effect.succeed(Option.none()),
+        }),
+      ),
+    ),
+  );
+});
 it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
   "finds remote editors installed without PATH launchers",
   () =>

@@ -77,7 +77,7 @@ export function clientPresentationMetadata(input: {
 }): AuthClientPresentationMetadata {
   if (input.desktopBridge !== undefined) {
     return {
-      label: "T3 Code Desktop",
+      label: "T3 Agents Desktop",
       deviceType: "desktop",
       os: clientOsFromElectronPlatform(input.desktopBridge.getClientPlatform?.()),
       surface: "desktop",
@@ -86,7 +86,7 @@ export function clientPresentationMetadata(input: {
   }
 
   return {
-    label: "T3 Code Web",
+    label: "T3 Agents Web",
     deviceType: browserDeviceType(input.identity),
     os: browserClientOs(input.identity),
     surface: "web",
@@ -94,4 +94,20 @@ export function clientPresentationMetadata(input: {
     browser: browserFamily(input.identity.userAgent),
     ...(input.appVersion === "0.0.0" ? {} : { appVersion: input.appVersion }),
   };
+}
+
+/** How this client names itself to agents choosing a device to focus. */
+export function clientFocusIdentity(input: {
+  readonly identity: BrowserIdentity;
+  readonly desktopBridge:
+    | Pick<DesktopBridge, "getClientPlatform" | "getClientDeviceName">
+    | undefined;
+}): { readonly label: string; readonly platform: ClientOs } {
+  if (input.desktopBridge !== undefined) {
+    const platform = clientOsFromElectronPlatform(input.desktopBridge.getClientPlatform?.());
+    const deviceName = input.desktopBridge.getClientDeviceName?.()?.trim();
+    return { label: deviceName || `${platform} desktop`, platform };
+  }
+  const platform = browserClientOs(input.identity);
+  return { label: `${browserFamily(input.identity.userAgent)} on ${platform}`, platform };
 }

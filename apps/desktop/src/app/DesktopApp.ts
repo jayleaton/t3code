@@ -1,3 +1,4 @@
+import { usesSharedEncryptionIdentity } from "./SharedSafeStorage.ts";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -132,7 +133,7 @@ const handleFatalStartupError = Effect.fn("desktop.startup.handleFatalStartupErr
   const wasQuitting = yield* Ref.getAndSet(state.quitting, true);
   if (!wasQuitting) {
     yield* electronDialog.showErrorBox(
-      "T3 Code failed to start",
+      "T3 Agents failed to start",
       `Stage: ${stage}\n${message}${detail}`,
     );
   }
@@ -307,7 +308,9 @@ const startup = Effect.gen(function* () {
     });
   }
 
-  yield* appIdentity.configure;
+  // Keep the startup encryption identity until Electron has captured it.
+  // Display branding is applied immediately after ready below.
+  if (!usesSharedEncryptionIdentity()) yield* appIdentity.configure;
   yield* lifecycle.register;
   yield* clerk.configure;
 

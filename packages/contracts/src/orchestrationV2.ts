@@ -39,6 +39,7 @@ import {
   OrchestrationGetTurnDiffResult,
 } from "./checkpointDiff.ts";
 import { ModelSelection } from "./modelSelection.ts";
+import { ThreadProfileSelection, ThreadProfileSnapshot } from "./agentProfile.ts";
 import {
   ThreadLinkedPullRequest,
   ThreadPullRequestLink,
@@ -354,6 +355,12 @@ export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
 export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
 
 export const OrchestrationV2AppThread = Schema.Struct({
+  profileSnapshot: Schema.optional(ThreadProfileSnapshot),
+  /**
+   * Chat that owns this one's work on the Agents board, such as the chat whose agent created it.
+   * Organizational only and same-environment; unlike `lineage` it can be changed or cleared.
+   */
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
@@ -1664,6 +1671,10 @@ export type OrchestrationV2LatestVisibleMessageSummary =
   typeof OrchestrationV2LatestVisibleMessageSummary.Type;
 
 export const OrchestrationV2ThreadShell = Schema.Struct({
+  profileSnapshot: Schema.optional(
+    ThreadProfileSnapshot.mapFields(({ skills: _skills, ...fields }) => fields),
+  ),
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
@@ -2415,6 +2426,9 @@ export type OrchestrationV2StoredEventJson = typeof OrchestrationV2StoredEventJs
 export const OrchestrationV2Command = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("thread.create"),
+    profileSelection: Schema.optional(ThreadProfileSelection),
+    profileSnapshot: Schema.optional(ThreadProfileSnapshot),
+    parentThreadId: Schema.optional(ThreadId),
     ...OrchestrationV2CreationFields,
     commandId: CommandId,
     threadId: ThreadId,
@@ -2555,6 +2569,8 @@ export const OrchestrationV2Command = Schema.Union([
     limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecoveryUpdate)),
     /** Link (object) or unlink (null) a pull request (#8160); absent leaves it unchanged. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+    /** Nest under another chat on the Agents board, or detach with null. */
+    parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.pull-request.link"),
@@ -2865,6 +2881,7 @@ export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalComma
 export type OrchestrationV2ServerCommand = OrchestrationV2Command | OrchestrationV2InternalCommand;
 
 export const ORCHESTRATION_V2_WS_METHODS = {
+  getCommandReceipts: "orchestration.getCommandReceipts",
   dispatchCommand: "orchestration.dispatchCommand",
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
@@ -2926,6 +2943,8 @@ export type OrchestrationV2ThreadLaunchWorkspaceStrategy =
   typeof OrchestrationV2ThreadLaunchWorkspaceStrategy.Type;
 
 export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
+  profileSelection: Schema.optional(ThreadProfileSelection),
+  parentThreadId: Schema.optional(ThreadId),
   commandId: CommandId,
   creationSource: Schema.optional(OrchestrationV2CreationSource),
   threadId: Schema.optional(ThreadId),

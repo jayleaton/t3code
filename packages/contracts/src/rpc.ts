@@ -1,4 +1,14 @@
+import {
+  OrchestrationGetCommandReceiptsInput,
+  OrchestrationGetCommandReceiptsResult,
+} from "./commandReceipts.ts";
 import { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
+
+import {
+  McpGatewayRelayEvent,
+  McpGatewayRelayResponse,
+  McpGatewayUnavailableError,
+} from "./mcpGateway.ts";
 import {
   ChatGptReconnectProfileInput,
   ChatGptReconnectProfile,
@@ -61,6 +71,14 @@ import {
   HostPowerSnapshot,
 } from "./background.ts";
 import {
+  ClientFocusHost,
+  ClientFocusInput,
+  ClientFocusRequest,
+  ClientFocusResult,
+  ClientListResult,
+  ClientNotConnectedError,
+} from "./clientFocus.ts";
+import {
   FilesystemBrowseInput,
   FilesystemBrowseResult,
   FilesystemBrowseError,
@@ -103,6 +121,7 @@ import {
   VcsSwitchRefInput,
   VcsSwitchRefResult,
   GitCommandError,
+  VcsApplyPatchInput,
   VcsCreateRefInput,
   VcsCreateRefResult,
   VcsCreateWorktreeInput,
@@ -385,6 +404,7 @@ export const WS_METHODS = {
   vcsListRefs: "vcs.listRefs",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
+  vcsApplyPatch: "vcs.applyPatch",
   vcsCreateRef: "vcs.createRef",
   vcsSwitchRef: "vcs.switchRef",
   vcsInit: "vcs.init",
@@ -415,6 +435,8 @@ export const WS_METHODS = {
   previewClose: "preview.close",
   previewList: "preview.list",
   previewReportStatus: "preview.reportStatus",
+  mcpGatewayConnect: "mcpGateway.connect",
+  mcpGatewayRespond: "mcpGateway.respond",
   previewAutomationConnect: "previewAutomation.connect",
   previewAutomationRespond: "previewAutomation.respond",
   previewAutomationFocusHost: "previewAutomation.focusHost",
@@ -461,6 +483,9 @@ export const WS_METHODS = {
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
   serverSignalProcess: "server.signalProcess",
   serverReportClientActivity: "server.reportClientActivity",
+  clientsConnectFocus: "clients.connectFocus",
+  clientsList: "clients.list",
+  clientsFocus: "clients.focus",
   serverReportHostPowerState: "server.reportHostPowerState",
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
   serverGetUsageSummary: "server.getUsageSummary",
@@ -706,6 +731,7 @@ const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
 const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
   payload: Schema.Struct({
     patch: ServerSettingsPatch,
+    replicateProfiles: Schema.optional(Schema.Boolean),
     providerInstanceMutation: Schema.optionalKey(ProviderInstanceMutation),
   }),
   success: ServerSettings,
@@ -867,6 +893,25 @@ const WsCloudInstallRelayClientRpc = Rpc.make(WS_METHODS.cloudInstallRelayClient
 const WsServerReportClientActivityRpc = Rpc.make(WS_METHODS.serverReportClientActivity, {
   payload: ClientActivityReportInput,
   error: EnvironmentAuthorizationError,
+});
+
+const WsClientsConnectFocusRpc = Rpc.make(WS_METHODS.clientsConnectFocus, {
+  payload: ClientFocusHost,
+  success: ClientFocusRequest,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const WsClientsListRpc = Rpc.make(WS_METHODS.clientsList, {
+  payload: Schema.Struct({}),
+  success: ClientListResult,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsClientsFocusRpc = Rpc.make(WS_METHODS.clientsFocus, {
+  payload: ClientFocusInput,
+  success: ClientFocusResult,
+  error: Schema.Union([ClientNotConnectedError, EnvironmentAuthorizationError]),
 });
 
 const WsServerReportHostPowerStateRpc = Rpc.make(WS_METHODS.serverReportHostPowerState, {
@@ -1296,6 +1341,11 @@ const WsVcsRemoveWorktreeRpc = Rpc.make(WS_METHODS.vcsRemoveWorktree, {
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
 });
 
+const WsVcsApplyPatchRpc = Rpc.make(WS_METHODS.vcsApplyPatch, {
+  payload: VcsApplyPatchInput,
+  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+});
+
 const WsVcsCreateRefRpc = Rpc.make(WS_METHODS.vcsCreateRef, {
   payload: VcsCreateRefInput,
   success: VcsCreateRefResult,
@@ -1408,6 +1458,17 @@ const WsPreviewReportStatusRpc = Rpc.make(WS_METHODS.previewReportStatus, {
   error: Schema.Union([PreviewError, EnvironmentAuthorizationError]),
 });
 
+const WsMcpGatewayConnectRpc = Rpc.make(WS_METHODS.mcpGatewayConnect, {
+  payload: Schema.Struct({}),
+  success: McpGatewayRelayEvent,
+  error: Schema.Union([McpGatewayUnavailableError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+const WsMcpGatewayRespondRpc = Rpc.make(WS_METHODS.mcpGatewayRespond, {
+  payload: McpGatewayRelayResponse,
+  error: Schema.Union([McpGatewayUnavailableError, EnvironmentAuthorizationError]),
+});
+
 const WsPreviewAutomationConnectRpc = Rpc.make(WS_METHODS.previewAutomationConnect, {
   payload: PreviewAutomationHost,
   success: PreviewAutomationStreamEvent,
@@ -1493,6 +1554,15 @@ const WsSubscribeDeviceStateRpc = Rpc.make(WS_METHODS.subscribeDeviceState, {
   error: EnvironmentAuthorizationError,
   stream: true,
 });
+
+const WsOrchestrationGetCommandReceiptsRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.getCommandReceipts,
+  {
+    payload: OrchestrationGetCommandReceiptsInput,
+    success: OrchestrationGetCommandReceiptsResult,
+    error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
+  },
+);
 
 const WsOrchestrationV2DispatchCommandRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, {
   payload: OrchestrationV2RpcSchemas.dispatchCommand.input,
@@ -1805,6 +1875,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsListRefsRpc,
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,
+  WsVcsApplyPatchRpc,
   WsVcsCreateRefRpc,
   WsVcsSwitchRefRpc,
   WsVcsInitRpc,
@@ -1826,7 +1897,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsPreviewCloseRpc,
   WsPreviewListRpc,
   WsPreviewReportStatusRpc,
+  WsMcpGatewayConnectRpc,
+  WsMcpGatewayRespondRpc,
   WsPreviewAutomationConnectRpc,
+  WsClientsConnectFocusRpc,
+  WsClientsListRpc,
+  WsClientsFocusRpc,
   WsPreviewAutomationRespondRpc,
   WsPreviewAutomationFocusHostRpc,
   WsSubscribePreviewEventsRpc,
@@ -1855,5 +1931,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2LaunchThreadRpc,
   WsOrchestrationV2SubscribeArchivedShellRpc,
   WsOrchestrationV2SubscribeShellRpc,
+  WsOrchestrationGetCommandReceiptsRpc,
   WsOrchestrationV2SubscribeThreadRpc,
 );

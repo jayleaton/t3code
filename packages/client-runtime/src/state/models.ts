@@ -85,6 +85,9 @@ function threadRunStatusIsActive(status: ThreadRuntimeSummary["status"]): boolea
 }
 
 export interface EnvironmentThreadShell {
+  readonly profileSnapshot?: OrchestrationV2ThreadShell["profileSnapshot"];
+  /** Chat this one nests under on the Agents board; null when it stands alone. */
+  readonly parentThreadId: ThreadId | null;
   readonly environmentId: EnvironmentId;
   readonly id: ThreadId;
   readonly projectId: ProjectId;
@@ -270,6 +273,8 @@ export function presentThreadShell(
             startedAt: iso(thread.titleRegeneration.startedAt),
           },
     deletedAt: nullableIso(thread.deletedAt),
+    ...(thread.profileSnapshot === undefined ? {} : { profileSnapshot: thread.profileSnapshot }),
+    parentThreadId: thread.parentThreadId ?? null,
     source: thread,
   };
 }

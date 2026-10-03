@@ -1,4 +1,7 @@
 export const BRAND_ASSET_PATHS = {
+  agentsDesktopIconPng: "assets/agents/icon.png",
+  agentsWindowsIconIco: "assets/agents/windows.ico",
+
   developmentIconComposerProject: "assets/dev/app-icon.icon",
   developmentIosIconPng: "assets/dev/blueprint-ios-1024.png",
   developmentUniversalIconPng: "assets/dev/blueprint-universal-1024.png",
@@ -31,7 +34,7 @@ export const BRAND_ASSET_PATHS = {
   developmentWebAppleTouchIconPng: "assets/dev/blueprint-web-apple-touch-180.png",
 } as const;
 
-export type WebAssetBrand = "development" | "nightly" | "production";
+export type WebAssetBrand = "development" | "nightly" | "production" | "agents";
 
 export const WEB_ASSET_CHANNELS = ["latest", "nightly"] as const;
 
@@ -58,6 +61,12 @@ const WEB_ICON_TARGET_FILENAMES = {
 } as const;
 
 const WEB_ICON_SOURCE_PATHS_BY_BRAND = {
+  agents: {
+    faviconIco: "assets/agents/favicon.ico",
+    favicon16Png: "assets/agents/favicon-16x16.png",
+    favicon32Png: "assets/agents/favicon-32x32.png",
+    appleTouchIconPng: "assets/agents/apple-touch-icon.png",
+  },
   development: {
     faviconIco: BRAND_ASSET_PATHS.developmentWebFaviconIco,
     favicon16Png: BRAND_ASSET_PATHS.developmentWebFavicon16Png,

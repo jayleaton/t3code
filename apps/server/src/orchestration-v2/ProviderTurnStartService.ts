@@ -1,3 +1,6 @@
+import { syncAgentSkillFiles } from "../provider/AgentInstructionFiles.ts";
+import * as Path from "effect/Path";
+import { agentProfilePrompt } from "./AgentProfile.ts";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import {
@@ -88,6 +91,7 @@ export const layer: Layer.Layer<
   | ContextHandoffService.ContextHandoffServiceV2
   | IdAllocator.IdAllocatorV2
   | FileSystem.FileSystem
+  | Path.Path
   | GitWorkflowService.GitWorkflowService
   | ProjectService.ProjectService
   | ProviderAuthService.ProviderAuthService
@@ -102,6 +106,7 @@ export const layer: Layer.Layer<
     const contextHandoffService = yield* ContextHandoffService.ContextHandoffServiceV2;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
     const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
     const projects = yield* ProjectService.ProjectService;
     const providerAuth = yield* ProviderAuthService.ProviderAuthService;
@@ -943,8 +948,23 @@ export const layer: Layer.Layer<
       const routableSubagents = projection.subagents.filter((subagent) =>
         RunExecutionService.canRouteRelatedSubagent(subagent.status),
       );
+      const skillIndex = projection.thread.profileSnapshot?.skills?.length
+        ? yield* syncAgentSkillFiles({
+            cwd:
+              resolvedRuntimePolicy.cwd ??
+              Option.getOrThrow(yield* projects.getById(projection.thread.projectId)).workspaceRoot,
+            threadId: projection.thread.id,
+            skills: projection.thread.profileSnapshot.skills,
+          }).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+          )
+        : "";
       const userText = projectComposerContextForProvider({
-        text: message.text,
+        text: agentProfilePrompt(
+          skillIndex ? `${skillIndex}\n\n${message.text}` : message.text,
+          projection.thread.profileSnapshot,
+        ),
         records: message.context?.records ?? [],
       });
       // Delivered once: this run's provider turn marks the work as told. A

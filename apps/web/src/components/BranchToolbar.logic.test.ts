@@ -15,6 +15,7 @@ import {
   resolveLockedWorkspaceLabel,
   resolveWorkspaceDisplayName,
   resolveLocalCheckoutBranchMismatch,
+  resolveThreadBranchForSend,
   resolvePreviousWorktreeLabel,
   resolvePreviousWorktreeSeed,
   sanitizeNewRefName,
@@ -894,5 +895,58 @@ describe("sanitizeNewRefName", () => {
   it("does not collapse dashes the user typed", () => {
     expect(sanitizeNewRefName("new - branch")).toBe("new---branch");
     expect(sanitizeNewRefName("foo--bar")).toBe("foo--bar");
+  });
+});
+
+describe("resolveThreadBranchForSend", () => {
+  it("records the checkout for a local agent chat with no saved branch", () => {
+    expect(
+      resolveThreadBranchForSend({
+        effectiveEnvMode: "local",
+        activeWorktreePath: null,
+        activeThreadBranch: null,
+        currentGitBranch: "feat/agents",
+      }),
+    ).toBe("feat/agents");
+  });
+  it("follows a local checkout change when sending", () => {
+    expect(
+      resolveThreadBranchForSend({
+        effectiveEnvMode: "local",
+        activeWorktreePath: null,
+        activeThreadBranch: "old",
+        currentGitBranch: "new",
+      }),
+    ).toBe("new");
+  });
+  it("does not replace a new worktree base with the local checkout", () => {
+    expect(
+      resolveThreadBranchForSend({
+        effectiveEnvMode: "worktree",
+        activeWorktreePath: null,
+        activeThreadBranch: "main",
+        currentGitBranch: "unrelated",
+      }),
+    ).toBe("main");
+  });
+  it("does not infer an existing worktree branch from another checkout", () => {
+    expect(
+      resolveThreadBranchForSend({
+        effectiveEnvMode: "local",
+        activeWorktreePath: "/repo/worktree",
+        activeThreadBranch: "feature",
+        currentGitBranch: "main",
+      }),
+    ).toBe("feature");
+  });
+  it("leaves a non-git project without a branch", () => {
+    expect(
+      resolveThreadBranchForSend({
+        effectiveEnvMode: "local",
+        activeWorktreePath: null,
+        activeThreadBranch: null,
+        currentGitBranch: null,
+      }),
+    ).toBeNull();
   });
 });

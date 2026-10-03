@@ -17,6 +17,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  ThreadProfileSnapshot,
   ThreadLinkedPullRequest,
   ThreadPullRequestLink,
   TurnItemId,
@@ -57,6 +58,8 @@ interface LegacyThreadRow {
   readonly auto_settle_disabled_at: string | null;
   readonly pin_order_key: string | null;
   readonly pull_requests_json: string;
+  readonly profile_snapshot_json: string | null;
+  readonly parent_thread_id: string | null;
   readonly linked_pull_request_json: string | null;
   readonly branch_pull_request_json: string | null;
   readonly active_order_key: string | null;
@@ -186,6 +189,8 @@ function nullableDateTime(value: string | null): DateTime.Utc | null {
   return value === null ? null : dateTime(value);
 }
 
+const decodeProfileSnapshot = Schema.decodeUnknownSync(ThreadProfileSnapshot);
+
 function importedThread(row: LegacyThreadRow): OrchestrationV2AppThread {
   const threadId = ThreadId.make(row.thread_id);
   const modelSelection = modelSelectionFor(row);
@@ -203,6 +208,14 @@ function importedThread(row: LegacyThreadRow): OrchestrationV2AppThread {
       ? [...pullRequests, legacyLink]
       : pullRequests;
   return {
+    ...(row.profile_snapshot_json === null
+      ? {}
+      : {
+          profileSnapshot: decodeProfileSnapshot(parseJson(row.profile_snapshot_json)),
+        }),
+    ...(row.parent_thread_id === null
+      ? {}
+      : { parentThreadId: ThreadId.make(row.parent_thread_id) }),
     createdBy: "system",
     creationSource: "server",
     id: threadId,
@@ -446,6 +459,8 @@ const make = Effect.gen(function* () {
       SELECT
         thread.thread_id,
         thread.project_id,
+        thread.profile_snapshot_json,
+        thread.parent_thread_id,
         thread.title,
         thread.model_selection_json,
         thread.runtime_mode,
@@ -550,6 +565,8 @@ const make = Effect.gen(function* () {
       SELECT
         thread.thread_id,
         thread.project_id,
+        thread.profile_snapshot_json,
+        thread.parent_thread_id,
         thread.title,
         thread.model_selection_json,
         thread.runtime_mode,
@@ -627,6 +644,7 @@ const make = Effect.gen(function* () {
               `,
             { discard: true },
           );
+          // Preserve legacy ordinals before the sink normalizes and projects the shell.
           yield* eventSink.write({ events });
           yield* sql`
             INSERT INTO orchestration_v2_legacy_imports (

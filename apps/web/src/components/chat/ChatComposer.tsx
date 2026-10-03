@@ -98,6 +98,7 @@ import {
 } from "./composerMentionDrag";
 import {
   composerFloatingLayerProps,
+  isComposerEventForSurface,
   useComposerMenuProps,
   isInsideCollapsedComposerControls,
   isInsideRestingComposerControlScope,
@@ -5563,6 +5564,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         },
       });
       if (command !== "composer.stash") return;
+      if (
+        !isComposerEventForSurface(
+          document.activeElement,
+          composerFormRef.current?.closest("[data-embedded-chat-composer]") ?? null,
+        )
+      )
+        return;
       // Always claim the shortcut so the browser save dialog never opens,
       // even when the composer is in a state that can't stash.
       event.preventDefault();
