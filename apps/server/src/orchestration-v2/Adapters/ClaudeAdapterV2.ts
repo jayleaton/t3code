@@ -96,7 +96,9 @@ import { expandHomePath } from "../../pathExpansion.ts";
 import {
   claudeSignedOutMessage,
   makeClaudeEnvironment,
+  resolveClaudeHomePath,
 } from "../../provider/Drivers/ClaudeHome.ts";
+import { claudeSessionTranscriptExists } from "../../provider/Drivers/ClaudeSessionTranscript.ts";
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,
   resolveClaudeCatalogContextWindow,
@@ -366,6 +368,15 @@ export interface ClaudeAgentSdkQueryRunnerShape {
   readonly subagentLaunchToolUseId: (
     input: ClaudeAgentSdkSubagentLookupInput,
   ) => Effect.Effect<string | null, ClaudeAgentSdkQueryRunnerError>;
+  /**
+   * Whether the CLI's session storage under `configDir` has a transcript for
+   * `sessionId`, so a reopen can `resume` it. `undefined`, or a runner without
+   * this lookup, means unknown.
+   */
+  readonly sessionTranscriptExists?: (input: {
+    readonly configDir: string;
+    readonly sessionId: string;
+  }) => Effect.Effect<boolean | undefined>;
   readonly assertComplete: Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
 }
 
@@ -768,6 +779,7 @@ export const claudeAgentSdkQueryRunnerLiveLayer: Layer.Layer<
           return toolUseId;
         },
       ),
+      sessionTranscriptExists: claudeSessionTranscriptExists,
       assertComplete: Effect.void,
     });
   }),
@@ -2948,6 +2960,22 @@ export function makeClaudeAdapterV2(
         const steeredTurns = yield* Ref.make(new Set<OrchestrationV2ProviderTurn["id"]>());
         const queryContext = yield* Ref.make<ClaudeLiveQueryContext | null>(null);
         const openedNativeThreads = yield* Ref.make(new Set<string>());
+        // A native id the CLI never created or whose transcript is gone.
+        // Resuming it fails with "No conversation found" on every turn. An
+        // earlier open does not prove the session exists: the SDK opens
+        // before it spawns, so a CLI that never started still counts as opened.
+        const isNativeSessionMissing = Effect.fnUntraced(function* (nativeThreadId: string) {
+          if (queryRunner.sessionTranscriptExists === undefined) return false;
+          const configDir = yield* resolveClaudeHomePath(
+            adapterOptions.settings,
+            adapterOptions.environment,
+          ).pipe(Effect.provideService(Path.Path, adapterOptions.path));
+          const exists = yield* queryRunner.sessionTranscriptExists({
+            configDir,
+            sessionId: nativeThreadId,
+          });
+          return exists === false;
+        });
         const latestPlanByKind = yield* Ref.make(new Map<string, OrchestrationV2PlanArtifact>());
         const planIdsByNativeItem = yield* Ref.make(
           new Map<string, OrchestrationV2PlanArtifact["id"]>(),
@@ -6869,12 +6897,17 @@ export function makeClaudeAdapterV2(
           const openedWithResume = (yield* Ref.get(openedNativeThreads)).has(nativeThreadId);
           // openedNativeThreads is per session instance and is lost when the
           // provider session is idle-released. A prior persisted provider turn
-          // proves the native session already exists, so the query must resume
+          // usually means the native session exists, so the query must resume
           // it; reopening with a fixed session id makes the CLI fail fast with
-          // "Session ID ... is already in use".
+          // "Session ID ... is already in use". Earlier turns do not prove it,
+          // though: turns whose CLI never spawned, and ids minted by a
+          // fresh-session fallback, have no transcript, and resuming them fails
+          // with "No conversation found" forever.
           const hasPersistedProviderTurn = turnInput.providerTurnOrdinal > 1;
           const shouldResume =
-            resumeSessionAt !== undefined || openedWithResume || hasPersistedProviderTurn;
+            resumeSessionAt !== undefined ||
+            ((openedWithResume || hasPersistedProviderTurn) &&
+              !(yield* isNativeSessionMissing(nativeThreadId)));
           const querySession = yield* queryRunner
             .open({
               threadId: turnInput.threadId,
@@ -7413,6 +7446,15 @@ export function makeClaudeAdapterV2(
           ),
           resumeThread: Effect.fn("ClaudeAdapterV2.resumeThread")(
             function* (threadInput: { readonly providerThread: OrchestrationV2ProviderThread }) {
+              // Failing here sends the turn through the fresh-session fallback,
+              // which carries the thread's history over as a summary.
+              const nativeThreadId = yield* getNativeThreadId(threadInput.providerThread);
+              if (yield* isNativeSessionMissing(nativeThreadId)) {
+                return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+                  driver: CLAUDE_PROVIDER,
+                  detail: `Claude has no transcript for session ${nativeThreadId}; it was never created or has been deleted.`,
+                });
+              }
               const updatedAt = yield* DateTime.now;
               return {
                 ...threadInput.providerThread,

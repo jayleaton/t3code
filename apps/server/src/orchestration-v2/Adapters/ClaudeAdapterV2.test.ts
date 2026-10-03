@@ -1777,7 +1777,10 @@ describe("ClaudeAdapterV2 native fork", () => {
 });
 
 describe("ClaudeAdapterV2 native session identity", () => {
-  const openTurnWithOrdinal = (providerTurnOrdinal: number) =>
+  const openTurnWithOrdinal = (
+    providerTurnOrdinal: number,
+    sessionTranscriptExists?: ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerShape["sessionTranscriptExists"],
+  ) =>
     Effect.scoped(
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -1795,6 +1798,7 @@ describe("ClaudeAdapterV2 native session identity", () => {
           path: yield* Path.Path,
           idAllocator,
           queryRunner: {
+            ...(sessionTranscriptExists === undefined ? {} : { sessionTranscriptExists }),
             allocateSessionId: Effect.succeed("native-session-identity"),
             open: (input) =>
               Effect.sync(() => {
@@ -1859,6 +1863,66 @@ describe("ClaudeAdapterV2 native session identity", () => {
         assert.equal(openedQueries[0]?.options.resume, "native-session-identity");
         assert.equal(openedQueries[0]?.options.sessionId, undefined);
       }),
+  );
+
+  it.effect("resumes when the CLI has a transcript for the native session", () =>
+    Effect.gen(function* () {
+      const openedQueries = yield* openTurnWithOrdinal(2, () => Effect.succeed(true));
+      assert.equal(openedQueries[0]?.options.resume, "native-session-identity");
+    }),
+  );
+
+  // Earlier turns whose CLI never spawned (a wrong binary path) still count
+  // as provider turns. Resuming then fails with "No conversation found".
+  it.effect("creates the native session when earlier turns never produced a transcript", () =>
+    Effect.gen(function* () {
+      const openedQueries = yield* openTurnWithOrdinal(2, () => Effect.succeed(false));
+      assert.equal(openedQueries.length, 1);
+      assert.equal(openedQueries[0]?.options.sessionId, "native-session-identity");
+      assert.equal(openedQueries[0]?.options.resume, undefined);
+    }),
+  );
+
+  it.effect("fails resume when the native session has no transcript", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const adapter = ClaudeAdapterV2.makeClaudeAdapterV2({
+          instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+          settings: DEFAULT_CLAUDE_SETTINGS,
+          environment: {},
+          attachmentsDir: yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "t3-claude-v2-missing-session-",
+          }),
+          fileSystem,
+          path: yield* Path.Path,
+          idAllocator: yield* IdAllocator.IdAllocatorV2,
+          queryRunner: {
+            sessionTranscriptExists: ({ sessionId }) =>
+              Effect.succeed(sessionId === "native-session-identity" ? false : undefined),
+            allocateSessionId: Effect.succeed("native-session-identity"),
+            open: () => Effect.die("unused open"),
+            forkSession: () => Effect.die("unused forkSession"),
+            subagentLaunchToolUseId: () => Effect.succeed(null),
+            assertComplete: Effect.void,
+          },
+        });
+        const threadId = ThreadId.make("thread-claude-missing-session");
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-claude-missing"),
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        const resumed = yield* Effect.result(runtime.resumeThread({ providerThread }));
+        assert.equal(resumed._tag, "Failure");
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
   );
 });
 
