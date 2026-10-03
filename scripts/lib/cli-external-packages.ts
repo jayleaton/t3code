@@ -70,6 +70,14 @@ export function isRuntimeExternalCliDependency(id: string): boolean {
 }
 
 /**
+ * Disk-backed packages that bundled server code also imports, at its own version. The T3
+ * Agents tool catalog needs zod 4 while Cursor's SDK needs zod 3: the bundle inlines the
+ * catalog's copy, and the sidecar still ships Cursor's for the external SDK to require from
+ * disk. An external package never resolves through the bundle, so the two cannot meet.
+ */
+const SERVER_INLINED_PACKAGES = ["zod"] as const;
+
+/**
  * True when `id` must stay out of the bundle.
  *
  * This has to be wired to the bundler's `neverBundle`, not just to
@@ -80,7 +88,10 @@ export function isRuntimeExternalCliDependency(id: string): boolean {
  * dependency) stayed external.
  */
 export function isExternalCliDependency(id: string): boolean {
-  return isRuntimeExternalCliDependency(id);
+  return (
+    isRuntimeExternalCliDependency(id) &&
+    !SERVER_INLINED_PACKAGES.some((name) => id === name || id.startsWith(`${name}/`))
+  );
 }
 
 /** True when the CLI bundle should inline `id` rather than leave it external. */
