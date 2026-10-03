@@ -793,7 +793,10 @@ const make = Effect.gen(function* () {
               attachments: input.initialMessage.attachments,
               ...(input.initialMessage.context ? { context: input.initialMessage.context } : {}),
               ...(input.generateTitle === true ? { titleSeed: input.title } : {}),
-              modelSelection: input.modelSelection,
+              // An agent thread keeps the model its profile resolved.
+              ...(input.profileSelection === undefined
+                ? { modelSelection: input.modelSelection }
+                : {}),
               dispatchMode: { type: "defer_start" },
               createdBy: input.createdBy,
               creationSource: input.creationSource,

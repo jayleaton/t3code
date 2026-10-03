@@ -16,6 +16,7 @@ import * as Stream from "effect/Stream";
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ServerConfig from "../../../config.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -69,6 +70,7 @@ it.effect("attributes a launched thread's first message to the calling thread", 
       Layer.mock(Project.ProjectService)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
       NodeServices.layer,
+      ServerSettings.layerTest(),
       ServerConfig.layerTest(process.cwd(), { prefix: "t3-source-link-" }).pipe(
         Layer.provide(NodeServices.layer),
       ),
@@ -134,6 +136,7 @@ it.effect("launches a scratch thread into the Scratch project", () =>
         ensureScratchProject: Effect.succeed({ projectId: scratchProjectId }),
       }),
       NodeServices.layer,
+      ServerSettings.layerTest(),
       ServerConfig.layerTest(process.cwd(), { prefix: "t3-scratch-launch-" }).pipe(
         Layer.provide(NodeServices.layer),
       ),
@@ -158,6 +161,86 @@ it.effect("launches a scratch thread into the Scratch project", () =>
       projectId: caller.projectId,
     });
     expect(rejected.at(-1)?.result).toMatchObject({ code: "invalid_request" });
+    expect(launched).toHaveLength(1);
+  }),
+);
+
+it.effect("launches an agent thread from profileId and rejects unknown agents", () =>
+  Effect.gen(function* () {
+    const sourceThreadId = ThreadId.make("source-thread");
+    const projectId = ProjectId.make("project");
+    const providerInstanceId = ProviderInstanceId.make("codex");
+    const modelSelection = { instanceId: providerInstanceId, model: "gpt-5" };
+    const caller = {
+      id: sourceThreadId,
+      projectId,
+      providerInstanceId,
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      activeRunId: "active-run",
+      archivedAt: null,
+      deletedAt: null,
+    } as OrchestrationV2ThreadShell;
+    const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+    const dependencies = Layer.mergeAll(
+      NodeCrypto.layer,
+      Layer.succeed(McpInvocationContext.McpInvocationContext, {
+        environmentId: EnvironmentId.make("environment"),
+        threadId: sourceThreadId,
+        providerSessionId: "session",
+        providerInstanceId,
+        issuedAt: 0,
+        capabilities: new Set(["orchestration" as const]),
+      }),
+      Layer.mock(ThreadManagement.ThreadManagementService)({
+        getThreadShell: () => Effect.succeed(caller),
+      }),
+      Layer.mock(ThreadLaunch.ThreadLaunchService)({
+        launch: (input) => {
+          launched.push(input);
+          return Effect.succeed({
+            threadId: input.threadId,
+            projection: { thread: { id: input.threadId, projectId, modelSelection }, runs: [] },
+            resumed: false,
+          } as unknown as ThreadLaunch.ThreadLaunchResult);
+        },
+      }),
+      Layer.mock(Project.ProjectService)({}),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
+      NodeServices.layer,
+      ServerSettings.layerTest({
+        mcpGatewayProfiles: [
+          {
+            profileId: "doug",
+            name: "Doug",
+            revision: 3,
+            createdAt: "2026-10-03T00:00:00.000Z",
+            updatedAt: "2026-10-03T00:00:00.000Z",
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
+        ],
+      }),
+      ServerConfig.layerTest(process.cwd(), { prefix: "t3-agent-launch-" }).pipe(
+        Layer.provide(NodeServices.layer),
+      ),
+    );
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(ProjectHandlersLive.pipe(Layer.provide(dependencies))),
+    );
+    const handle = (params: Parameters<typeof toolkit.handle<"t3_thread_launch">>[1]) =>
+      toolkit
+        .handle("t3_thread_launch", params)
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+
+    yield* handle({ title: "Review", profileId: "doug", runtimeMode: "auto", message: "Go" });
+    expect(launched.map((input) => input.profileSelection)).toEqual([
+      { profileId: "doug", revision: 3, overrideFields: ["runtimeMode"] },
+    ]);
+
+    const unknown = yield* handle({ title: "Review", profileId: "nobody", message: "Go" });
+    expect(unknown.at(-1)?.result).toMatchObject({ code: "invalid_request" });
     expect(launched).toHaveLength(1);
   }),
 );

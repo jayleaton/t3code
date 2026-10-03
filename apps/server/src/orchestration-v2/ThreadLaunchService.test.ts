@@ -1297,6 +1297,44 @@ it.effect("shows the fetch diagnosis when preparing a worktree from origin fails
   }).pipe(Effect.provide(harness.layer));
 });
 
+it.effect("launches an agent thread whose first run keeps the agent's model", () =>
+  Effect.gen(function* () {
+    const agentModel = { instanceId: modelSelection.instanceId, model: "agent-model" };
+    const harness = makeHarness({
+      serverSettings: {
+        mcpGatewayProfiles: [
+          {
+            profileId: "doug",
+            name: "Doug",
+            revision: 1,
+            createdAt: "2026-10-03T00:00:00.000Z",
+            updatedAt: "2026-10-03T00:00:00.000Z",
+            systemPrompt: "You are Doug.",
+            modelSelection: agentModel,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
+        ],
+      },
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const launched = yield* launches.launch({
+        ...launchInput({
+          command: "command:launch:agent",
+          thread: "thread:launch:agent",
+          message: "Review the change",
+        }),
+        profileSelection: { profileId: "doug", revision: 1, overrideFields: [] },
+      });
+      assert.equal(launched.projection.thread.profileSnapshot?.profileId, "doug");
+      assert.equal(launched.projection.thread.profileSnapshot?.systemPrompt, "You are Doug.");
+      assert.deepEqual(launched.projection.thread.modelSelection, agentModel);
+      assert.deepEqual(launched.projection.runs[0]?.modelSelection, agentModel);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
 it.effect("holds a message sent while a message-less launch is still binding its worktree", () =>
   Effect.gen(function* () {
     const allowWorktree = yield* Deferred.make<void>();

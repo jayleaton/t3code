@@ -2,9 +2,36 @@ import {
   type McpGatewayProfile,
   type AgentSkill,
   type ServerProvider,
+  type ThreadProfileSelection,
   type ThreadProfileSnapshot,
   OrchestrationDispatchCommandError,
 } from "@t3tools/contracts";
+
+/**
+ * Selects an agent's current revision for a new thread. Fields the caller set
+ * explicitly stay thread overrides; everything else follows the agent.
+ * Returns undefined when no agent has this id.
+ */
+export function agentProfileSelection(
+  profiles: ReadonlyArray<McpGatewayProfile>,
+  profileId: string,
+  overrides: {
+    readonly modelSelection?: boolean;
+    readonly reasoningEffort?: boolean;
+    readonly runtimeMode?: boolean;
+    readonly interactionMode?: boolean;
+  },
+): ThreadProfileSelection | undefined {
+  const profile = profiles.find((candidate) => candidate.profileId === profileId);
+  if (profile === undefined) return undefined;
+  return {
+    profileId,
+    revision: profile.revision,
+    overrideFields: (
+      ["modelSelection", "reasoningEffort", "runtimeMode", "interactionMode"] as const
+    ).filter((field) => overrides[field] === true),
+  };
+}
 
 export function resolveThreadCreateProfile<
   T extends {

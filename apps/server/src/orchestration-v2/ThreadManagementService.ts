@@ -607,7 +607,7 @@ const make = Effect.gen(function* () {
         return result;
       }
       if (command.type === "message.dispatch") return yield* dispatchMessage(command);
-      if (command.type !== "thread.create") {
+      if (command.type !== "thread.create" && command.type !== "delegated_task.request") {
         return yield* orchestrator.dispatch(command);
       }
       // Only the server resolves profile snapshots; a caller-supplied one is dropped.

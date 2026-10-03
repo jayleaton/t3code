@@ -1,11 +1,20 @@
-import { MessageId, ThreadId, OrchestratorMcpFailure, ProjectId } from "@t3tools/contracts";
+import {
+  MessageId,
+  OrchestrationDispatchCommandError,
+  OrchestratorMcpFailure,
+  ProjectId,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as ThreadMessageIntake from "../../../orchestration-v2/ThreadMessageIntake.ts";
 import * as Claims from "../../../orchestration-v2/AttachmentClaims.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
+import { resolveMcpProfileSelection } from "../../agentProfileSelection.ts";
 import { newCommandId, readCaller, readMutationCaller, unavailable } from "../../threadAccess.ts";
 import { ProjectToolkit } from "./tools.ts";
 
@@ -18,6 +27,17 @@ function projectFailure(error: Project.ProjectServiceError) {
         ? "The workspace is already registered to a project."
         : "The project is not empty; force=true is required to delete it.";
   return new OrchestratorMcpFailure({ code: "invalid_request", message });
+}
+
+const isDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
+
+/** The agent-profile reason behind a rejected thread create, if that is what failed. */
+function profileRejection(cause: unknown): string | undefined {
+  for (let depth = 0; depth < 6 && typeof cause === "object" && cause !== null; depth++) {
+    if (isDispatchCommandError(cause)) return cause.message;
+    cause = (cause as { cause?: unknown }).cause;
+  }
+  return undefined;
 }
 
 const access = Effect.gen(function* () {
@@ -77,7 +97,20 @@ export const ProjectHandlersLive = ProjectToolkit.toLayer({
               ),
             )).projectId
           : (input.projectId ?? caller.projectId);
+      const profile =
+        input.profileId === undefined
+          ? undefined
+          : yield* resolveMcpProfileSelection(
+              yield* ServerSettings.ServerSettingsService,
+              input.profileId,
+              {
+                modelSelection: input.modelSelection !== undefined,
+                runtimeMode: input.runtimeMode !== undefined,
+                interactionMode: input.interactionMode !== undefined,
+              },
+            );
       const result = yield* ThreadMessageIntake.launchThread({
+        ...(profile === undefined ? {} : { profileSelection: profile.selection }),
         commandId,
         threadId,
         projectId,
@@ -99,11 +132,18 @@ export const ProjectHandlersLive = ProjectToolkit.toLayer({
         createdBy: "agent",
         creationSource: "mcp",
       }).pipe(
-        Effect.mapError((error) =>
-          error._tag === "AttachmentClaimError"
-            ? new OrchestratorMcpFailure({ code: "orchestration_error", message: error.message })
-            : unavailable(),
-        ),
+        Effect.mapError((error) => {
+          if (error._tag === "AttachmentClaimError")
+            return new OrchestratorMcpFailure({
+              code: "orchestration_error",
+              message: error.message,
+            });
+          // A stale, read-only, or unroutable agent is rejected at create; say why.
+          const rejection = profile === undefined ? undefined : profileRejection(error.cause);
+          return rejection === undefined
+            ? unavailable()
+            : new OrchestratorMcpFailure({ code: "invalid_request", message: rejection });
+        }),
       );
       const thread = result.projection.thread;
       const run = result.projection.runs.find((run) => run.userMessageId === messageId);
