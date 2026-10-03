@@ -171,51 +171,6 @@ function record(input: unknown): Record<string, unknown> {
   return input as Record<string, unknown>;
 }
 
-function gatewayArtifactRecord(value: unknown): Readonly<Record<string, unknown>> | undefined {
-  const artifact = record(value);
-  const artifactId = typeof artifact.artifactId === "string" ? artifact.artifactId : undefined;
-  const kind =
-    artifact.kind === "attachment" || artifact.kind === "workspace-file"
-      ? artifact.kind
-      : undefined;
-  const sourceId = typeof artifact.sourceId === "string" ? artifact.sourceId : undefined;
-  const availability =
-    artifact.availability === "available" ||
-    artifact.availability === "unavailable" ||
-    artifact.availability === "deleted"
-      ? artifact.availability
-      : undefined;
-  if (
-    artifactId === undefined ||
-    kind === undefined ||
-    sourceId === undefined ||
-    availability === undefined
-  ) {
-    return undefined;
-  }
-  const path = typeof artifact.path === "string" ? artifact.path : undefined;
-  if (
-    path !== undefined &&
-    (path.startsWith("/") ||
-      path.startsWith("\\") ||
-      /^[a-z]:[\\/]/i.test(path) ||
-      path.split(/[\\/]/).includes(".."))
-  ) {
-    return undefined;
-  }
-  return {
-    artifactId,
-    kind,
-    sourceId,
-    availability,
-    ...(typeof artifact.name === "string" ? { name: artifact.name.slice(0, 512) } : {}),
-    ...(path === undefined ? {} : { path }),
-    ...(typeof artifact.mimeType === "string" ? { mimeType: artifact.mimeType.slice(0, 255) } : {}),
-    ...(typeof artifact.sizeBytes === "number" ? { sizeBytes: artifact.sizeBytes } : {}),
-    ...(typeof artifact.createdAt === "string" ? { createdAt: artifact.createdAt } : {}),
-  };
-}
-
 function requiredString(input: Record<string, unknown>, key: string): string {
   const value = input[key];
   if (typeof value !== "string" || value.trim() === "") {
@@ -840,7 +795,36 @@ export function resolveQuestionAnswers(
   return Object.fromEntries(resolved);
 }
 
+function approvalAction(requestId: string, requestKind: string, detail: string | undefined) {
+  return {
+    approvalActionId: requestId,
+    requestKind,
+    detail: detail ?? "Approval requested",
+    risk: requestKind === "file-read" ? "low" : "high",
+    reversible: requestKind !== "command",
+    requiresDestructiveConfirmation: requestKind === "command" || requestKind === "file-change",
+    modifiableFields: ["decision"],
+  };
+}
+
 function approvalPlan(thread: Record<string, unknown>) {
+  const threadId = typeof thread.id === "string" ? thread.id : "unknown";
+  // V2 runtimes list pending approvals directly; older runtimes only expose activities.
+  if (Array.isArray(thread.pendingApprovals)) {
+    const actions = thread.pendingApprovals.flatMap((candidate) => {
+      if (typeof candidate !== "object" || candidate === null) return [];
+      const approval = candidate as Record<string, unknown>;
+      if (typeof approval.requestId !== "string") return [];
+      return [
+        approvalAction(
+          approval.requestId,
+          typeof approval.requestKind === "string" ? approval.requestKind : "command",
+          typeof approval.detail === "string" ? approval.detail : undefined,
+        ),
+      ];
+    });
+    return { approvalPlanId: `plan-${threadId}`, revision: 0, actions };
+  }
   const pending = new Map<string, Record<string, unknown>>();
   const activities = (Array.isArray(thread.activities) ? thread.activities : []).toSorted(
     (left, right) => {
@@ -867,16 +851,14 @@ function approvalPlan(thread: Record<string, unknown>) {
     if (typeof activity.sequence === "number") revision = Math.max(revision, activity.sequence);
     if (requestId === undefined) continue;
     if (activity.kind === "approval.requested") {
-      const requestKind = typeof payload.requestKind === "string" ? payload.requestKind : "command";
-      pending.set(requestId, {
-        approvalActionId: requestId,
-        requestKind,
-        detail: typeof payload.detail === "string" ? payload.detail : "Approval requested",
-        risk: requestKind === "file-read" ? "low" : "high",
-        reversible: requestKind !== "command",
-        requiresDestructiveConfirmation: requestKind === "command" || requestKind === "file-change",
-        modifiableFields: ["decision"],
-      });
+      pending.set(
+        requestId,
+        approvalAction(
+          requestId,
+          typeof payload.requestKind === "string" ? payload.requestKind : "command",
+          typeof payload.detail === "string" ? payload.detail : undefined,
+        ),
+      );
     } else if (activity.kind === "approval.resolved") {
       pending.delete(requestId);
     } else if (
@@ -886,28 +868,11 @@ function approvalPlan(thread: Record<string, unknown>) {
       pending.delete(requestId);
     }
   }
-  const threadId = typeof thread.id === "string" ? thread.id : "unknown";
   return {
     approvalPlanId: `plan-${threadId}`,
     revision,
     actions: [...pending.values()],
   };
-}
-
-function requiredStringArray(input: Record<string, unknown>, key: string): ReadonlyArray<string> {
-  const value = input[key];
-  if (
-    !Array.isArray(value) ||
-    value.length === 0 ||
-    value.some((item) => typeof item !== "string" || item.trim() === "")
-  ) {
-    throw new GatewayError({
-      code: "invalid_input",
-      message: `${key} must be a non-empty array of strings.`,
-      retryable: false,
-    });
-  }
-  return value as ReadonlyArray<string>;
 }
 
 function pullRequestRef(input: Record<string, unknown>) {
@@ -1576,11 +1541,6 @@ export async function callGatewayTool(
         snapshotAt: "runtime",
       };
     }
-    case "t3_get_approval_plan": {
-      const environmentId = environmentWithScope(context, input, "approval");
-      const thread = await context.port.getThread(environmentId, requiredString(input, "threadId"));
-      return approvalPlan(thread);
-    }
     case "t3_get_messages": {
       const environmentId = environmentWithScope(context, input, "read");
       const thread = await context.port.getThread(environmentId, requiredString(input, "threadId"));
@@ -1590,29 +1550,6 @@ export async function callGatewayTool(
       return {
         items: messages.slice(-limit),
         snapshotAt: typeof thread.updatedAt === "string" ? thread.updatedAt : "runtime",
-      };
-    }
-    case "t3_get_thread_history": {
-      const environmentId = environmentWithScope(context, input, "read");
-      const thread = await context.port.getThread(environmentId, requiredString(input, "threadId"));
-      const afterSequence =
-        typeof input.afterSequence === "number" ? Math.max(0, Math.trunc(input.afterSequence)) : 0;
-      const requestedLimit = typeof input.limit === "number" ? input.limit : 200;
-      const limit = Math.max(1, Math.min(500, Math.trunc(requestedLimit)));
-      const activities = (Array.isArray(thread.activities) ? thread.activities : [])
-        .filter(
-          (activity): activity is Record<string, unknown> =>
-            typeof activity === "object" &&
-            activity !== null &&
-            !Array.isArray(activity) &&
-            typeof (activity as Record<string, unknown>).sequence === "number" &&
-            ((activity as Record<string, unknown>).sequence as number) > afterSequence,
-        )
-        .slice(0, limit);
-      const lastSequence = activities.at(-1)?.sequence;
-      return {
-        items: activities,
-        ...(typeof lastSequence === "number" ? { nextCursor: String(lastSequence) } : {}),
       };
     }
     case "t3_get_operation_history": {
@@ -1633,75 +1570,6 @@ export async function callGatewayTool(
         ...(items.at(-1) === undefined ? {} : { nextCursor: String(items.at(-1)?.sequence) }),
         hasMore: items.length === limit,
       };
-    }
-    case "t3_list_artifacts": {
-      const environmentId = environmentWithScope(context, input, "artifact");
-      const thread = await context.port.getThread(environmentId, requiredString(input, "threadId"));
-      const items = (Array.isArray(thread.artifacts) ? thread.artifacts : [])
-        .slice(0, 2_000)
-        .flatMap((artifact) => {
-          try {
-            const projected = gatewayArtifactRecord(artifact);
-            return projected === undefined ? [] : [projected];
-          } catch {
-            return [];
-          }
-        });
-      return { items };
-    }
-    case "t3_get_artifact": {
-      const environmentId = environmentWithScope(context, input, "artifact");
-      const threadId = requiredString(input, "threadId");
-      const artifactId = requiredString(input, "artifactId");
-      const thread = await context.port.getThread(environmentId, threadId);
-      const artifact = (Array.isArray(thread.artifacts) ? thread.artifacts : [])
-        .slice(0, 2_000)
-        .flatMap((candidate) => {
-          try {
-            const projected = gatewayArtifactRecord(candidate);
-            return projected === undefined ? [] : [projected];
-          } catch {
-            return [];
-          }
-        })
-        .find((candidate) => candidate.artifactId === artifactId);
-      if (artifact === undefined) {
-        throw new GatewayError({
-          code: "invalid_input",
-          message: `Artifact ${artifactId} does not belong to thread ${threadId}.`,
-          retryable: false,
-          environmentId,
-        });
-      }
-      if (artifact.availability !== "available") {
-        throw new GatewayError({
-          code: "invalid_input",
-          message: `Artifact ${artifactId} is ${String(artifact.availability)}.`,
-          retryable: false,
-          environmentId,
-        });
-      }
-      if (artifact.kind === "attachment" && typeof artifact.sourceId === "string") {
-        const download = await context.port.createAssetUrl(environmentId, {
-          _tag: "attachment",
-          attachmentId: artifactId,
-        });
-        return { ...artifact, environmentId, threadId, download };
-      }
-      if (artifact.kind === "workspace-file" && typeof artifact.path === "string") {
-        const download = await context.port.createAssetUrl(environmentId, {
-          _tag: "workspace-file",
-          threadId,
-          path: artifact.path,
-        });
-        return { ...artifact, environmentId, threadId, download };
-      }
-      throw new GatewayError({
-        code: "invalid_input",
-        message: `Unsupported artifact record ${artifactId}.`,
-        retryable: false,
-        environmentId,
-      });
     }
     case "t3_get_pr": {
       const environmentId = environmentWithScope(context, input, "review");
@@ -1726,124 +1594,6 @@ export async function callGatewayTool(
           (thread as Record<string, unknown>).isResolved !== true,
       );
       return { items, unresolvedCount: items.length };
-    }
-    case "t3_modify_actions": {
-      const environmentId = environmentWithScope(context, input, "approval");
-      const idempotencyKey = requiredIdempotencyKey(input);
-      const threadId = requiredString(input, "threadId");
-      const requestedRevision = Number(input.planRevision);
-      const modifications = Array.isArray(input.modifications) ? input.modifications : [];
-      const execute = requireOperationPort(context);
-      const authoritativeRequestId = scopedIdFor(
-        "approval-plan",
-        environmentId,
-        threadId,
-        idempotencyKey,
-      );
-      const legacyRequestId = idFor("approval-plan", idempotencyKey);
-      return withIdempotency(
-        context,
-        `${environmentId}::${threadId}::${idFor("approval-plan", idempotencyKey)}`,
-        idempotencyCommandPayload("approval.modify", input),
-        (prepared) => {
-          const dispatch = prepared ?? {
-            payload: { threadId, planRevision: requestedRevision, modifications },
-            requestId: authoritativeRequestId,
-          };
-          if (
-            dispatch.requestId !== authoritativeRequestId &&
-            dispatch.requestId !== legacyRequestId
-          ) {
-            throw new GatewayError({
-              code: "idempotency_conflict",
-              message: "This approval request has no recoverable authoritative command identity.",
-              retryable: false,
-              environmentId,
-              requestId: authoritativeRequestId,
-            });
-          }
-          return execute({
-            environmentId,
-            operation: "approval.modify",
-            payload: dispatch.payload,
-            requestId: dispatch.requestId,
-          });
-        },
-        async () => {
-          const thread = await context.port.getThread(environmentId, threadId);
-          const plan = approvalPlan(thread);
-          if (!Number.isInteger(requestedRevision) || requestedRevision !== plan.revision) {
-            throw new GatewayError({
-              code: "stale_plan",
-              message: `Approval plan changed from revision ${String(input.planRevision)} to ${plan.revision}.`,
-              retryable: false,
-              environmentId,
-              details: { approvalPlanId: plan.approvalPlanId, currentRevision: plan.revision },
-            });
-          }
-          if (modifications.length === 0) {
-            throw new GatewayError({
-              code: "invalid_input",
-              message: "modifications cannot be empty.",
-              retryable: false,
-              environmentId,
-            });
-          }
-          for (const modification of modifications) {
-            if (
-              typeof modification !== "object" ||
-              modification === null ||
-              Array.isArray(modification)
-            ) {
-              throw new GatewayError({
-                code: "invalid_input",
-                message: "Each modification must identify one pending action.",
-                retryable: false,
-                environmentId,
-              });
-            }
-            const value = modification as Record<string, unknown>;
-            const action = plan.actions.find(
-              (candidate) => candidate.approvalActionId === value.actionId,
-            );
-            const fields = record(value.fields);
-            if (
-              action === undefined ||
-              fields === undefined ||
-              Object.keys(fields).some(
-                (field) =>
-                  !(
-                    Array.isArray(action.modifiableFields) &&
-                    action.modifiableFields.includes(field)
-                  ),
-              )
-            ) {
-              throw new GatewayError({
-                code: "invalid_input",
-                message: `Action ${String(value.actionId)} contains fields that are not modifiable.`,
-                retryable: false,
-                environmentId,
-              });
-            }
-            if (
-              action.requiresDestructiveConfirmation === true &&
-              (fields.decision === "accept" || fields.decision === "acceptForSession") &&
-              input.confirmDestructive !== true
-            ) {
-              throw new GatewayError({
-                code: "destructive_confirmation_required",
-                message: `Action ${String(value.actionId)} requires confirmDestructive: true.`,
-                retryable: false,
-                environmentId,
-              });
-            }
-          }
-          return {
-            payload: { threadId, planRevision: requestedRevision, modifications },
-            requestId: authoritativeRequestId,
-          };
-        },
-      );
     }
     case "t3_replay_events": {
       const events = requireEventStore(context);
@@ -2672,120 +2422,6 @@ export async function callGatewayTool(
             });
           }
           return { requestId: authoritativeRequestId };
-        },
-      );
-    }
-    case "t3_approve_actions":
-    case "t3_reject_actions": {
-      const environmentId = environmentWithScope(context, input, "approval");
-      const threadId = requiredString(input, "threadId");
-      const idempotencyKey = requiredIdempotencyKey(input);
-      const actionIds = requiredStringArray(input, "actionIds");
-      const requestedRevision = Number(input.planRevision);
-      const decision: GatewayApprovalDecision =
-        name === "t3_approve_actions" ? "accept" : "decline";
-      const authoritativeRequestId = scopedIdFor(
-        "approval-plan",
-        environmentId,
-        threadId,
-        idempotencyKey,
-      );
-      const legacyRequestId = idFor("approval-plan", idempotencyKey);
-      return withIdempotency(
-        context,
-        `${environmentId}::${threadId}::${idFor("approval-plan", idempotencyKey)}`,
-        idempotencyCommandPayload(`approval.respond.${decision}`, input),
-        async (prepared) => {
-          if (context.port.respondToApprovals === undefined) {
-            throw new GatewayError({
-              code: "not_configured",
-              message: "The connected runtime does not support atomic grouped approvals.",
-              retryable: false,
-              environmentId,
-            });
-          }
-          const dispatch = prepared ?? {
-            approvalPlanId: `plan-${threadId}`,
-            revision: requestedRevision,
-            actionIds,
-            decision,
-            pending: 0,
-            requestId: authoritativeRequestId,
-          };
-          if (
-            dispatch.requestId !== authoritativeRequestId &&
-            dispatch.requestId !== legacyRequestId
-          ) {
-            throw new GatewayError({
-              code: "idempotency_conflict",
-              message: "This approval request has no recoverable authoritative command identity.",
-              retryable: false,
-              environmentId,
-              requestId: authoritativeRequestId,
-            });
-          }
-          const receipt = await context.port.respondToApprovals({
-            environmentId,
-            threadId,
-            responses: dispatch.actionIds.map((approvalRequestId) => ({
-              approvalRequestId,
-              decision: dispatch.decision,
-            })),
-            expectedRevision: dispatch.revision,
-            requestId: dispatch.requestId,
-          });
-          return {
-            approvalPlanId: dispatch.approvalPlanId,
-            revision: dispatch.revision,
-            approved: dispatch.decision === "accept" ? dispatch.actionIds.length : 0,
-            rejected: dispatch.decision === "decline" ? dispatch.actionIds.length : 0,
-            pending: dispatch.pending,
-            receipt,
-          };
-        },
-        async () => {
-          const thread = await context.port.getThread(environmentId, threadId);
-          const plan = approvalPlan(thread);
-          if (!Number.isInteger(requestedRevision) || requestedRevision !== plan.revision) {
-            throw new GatewayError({
-              code: "stale_plan",
-              message: `Approval plan changed from revision ${String(input.planRevision)} to ${plan.revision}.`,
-              retryable: false,
-              environmentId,
-              details: { approvalPlanId: plan.approvalPlanId, currentRevision: plan.revision },
-            });
-          }
-          const selected = plan.actions.filter((action) =>
-            actionIds.includes(action.approvalActionId as string),
-          );
-          if (selected.length !== actionIds.length) {
-            throw new GatewayError({
-              code: "invalid_input",
-              message: "One or more approval action IDs are not pending in this plan.",
-              retryable: false,
-              environmentId,
-            });
-          }
-          if (
-            name === "t3_approve_actions" &&
-            input.confirmDestructive !== true &&
-            selected.some((action) => action.requiresDestructiveConfirmation === true)
-          ) {
-            throw new GatewayError({
-              code: "destructive_confirmation_required",
-              message: "One or more selected actions require confirmDestructive: true.",
-              retryable: false,
-              environmentId,
-            });
-          }
-          return {
-            approvalPlanId: plan.approvalPlanId,
-            revision: plan.revision,
-            actionIds: selected.map((action) => action.approvalActionId as string),
-            decision,
-            pending: plan.actions.length - selected.length,
-            requestId: authoritativeRequestId,
-          };
         },
       );
     }

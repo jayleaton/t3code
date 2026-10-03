@@ -8,6 +8,7 @@ import {
   type ServerProvider,
   type OrchestrationV2Command,
   NodeId,
+  ProviderSessionId,
   RuntimeRequestId,
   TurnItemId,
 } from "@t3tools/contracts";
@@ -622,6 +623,58 @@ describe("gateway pending questions", () => {
             options: [{ label: "Staging", description: "Safe first", value: "staging" }],
           },
         ],
+      },
+    ]);
+  });
+
+  it("projects a pending approval with the prompt the composer shows", () => {
+    const requestId = RuntimeRequestId.make("approval-1");
+    const nodeId = NodeId.make("approval-node");
+    const projected = gatewayThreadProjection({
+      ...v2Projection,
+      runtimeRequests: [
+        {
+          id: requestId,
+          nodeId,
+          providerTurnId: null,
+          nativeRequestRef: null,
+          kind: "command",
+          status: "pending",
+          responseCapability: { type: "live", providerSessionId: ProviderSessionId.make("s") },
+          createdAt: v2Now,
+          resolvedAt: null,
+        },
+      ],
+      turnItems: [
+        {
+          id: TurnItemId.make("approval-item"),
+          threadId: v2Projection.thread.id,
+          runId: null,
+          nodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 0,
+          status: "running",
+          title: null,
+          startedAt: v2Now,
+          completedAt: null,
+          updatedAt: v2Now,
+          type: "approval_request",
+          requestId,
+          requestKind: "command",
+          prompt: "rm -rf build",
+        },
+      ],
+    });
+    expect(projected.hasPendingApprovals).toBe(true);
+    expect(projected.pendingApprovals).toEqual([
+      {
+        requestId: "approval-1",
+        requestKind: "command",
+        createdAt: DateTime.formatIso(v2Now),
+        detail: "rm -rf build",
       },
     ]);
   });

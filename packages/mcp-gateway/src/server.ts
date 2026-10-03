@@ -355,10 +355,6 @@ const TOOL_SPECS = {
       ...optionalRequestContext,
     },
   ],
-  t3_get_thread_history: [
-    "Read replayable progress events after a sequence cursor.",
-    { environmentId, threadId, ...page, ...optionalRequestContext },
-  ],
   t3_get_operation_history: [
     "Read durable operation events after a sequence cursor.",
     { environmentId, threadId: threadId.optional(), ...page, ...optionalRequestContext },
@@ -371,19 +367,6 @@ const TOOL_SPECS = {
       untilStatuses: z.array(executionState).min(1).optional(),
       afterSequence: z.number().int().min(0).optional(),
       timeoutMs: z.number().int().min(250).max(120_000).optional(),
-      ...optionalRequestContext,
-    },
-  ],
-  t3_list_artifacts: [
-    "List durable artifacts for one chat.",
-    { environmentId, threadId, ...optionalRequestContext },
-  ],
-  t3_get_artifact: [
-    "Get a short-lived URL for one authorized artifact.",
-    {
-      environmentId,
-      threadId,
-      artifactId: z.string().trim().min(1),
       ...optionalRequestContext,
     },
   ],
@@ -477,53 +460,6 @@ const TOOL_SPECS = {
       approvalRequestId: z.string().trim().min(1),
       decision: z.enum(["accept", "acceptForSession", "decline", "cancel"]),
       confirmDestructive: z.boolean().optional(),
-      idempotencyKey,
-      correlationId: optionalRequestContext.correlationId,
-    },
-  ],
-  t3_get_approval_plan: [
-    "Read the current grouped approval plan.",
-    { environmentId, threadId, ...optionalRequestContext },
-  ],
-  t3_approve_actions: [
-    "Atomically approve selected actions from one plan revision.",
-    {
-      environmentId,
-      threadId,
-      actionIds: z.array(z.string().trim().min(1)).min(1),
-      planRevision: z.number().int().min(0),
-      confirmDestructive: z.boolean().optional(),
-      idempotencyKey,
-      correlationId: optionalRequestContext.correlationId,
-    },
-  ],
-  t3_reject_actions: [
-    "Atomically reject selected actions from one plan revision.",
-    {
-      environmentId,
-      threadId,
-      actionIds: z.array(z.string().trim().min(1)).min(1),
-      planRevision: z.number().int().min(0),
-      idempotencyKey,
-      correlationId: optionalRequestContext.correlationId,
-    },
-  ],
-  t3_modify_actions: [
-    "Modify allowed fields on selected approval actions.",
-    {
-      environmentId,
-      threadId,
-      modifications: z
-        .array(
-          z
-            .object({
-              actionId: z.string().trim().min(1),
-              fields: z.record(z.string(), z.unknown()),
-            })
-            .strict(),
-        )
-        .min(1),
-      planRevision: z.number().int().min(0),
       idempotencyKey,
       correlationId: optionalRequestContext.correlationId,
     },

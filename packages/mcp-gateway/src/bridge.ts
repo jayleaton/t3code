@@ -431,8 +431,6 @@ export function createBridgeRuntimePort(input: {
       getThread: (environmentId, threadId) => invoke("getThread", [environmentId, threadId]),
       hasThreadMessage: (environmentId, threadId, messageId) =>
         invoke("hasThreadMessage", [environmentId, threadId, messageId]),
-      createAssetUrl: (environmentId, resource) =>
-        invoke("createAssetUrl", [environmentId, resource]),
       getPullRequest: (environmentId, ref) => invoke("getPullRequest", [environmentId, ref]),
       getPullRequestActivity: (environmentId, ref) =>
         invoke("getPullRequestActivity", [environmentId, ref]),
@@ -441,7 +439,6 @@ export function createBridgeRuntimePort(input: {
       createThread: (request) => invoke("createThread", [request]),
       sendMessage: (request) => invoke("sendMessage", [request]),
       controlThread: (request) => invoke("controlThread", [request]),
-      respondToApprovals: (request) => invoke("respondToApprovals", [request]),
       respondToApproval: (request) => invoke("respondToApproval", [request]),
       respondToUserInput: (request) => invoke("respondToUserInput", [request]),
       executeOperation: (request) => invoke("executeOperation", [request]),
