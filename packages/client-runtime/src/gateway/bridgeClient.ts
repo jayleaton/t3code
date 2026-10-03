@@ -28,7 +28,10 @@ export interface GatewayBridgeSocket {
   close(): void;
 }
 
-const METHODS = new Set<keyof GatewayRuntimePort>([
+/** Runtime port methods a gateway or T3 server may invoke on a connected app. */
+export const GATEWAY_PORT_METHODS: ReadonlySet<keyof GatewayRuntimePort> = new Set<
+  keyof GatewayRuntimePort
+>([
   "openThread",
   "openAgents",
   "listDevices",
@@ -232,7 +235,7 @@ export function connectGatewayBridge(input: {
             typeof candidate.id !== "number" ||
             !Number.isInteger(candidate.id) ||
             typeof candidate.method !== "string" ||
-            !METHODS.has(candidate.method as keyof GatewayRuntimePort) ||
+            !GATEWAY_PORT_METHODS.has(candidate.method as keyof GatewayRuntimePort) ||
             !Array.isArray(candidate.args)
           ) {
             throw new Error("Invalid gateway bridge request.");

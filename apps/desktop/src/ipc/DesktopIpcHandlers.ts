@@ -91,8 +91,6 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handleSync(getMcpGatewayBridgeToken);
   yield* ipc.handleSync(getMcpGatewayLaunchConfig);
   yield* ipc.handle(McpGatewayIpc.configureManagedMcpGateway);
-  yield* ipc.handle(McpGatewayIpc.sendManagedMcpGatewayMessage);
-  yield* ipc.handle(McpGatewayIpc.closeManagedMcpGatewaySession);
   yield* ipc.handleSync(getSystemLocale);
   yield* ipc.handleSync(getWindowFullscreenState);
   yield* ipc.handleSync(getLocalEnvironmentBootstraps);

@@ -3484,10 +3484,10 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.previewReportStatus, previewManager.reportStatus(input), {
             "rpc.aggregate": "preview",
           }),
-        [WS_METHODS.mcpGatewayConnect]: () =>
+        [WS_METHODS.mcpGatewayConnect]: (input) =>
           observeRpcStream(
             WS_METHODS.mcpGatewayConnect,
-            mcpGatewayBroker.connect(currentSessionId),
+            mcpGatewayBroker.connect(currentSessionId, input.grants),
             { "rpc.aggregate": "mcp-gateway" },
           ),
         [WS_METHODS.mcpGatewayRespond]: (input) =>

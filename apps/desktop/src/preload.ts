@@ -1,4 +1,3 @@
-import type { McpGatewayDesktopEvent } from "@t3tools/contracts";
 import type {
   DesktopBridge,
   DesktopPreviewPointerEvent,
@@ -78,16 +77,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   },
   configureManagedMcpGateway: (input) =>
     ipcRenderer.invoke(IpcChannels.CONFIGURE_MANAGED_MCP_GATEWAY_CHANNEL, input),
-  sendManagedMcpGatewayMessage: (input) =>
-    ipcRenderer.invoke(IpcChannels.SEND_MANAGED_MCP_GATEWAY_MESSAGE_CHANNEL, input),
-  closeManagedMcpGatewaySession: (sessionId) =>
-    ipcRenderer.invoke(IpcChannels.CLOSE_MANAGED_MCP_GATEWAY_SESSION_CHANNEL, sessionId),
-  onManagedMcpGatewayEvent: (listener) => {
-    const handler = (_event: Electron.IpcRendererEvent, value: McpGatewayDesktopEvent) =>
-      listener(value);
-    ipcRenderer.on(IpcChannels.MANAGED_MCP_GATEWAY_EVENT_CHANNEL, handler);
-    return () => ipcRenderer.removeListener(IpcChannels.MANAGED_MCP_GATEWAY_EVENT_CHANNEL, handler);
-  },
   getMcpGatewayBridgeToken: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_MCP_GATEWAY_BRIDGE_TOKEN_CHANNEL);
     return typeof result === "string" ? result : null;

@@ -1,8 +1,8 @@
 import {
   connectGatewayBridge,
-  connectManagedGatewayRelays,
   createGatewayRuntimeEventSourceFromContext,
   createGatewayRuntimePortFromContext,
+  serveGatewayPortRelays,
 } from "@t3tools/client-runtime/gateway";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/unstable/reactivity";
@@ -121,29 +121,27 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
       if (stopped || bridge !== null) return;
       const value = AsyncResult.value(appAtomRegistry.get(connectionAtomRuntime));
       if (Option.isNone(value)) return;
+      const port = createGatewayRuntimePortFromContext(
+        value.value,
+        (environmentId, threadId) =>
+          openDesktopGatewayThread(router, window.desktopBridge, environmentId, threadId),
+        () => openDesktopGatewayAgents(router, window.desktopBridge),
+      );
       bridge = connectGatewayBridge({
-        port: createGatewayRuntimePortFromContext(
-          value.value,
-          (environmentId, threadId) =>
-            openDesktopGatewayThread(router, window.desktopBridge, environmentId, threadId),
-          () => openDesktopGatewayAgents(router, window.desktopBridge),
-        ),
+        port,
         events: createGatewayRuntimeEventSourceFromContext(value.value),
         grants: configuration.grants,
         token: configuration.token,
         url: `ws://127.0.0.1:${configuration.port}`,
         onState: (state) => {
           publishMcpGatewayStatus(state);
-          if (state === "running" && !stopRelays && window.desktopBridge) {
-            stopRelays = connectManagedGatewayRelays(
-              value.value,
-              window.desktopBridge,
-              Object.keys(configuration.grants),
-              () => {
-                console.error("MCP gateway relay failed");
-                publishMcpGatewayStatus("degraded");
-              },
-            );
+          // Agents in granted environments' chats reach the other granted environments
+          // through this app, under the same grants as the gateway.
+          if (state === "running" && !stopRelays) {
+            stopRelays = serveGatewayPortRelays(value.value, port, configuration.grants, () => {
+              console.error("MCP gateway relay failed");
+              publishMcpGatewayStatus("degraded");
+            });
           } else if (state === "degraded" || state === "disabled") {
             stopRelays?.();
             stopRelays = undefined;

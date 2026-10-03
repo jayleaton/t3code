@@ -6,7 +6,6 @@ import * as StorageCleanup from "./storageCleanup.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as McpGatewayBroker from "./mcp/McpGatewayBroker.ts";
 import * as LocalGatewayPort from "./mcp/agents/LocalGatewayPort.ts";
-import * as McpGatewayHttpServer from "./mcp/McpGatewayHttpServer.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeHttp from "node:http";
 
@@ -653,7 +652,6 @@ const makeRoutesLayer = Layer.mergeAll(
     // Fork: T3 Agents tools run against this server's own RPC API.
     Layer.provide(LocalGatewayPort.layer),
   ),
-  McpGatewayHttpServer.layer,
   // Last, so no route layer can replace the server's one TracerDisabledWhen.
   untracedRequestsLayer,
 ).pipe(

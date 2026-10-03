@@ -688,15 +688,10 @@ export function failure(error: unknown, context: ReturnType<typeof requestContex
 export type GatewayToolName = keyof typeof TOOL_SPECS;
 
 /**
- * Tools that need the gateway's own state or several environments: environment listing and
- * health, events and webhooks, operation history, waiting on events, cross-environment handoff,
- * and opening UI on the host. Every other tool acts on exactly one environment, so its
- * environment's T3 server can run it.
+ * Tools that read the gateway's own event store or bridge health. Every other tool runs
+ * anywhere with a runtime port, including inside a T3 server's `t3-code` MCP.
  */
-export const ROUTER_TOOLS: ReadonlySet<string> = new Set([
-  "t3_list_environments",
-  "t3_get_environment_status",
-  "t3_get_environment_health",
+export const GATEWAY_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "t3_get_gateway_health",
   "t3_get_operation_history",
   "t3_wait_for_thread_status",
@@ -709,9 +704,6 @@ export const ROUTER_TOOLS: ReadonlySet<string> = new Set([
   "t3_rotate_webhook_secret",
   "t3_delete_webhook",
   "t3_list_webhooks",
-  "t3_handoff_thread",
-  "t3_open_thread",
-  "t3_open_agents",
 ]);
 
 /** Runs one tool by its public name (aliases included) and wraps the result in the v3 envelope. */
@@ -737,6 +729,18 @@ export async function runGatewayTool(
  * JSON Schema for a tool's input. With `environmentDefault`, `environmentId` becomes optional:
  * a T3 server hosting the tools fills in its own environment.
  */
+/** True when the tool acts on one environment that callers must name. */
+export function requiresEnvironment(name: string): boolean {
+  const environment = (TOOL_SPECS as Record<string, ToolSpec>)[name]?.[1].environmentId as
+    | z.ZodType
+    | undefined;
+  return environment !== undefined && !environment.safeParse(undefined).success;
+}
+
+/**
+ * The tool's input JSON schema. With `environmentDefault`, a required environmentId becomes
+ * optional for callers that run on an environment of their own.
+ */
 export function toolInputJsonSchema(
   name: string,
   options: { readonly environmentDefault?: boolean } = {},
@@ -744,12 +748,11 @@ export function toolInputJsonSchema(
   const spec = (TOOL_SPECS as Record<string, ToolSpec>)[name];
   if (spec === undefined) throw new Error(`Unknown gateway tool ${name}.`);
   const shape = spec[1];
-  const environment = shape.environmentId as z.ZodType | undefined;
   const input =
-    options.environmentDefault === true && environment !== undefined
+    options.environmentDefault === true && requiresEnvironment(name)
       ? {
           ...shape,
-          environmentId: environment
+          environmentId: (shape.environmentId as z.ZodType)
             .optional()
             .describe(
               "Environment to act on. Omit to use the machine this chat runs on; pass another environment's ID to act there through your connected T3 app.",

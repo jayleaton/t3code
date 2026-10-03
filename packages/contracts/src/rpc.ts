@@ -5,6 +5,7 @@ import {
 import { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 
 import {
+  McpGatewayConnectInput,
   McpGatewayRelayEvent,
   McpGatewayRelayResponse,
   McpGatewayUnavailableError,
@@ -1459,7 +1460,7 @@ const WsPreviewReportStatusRpc = Rpc.make(WS_METHODS.previewReportStatus, {
 });
 
 const WsMcpGatewayConnectRpc = Rpc.make(WS_METHODS.mcpGatewayConnect, {
-  payload: Schema.Struct({}),
+  payload: McpGatewayConnectInput,
   success: McpGatewayRelayEvent,
   error: Schema.Union([McpGatewayUnavailableError, EnvironmentAuthorizationError]),
   stream: true,

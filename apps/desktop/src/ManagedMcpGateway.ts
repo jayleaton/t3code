@@ -7,7 +7,6 @@ import * as Semaphore from "effect/Semaphore";
 import * as Electron from "electron";
 import * as DesktopEnvironment from "./app/DesktopEnvironment.ts";
 import { resolveMcpGatewayLaunchConfig } from "./mcpGatewayLaunchConfig.ts";
-import { MANAGED_MCP_GATEWAY_EVENT_CHANNEL } from "./ipc/channels.ts";
 
 export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
@@ -49,19 +48,14 @@ export const make = Effect.gen(function* () {
           if (launch === null || input.token.length < 16) throw new Error("Gateway unavailable.");
           const sender = Electron.webContents.fromId(ownerId);
           if (!sender || sender.isDestroyed()) throw new Error("Gateway window closed.");
-          const host = await createManagedGatewayHost(
-            {
-              ...launch,
-              env: {
-                ...launch.env,
-                T3_MCP_BRIDGE_TOKEN: input.token,
-                T3_MCP_BRIDGE_PORT: String(input.port),
-              },
+          const host = await createManagedGatewayHost({
+            ...launch,
+            env: {
+              ...launch.env,
+              T3_MCP_BRIDGE_TOKEN: input.token,
+              T3_MCP_BRIDGE_PORT: String(input.port),
             },
-            (event) => {
-              if (!sender.isDestroyed()) sender.send(MANAGED_MCP_GATEWAY_EVENT_CHANNEL, event);
-            },
-          );
+          });
           if (sender.isDestroyed()) {
             await host.close();
             return;
@@ -74,16 +68,6 @@ export const make = Effect.gen(function* () {
           unwatch.set(ownerId, () => sender.removeListener("destroyed", onDestroyed));
         }),
       ),
-    send: (ownerId: number, sessionId: string, message: unknown) =>
-      attempt(async () => {
-        const host = hosts.get(ownerId);
-        if (!host) throw new Error("Gateway disabled.");
-        await host.send(sessionId, message);
-      }),
-    closeSession: (ownerId: number, sessionId: string) =>
-      attempt(async () => {
-        await hosts.get(ownerId)?.closeSession(sessionId);
-      }),
   };
 });
 

@@ -293,7 +293,6 @@ it.effect.each(["ready", "missing-mod", "mcp-failure"])(
         providerSessionId: "test-session",
         providerInstanceId: ProviderInstanceId.make("one"),
         endpoint: "http://127.0.0.1:43123/mcp",
-        gatewayEndpoint: "http://127.0.0.1:43123/mcp/gateway",
         authorizationHeader: "Bearer test-only",
         browserToolsAvailable: false,
       });
@@ -311,7 +310,8 @@ it.effect.each(["ready", "missing-mod", "mcp-failure"])(
       );
       const calls = yield* h.calls;
       assert.include(calls[0]!.args, "--mod");
-      assert.include(calls[0]!.mcpServers, "/mcp/gateway");
+      assert.include(calls[0]!.mcpServers, "127.0.0.1:43123/mcp");
+      assert.notInclude(calls[0]!.mcpServers, "t3-gateway");
       assert.include(calls[0]!.modSource, "t3_mcp_ready");
     }).pipe(Effect.provide(layer), Effect.scoped),
 );

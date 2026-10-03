@@ -5,7 +5,6 @@ import { z } from "zod";
 import { failure, requestContext, runGatewayTool, TOOL_SPECS } from "./catalog.ts";
 import type { GatewayRuntimePort } from "./port.ts";
 import {
-  gatewayCaller,
   type GatewayGrantSource,
   type GatewayProfileSource,
   type GatewayToolContext,
@@ -152,7 +151,7 @@ export function createMcpGateway(input: {
     server.registerTool(
       name,
       { description, inputSchema: z.strictObject(inputSchema) },
-      async (rawArgs, extra) => {
+      async (rawArgs) => {
         const args = rawArgs as Record<string, unknown>;
         if (name !== "t3_get_gateway_health") {
           try {
@@ -161,9 +160,7 @@ export function createMcpGateway(input: {
             return failure(error, requestContext(args));
           }
         }
-        const run = await runGatewayTool(context, name, args, {
-          caller: gatewayCaller(extra._meta),
-        });
+        const run = await runGatewayTool(context, name, args, {});
         if (
           run.ok &&
           (name === "t3_subscribe_events" || name === "t3_replay_events") &&
