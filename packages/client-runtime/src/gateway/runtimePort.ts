@@ -321,6 +321,13 @@ export function gatewayThreadProjection(projection: OrchestrationV2ThreadProject
       createdAt: iso(message.createdAt),
       updatedAt: iso(message.updatedAt),
     })),
+    // Approvals carry the same detail the composer shows, so MCP clients can decide on them.
+    pendingApprovals: derivePendingThreadRequests(projection).approvals.map((approval) => ({
+      requestId: approval.requestId,
+      requestKind: approval.requestKind,
+      createdAt: approval.createdAt,
+      ...(approval.detail === undefined ? {} : { detail: approval.detail.slice(0, 4_000) }),
+    })),
     runtimeRequests: projection.runtimeRequests
       .filter((request) => request.status === "pending")
       .map((request) => ({
@@ -925,21 +932,6 @@ export function createGatewayRuntimePort(
       run(threadSnapshot(EnvironmentId.make(rawEnvironmentId), ThreadId.make(rawThreadId))).then(
         (snapshot) => snapshot.messages.some((message) => message.id === rawMessageId),
       ),
-    createAssetUrl: (rawEnvironmentId, resource) =>
-      run(
-        Effect.gen(function* () {
-          const registry = yield* EnvironmentRegistry;
-          const typedResource =
-            resource._tag === "attachment"
-              ? resource
-              : { ...resource, threadId: ThreadId.make(resource.threadId) };
-          const asset = yield* registry.run(
-            EnvironmentId.make(rawEnvironmentId),
-            request(WS_METHODS.assetsCreateUrl, { resource: typedResource }),
-          );
-          return { relativeUrl: asset.relativeUrl, expiresAt: asset.expiresAt };
-        }),
-      ),
     getPullRequest: (rawEnvironmentId, ref) =>
       run(
         Effect.gen(function* () {
@@ -1178,12 +1170,6 @@ export function createGatewayRuntimePort(
                   (candidate) => candidate.id === projectId,
                 );
           const cwd = project?.workspaceRoot;
-          if (input.operation === "approval.modify") {
-            throw new Error(
-              "V2 requires responding to individual runtime requests; atomic approval plans are not supported.",
-            );
-          }
-
           if (input.operation === "git.status") {
             if (cwd === undefined)
               throw new Error(`Project ${String(payload.projectId)} was not found.`);

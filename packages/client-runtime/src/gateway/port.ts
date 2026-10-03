@@ -436,15 +436,6 @@ export interface GatewayRuntimePort {
   getThread(environmentId: string, threadId: string): Promise<Record<string, unknown>>;
   /** Check complete authoritative thread state rather than the bounded display projection. */
   hasThreadMessage?(environmentId: string, threadId: string, messageId: string): Promise<boolean>;
-  createAssetUrl(
-    environmentId: string,
-    resource:
-      | { readonly _tag: "attachment"; readonly attachmentId: string }
-      | { readonly _tag: "workspace-file"; readonly threadId: string; readonly path: string },
-  ): Promise<{
-    readonly relativeUrl: string;
-    readonly expiresAt: number;
-  }>;
   getPullRequest(
     environmentId: string,
     ref: { readonly projectId: string; readonly repository: string; readonly number: number },
@@ -504,16 +495,6 @@ export interface GatewayRuntimePort {
     readonly action: GatewayThreadControlAction;
     readonly requestId: string;
     readonly messageId: string;
-  }): Promise<GatewayMutationResult>;
-  respondToApprovals?(input: {
-    readonly environmentId: string;
-    readonly threadId: string;
-    readonly responses: ReadonlyArray<{
-      readonly approvalRequestId: string;
-      readonly decision: GatewayApprovalDecision;
-    }>;
-    readonly expectedRevision: number;
-    readonly requestId: string;
   }): Promise<GatewayMutationResult>;
   respondToApproval(input: {
     readonly environmentId: string;
