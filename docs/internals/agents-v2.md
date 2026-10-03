@@ -89,5 +89,16 @@ are superseded by those native paths; they must not be layered on top of V2.
 Command Code uses the fork CLI protocol helpers at a native V2 adapter boundary.
 The orchestrator owns queueing and terminal runs; the CLI owns resumable history.
 Headless approvals remain noninteractive and never elevate supervised permissions.
-The managed MCP bridge advertises gateway access only while an authorized client
-gateway is available, and that gateway still applies its own grants on every action.
+
+There is one MCP per chat: the server's `t3-code`. The T3 Agents tools join it from the
+gateway catalog (`packages/mcp-gateway/src/catalog.ts`) and run through the same
+`GatewayRuntimePort` the external gateway uses, backed in-process by the server's own WS RPC
+handlers (`apps/server/src/mcp/agents`). A new tool added to the catalog appears in both
+places, and a new RPC either stream adds is reachable through the port. Calls for other
+environments route to a connected app over `mcpGateway.connect`; the app only answers for
+environments its user granted, and the server applies those grants' scopes. Keep tools that
+need the gateway's event store in `GATEWAY_ONLY_TOOLS`.
+
+Sub-run links (`parentThreadId`) may point at a chat on another machine through
+`parentEnvironmentId`. A server cannot check a parent it does not host, so it validates
+existence and cycles only for local parents; clients resolve parents by both IDs.
