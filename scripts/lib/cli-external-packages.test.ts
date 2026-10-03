@@ -39,7 +39,12 @@ describe("shouldBundleCliDependency", () => {
     }
   });
 
-  it("never bundles node: builtins", () => {
+  it("inlines zod for bundled server code while the sidecar keeps Cursor's copy", () => {
+    assert.strictEqual(shouldBundleCliDependency("zod"), true);
+    assert.strictEqual(isRuntimeExternalCliDependency("zod"), true);
+  });
+
+    it("never bundles node: builtins", () => {
     assert.strictEqual(shouldBundleCliDependency("node:fs"), false);
   });
 
