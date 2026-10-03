@@ -1878,6 +1878,7 @@ describe("orchestrator MCP toolkit", () => {
             expect(emptyProjection.thread).toMatchObject({
               createdBy: "agent",
               creationSource: "mcp",
+              parentThreadId,
             });
             expect(emptyProjection.thread.forkedFrom).toBeNull();
             expect(emptyProjection.runs).toEqual([]);
@@ -1986,10 +1987,11 @@ describe("orchestrator MCP toolkit", () => {
             const settledList = yield* decodeThreadListResult(
               settledListCall.structuredContent,
             ).pipe(Effect.orDie);
-            expect(settledList.threads.map((thread) => thread.threadId)).toEqual([
-              emptyThread.threadId,
-            ]);
-            expect(settledList.threads[0]).toMatchObject({
+            // Completed delegated children settle on their own, so they list here too.
+            expect(settledList.threads.every((thread) => thread.settled)).toBe(true);
+            expect(
+              settledList.threads.find((thread) => thread.threadId === emptyThread.threadId),
+            ).toMatchObject({
               settled: true,
               settledAt: "2026-01-01T00:00:00.000Z",
             });

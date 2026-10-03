@@ -361,6 +361,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "checkpoint.rollback":
     case "checkpoint.rollback.fail":
     case "thread.background-work.settle":
+    case "thread.sub-run.settle":
     case "provider.switch":
       return command.threadId;
     case "delegated_task.request":
@@ -2226,6 +2227,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     >,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    options?: { readonly keepProviderSession?: boolean },
   ) {
     const thread = yield* projectionStore.getThread(command.threadId).pipe(
       Effect.mapError(
@@ -3051,9 +3053,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     // lands. The settle guard above already rejects active or blocked runs,
     // so for settle this only ever stops an idle session; commands are
     // decided serially against the projection, so a turn start that
-    // re-engages the thread cannot race this detach.
+    // re-engages the thread cannot race this detach. A sub-run settled on
+    // completion keeps its session warm for the parent's next message.
     const detachSessionIds = new Set(
-      command.type === "thread.archive" || command.type === "thread.settle"
+      command.type === "thread.archive" ||
+        (command.type === "thread.settle" && options?.keepProviderSession !== true)
         ? (providerContext?.providerSessions ?? []).map((session) => session.id)
         : command.type === "thread.metadata.update" &&
             command.worktreePath !== undefined &&
@@ -7694,6 +7698,43 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
     });
 
+  /**
+   * Settles an agent-spawned sub-run once its run completes, so finished child
+   * work leaves the active list. A later message to the child unsettles it
+   * (see dispatchMessage) and its next completion settles it again. Threads
+   * with an explicit settle choice or auto-settle turned off are left alone,
+   * and so is any thread with new work or an open question or approval:
+   * automatic settlement must not dismiss what the user has not seen.
+   */
+  const dispatchSubRunSettle = Effect.fn("orchestrationV2.dispatch.subRunSettle")(function* (
+    command: Extract<OrchestrationV2ServerCommand, { readonly type: "thread.sub-run.settle" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+  ) {
+    const records = yield* projectionStore
+      .getThreadRecords(command.threadId, ["runs", "runtimeRequests"])
+      .pipe(mapDispatchError(command));
+    const thread = records.thread;
+    if (
+      thread.parentThreadId == null ||
+      thread.createdBy !== "agent" ||
+      thread.settledOverride !== null ||
+      thread.autoSettleDisabledAt != null ||
+      thread.archivedAt !== null ||
+      thread.deletedAt !== null ||
+      records.runs.some((run) => isBlockingRun(run) || run.status === "queued") ||
+      records.runtimeRequests.some((request) => request.status === "pending")
+    ) {
+      return;
+    }
+    yield* dispatchThreadMutation(
+      { type: "thread.settle", commandId: command.commandId, threadId: command.threadId },
+      events,
+      effects,
+      { keepProviderSession: true },
+    );
+  });
+
   const dispatchBackgroundWorkSettle = (
     command: Extract<
       OrchestrationV2InternalCommand,
@@ -9305,6 +9346,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.background-work.settle":
         yield* dispatchBackgroundWorkSettle(command, events);
         break;
+      case "thread.sub-run.settle":
+        yield* dispatchSubRunSettle(command, events, effects);
+        break;
       case "thread.fork":
         yield* dispatchThreadFork(command, events);
         break;
@@ -9400,7 +9444,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       Effect.flatMap((planned) =>
         // A settle that finds the provider already ended everything has
         // nothing to record, which is its expected outcome, not a failure.
-        planned.events.length > 0 || command.type === "thread.background-work.settle"
+        planned.events.length > 0 ||
+        command.type === "thread.background-work.settle" ||
+        command.type === "thread.sub-run.settle"
           ? Effect.succeed(planned)
           : Effect.fail(
               new OrchestratorDispatchError({
@@ -9524,6 +9570,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const dispatchWithReceipt = (command: OrchestrationV2ServerCommand) =>
     threadDispatch.withLock(commandThreadId(command), dispatchWithReceiptEffect(command));
 
+  /** Asks the orchestrator to settle a sub-run whose run just completed. */
+  const settleCompletedSubRun = (threadId: ThreadId, runId: RunId) =>
+    dispatchWithReceipt({
+      type: "thread.sub-run.settle",
+      commandId: CommandId.make(`server:sub-run-settle:${threadId}:${runId}`),
+      threadId,
+    });
+
   const handleTerminalRun = (stored: OrchestrationV2StoredEvent) =>
     Effect.gen(function* () {
       const threadId = stored.event.threadId;
@@ -9552,6 +9606,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             : undefined,
         ),
       );
+      // After queue promotion, so a queued follow-up keeps the sub-run active.
+      if (stored.event.type === "run.updated" && stored.event.payload.status === "completed") {
+        yield* settleCompletedSubRun(threadId, stored.event.payload.id);
+      }
     }).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("Failed to react to terminal V2 run", {

@@ -319,8 +319,9 @@ board in the connected desktop window with read access.
 ### Sub-agent runs
 
 When an agent's chat creates chats through the MCP gateway (`t3_create_thread` or
-`t3_create_and_start_thread`), each new chat is recorded as a sub-run of the chat that created
-it. This happens without the agent doing anything extra. This works across machines too. Pass `parentThreadId` (with
+`t3_create_and_start_thread`) or its own T3 tools (`delegate_task`, `t3_thread_launch`, or
+`create_threads`), each new chat is recorded as a sub-run of the chat that created it. This
+happens without the agent doing anything extra. This works across machines too. Pass `parentThreadId` (with
 `parentEnvironmentId` when that chat is on another machine) to attach a new chat to another
 chat, or `parentThreadId: null` for a standalone chat. `t3_list_threads` accepts `parentThreadId` to list a chat's sub-runs. To regroup existing
 chats, `t3_set_thread_parent` moves a chat under another chat on any machine, or detaches it
@@ -337,6 +338,10 @@ own card, which names its parent's agent and chat; click that name to open the p
 Settling a run also settles its sub-runs, at every depth, except ones that are still working or
 waiting on an approval. Un-settling the run brings back the sub-runs that settled with it; ones you
 settled earlier stay settled.
+
+A sub-run an agent created settles on its own when it finishes, unless it is waiting on a question
+or an approval. When its parent sends it more work it returns to the active list, and it settles
+again when that work finishes. Turn off auto-settle on a sub-run to keep it active.
 
 To link runs yourself on web and desktop, drag a card onto another card's title to make it a
 sub-run, or drag a sub-run out of its card to make it independent. Dragging a sub-run onto

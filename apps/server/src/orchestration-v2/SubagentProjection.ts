@@ -60,6 +60,9 @@ export function makeSubagentChildThread(input: {
     providerInstanceId: input.providerInstanceId,
     modelSelection: input.modelSelection,
     activeProviderThreadId: input.activeProviderThreadId,
+    // The spread copies the parent's own parent; a sub-run always nests under its spawner.
+    parentThreadId: input.parentThread.id,
+    parentEnvironmentId: null,
     lineage: {
       parentThreadId: input.parentThread.id,
       relationshipToParent: "subagent",
@@ -76,6 +79,10 @@ export function makeSubagentChildThread(input: {
     settledAt: null,
     snoozedUntil: null,
     snoozedAt: null,
+    pinnedAt: null,
+    pinOrderKey: null,
+    activeOrderKey: null,
+    autoSettleDisabledAt: null,
     lastVisitedAt: null,
     deletedAt: null,
   };

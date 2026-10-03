@@ -2881,6 +2881,16 @@ const OrchestrationV2InternalCommand = Schema.Union([
     providerThreadId: ProviderThreadId,
     providerTurnId: ProviderTurnId,
   }),
+  /**
+   * Settles an agent-spawned sub-run once its run completes. Unlike a user
+   * settle it keeps the provider session, since the parent often sends the
+   * sub-run more work. Records nothing when the sub-run no longer qualifies.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.sub-run.settle"),
+    commandId: CommandId,
+    threadId: ThreadId,
+  }),
 ]);
 export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalCommand.Type;
 

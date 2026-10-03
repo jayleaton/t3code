@@ -80,6 +80,7 @@ export const ProjectHandlersLive = ProjectToolkit.toLayer({
       const result = yield* ThreadMessageIntake.launchThread({
         commandId,
         threadId,
+        parentThreadId: scope.threadId,
         projectId,
         title: input.title,
         modelSelection: input.modelSelection ?? caller.modelSelection,
