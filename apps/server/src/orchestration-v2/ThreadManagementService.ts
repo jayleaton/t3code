@@ -26,17 +26,23 @@ import {
   RunId,
   type ScheduledTaskId,
   ThreadId,
+  type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 
 import * as Orchestrator from "./Orchestrator.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
+import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
+import { makeProviderFailure } from "./ProviderFailure.ts";
 
 export type ThreadManagementSendMode = "auto" | "queue" | "steer" | "restart";
 
@@ -449,6 +455,94 @@ const make = Effect.gen(function* () {
   const settings = yield* Effect.serviceOption(ServerSettingsService);
   const providers = yield* Effect.serviceOption(ProviderRegistry);
   const projections = yield* Effect.serviceOption(ProjectionStoreV2);
+  const setupTracker = yield* Effect.serviceOption(WorktreeSetupTracker.WorktreeSetupTracker);
+  const heldRunScope = yield* Scope.make("sequential");
+  yield* Effect.addFinalizer(() => Scope.close(heldRunScope, Exit.void));
+
+  /** The setup is still binding the thread's workspace; its agent stage has not begun. */
+  const bindingWorkspace = (snapshot: WorktreeSetupSnapshot | null) =>
+    snapshot !== null &&
+    snapshot.phase === "running" &&
+    !snapshot.stages.some((stage) => stage.id === "agent" && stage.status !== "pending");
+
+  /**
+   * Releases a held run once its thread's workspace is bound, or fails it with the
+   * setup's own reason. A finished snapshot that already aged out counts as done.
+   */
+  const releaseWhenWorkspaceReady = (
+    tracker: WorktreeSetupTracker.WorktreeSetupTracker["Service"],
+    command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
+    runId: RunId,
+  ) =>
+    tracker.stream(command.threadId).pipe(
+      Stream.filter((snapshot) => !bindingWorkspace(snapshot)),
+      Stream.runHead,
+      Effect.flatMap((settled) => {
+        const snapshot = Option.getOrNull(settled);
+        return snapshot?.phase === "failed" || snapshot?.phase === "cancelled"
+          ? orchestrator.dispatch({
+              type: "prepared-run.fail",
+              commandId: CommandId.make(`${command.commandId}:workspace-fail`),
+              threadId: command.threadId,
+              runId,
+              failure: makeProviderFailure({
+                message:
+                  snapshot.phase === "cancelled"
+                    ? "Worktree setup cancelled."
+                    : (snapshot.error ?? "Workspace preparation failed."),
+                class: "validation_error",
+                retryable: false,
+              }),
+            })
+          : orchestrator.dispatch({
+              type: "prepared-run.release",
+              commandId: CommandId.make(`${command.commandId}:workspace-ready`),
+              threadId: command.threadId,
+              runId,
+            });
+      }),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Held run could not follow workspace preparation", {
+          threadId: command.threadId,
+          runId,
+          cause,
+        }),
+      ),
+    );
+
+  /**
+   * A thread launched without its first message prepares its worktree in the
+   * background. A message that would start a turn before the worktree binds is
+   * held as a preparing run instead: started now, it would run in the project
+   * root and be cut off when the binding detaches its provider session.
+   */
+  const dispatchMessage = (
+    command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
+  ) =>
+    Effect.gen(function* () {
+      const startsTurn =
+        command.dispatchMode.type === "start_immediately" || command.deliveryIntent !== undefined;
+      if (Option.isNone(setupTracker) || !startsTurn) return yield* orchestrator.dispatch(command);
+      const tracker = setupTracker.value;
+      if (!bindingWorkspace(yield* tracker.get(command.threadId))) {
+        return yield* orchestrator.dispatch(command);
+      }
+      const { deliveryIntent: _resolvedByHold, ...held } = command;
+      const result = yield* orchestrator.dispatch({
+        ...held,
+        dispatchMode: { type: "defer_start" },
+      });
+      const preparing = result.storedEvents.find(
+        (stored) =>
+          stored.event.type === "run.created" && stored.event.payload.status === "preparing",
+      );
+      if (preparing?.event.type === "run.created") {
+        yield* releaseWhenWorkspaceReady(tracker, command, preparing.event.payload.id).pipe(
+          Effect.forkIn(heldRunScope),
+        );
+      }
+      return result;
+    });
   /**
    * Settling a chat settles its sub-runs at every depth with the parent's settledAt; unsettling
    * brings back only the sub-runs that settled with it. Each sub-run gets its own command so its
@@ -512,13 +606,13 @@ const make = Effect.gen(function* () {
         if (settledAt != null) yield* cascadeSettlement(command, settledAt);
         return result;
       }
-      if (command.type !== "thread.create" || command.profileSelection === undefined) {
-        if (command.type === "thread.create") {
-          const { profileSnapshot: _untrustedSnapshot, ...trusted } = command;
-          return yield* orchestrator.dispatch(trusted);
-        }
+      if (command.type === "message.dispatch") return yield* dispatchMessage(command);
+      if (command.type !== "thread.create" && command.type !== "delegated_task.request") {
         return yield* orchestrator.dispatch(command);
       }
+      // Only the server resolves profile snapshots; a caller-supplied one is dropped.
+      const { profileSnapshot: _untrustedSnapshot, ...trusted } = command;
+      if (trusted.profileSelection === undefined) return yield* orchestrator.dispatch(trusted);
       if (Option.isNone(settings) || Option.isNone(providers)) {
         return yield* new Orchestrator.OrchestratorCommandRejectedError({
           commandId: command.commandId,
@@ -531,7 +625,7 @@ const make = Effect.gen(function* () {
         const catalog = yield* Option.getOrThrow(providers).getProviders;
         return yield* Effect.try(() =>
           resolveThreadCreateProfile(
-            command,
+            trusted,
             library.mcpGatewayProfiles,
             catalog,
             library.agentSkills,
@@ -657,7 +751,7 @@ const make = Effect.gen(function* () {
         };
       }
 
-      const dispatch = yield* orchestrator.dispatch({
+      const dispatch = yield* dispatchMessage({
         type: "message.dispatch",
         commandId: input.commandId,
         threadId: input.threadId,

@@ -2802,6 +2802,9 @@ export const OrchestrationV2Command = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("delegated_task.request"),
     ...OrchestrationV2CreationFields,
+    /** Run the child as this agent; the server resolves it into profileSnapshot. */
+    profileSelection: Schema.optional(ThreadProfileSelection),
+    profileSnapshot: Schema.optional(ThreadProfileSnapshot),
     commandId: CommandId,
     parentThreadId: ThreadId,
     parentRunId: RunId,

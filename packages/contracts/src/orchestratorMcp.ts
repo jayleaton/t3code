@@ -127,6 +127,11 @@ export const OrchestratorMcpTarget = Schema.Struct({
 });
 export type OrchestratorMcpTarget = typeof OrchestratorMcpTarget.Type;
 
+export const OrchestratorMcpProfileId = TrimmedNonEmptyString.annotate({
+  description:
+    "Agent (profileId from t3_list_agents) that runs this work with its own instructions, skills, model, and modes. Explicit target, runtimeMode, or interactionMode values override the agent's.",
+});
+
 export const OrchestratorMcpRuntimeMode = Schema.Union([Schema.Literal("inherit"), RuntimeMode]);
 export type OrchestratorMcpRuntimeMode = typeof OrchestratorMcpRuntimeMode.Type;
 
@@ -170,6 +175,7 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
   task: OrchestratorMcpPrompt.annotate({
     description: "Self-contained task for one delegated child agent/subagent.",
   }),
+  profileId: Schema.optional(OrchestratorMcpProfileId),
   target: Schema.optional(OrchestratorMcpTarget),
   title: Schema.optional(OrchestratorMcpTitle),
   role: Schema.optional(OrchestratorMcpTaskRole),
@@ -233,6 +239,7 @@ export type OrchestratorMcpTaskCancelResult = typeof OrchestratorMcpTaskCancelRe
 export const OrchestratorMcpCreateThreadRequest = Schema.Struct({
   prompt: Schema.optional(OrchestratorMcpPrompt),
   title: Schema.optional(OrchestratorMcpTitle),
+  profileId: Schema.optional(OrchestratorMcpProfileId),
   target: Schema.optional(OrchestratorMcpTarget),
   runtimeMode: Schema.optional(OrchestratorMcpRuntimeMode),
   interactionMode: Schema.optional(OrchestratorMcpInteractionMode),
@@ -481,6 +488,14 @@ export const OrchestratorMcpCapabilitiesResult = Schema.Struct({
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   providers: Schema.Array(OrchestratorMcpProviderCapability),
+  /** Agents that can run delegated or new-thread work; pass profileId to use one. */
+  agents: Schema.Array(
+    Schema.Struct({
+      profileId: TrimmedNonEmptyString,
+      name: TrimmedNonEmptyString,
+      description: Schema.optional(Schema.String),
+    }),
+  ),
   features: Schema.Struct({
     appOwnedSubagents: Schema.Boolean,
     asyncPolling: Schema.Boolean,

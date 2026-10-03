@@ -6245,6 +6245,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           createdBy: command.createdBy,
           creationSource: command.creationSource,
         }),
+        ...(command.profileSnapshot === undefined
+          ? {}
+          : { profileSnapshot: command.profileSnapshot }),
         runtimeMode: command.runtimeMode,
         interactionMode: command.interactionMode,
       };

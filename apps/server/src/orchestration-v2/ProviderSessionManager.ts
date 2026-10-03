@@ -45,6 +45,7 @@ import {
   type ProviderAdapterV2SessionRuntime,
 } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
+import { ProviderSessionStoppedError } from "./ProviderFailure.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
@@ -509,12 +510,12 @@ export const layerWithOptions = (
           ),
         );
 
-      const failSubscribers = (entry: LiveSessionEntry, detail: string) =>
+      const failSubscribers = (entry: LiveSessionEntry, cause: unknown) =>
         Effect.gen(function* () {
           const error = new ProviderAdapterEventStreamError({
             driver: entry.runtime.driver,
             providerSessionId: entry.runtime.providerSessionId,
-            cause: detail,
+            cause,
           });
           const subscribers = yield* Ref.getAndSet(entry.eventSubscribers, new Map());
           yield* Effect.forEach(
@@ -746,9 +747,13 @@ export const layerWithOptions = (
                   } else if (input.reason === "server_shutdown") {
                     yield* closeSubscribers(entry);
                   } else {
+                    // Manual shutdown details are server-authored and safe to show
+                    // on the interrupted run; runtime errors carry provider text.
                     yield* failSubscribers(
                       entry,
-                      input.detail ?? `Provider session released: ${input.reason}.`,
+                      input.reason === "manual_shutdown" && input.detail !== undefined
+                        ? new ProviderSessionStoppedError({ detail: input.detail })
+                        : (input.detail ?? `Provider session released: ${input.reason}.`),
                     );
                   }
                   // Scope close can wedge on a misbehaving adapter finalizer

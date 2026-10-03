@@ -138,6 +138,8 @@ export class ThreadLaunchService extends Context.Service<
 
 const isThreadLaunchError = Schema.is(ThreadLaunchError);
 
+const WORKTREE_LAUNCH_STAGES = ["fetch", "checkout", "setup-script", "agent"] as const;
+
 function failureDetail(error: unknown): string {
   if (isThreadLaunchError(error)) {
     const cause = error.cause;
@@ -210,6 +212,7 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
     runId: RunId | null,
   ) {
+    const tracked = input.workspaceStrategy.type === "worktree";
     const project = yield* projects.getById(input.projectId).pipe(
       Effect.mapError(mapError(input, "resolve-project", threadId)),
       Effect.flatMap(
@@ -219,9 +222,11 @@ const make = Effect.gen(function* () {
           onSome: Effect.succeed,
         }),
       ),
+      Effect.tapError((error) =>
+        tracked ? setupTracker.finish(threadId, "failed", failureDetail(error)) : Effect.void,
+      ),
     );
 
-    const tracked = input.workspaceStrategy.type === "worktree";
     let createdWorktreePath: string | null = null;
     let setupTerminalId: string | null = null;
     if (tracked) {
@@ -229,7 +234,7 @@ const make = Effect.gen(function* () {
         threadId,
         branch: input.workspaceStrategy.branch ?? null,
         baseRef: input.workspaceStrategy.baseRef,
-        stages: ["fetch", "checkout", "setup-script", "agent"],
+        stages: WORKTREE_LAUNCH_STAGES,
         fiber: yield* Effect.fiber,
       });
     }
@@ -601,6 +606,18 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
     runId: RunId | null,
   ) {
+    // Register a worktree setup before forking so a message sent as soon as
+    // launch returns already sees it and waits; the preparation fiber then
+    // re-registers itself as the cancel handle.
+    if (input.workspaceStrategy.type === "worktree") {
+      yield* setupTracker.begin({
+        threadId,
+        branch: input.workspaceStrategy.branch ?? null,
+        baseRef: input.workspaceStrategy.baseRef,
+        stages: WORKTREE_LAUNCH_STAGES,
+        fiber: null,
+      });
+    }
     yield* prepareInBackground(input, threadId, runId).pipe(
       Effect.onError((cause) =>
         failPreparedRun(
@@ -776,7 +793,10 @@ const make = Effect.gen(function* () {
               attachments: input.initialMessage.attachments,
               ...(input.initialMessage.context ? { context: input.initialMessage.context } : {}),
               ...(input.generateTitle === true ? { titleSeed: input.title } : {}),
-              modelSelection: input.modelSelection,
+              // An agent thread keeps the model its profile resolved.
+              ...(input.profileSelection === undefined
+                ? { modelSelection: input.modelSelection }
+                : {}),
               dispatchMode: { type: "defer_start" },
               createdBy: input.createdBy,
               creationSource: input.creationSource,

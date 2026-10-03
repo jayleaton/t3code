@@ -69,6 +69,8 @@ import {
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import { resolveMcpProfileSelection } from "./agentProfileSelection.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
@@ -756,6 +758,49 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const providerAdapters = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
   const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
+  const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+
+  /**
+   * Resolves the agent a child runs as. The agent's own modes count as the
+   * child's requested modes, so an agent cannot escalate past its parent.
+   */
+  const childProfileSelection = (input: {
+    readonly parent: Pick<OrchestrationV2ThreadProjection, "thread">;
+    readonly profileId: string | undefined;
+    readonly target: OrchestratorMcpTarget | undefined;
+    readonly runtimeMode: OrchestratorMcpRuntimeMode | undefined;
+    readonly interactionMode: OrchestratorMcpInteractionMode | undefined;
+  }) =>
+    Effect.gen(function* () {
+      if (input.profileId === undefined) return undefined;
+      if (Option.isNone(settings)) {
+        return yield* failure("orchestration_error", "Agent profiles are unavailable.");
+      }
+      const { selection, profile } = yield* resolveMcpProfileSelection(
+        settings.value,
+        input.profileId,
+        {
+          modelSelection:
+            input.target?.providerInstanceId !== undefined ||
+            input.target?.driverKind !== undefined ||
+            input.target?.model !== undefined,
+          reasoningEffort: input.target?.options !== undefined,
+          runtimeMode: input.runtimeMode !== undefined && input.runtimeMode !== "inherit",
+          interactionMode:
+            input.interactionMode !== undefined && input.interactionMode !== "inherit",
+        },
+      );
+      if (
+        !selection.overrideFields.includes("runtimeMode") &&
+        profile.runtimeMode !== "read-only"
+      ) {
+        yield* resolveRuntimeMode(input.parent.thread.runtimeMode, profile.runtimeMode);
+      }
+      if (!selection.overrideFields.includes("interactionMode")) {
+        yield* resolveInteractionMode(input.parent.thread.interactionMode, profile.interactionMode);
+      }
+      return selection;
+    });
 
   const requireCapability = (scope: McpInvocationScope) =>
     scope.capabilities.has("orchestration")
@@ -1313,6 +1358,12 @@ const make = Effect.gen(function* () {
         const parent = yield* loadProjection(scope.threadId);
         const providers = yield* loadProviders;
         const orchestrationCapableInstanceIds = yield* loadOrchestrationCapableInstanceIds();
+        const profiles = Option.isNone(settings)
+          ? []
+          : yield* settings.value.getSettings.pipe(
+              Effect.map((library) => library.mcpGatewayProfiles),
+              Effect.orElseSucceed(() => []),
+            );
         return {
           parentThreadId: scope.threadId,
           inheritedProviderInstanceId: parent.thread.modelSelection.instanceId,
@@ -1341,6 +1392,14 @@ const make = Effect.gen(function* () {
               constraints: [...constraints],
             };
           }),
+          // Read-only agents cannot run work, so they are not offered here.
+          agents: profiles
+            .filter((profile) => profile.runtimeMode !== "read-only")
+            .map((profile) => ({
+              profileId: profile.profileId,
+              name: profile.name,
+              ...(profile.description === undefined ? {} : { description: profile.description }),
+            })),
           features: {
             appOwnedSubagents: true,
             asyncPolling: true,
@@ -1381,6 +1440,13 @@ const make = Effect.gen(function* () {
           parent.thread.interactionMode,
           input.interactionMode,
         );
+        const profileSelection = yield* childProfileSelection({
+          parent,
+          profileId: input.profileId,
+          target: input.target,
+          runtimeMode: input.runtimeMode,
+          interactionMode: input.interactionMode,
+        });
         const key = yield* requestKey(input.clientRequestId);
         const commandId = stableCommandId({
           scope,
@@ -1390,6 +1456,7 @@ const make = Effect.gen(function* () {
         const result = yield* threadManagement
           .dispatch({
             type: "delegated_task.request",
+            ...(profileSelection === undefined ? {} : { profileSelection }),
             createdBy: "agent",
             creationSource: "mcp",
             commandId,
@@ -1593,6 +1660,13 @@ const make = Effect.gen(function* () {
                 parent.thread.interactionMode,
                 request.interactionMode,
               );
+              const profileSelection = yield* childProfileSelection({
+                parent,
+                profileId: request.profileId,
+                target: request.target,
+                runtimeMode: request.runtimeMode,
+                interactionMode: request.interactionMode,
+              });
               const threadId = stableThreadId({
                 scope,
                 requestKey: key,
@@ -1607,6 +1681,7 @@ const make = Effect.gen(function* () {
               yield* threadManagement
                 .dispatch({
                   type: "thread.create",
+                  ...(profileSelection === undefined ? {} : { profileSelection }),
                   createdBy: "agent",
                   creationSource: "mcp",
                   commandId: stableCommandId({
@@ -1653,7 +1728,10 @@ const make = Effect.gen(function* () {
                     }),
                     text: request.prompt,
                     attachments: [],
-                    modelSelection: target.modelSelection,
+                    // An agent thread keeps the model its profile resolved.
+                    ...(profileSelection === undefined
+                      ? { modelSelection: target.modelSelection }
+                      : {}),
                     dispatchMode: { type: "start_immediately" },
                   })
                   .pipe(
@@ -1697,8 +1775,8 @@ const make = Effect.gen(function* () {
                 title: projection.thread.title,
                 createdBy: projection.thread.createdBy,
                 creationSource: projection.thread.creationSource,
-                providerInstanceId: target.modelSelection.instanceId,
-                model: target.modelSelection.model,
+                providerInstanceId: projection.thread.modelSelection.instanceId,
+                model: projection.thread.modelSelection.model,
               } satisfies OrchestratorMcpCreatedThread;
             }),
           { concurrency: 1 },

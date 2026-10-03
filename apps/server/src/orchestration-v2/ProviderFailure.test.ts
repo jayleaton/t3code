@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import {
   NodeId,
   ProviderDriverKind,
+  ProviderSessionId,
   ProviderThreadId,
   ProviderTurnId,
   RunId,
@@ -16,10 +17,14 @@ import {
   makeProviderFailureTurnItem,
   MAX_PROVIDER_FAILURE_CODE_LENGTH,
   MAX_PROVIDER_FAILURE_MESSAGE_LENGTH,
+  ProviderSessionStoppedError,
 } from "./ProviderFailure.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import { ContextHandoffBudgetError } from "./ContextHandoffDelivery.ts";
-import { ProviderAdapterTurnStartError } from "./ProviderAdapter.ts";
+import {
+  ProviderAdapterEventStreamError,
+  ProviderAdapterTurnStartError,
+} from "./ProviderAdapter.ts";
 
 it("redacts credentials and URL secrets from provider failures", () => {
   const failure = makeProviderFailure({
@@ -98,6 +103,18 @@ it("preserves actionable handoff errors wrapped by turn startup", () => {
   assert.equal(
     makeProviderFailure({ cause: Cause.fail(cause) }).message,
     new ContextHandoffBudgetError().message,
+  );
+});
+
+it("says why T3 Code stopped the session under a running turn", () => {
+  const cause = new ProviderAdapterEventStreamError({
+    driver: ProviderDriverKind.make("claudeAgent"),
+    providerSessionId: ProviderSessionId.make("provider-session:stopped"),
+    cause: new ProviderSessionStoppedError({ detail: "Workspace changed." }),
+  });
+  assert.equal(
+    makeProviderFailure({ cause: Cause.fail(cause) }).message,
+    "T3 Code stopped the provider session: Workspace changed. Retry the turn.",
   );
 });
 
