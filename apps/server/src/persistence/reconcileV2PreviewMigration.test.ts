@@ -6,8 +6,9 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { runMigrations } from "./Migrations.ts";
 
 describe("fork V2 preview migration boundary", () => {
-  for (const previewId of [53, 54, 55, 56, 57]) {
-    it.effect(`refuses preview ${previewId} without changing schema, history, or data`, () =>
+  it.effect.each([53, 54, 55, 56, 57])(
+    "refuses preview %s without changing schema, history, or data",
+    (previewId) =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         yield* runMigrations({ toMigrationInclusive: previewId - 1 });
@@ -24,6 +25,5 @@ describe("fork V2 preview migration boundary", () => {
         assert.deepStrictEqual(yield* sql`SELECT * FROM sqlite_master ORDER BY name`, schema);
         assert.deepStrictEqual(yield* sql`SELECT * FROM preview_data`, [{ value: "preserve me" }]);
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
-    );
-  }
+  );
 });

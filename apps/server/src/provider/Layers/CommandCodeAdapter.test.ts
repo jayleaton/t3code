@@ -236,15 +236,15 @@ it.effect("completes a turn that needs more model requests than the headless def
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
-for (const prompt of ["early-error", "bad-json", "limit"]) {
-  it.effect(`terminalizes ${prompt} as a failed V2 turn`, () =>
+it.effect.each(["early-error", "bad-json", "limit"])(
+  "terminalizes %s as a failed V2 turn",
+  (prompt) =>
     Effect.gen(function* () {
       const h = yield* harness;
       const events = yield* h.run(prompt);
       assert.ok(events.some((e) => e.type === "turn.terminal" && e.status === "failed"));
     }).pipe(Effect.provide(layer), Effect.scoped),
-  );
-}
+);
 
 it.effect("rejects native session identity changes on resume", () =>
   Effect.gen(function* () {
@@ -283,8 +283,9 @@ it.effect("interrupts the owned process and allows a subsequent turn", () =>
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
-for (const prompt of ["ready", "missing-mod", "mcp-failure"]) {
-  it.effect(`keeps authorized MCP endpoints and fails closed for ${prompt}`, () =>
+it.effect.each(["ready", "missing-mod", "mcp-failure"])(
+  "keeps authorized MCP endpoints and fails closed for %s",
+  (prompt) =>
     Effect.gen(function* () {
       McpProviderSession.setMcpProviderSession({
         environmentId: EnvironmentId.make("test"),
@@ -313,8 +314,7 @@ for (const prompt of ["ready", "missing-mod", "mcp-failure"]) {
       assert.include(calls[0]!.mcpServers, "/mcp/gateway");
       assert.include(calls[0]!.modSource, "t3_mcp_ready");
     }).pipe(Effect.provide(layer), Effect.scoped),
-  );
-}
+);
 
 it.effect("projects valid compaction reports without inventing context window measurements", () =>
   Effect.gen(function* () {

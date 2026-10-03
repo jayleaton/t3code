@@ -2984,37 +2984,42 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
         }).pipe(Effect.provide(recorded.layer));
       });
 
-      for (const [label, stdout, code] of [
-        ["unsupported auth command", "unknown command: auth; private data", 1],
-        ["malformed auth output", '{"loggedIn":"true","secret":"private data"}', 0],
-        ["unsuccessful auth probe", '{"loggedIn":true}', 1],
-      ] as const) {
-        it.effect(`does not trust cached SDK metadata after ${label}`, () =>
-          Effect.gen(function* () {
-            const status = yield* checkClaudeProviderStatus(
-              defaultClaudeSettings,
-              claudeCapabilities({ email: "cached@example.com", subscriptionType: "maxplan" }),
-            );
-            assert.strictEqual(status.status, "warning");
-            assert.strictEqual(status.auth.status, "unknown");
-            assert.strictEqual(
-              status.message,
-              "Could not verify Claude authentication status from the CLI.",
-            );
-            assert.strictEqual(status.auth.email, undefined);
-          }).pipe(
-            Effect.provide(
-              mockSpawnerLayer((args) => {
-                if (args.join(" ") === "--version")
-                  return { stdout: "2.1.258", stderr: "", code: 0 };
-                if (args.join(" ") === "auth status --json")
-                  return { stdout, stderr: "private data", code };
-                throw new Error(`Unexpected args: ${args.join(" ")}`);
-              }),
-            ),
+      it.effect.each([
+        {
+          label: "unsupported auth command",
+          stdout: "unknown command: auth; private data",
+          code: 1,
+        },
+        {
+          label: "malformed auth output",
+          stdout: '{"loggedIn":"true","secret":"private data"}',
+          code: 0,
+        },
+        { label: "unsuccessful auth probe", stdout: '{"loggedIn":true}', code: 1 },
+      ])("does not trust cached SDK metadata after $label", ({ stdout, code }) =>
+        Effect.gen(function* () {
+          const status = yield* checkClaudeProviderStatus(
+            defaultClaudeSettings,
+            claudeCapabilities({ email: "cached@example.com", subscriptionType: "maxplan" }),
+          );
+          assert.strictEqual(status.status, "warning");
+          assert.strictEqual(status.auth.status, "unknown");
+          assert.strictEqual(
+            status.message,
+            "Could not verify Claude authentication status from the CLI.",
+          );
+          assert.strictEqual(status.auth.email, undefined);
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              if (args.join(" ") === "--version") return { stdout: "2.1.258", stderr: "", code: 0 };
+              if (args.join(" ") === "auth status --json")
+                return { stdout, stderr: "private data", code };
+              throw new Error(`Unexpected args: ${args.join(" ")}`);
+            }),
           ),
-        );
-      }
+        ),
+      );
 
       it.effect("returns ready and labels Bedrock-backed Claude as authenticated", () =>
         Effect.gen(function* () {

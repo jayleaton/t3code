@@ -42,8 +42,9 @@ const testCrypto = Crypto.make({
 });
 
 describe("Gateway Runtime Port", () => {
-  for (const operation of ["listProjects", "getThread"] as const) {
-    it.effect(`interrupts an offline ${operation} snapshot after the request deadline`, () =>
+  it.effect.each(["listProjects", "getThread"] as const)(
+    "interrupts an offline %s snapshot after the request deadline",
+    (operation) =>
       Effect.gen(function* () {
         const started = yield* Deferred.make<void>();
         let released = false;
@@ -74,8 +75,7 @@ describe("Gateway Runtime Port", () => {
         expect(result._tag).toBe("Failure");
         expect(released).toBe(true);
       }),
-    );
-  }
+  );
   it("resolves readable labels only when one live provider/model pair matches", () => {
     const profile = {
       profileId: "profile-andy",
@@ -259,8 +259,9 @@ describe("Gateway Runtime Port", () => {
     expect(gatewayStatusFromThread({ status, pendingRuntimeRequest: null })).toBe(expected);
   });
 
-  for (const operation of ["listProjects", "getThread"] as const) {
-    it.effect(`interrupts an offline ${operation} snapshot subscription at its deadline`, () =>
+  it.effect.each(["listProjects", "getThread"] as const)(
+    "interrupts an offline %s snapshot subscription at its deadline",
+    (operation) =>
       Effect.gen(function* () {
         const entered = yield* Deferred.make<void>();
         const released = yield* Deferred.make<void>();
@@ -289,8 +290,7 @@ describe("Gateway Runtime Port", () => {
         yield* Deferred.await(released);
         expect(yield* Effect.promise(() => pending)).toBe(true);
       }),
-    );
-  }
+  );
 
   it.effect("projects the existing registry without starting or replacing it", () =>
     Effect.gen(function* () {
