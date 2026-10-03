@@ -177,8 +177,26 @@ function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
   }
 }
 
+/**
+ * The error's message followed by its causes' messages. Orchestrator errors
+ * keep the real reason (a stale agent revision, an unavailable model) in a
+ * cause behind a generic "rejected before commit", and a calling agent can
+ * only act on the reason.
+ */
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  const messages: Array<string> = [];
+  let current = error;
+  for (let depth = 0; depth < 6 && current !== undefined && current !== null; depth++) {
+    const message =
+      typeof current === "string"
+        ? current
+        : current instanceof Error || typeof (current as { message?: unknown }).message === "string"
+          ? (current as { message: string }).message
+          : String(current);
+    if (message !== "" && !messages.some((seen) => seen.includes(message))) messages.push(message);
+    current = typeof current === "object" ? (current as { cause?: unknown }).cause : undefined;
+  }
+  return messages.join(" Cause: ");
 }
 
 /**
@@ -761,8 +779,10 @@ const make = Effect.gen(function* () {
   const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
 
   /**
-   * Resolves the agent a child runs as. The agent's own modes count as the
-   * child's requested modes, so an agent cannot escalate past its parent.
+   * Resolves the agent a child runs as. An agent whose own modes are broader
+   * than its parent's runs clamped to the parent's modes (the child command
+   * already carries them), so the agent works from any thread without
+   * escalating past it. Explicit caller modes are checked before this runs.
    */
   const childProfileSelection = (input: {
     readonly parent: Pick<OrchestrationV2ThreadProjection, "thread">;
@@ -776,30 +796,22 @@ const make = Effect.gen(function* () {
       if (Option.isNone(settings)) {
         return yield* failure("orchestration_error", "Agent profiles are unavailable.");
       }
-      const { selection, profile } = yield* resolveMcpProfileSelection(
-        settings.value,
-        input.profileId,
-        {
-          modelSelection:
-            input.target?.providerInstanceId !== undefined ||
-            input.target?.driverKind !== undefined ||
-            input.target?.model !== undefined,
-          reasoningEffort: input.target?.options !== undefined,
-          runtimeMode: input.runtimeMode !== undefined && input.runtimeMode !== "inherit",
-          interactionMode:
-            input.interactionMode !== undefined && input.interactionMode !== "inherit",
-        },
-      );
-      if (
-        !selection.overrideFields.includes("runtimeMode") &&
-        profile.runtimeMode !== "read-only"
-      ) {
-        yield* resolveRuntimeMode(input.parent.thread.runtimeMode, profile.runtimeMode);
-      }
-      if (!selection.overrideFields.includes("interactionMode")) {
-        yield* resolveInteractionMode(input.parent.thread.interactionMode, profile.interactionMode);
-      }
-      return selection;
+      const parentModes = input.parent.thread;
+      return yield* resolveMcpProfileSelection(settings.value, input.profileId, (profile) => ({
+        modelSelection:
+          input.target?.providerInstanceId !== undefined ||
+          input.target?.driverKind !== undefined ||
+          input.target?.model !== undefined,
+        reasoningEffort: input.target?.options !== undefined,
+        runtimeMode:
+          (input.runtimeMode !== undefined && input.runtimeMode !== "inherit") ||
+          (profile.runtimeMode !== "read-only" &&
+            runtimeModeRank(profile.runtimeMode) > runtimeModeRank(parentModes.runtimeMode)),
+        interactionMode:
+          (input.interactionMode !== undefined && input.interactionMode !== "inherit") ||
+          interactionModeRank(profile.interactionMode) >
+            interactionModeRank(parentModes.interactionMode),
+      })).pipe(Effect.map(({ selection }) => selection));
     });
 
   const requireCapability = (scope: McpInvocationScope) =>
@@ -1477,7 +1489,7 @@ const make = Effect.gen(function* () {
             Effect.mapError((error) =>
               failure(
                 "orchestration_error",
-                `Unable to create delegated task: ${errorMessage(error)}`,
+                `Unable to create delegated task${input.profileId === undefined ? "" : ` as agent ${input.profileId}`}: ${errorMessage(error)}`,
               ),
             ),
           );
@@ -1704,7 +1716,7 @@ const make = Effect.gen(function* () {
                   Effect.mapError((error) =>
                     failure(
                       "orchestration_error",
-                      `Unable to create thread ${index + 1}: ${errorMessage(error)}`,
+                      `Unable to create thread ${index + 1}${request.profileId === undefined ? "" : ` as agent ${request.profileId}`}: ${errorMessage(error)}`,
                     ),
                   ),
                 );

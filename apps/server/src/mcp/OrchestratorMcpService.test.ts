@@ -16,6 +16,7 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 
 import type { ProviderAdapterV2Shape } from "../orchestration-v2/ProviderAdapter.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
@@ -773,115 +774,189 @@ describe("OrchestratorMcpService provider resolution", () => {
     }),
   );
 
-  it.effect("delegates to an agent profile and rejects unknown agents", () =>
-    Effect.gen(function* () {
-      const dispatched = yield* Ref.make<ReadonlyArray<unknown>>([]);
-      const task = {
-        id: taskId,
-        threadId: parentThreadId,
-        runId: parentRunId,
-        parentNodeId,
-        origin: "app_owned",
-        createdBy: "agent",
-        driver: ProviderDriverKind.make("codex"),
-        providerInstanceId: codexInstanceId,
-        providerThreadId: null,
-        childThreadId,
-        nativeTaskRef: null,
-        prompt: "Review the diff.",
-        title: null,
-        model: "gpt-5.4",
-        status: "running",
-        result: null,
-        startedAt: null,
-        completedAt: null,
-      };
-      let delegated = false;
-      const dependencies = Layer.mergeAll(
-        NodeServices.layer,
-        Layer.mock(ThreadManagementService.ThreadManagementService)({
-          getThreadRecords: (threadId) =>
-            Effect.succeed(
-              threadId === parentThreadId
-                ? parentProjection(delegated ? [task] : [])
-                : childProjection,
-            ),
-          dispatch: (command) =>
-            Ref.update(dispatched, (commands) => [...commands, command]).pipe(
-              Effect.andThen(
-                Effect.sync(() => {
-                  delegated = true;
-                }),
+  it.effect(
+    "delegates to an agent profile, clamps its modes to the parent, and rejects unknown agents",
+    () =>
+      Effect.gen(function* () {
+        const dispatched = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        const task = {
+          id: taskId,
+          threadId: parentThreadId,
+          runId: parentRunId,
+          parentNodeId,
+          origin: "app_owned",
+          createdBy: "agent",
+          driver: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          providerThreadId: null,
+          childThreadId,
+          nativeTaskRef: null,
+          prompt: "Review the diff.",
+          title: null,
+          model: "gpt-5.4",
+          status: "running",
+          result: null,
+          startedAt: null,
+          completedAt: null,
+        };
+        let delegated = false;
+        let parentModes: { runtimeMode: string; interactionMode: string } | undefined;
+        const dependencies = Layer.mergeAll(
+          NodeServices.layer,
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            getThreadRecords: (threadId) =>
+              Effect.succeed(
+                threadId === parentThreadId
+                  ? (() => {
+                      const projection = parentProjection(delegated ? [task] : []);
+                      return parentModes === undefined
+                        ? projection
+                        : ({
+                            ...projection,
+                            thread: { ...projection.thread, ...parentModes },
+                          } as OrchestrationV2ThreadProjection);
+                    })()
+                  : childProjection,
               ),
-              Effect.as({
-                sequence: 1,
-                storedEvents: [
-                  {
-                    sequence: 1,
-                    commandId: null,
-                    event: { type: "subagent.updated", payload: task },
-                  },
-                ],
-              } as never),
-            ),
-        }),
-        Layer.mock(ProviderRegistry.ProviderRegistry)({
-          getProviders: Effect.succeed([
-            providerSnapshot({
-              instanceId: codexInstanceId,
-              driver: ProviderDriverKind.make("codex"),
-              model: "gpt-5.4",
-            }),
-          ]),
-        }),
-        adapterRegistryLayer([codexInstanceId]),
-        Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
-        ServerSettings.layerTest({
-          mcpGatewayProfiles: [
-            {
-              profileId: "reviewer",
-              name: "Reviewer",
-              revision: 2,
-              createdAt: "2026-10-03T00:00:00.000Z",
-              updatedAt: "2026-10-03T00:00:00.000Z",
-              runtimeMode: "auto",
-              interactionMode: "default",
-            },
-          ],
-        }),
-      );
+            dispatch: (command) =>
+              command.type === "delegated_task.request" && command.task.includes("Reject me")
+                ? Effect.fail(
+                    new Orchestrator.OrchestratorCommandRejectedError({
+                      commandId: command.commandId,
+                      commandType: command.type,
+                      cause: new Error("Gateway profile 'builder' revision 1 is stale or missing."),
+                    }),
+                  )
+                : Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+                    Effect.andThen(
+                      Effect.sync(() => {
+                        delegated = true;
+                      }),
+                    ),
+                    Effect.as({
+                      sequence: 1,
+                      storedEvents: [
+                        {
+                          sequence: 1,
+                          commandId: null,
+                          event: { type: "subagent.updated", payload: task },
+                        },
+                      ],
+                    } as never),
+                  ),
+          }),
+          Layer.mock(ProviderRegistry.ProviderRegistry)({
+            getProviders: Effect.succeed([
+              providerSnapshot({
+                instanceId: codexInstanceId,
+                driver: ProviderDriverKind.make("codex"),
+                model: "gpt-5.4",
+              }),
+            ]),
+          }),
+          adapterRegistryLayer([codexInstanceId]),
+          Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+          ServerSettings.layerTest({
+            mcpGatewayProfiles: [
+              {
+                profileId: "reviewer",
+                name: "Reviewer",
+                revision: 2,
+                createdAt: "2026-10-03T00:00:00.000Z",
+                updatedAt: "2026-10-03T00:00:00.000Z",
+                runtimeMode: "auto",
+                interactionMode: "default",
+              },
+              {
+                profileId: "builder",
+                name: "Builder",
+                revision: 1,
+                createdAt: "2026-10-03T00:00:00.000Z",
+                updatedAt: "2026-10-03T00:00:00.000Z",
+                runtimeMode: "full-access",
+                interactionMode: "default",
+              },
+            ],
+          }),
+        );
 
-      yield* Effect.gen(function* () {
-        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-        yield* service.delegateTask(scope, {
-          task: "Review the diff.",
-          profileId: "reviewer",
-          mode: "async",
-          clientRequestId: "delegate-agent-1",
-        });
-        const [request] = (yield* Ref.get(dispatched)) as ReadonlyArray<{
-          type: string;
-          profileSelection?: unknown;
-        }>;
-        assert.equal(request?.type, "delegated_task.request");
-        assert.deepEqual(request?.profileSelection, {
-          profileId: "reviewer",
-          revision: 2,
-          overrideFields: [],
-        });
-
-        const unknown = yield* service
-          .delegateTask(scope, {
+        yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          yield* service.delegateTask(scope, {
             task: "Review the diff.",
-            profileId: "nobody",
+            profileId: "reviewer",
             mode: "async",
-            clientRequestId: "delegate-agent-2",
-          })
-          .pipe(Effect.flip);
-        assert.equal(unknown.code, "invalid_request");
-        assert.lengthOf(yield* Ref.get(dispatched), 1);
-      }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(dependencies))));
-    }),
+            clientRequestId: "delegate-agent-1",
+          });
+          const [request] = (yield* Ref.get(dispatched)) as ReadonlyArray<{
+            type: string;
+            profileSelection?: unknown;
+          }>;
+          assert.equal(request?.type, "delegated_task.request");
+          assert.deepEqual(request?.profileSelection, {
+            profileId: "reviewer",
+            revision: 2,
+            overrideFields: [],
+          });
+
+          const unknown = yield* service
+            .delegateTask(scope, {
+              task: "Review the diff.",
+              profileId: "nobody",
+              mode: "async",
+              clientRequestId: "delegate-agent-2",
+            })
+            .pipe(Effect.flip);
+          assert.equal(unknown.code, "invalid_request");
+          assert.lengthOf(yield* Ref.get(dispatched), 1);
+
+          // A full-access agent called from a narrower parent runs at the
+          // parent's modes instead of being rejected as an escalation.
+          parentModes = { runtimeMode: "approval-required", interactionMode: "plan" };
+          yield* service.delegateTask(scope, {
+            task: "Build it.",
+            profileId: "builder",
+            mode: "async",
+            clientRequestId: "delegate-agent-3",
+          });
+          const clamped = (yield* Ref.get(dispatched))[1] as {
+            profileSelection?: unknown;
+            runtimeMode?: string;
+            interactionMode?: string;
+          };
+          assert.deepEqual(clamped.profileSelection, {
+            profileId: "builder",
+            revision: 1,
+            overrideFields: ["runtimeMode", "interactionMode"],
+          });
+          assert.equal(clamped.runtimeMode, "approval-required");
+          assert.equal(clamped.interactionMode, "plan");
+
+          // Explicitly asking for broader modes than the parent still fails.
+          const escalation = yield* service
+            .delegateTask(scope, {
+              task: "Build it.",
+              profileId: "builder",
+              runtimeMode: "full-access",
+              mode: "async",
+              clientRequestId: "delegate-agent-4",
+            })
+            .pipe(Effect.flip);
+          assert.equal(escalation.code, "runtime_mode_escalation_denied");
+
+          // A rejection deep in dispatch reaches the calling agent with its reason.
+          const rejected = yield* service
+            .delegateTask(scope, {
+              task: "Reject me.",
+              profileId: "builder",
+              mode: "async",
+              clientRequestId: "delegate-agent-5",
+            })
+            .pipe(Effect.flip);
+          assert.include(rejected.message, "as agent builder");
+          assert.include(rejected.message, "revision 1 is stale or missing");
+        }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(dependencies))));
+      }),
   );
 
   it.effect("rejects delegation to a provider without a registered adapter", () =>
