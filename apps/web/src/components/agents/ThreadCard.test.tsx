@@ -96,7 +96,29 @@ describe("agent card PR navigation", () => {
 describe("agent card subagents", () => {
   const parent = presentThreadShell(EnvironmentId.make("remote"), v2ThreadShell);
   const child = (id: string, overrides: Partial<EnvironmentThreadShell> = {}) => ({
-    thread: { ...parent, id: ThreadId.make(id), title: id, ...overrides },
+    thread: {
+      ...parent,
+      id: ThreadId.make(id),
+      title: id,
+      profileSnapshot: {
+        profileId: "cody",
+        profileName: "Cody",
+        revision: 1,
+        effectiveSource: {
+          modelSelection: "profile",
+          runtimeMode: "profile",
+          interactionMode: "profile",
+          reasoningEffort: "profile",
+        },
+      } satisfies EnvironmentThreadShell["profileSnapshot"],
+      parentThreadId: parent.id,
+      lineage: {
+        rootThreadId: parent.id,
+        parentThreadId: parent.id,
+        relationshipToParent: "subagent" as const,
+      },
+      ...overrides,
+    },
     depth: 0,
     siblings: [],
   });
@@ -159,6 +181,7 @@ describe("agent card subagents", () => {
       root.render(<ThreadCard thread={parent} childRuns={runs} onContextMenu={vi.fn()} />),
     );
     expect(container.textContent).toContain("Finished worker 19");
+    expect(container.textContent).toContain("Cody");
     expect(container.textContent).not.toContain("Settled worker");
     const toggle = container.querySelector<HTMLButtonElement>(".agent-thread-children-settled")!;
     await act(async () => toggle.click());

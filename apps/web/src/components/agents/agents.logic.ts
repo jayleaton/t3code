@@ -164,6 +164,7 @@ type AgentRun = Pick<
   | "environmentId"
   | "id"
   | "parentThreadId"
+  | "lineage"
   | "createdAt"
   | "settledAt"
   | "pinnedAt"
@@ -234,6 +235,8 @@ function sortSiblingRuns<T extends AgentRun>(runs: readonly T[]): T[] {
 export function nestAgentRuns<T extends AgentRun>(input: {
   readonly lists: Readonly<Record<AgentRunList, readonly T[]>>;
   readonly all: readonly T[];
+  /** Only delegated relationships collapse in the sidebar; Agent chats stay first-class. */
+  readonly subagentsOnly?: boolean;
 }): {
   readonly lists: Readonly<Record<AgentRunList, readonly T[]>>;
   readonly childrenByKey: ReadonlyMap<string, AgentCardChildren<T>>;
@@ -246,7 +249,14 @@ export function nestAgentRuns<T extends AgentRun>(input: {
   for (const run of [...input.all, ...input.lists.pinned, ...input.lists.active]) {
     if (run.archivedAt === null) runByKey.set(threadKey(run), run);
   }
-  const parentKeyOf = (run: T) => agentRunParentKey(run);
+  const isSubagent = (run: T) =>
+    run.lineage.relationshipToParent === "subagent" && run.lineage.parentThreadId !== null;
+  const parentKeyOf = (run: T) =>
+    input.subagentsOnly
+      ? isSubagent(run)
+        ? threadKey({ environmentId: run.environmentId, id: run.lineage.parentThreadId! })
+        : null
+      : agentRunParentKey(run);
   const anchorByKey = new Map<string, string | null>();
   const resolveAnchor = (run: T, visiting: Set<string>): string | null => {
     const key = threadKey(run);
@@ -262,7 +272,7 @@ export function nestAgentRuns<T extends AgentRun>(input: {
       visiting.delete(key);
       if (
         candidate !== null &&
-        (listByKey.get(candidate) !== "settled" || run.settledAt !== null)
+        (input.subagentsOnly || listByKey.get(candidate) !== "settled" || run.settledAt !== null)
       ) {
         anchor = candidate;
       }
@@ -297,7 +307,9 @@ export function nestAgentRuns<T extends AgentRun>(input: {
     childrenByKey.set(anchor, { live, settled });
   }
   const keep = (runs: readonly T[]) =>
-    runs.filter((run) => anchorByKey.get(threadKey(run)) == null);
+    runs.filter((run) =>
+      input.subagentsOnly ? !isSubagent(run) : anchorByKey.get(threadKey(run)) == null,
+    );
   return {
     lists: {
       pinned: keep(input.lists.pinned),

@@ -22,6 +22,7 @@ export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
   const { lists, childrenByKey } = nestAgentRuns({
     lists: { pinned: [], active: inFocus, settled: [] },
     all: threads,
+    subagentsOnly: true,
   });
   const visible = lists.active;
   const runByKey = new Map(

@@ -201,8 +201,9 @@ export function AgentsBoard() {
         settled: excludePinnedAgentThreads(settled, allPinned),
       },
       all: threads,
+      subagentsOnly: selected,
     });
-  }, [threads, filter, query, allPinned]);
+  }, [threads, filter, query, allPinned, selected]);
   const pinned = nestedLists.pinned;
   const visible = useMemo(
     () => [...nestedLists.active, ...nestedLists.settled],
