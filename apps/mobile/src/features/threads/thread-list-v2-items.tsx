@@ -504,6 +504,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
   readonly onRenameThread: (thread: EnvironmentThreadShell) => void;
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => void;
+  /** Offered on named child agent chats; delegated subagents never reach this list. */
+  readonly onRemoveThreadFromParent?: (thread: EnvironmentThreadShell) => void;
   readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onSnoozeThread: (thread: EnvironmentThreadShell, snoozedUntil: string) => void;
   readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => void;
@@ -549,6 +551,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onDeleteThread,
     onRenameThread,
     onRegenerateThreadTitle,
+    onRemoveThreadFromParent,
     onNewThreadOnBranch,
     onSettleThread,
     onSnoozeThread,
@@ -818,6 +821,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "archive") handleArchive();
       if (nativeEvent.event === "rename") handleRename();
       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
+      if (nativeEvent.event === "remove-parent") onRemoveThreadFromParent?.(thread);
       if (nativeEvent.event === "copy-thread-id") {
         copyTextWithHaptic(thread.id, { target: "thread-id" });
       }
@@ -839,6 +843,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     },
     [
       onNewThreadOnBranch,
+      onRemoveThreadFromParent,
       thread,
       handleArchive,
       handleDelete,
@@ -1273,6 +1278,17 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                       id: "new-thread-on-branch",
                       title: getThreadListV2NewBranchMenuTitle(thread.branch),
                       image: "square.and.pencil",
+                    },
+                  ]
+                : []),
+              ...(onRemoveThreadFromParent &&
+              thread.parentThreadId != null &&
+              thread.lineage.relationshipToParent !== "subagent"
+                ? [
+                    {
+                      id: "remove-parent",
+                      title: "Remove from parent",
+                      image: "arrow.uturn.backward",
                     },
                   ]
                 : []),

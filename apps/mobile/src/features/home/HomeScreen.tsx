@@ -114,6 +114,7 @@ interface HomeScreenProps {
   ) => Promise<boolean>;
   readonly onRenameThread: (thread: EnvironmentThreadShell) => void;
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
+  readonly onRemoveThreadFromParent?: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onSelectPendingTask: (pendingTask: PendingNewTask) => void;
   readonly onDeletePendingTask: (pendingTask: PendingNewTask) => void;
   readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
@@ -444,6 +445,12 @@ export function HomeScreen(props: HomeScreenProps) {
     },
     [props.onRegenerateThreadTitle],
   );
+  const handleRemoveThreadFromParent = useCallback(
+    (thread: EnvironmentThreadShell) => {
+      void props.onRemoveThreadFromParent?.(thread);
+    },
+    [props.onRemoveThreadFromParent],
+  );
   const handleRenameThread = useCallback(
     (thread: EnvironmentThreadShell) => props.onRenameThread(thread),
     [props.onRenameThread],
@@ -752,6 +759,7 @@ export function HomeScreen(props: HomeScreenProps) {
           onArchiveThread={props.onArchiveThread}
           onRenameThread={handleRenameThread}
           onRegenerateThreadTitle={handleRegenerateThreadTitle}
+          onRemoveThreadFromParent={handleRemoveThreadFromParent}
           titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
           settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
           onSettleThread={handleSettleThread}
@@ -784,6 +792,7 @@ export function HomeScreen(props: HomeScreenProps) {
       handleMoveThread,
       handlePinThread,
       handleRegenerateThreadTitle,
+      handleRemoveThreadFromParent,
       handleRenameThread,
       handleSettleThread,
       handleSnoozeThread,
