@@ -160,7 +160,8 @@ expires.
 To remove an environment from T3 Connect, open your account menu's **T3 Connect**
 page, or **Settings → T3 Connect** on mobile, and choose **Deregister**. This
 revokes its cloud access and frees its host space even when the environment is
-offline or has been wiped.
+offline or has been wiped. Removing an environment from a device's connection
+settings only forgets it on that device; it stays registered to your account.
 
 When idle tunnel cleanup is enabled, T3 Connect removes a linked environment's
 tunnel after it stays offline for several minutes. The environment stays linked
@@ -200,11 +201,11 @@ devices. For server version warnings, follow [Updating T3 Code](./updating.md).
 
 ## Use MCP with connected environments
 
-Enable **Settings → MCP Gateway** in the desktop app, then grant access to the environments
-that your agents need. New T3-managed agent sessions on granted environments receive the
-gateway tools automatically, including sessions running on remote machines. Restart existing
-agent sessions to attach the gateway. Keep this desktop connected while the agents use it.
-Disabling the gateway disconnects managed gateway sessions immediately.
+Agents in T3 Code chats always have the T3 Agents tools for the machine they run on. To let
+them act on your other machines too, enable **Settings → MCP Gateway** in the desktop app and
+grant access to each environment involved, including the one the chat runs on. Keep this
+desktop connected while agents use it; calls for other machines go through it, under the
+grants you set. Disabling the gateway stops those calls immediately.
 
 For assistants outside T3 Code, copy the external MCP host configuration from the same page.
 For standalone OpenCode, merge **Copy OpenCode config** into `~/.config/opencode/opencode.jsonc`
@@ -223,6 +224,27 @@ lifecycle, and subscribe to events or webhook delivery when permitted. Agents ar
 Agents board; changing an agent does not change existing chats. Mobile Home opens to **Agents**: choose an agent to start a chat in an existing environment, or switch to **Threads** for all threads. Configure agents on web or desktop. Use `t3_list_environments`
 to check the environment IDs and effective grants seen by the assistant. Permission errors also
 report the granted and missing scopes.
+
+`t3_list_threads`, `t3_list_projects`, `t3_list_agents`, and `t3_get_agents_view` cover every
+connected machine with read access when `environmentId` is omitted. Each result names its
+machine with `environmentId` and `environmentLabel`, and `environments` lists any machine that
+was skipped (disconnected or without read access) or failed, so a missing chat is not mistaken
+for one that does not exist. Pass `environmentId` to list one machine.
+
+Listings stay small by leaving out agent system prompts. A chat's `profileSnapshot` in
+`t3_list_threads` keeps the agent's `profileId`, `profileName`, and `revision`; read the chat with
+`t3_get_thread` to see the prompt it runs with. Pass `includeSystemPrompt: true` to
+`t3_list_agents` when you need each agent's current prompt, for example before `t3_update_agent`.
+
+### Answer an agent's questions through MCP
+
+When an agent asks a question with answer options, its chat shows `waiting-input`, and
+`t3_list_threads` marks it with `hasPendingUserInput` (pass `includeQuestions: true` to include
+the questions). `t3_get_pending_questions` returns each question's full text, its options, whether
+several options can be chosen, and whether a typed answer is accepted. `t3_answer_question`
+answers with option labels or typed text, and the chat continues as if you had answered in the
+app. Every question in the request needs an answer. Answering needs the same send access as
+`t3_send_message`.
 
 ### Pause or stop work through MCP
 
@@ -290,19 +312,21 @@ Add a short **Specialization** when creating or editing an agent to show what it
 MCP assistants can discover agents with read access using `t3_list_agents`, or manage them using `t3_create_agent`, `t3_update_agent`, and `t3_delete_agent` with create
 or admin access. Agent writes share only to connected environments with one of those grants;
 check the returned sync failures. Use `profileId` with `t3_create_thread` to select an agent and its initial settings,
-then `t3_send_message` to start work, or `t3_create_and_start_thread` to create the chat and send its opening task in one idempotent call. The environment-local `/mcp/workspace` endpoint exposes `list_agents` and `get_agents_view` with the same profile and state filters, using runs from its hosting machine. Agent listings include specializations without exposing system prompts. Use `t3_get_agents_view` with an `environmentId` to list agents alongside their chats and run status. Filter by `profileId`, `state` (`active`, `settled`, or `all`; active is the default and includes completed chats that have not been settled), and `executionState` (`running`, `queued`, `waiting-approval`, `waiting-input`, `completed`, `failed`, `interrupted`, `stopped`, or `idle`). Chats belonging to deleted agents appear under `orphanedRuns`. To follow one chat without polling, use `t3_wait_for_thread_status`, which returns the new status and a resume cursor when it changes or the bounded timeout elapses. Use `t3_unsettle_thread`
+then `t3_send_message` to start work, or `t3_create_and_start_thread` to create the chat and send its opening task in one idempotent call. The environment-local `/mcp/workspace` endpoint exposes `list_agents` and `get_agents_view` with the same profile and state filters, using runs from its hosting machine. Agent listings include specializations without exposing system prompts. Use `t3_get_agents_view` to list agents alongside their chats and run status. Filter by `profileId`, `state` (`active`, `settled`, or `all`; active is the default and includes completed chats that have not been settled), and `executionState` (`running`, `queued`, `waiting-approval`, `waiting-input`, `completed`, `failed`, `interrupted`, `stopped`, or `idle`). Chats belonging to deleted agents appear under `orphanedRuns`. To follow one chat without polling, use `t3_wait_for_thread_status`, which returns the new status and a resume cursor when it changes or the bounded timeout elapses. Use `t3_unsettle_thread`
 with lifecycle access to return a settled chat to the active list. `t3_open_agents` opens the
 board in the connected desktop window with read access.
 
 ### Sub-agent runs
 
 When an agent's chat creates chats through the MCP gateway (`t3_create_thread` or
-`t3_create_and_start_thread`), each new chat is recorded as a sub-run of the chat that created
-it. This happens without the agent doing anything extra. Pass `parentThreadId` to attach a
-new chat to another chat in the same environment, or `parentThreadId: null` for a standalone
-chat. `t3_list_threads` accepts `parentThreadId` to list a chat's sub-runs. To regroup existing
-chats, `t3_set_thread_parent` moves a chat under another chat, or detaches it with
-`parentThreadId: null`; it needs lifecycle access.
+`t3_create_and_start_thread`) or its own T3 tools (`delegate_task`, `t3_thread_launch`, or
+`create_threads`), each new chat is recorded as a sub-run of the chat that created it. This
+happens without the agent doing anything extra. This works across machines too. Pass `parentThreadId` (with
+`parentEnvironmentId` when that chat is on another machine) to attach a new chat to another
+chat, or `parentThreadId: null` for a standalone chat. `t3_list_threads` accepts `parentThreadId` to list a chat's sub-runs. To regroup existing
+chats, `t3_set_thread_parent` moves a chat under another chat on any machine, or detaches it
+with `parentThreadId: null`; it needs lifecycle access. On the board, drag a run onto a card
+from any connected machine.
 
 On the Agents board, sub-runs appear inside the card of the run that created them, including
 runs by other agents. Each one shows its agent, title, and status; click it to open that chat.
@@ -310,6 +334,16 @@ Right-click a sub-run for the same actions as a card. **Pin to top of parent** k
 its parent's list, **Move up** and **Move down** arrange it among its siblings, and settling moves
 it into its parent's collapsed **Settled** group. A live sub-run whose parent is settled keeps its
 own card, which names its parent's agent and chat; click that name to open the parent.
+
+Settling a run also settles its sub-runs, at every depth, including when the run settles
+automatically. Settling never stops work: a sub-run that is still working or waiting on an approval
+stays active and settles with its parent when it finishes. Automatic settlement leaves alone a
+sub-run you un-settled or turned auto-settle off for. Un-settling the run brings back the sub-runs
+that settled with it; ones you settled earlier stay settled.
+
+A sub-run an agent created settles on its own when it finishes, unless it is waiting on a question
+or an approval. When its parent sends it more work it returns to the active list, and it settles
+again when that work finishes. Turn off auto-settle on a sub-run to keep it active.
 
 To link runs yourself on web and desktop, drag a card onto another card's title to make it a
 sub-run, or drag a sub-run out of its card to make it independent. Dragging a sub-run onto
@@ -332,6 +366,11 @@ run. MCP assistants can manage tasks with `t3_list_scheduled_tasks`, `t3_create_
 `t3_update_scheduled_task`, and `t3_delete_scheduled_task` (create or admin access), and run one
 immediately with `t3_run_scheduled_task` (send access). Pass `runAt` for a single run, or `cron`
 with an optional IANA `timezone` for a repeating one.
+
+MCP assistants can keep a project's [TODO list](./thread-sidebar.md#keep-a-todo-list) with
+`t3_list_todos` (read access) and `t3_add_todo`, `t3_update_todo`, `t3_settle_todo`,
+`t3_unsettle_todo`, and `t3_remove_todo` (create or admin access). Settling marks a todo done
+and is reversible; removing deletes it.
 
 Ask an assistant connected to the **T3 Agents MCP** to create a shared skill and assign it to
 an agent. For example: “Create a shared skill for reviewing pull requests and assign it to Randy.”

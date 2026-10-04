@@ -1,8 +1,9 @@
 import type {
   AgentSkill,
   ScheduledTask,
-  ScheduledTaskCreateInput,
-  ScheduledTaskUpdateInput,
+  ScheduledTaskSchedule,
+  Todo,
+  TodoListResult,
 } from "@t3tools/contracts";
 import type { AgentHandoffInput, AgentHandoffResult } from "./handoff.ts";
 export const GATEWAY_SCOPE_VALUES = [
@@ -163,12 +164,23 @@ export type GatewayScheduledTaskRequest =
   | { readonly action: "delete"; readonly taskId: string }
   | { readonly action: "run"; readonly taskId: string };
 
-export type GatewayScheduledTaskCreate = Omit<ScheduledTaskCreateInput, "projectId"> & {
+/** Agent-facing task fields; the runtime resolves the profile's model and modes. */
+export interface GatewayScheduledTaskCreate {
+  /** Defaults to the first line of the prompt. */
+  readonly title?: string;
+  readonly prompt: string;
+  readonly profileId: string;
   readonly projectId: string;
-};
-export type GatewayScheduledTaskPatch = Omit<ScheduledTaskUpdateInput["patch"], "projectId"> & {
-  readonly projectId?: string;
-};
+  readonly schedule: ScheduledTaskSchedule;
+  readonly enabled?: boolean;
+}
+export type GatewayScheduledTaskPatch = Partial<GatewayScheduledTaskCreate>;
+
+export type GatewayTodoRequest =
+  | { readonly action: "list"; readonly projectId: string }
+  | { readonly action: "add"; readonly projectId: string; readonly text: string }
+  | { readonly action: "update"; readonly todoId: string; readonly text: string }
+  | { readonly action: "remove" | "settle" | "unsettle"; readonly todoId: string };
 
 export interface GatewayPage<T> {
   readonly items: ReadonlyArray<T>;
@@ -380,11 +392,12 @@ export interface GatewayRuntimePort {
   handoffThread?(input: AgentHandoffInput): Promise<AgentHandoffResult>;
   unsettleThread?(environmentId: string, threadId: string): Promise<{ status: "succeeded" }>;
   settleThread?(environmentId: string, threadId: string): Promise<{ status: "succeeded" }>;
-  /** Links a chat under the chat that owns its work, or unlinks it with null. */
+  /** Links a chat under the chat that owns its work, which may be on another environment. */
   setThreadParent?(
     environmentId: string,
     threadId: string,
     parentThreadId: string | null,
+    parentEnvironmentId?: string,
   ): Promise<{ status: "succeeded" }>;
   openAgents?(environmentId: string): Promise<{ status: "succeeded" }>;
   createProfile?(environmentId: string, profile: GatewayProfileInput): Promise<GatewayProfile>;
@@ -424,6 +437,11 @@ export interface GatewayRuntimePort {
   ): Promise<
     { readonly tasks: ReadonlyArray<ScheduledTask> } | ScheduledTask | { readonly deleted: string }
   >;
+  /** List, add, update, remove, settle, or unsettle a project's todos. */
+  todo?(
+    environmentId: string,
+    request: GatewayTodoRequest,
+  ): Promise<TodoListResult | Todo | { readonly removed: string }>;
   getEnvironmentStatus(environmentId: string): Promise<Record<string, unknown>>;
   listProfiles?(environmentId: string): Promise<ReadonlyArray<GatewayProfile>>;
   /** Resolve readable profile labels against the environment's live provider catalog. */
@@ -436,15 +454,6 @@ export interface GatewayRuntimePort {
   getThread(environmentId: string, threadId: string): Promise<Record<string, unknown>>;
   /** Check complete authoritative thread state rather than the bounded display projection. */
   hasThreadMessage?(environmentId: string, threadId: string, messageId: string): Promise<boolean>;
-  createAssetUrl(
-    environmentId: string,
-    resource:
-      | { readonly _tag: "attachment"; readonly attachmentId: string }
-      | { readonly _tag: "workspace-file"; readonly threadId: string; readonly path: string },
-  ): Promise<{
-    readonly relativeUrl: string;
-    readonly expiresAt: number;
-  }>;
   getPullRequest(
     environmentId: string,
     ref: { readonly projectId: string; readonly repository: string; readonly number: number },
@@ -482,6 +491,8 @@ export interface GatewayRuntimePort {
     readonly workspaceMode?: "checkout" | "worktree";
     readonly baseBranch?: string;
     readonly parentThreadId?: string;
+    /** Environment of `parentThreadId` when it is another machine's chat. */
+    readonly parentEnvironmentId?: string;
     readonly requestId: string;
     readonly profileSelection?: {
       readonly profileId: string;
@@ -505,21 +516,22 @@ export interface GatewayRuntimePort {
     readonly requestId: string;
     readonly messageId: string;
   }): Promise<GatewayMutationResult>;
-  respondToApprovals?(input: {
-    readonly environmentId: string;
-    readonly threadId: string;
-    readonly responses: ReadonlyArray<{
-      readonly approvalRequestId: string;
-      readonly decision: GatewayApprovalDecision;
-    }>;
-    readonly expectedRevision: number;
-    readonly requestId: string;
-  }): Promise<GatewayMutationResult>;
   respondToApproval(input: {
     readonly environmentId: string;
     readonly threadId: string;
     readonly approvalRequestId: string;
     readonly decision: GatewayApprovalDecision;
+    readonly requestId: string;
+  }): Promise<GatewayMutationResult>;
+  /**
+   * Answers a question the agent is waiting on. `answers` maps each question id
+   * to an option value, several values for multi-select, or free text.
+   */
+  respondToUserInput?(input: {
+    readonly environmentId: string;
+    readonly threadId: string;
+    readonly userInputRequestId: string;
+    readonly answers: Readonly<Record<string, string | ReadonlyArray<string>>>;
     readonly requestId: string;
   }): Promise<GatewayMutationResult>;
   /** Extended v3 operations that map directly to authoritative server RPCs.

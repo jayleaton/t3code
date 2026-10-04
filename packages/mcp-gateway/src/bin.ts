@@ -6,7 +6,7 @@ import * as NodePath from "node:path";
 import { GATEWAY_SCOPE_VALUES } from "./port.ts";
 import type { GatewayScope } from "./port.ts";
 import { connectSharedGateway, launchSharedOwner, proxyMcpStdio } from "./sharedLauncher.ts";
-import { startSharedGatewayOwner, type SharedGatewayConfig } from "./sharedOwner.ts";
+import { gatewayBuild, startSharedGatewayOwner, type SharedGatewayConfig } from "./sharedOwner.ts";
 
 function parseGrants(
   raw: string | undefined,
@@ -64,8 +64,11 @@ const config: SharedGatewayConfig = {
 };
 
 try {
+  const entryPoint = process.argv[1]!;
+  const build = gatewayBuild(entryPoint);
   if (process.argv.includes("--shared-owner")) {
     const owner = await startSharedGatewayOwner(config, {
+      build,
       onIdle: () => {
         void owner?.close();
       },
@@ -86,10 +89,15 @@ try {
       process.once("SIGTERM", stop);
     }
   } else {
-    const remote = await connectSharedGateway(config, async () => {
-      await launchSharedOwner(process.argv[1]!, config);
-    });
-    await proxyMcpStdio(remote);
+    const connect = () =>
+      connectSharedGateway(
+        config,
+        async () => {
+          await launchSharedOwner(entryPoint, config);
+        },
+        build.id,
+      );
+    await proxyMcpStdio(await connect(), connect);
   }
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);

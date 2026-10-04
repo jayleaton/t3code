@@ -26,7 +26,7 @@ export const connectPairingUrl = createRuntimeCommand(connectionAtomRuntime, {
             detail: cause instanceof Error ? cause.message : "The pairing details are invalid.",
           }),
       });
-      const onboarding = yield* ConnectionOnboarding;
+      const onboarding = yield* ConnectionOnboarding.ConnectionOnboarding;
       return yield* onboarding.registerPairing({ pairingUrl });
     }),
 });
@@ -42,5 +42,8 @@ export const updateBearerConnection = createRuntimeCommand(connectionAtomRuntime
     readonly environmentId: EnvironmentId;
     readonly label: string;
     readonly httpBaseUrl: string;
-  }) => ConnectionOnboarding.pipe(Effect.flatMap((onboarding) => onboarding.updateBearer(input))),
+  }) =>
+    ConnectionOnboarding.ConnectionOnboarding.pipe(
+      Effect.flatMap((onboarding) => onboarding.updateBearer(input)),
+    ),
 });

@@ -38,6 +38,7 @@ import { AgentEditor } from "./AgentEditor";
 import { AgentTaskDialog } from "./AgentTaskDialog";
 import { AgentsLoadingNotice } from "./AgentsLoadingNotice";
 import {
+  agentRunParentKey,
   excludePinnedAgentThreads,
   groupAgentThreads,
   nestAgentRuns,
@@ -63,6 +64,7 @@ function AgentThreadList({
   profiles,
   childrenByKey,
   runByKey,
+  compactChildren,
 }: {
   profiles: readonly McpGatewayProfile[];
   threads: readonly EnvironmentThreadShell[];
@@ -70,6 +72,7 @@ function AgentThreadList({
   childrenByKey: ReadonlyMap<string, AgentCardChildren<EnvironmentThreadShell>>;
   runByKey: ReadonlyMap<string, EnvironmentThreadShell>;
   onContextMenu: AgentRunContextMenu;
+  compactChildren: boolean;
 }) {
   const [settledOpen, setSettledOpen] = useState(false);
   const active = threads.filter((thread) => thread.settledAt === null);
@@ -82,11 +85,11 @@ function AgentThreadList({
       profile={profiles.find((profile) => profile.profileId === thread.profileSnapshot?.profileId)}
       profiles={profiles}
       childRuns={childrenByKey.get(`${thread.environmentId}:${thread.id}`)}
-      parentRun={
-        thread.parentThreadId == null
-          ? null
-          : runByKey.get(`${thread.environmentId}:${thread.parentThreadId}`)
-      }
+      compactChildren={compactChildren}
+      parentRun={(() => {
+        const parentKey = agentRunParentKey(thread);
+        return parentKey === null ? null : runByKey.get(parentKey);
+      })()}
       onContextMenu={onContextMenu}
     />
   );
@@ -198,8 +201,9 @@ export function AgentsBoard() {
         settled: excludePinnedAgentThreads(settled, allPinned),
       },
       all: threads,
+      subagentsOnly: selected,
     });
-  }, [threads, filter, query, allPinned]);
+  }, [threads, filter, query, allPinned, selected]);
   const pinned = nestedLists.pinned;
   const visible = useMemo(
     () => [...nestedLists.active, ...nestedLists.settled],
@@ -502,6 +506,7 @@ export function AgentsBoard() {
             profiles={profiles}
             childrenByKey={childrenByKey}
             runByKey={runByKey}
+            compactChildren={selected}
             onContextMenu={onThreadContextMenu}
           />
         </section>

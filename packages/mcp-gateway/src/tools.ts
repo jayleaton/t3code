@@ -36,7 +36,7 @@ export interface GatewayToolContext {
   };
 }
 
-/** The T3 chat whose agent made a relayed tool call, as stamped by its server. */
+/** The T3 chat whose agent made a tool call, when it came from a thread. */
 export interface GatewayCaller {
   readonly environmentId: string;
   readonly threadId: string;
@@ -44,19 +44,6 @@ export interface GatewayCaller {
 
 export interface GatewayInvocation {
   readonly caller?: GatewayCaller | undefined;
-}
-
-/** Reads the caller the environment server stamps into `_meta` of relayed tool calls. */
-export function gatewayCaller(meta: unknown): GatewayCaller | undefined {
-  const caller =
-    typeof meta === "object" && meta !== null
-      ? (meta as Record<string, unknown>)["t3code/caller"]
-      : undefined;
-  if (typeof caller !== "object" || caller === null) return undefined;
-  const { environmentId, threadId } = caller as Record<string, unknown>;
-  return typeof environmentId === "string" && typeof threadId === "string"
-    ? { environmentId, threadId }
-    : undefined;
 }
 
 export const handoffInputSchema = z.object({
@@ -171,51 +158,6 @@ function record(input: unknown): Record<string, unknown> {
   return input as Record<string, unknown>;
 }
 
-function gatewayArtifactRecord(value: unknown): Readonly<Record<string, unknown>> | undefined {
-  const artifact = record(value);
-  const artifactId = typeof artifact.artifactId === "string" ? artifact.artifactId : undefined;
-  const kind =
-    artifact.kind === "attachment" || artifact.kind === "workspace-file"
-      ? artifact.kind
-      : undefined;
-  const sourceId = typeof artifact.sourceId === "string" ? artifact.sourceId : undefined;
-  const availability =
-    artifact.availability === "available" ||
-    artifact.availability === "unavailable" ||
-    artifact.availability === "deleted"
-      ? artifact.availability
-      : undefined;
-  if (
-    artifactId === undefined ||
-    kind === undefined ||
-    sourceId === undefined ||
-    availability === undefined
-  ) {
-    return undefined;
-  }
-  const path = typeof artifact.path === "string" ? artifact.path : undefined;
-  if (
-    path !== undefined &&
-    (path.startsWith("/") ||
-      path.startsWith("\\") ||
-      /^[a-z]:[\\/]/i.test(path) ||
-      path.split(/[\\/]/).includes(".."))
-  ) {
-    return undefined;
-  }
-  return {
-    artifactId,
-    kind,
-    sourceId,
-    availability,
-    ...(typeof artifact.name === "string" ? { name: artifact.name.slice(0, 512) } : {}),
-    ...(path === undefined ? {} : { path }),
-    ...(typeof artifact.mimeType === "string" ? { mimeType: artifact.mimeType.slice(0, 255) } : {}),
-    ...(typeof artifact.sizeBytes === "number" ? { sizeBytes: artifact.sizeBytes } : {}),
-    ...(typeof artifact.createdAt === "string" ? { createdAt: artifact.createdAt } : {}),
-  };
-}
-
 function requiredString(input: Record<string, unknown>, key: string): string {
   const value = input[key];
   if (typeof value !== "string" || value.trim() === "") {
@@ -253,14 +195,14 @@ function scheduleFromInput(input: Record<string, unknown>): ScheduledTaskSchedul
   if (runAt !== undefined && cron !== undefined) throw invalid("Pass runAt or cron, not both.");
   if (runAt !== undefined) {
     if (input.timezone !== undefined) throw invalid("timezone applies to cron only.");
-    return { kind: "once", runAt };
+    return { type: "once", runAt };
   }
   if (cron !== undefined) {
     const timezone =
       typeof input.timezone === "string"
         ? input.timezone
         : Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return { kind: "cron", expression: cron, timezone };
+    return { type: "cron", expression: cron, timezone };
   }
   if (input.timezone !== undefined) throw invalid("timezone requires cron.");
   return undefined;
@@ -345,6 +287,239 @@ function environmentWithAnyScope(
     });
   }
   return environmentId;
+}
+
+interface DiscoveryTarget {
+  readonly environmentId: string;
+  readonly environmentLabel: string;
+}
+
+interface EnvironmentCoverage extends DiscoveryTarget {
+  readonly connectionState: string;
+  readonly status: "listed" | "skipped" | "failed";
+  readonly reason?: string;
+}
+
+/**
+ * Runs a read listing on the requested environment, or on every granted environment when
+ * environmentId is omitted. Fan-out results come with coverage so a caller can tell an empty
+ * machine from one that was disconnected, lacked read access, or failed.
+ */
+async function discover<T>(
+  context: GatewayToolContext,
+  input: Record<string, unknown>,
+  list: (target: DiscoveryTarget) => Promise<T>,
+): Promise<{
+  readonly results: ReadonlyArray<{ readonly target: DiscoveryTarget; readonly value: T }>;
+  readonly coverage?: ReadonlyArray<EnvironmentCoverage>;
+}> {
+  if (input.environmentId !== undefined) {
+    const environmentId = environmentWithScope(context, input, "read");
+    const environments = await context.port.listEnvironments();
+    const environmentLabel =
+      environments.find((environment) => environment.environmentId === environmentId)?.label ??
+      environmentId;
+    const target = { environmentId, environmentLabel };
+    return { results: [{ target, value: await list(target) }] };
+  }
+  const environments = await context.port.listEnvironments();
+  const grants = currentGrants(context.grants);
+  const outcomes = await Promise.all(
+    environments
+      .filter((environment) => grants[environment.environmentId] !== undefined)
+      .map(
+        async (
+          environment,
+        ): Promise<{
+          readonly coverage: EnvironmentCoverage;
+          readonly listed?: { readonly target: DiscoveryTarget; readonly value: T };
+        }> => {
+          const target = {
+            environmentId: environment.environmentId,
+            environmentLabel: environment.label,
+          };
+          const base = { ...target, connectionState: environment.connectionState };
+          if (!grants[environment.environmentId]?.includes("read")) {
+            return { coverage: { ...base, status: "skipped", reason: "read not granted" } };
+          }
+          if (environment.connectionState !== "connected") {
+            return {
+              coverage: { ...base, status: "skipped", reason: environment.connectionState },
+            };
+          }
+          try {
+            const value = await list(target);
+            return { listed: { target, value }, coverage: { ...base, status: "listed" } };
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            return { coverage: { ...base, status: "failed", reason } };
+          }
+        },
+      ),
+  );
+  return {
+    results: outcomes.flatMap((outcome) => (outcome.listed === undefined ? [] : [outcome.listed])),
+    coverage: outcomes.map((outcome) => outcome.coverage),
+  };
+}
+
+/** Merges per-environment pages; a single-environment page keeps its own shape. */
+function discoveredPage(
+  discovered: Awaited<ReturnType<typeof discover<GatewayListPage>>>,
+): GatewayListPage & { readonly environments?: ReadonlyArray<EnvironmentCoverage> } {
+  const items = discovered.results.flatMap(({ value }) => value.items);
+  if (discovered.coverage === undefined) return { ...discovered.results[0]!.value, items };
+  return { items, environments: discovered.coverage, snapshotAt: "runtime" };
+}
+
+type GatewayListPage = {
+  readonly items: ReadonlyArray<Record<string, unknown>>;
+  readonly nextCursor?: string;
+  readonly snapshotAt: string;
+};
+
+/**
+ * Drops the system prompt from a listed thread's profile snapshot. Listings repeat the same
+ * few-KB prompt per chat; t3_get_thread still returns it for one chat.
+ */
+function withoutSystemPrompt(thread: Record<string, unknown>): Record<string, unknown> {
+  const snapshot = thread.profileSnapshot;
+  if (typeof snapshot !== "object" || snapshot === null || !("systemPrompt" in snapshot)) {
+    return thread;
+  }
+  const { systemPrompt: _systemPrompt, ...rest } = snapshot as Record<string, unknown>;
+  return { ...thread, profileSnapshot: rest };
+}
+
+function tagged(target: DiscoveryTarget, page: GatewayListPage): GatewayListPage {
+  return { ...page, items: page.items.map((item) => ({ ...item, ...target })) };
+}
+
+async function listGatewayThreads(
+  context: GatewayToolContext,
+  target: DiscoveryTarget,
+  input: Record<string, unknown>,
+): Promise<GatewayListPage> {
+  const { environmentId } = target;
+  const state = z.enum(["all", "active", "settled"]).default("all").parse(input.state);
+  const executionState = parseExecutionStateFilter(input);
+  const page = await context.port.listThreads(environmentId);
+  const projectId = typeof input.projectId === "string" ? input.projectId : undefined;
+  const profileId = typeof input.profileId === "string" ? input.profileId : undefined;
+  const parentThreadId =
+    typeof input.parentThreadId === "string" ? input.parentThreadId : undefined;
+  const parentEnvironmentId =
+    typeof input.parentEnvironmentId === "string" ? input.parentEnvironmentId : undefined;
+  const items = page.items
+    .filter((thread) => {
+      const snapshot = thread.profileSnapshot as { profileId?: string } | undefined;
+      return (
+        (projectId === undefined || thread.projectId === projectId) &&
+        (parentThreadId === undefined ||
+          (thread.parentThreadId === parentThreadId &&
+            (parentEnvironmentId === undefined ||
+              (thread.parentEnvironmentId ?? environmentId) === parentEnvironmentId))) &&
+        (profileId === undefined || snapshot?.profileId === profileId) &&
+        (state === "all" ||
+          (state === "settled" ? thread.settledAt != null : thread.settledAt == null)) &&
+        (executionState === undefined || readThreadExecutionState(thread) === executionState)
+      );
+    })
+    .map(withoutSystemPrompt);
+  if (input.includeQuestions !== true) return tagged(target, { ...page, items });
+  // Only chats waiting on a question need a detail read; the rest pass through.
+  return tagged(target, {
+    ...page,
+    items: await Promise.all(
+      items.map(async (thread) =>
+        thread.hasPendingUserInput === true && typeof thread.id === "string"
+          ? {
+              ...thread,
+              pendingQuestions: pendingQuestionsOf(
+                await context.port.getThread(environmentId, thread.id),
+              ),
+            }
+          : thread,
+      ),
+    ),
+  });
+}
+
+async function agentsView(
+  context: GatewayToolContext,
+  target: DiscoveryTarget,
+  input: Record<string, unknown>,
+) {
+  const { environmentId } = target;
+  const { profileId, state } = z
+    .object({
+      profileId: z.string().trim().min(1).optional(),
+      state: z.enum(["active", "settled", "all"]).default("active"),
+    })
+    .parse(input);
+  const executionState = parseExecutionStateFilter(input);
+  const [profiles, page] = await Promise.all([
+    authoritativeProfiles(context, environmentId),
+    context.port.listThreads(environmentId),
+  ]);
+  const runsByProfile = new Map<string, Record<string, unknown>[]>();
+  for (const thread of page.items) {
+    const snapshot = thread.profileSnapshot as { profileId?: string } | null | undefined;
+    const agentId = snapshot?.profileId;
+    if (!agentId || (profileId !== undefined && profileId !== agentId)) continue;
+    if (
+      state !== "all" &&
+      (state === "settled" ? thread.settledAt == null : thread.settledAt != null)
+    )
+      continue;
+    if (executionState !== undefined && readThreadExecutionState(thread) !== executionState)
+      continue;
+    const runs = runsByProfile.get(agentId) ?? [];
+    runs.push({
+      threadId: thread.id,
+      ...target,
+      projectId: thread.projectId,
+      title: thread.title,
+      status: thread.status,
+      settledAt: thread.settledAt ?? null,
+      createdAt: thread.createdAt,
+      updatedAt: thread.updatedAt,
+    });
+    runsByProfile.set(agentId, runs);
+  }
+  const items = profiles
+    .filter((profile) => profileId === undefined || profile.profileId === profileId)
+    .map((profile) => {
+      const runs = profile.profileId ? (runsByProfile.get(profile.profileId) ?? []) : [];
+      if (profile.profileId) runsByProfile.delete(profile.profileId);
+      return {
+        profileId: profile.profileId,
+        name: profile.name,
+        description: profile.description ?? "",
+        providerLabel: profile.providerLabel,
+        modelLabel: profile.modelLabel,
+        environmentIds: profile.environmentIds ?? [],
+        runs,
+      };
+    });
+  return {
+    environmentId,
+    items,
+    orphanedRuns: [...runsByProfile].flatMap(([profileId, runs]) =>
+      runs.map((run) => ({ ...run, profileId })),
+    ),
+    snapshotAt: page.snapshotAt,
+  };
+}
+
+/** Profiles the shared library makes available on one environment. */
+async function availableProfiles(context: GatewayToolContext, environmentId: string) {
+  return (await authoritativeProfiles(context, environmentId)).filter(
+    (profile) =>
+      !Array.isArray(profile.environmentIds) ||
+      profile.environmentIds.length === 0 ||
+      profile.environmentIds.includes(environmentId),
+  );
 }
 
 function idFor(kind: string, idempotencyKey: string): string {
@@ -488,7 +663,160 @@ function isStaleApprovalFailure(payload: Record<string, unknown>): boolean {
   );
 }
 
+type PendingQuestion = {
+  readonly questionId: string;
+  readonly header: string;
+  readonly question: string;
+  readonly multiSelect: boolean;
+  readonly allowsFreeText: boolean;
+  readonly options: ReadonlyArray<{
+    readonly label: string;
+    readonly description: string;
+    readonly value?: string;
+  }>;
+};
+type PendingQuestionRequest = {
+  readonly questionRequestId: string;
+  readonly askedAt: string;
+  readonly questions: ReadonlyArray<PendingQuestion>;
+};
+
+/** Questions the runtime projected onto a thread; empty for runtimes that predate them. */
+function pendingQuestionsOf(
+  thread: Record<string, unknown>,
+): ReadonlyArray<PendingQuestionRequest> {
+  return Array.isArray(thread.pendingQuestions)
+    ? (thread.pendingQuestions as ReadonlyArray<PendingQuestionRequest>)
+    : [];
+}
+
+type QuestionAnswerInput = {
+  readonly questionId?: string | undefined;
+  readonly options?: ReadonlyArray<string> | undefined;
+  readonly text?: string | undefined;
+};
+
+function invalidAnswer(message: string, request: PendingQuestionRequest): GatewayError {
+  return new GatewayError({
+    code: "invalid_input",
+    message,
+    retryable: false,
+    details: { questionRequestId: request.questionRequestId, questions: request.questions },
+  });
+}
+
+/**
+ * Turns chosen option labels or free text into the answers a provider expects:
+ * each question id maps to its option value (the label when there is none),
+ * a list of values for multi-select, or the text. Mirrors the composer's rules.
+ */
+export function resolveQuestionAnswers(
+  request: PendingQuestionRequest,
+  answers: ReadonlyArray<QuestionAnswerInput>,
+): Record<string, string | ReadonlyArray<string>> {
+  const resolved = new Map<string, string | ReadonlyArray<string>>();
+  for (const answer of answers) {
+    const question =
+      answer.questionId === undefined
+        ? request.questions.length === 1
+          ? request.questions[0]
+          : undefined
+        : request.questions.find((candidate) => candidate.questionId === answer.questionId);
+    if (question === undefined) {
+      throw invalidAnswer(
+        answer.questionId === undefined
+          ? `This request asks ${request.questions.length} questions; pass questionId with each answer.`
+          : `Question ${answer.questionId} is not part of this request.`,
+        request,
+      );
+    }
+    if (resolved.has(question.questionId)) {
+      throw invalidAnswer(`"${question.header}" was answered more than once.`, request);
+    }
+    const text = answer.text?.trim() ?? "";
+    const choices = answer.options ?? [];
+    if (text !== "" && choices.length > 0) {
+      throw invalidAnswer(
+        `Answer "${question.header}" with options or with text, not both.`,
+        request,
+      );
+    }
+    if (text !== "") {
+      if (!question.allowsFreeText) {
+        throw invalidAnswer(`"${question.header}" only accepts one of its options.`, request);
+      }
+      resolved.set(question.questionId, text);
+      continue;
+    }
+    if (choices.length === 0) {
+      throw invalidAnswer(`Pass options or text for "${question.header}".`, request);
+    }
+    const values = [
+      ...new Set(
+        choices.map((choice) => {
+          const wanted = choice.trim().toLocaleLowerCase();
+          const option =
+            question.options.find((candidate) => (candidate.value ?? candidate.label) === choice) ??
+            question.options.find(
+              (candidate) =>
+                candidate.label.trim().toLocaleLowerCase() === wanted ||
+                candidate.value?.trim().toLocaleLowerCase() === wanted,
+            );
+          if (option === undefined) {
+            throw invalidAnswer(
+              `"${choice}" is not an option for "${question.header}". Options: ${question.options.map((candidate) => candidate.label).join(", ")}.`,
+              request,
+            );
+          }
+          return option.value ?? option.label;
+        }),
+      ),
+    ];
+    if (!question.multiSelect && values.length !== 1) {
+      throw invalidAnswer(`"${question.header}" takes exactly one option.`, request);
+    }
+    resolved.set(question.questionId, question.multiSelect ? values : values[0]!);
+  }
+  const missing = request.questions.filter((question) => !resolved.has(question.questionId));
+  if (missing.length > 0) {
+    throw invalidAnswer(
+      `Answer every question in the request. Missing: ${missing.map((question) => question.header).join(", ")}.`,
+      request,
+    );
+  }
+  return Object.fromEntries(resolved);
+}
+
+function approvalAction(requestId: string, requestKind: string, detail: string | undefined) {
+  return {
+    approvalActionId: requestId,
+    requestKind,
+    detail: detail ?? "Approval requested",
+    risk: requestKind === "file-read" ? "low" : "high",
+    reversible: requestKind !== "command",
+    requiresDestructiveConfirmation: requestKind === "command" || requestKind === "file-change",
+    modifiableFields: ["decision"],
+  };
+}
+
 function approvalPlan(thread: Record<string, unknown>) {
+  const threadId = typeof thread.id === "string" ? thread.id : "unknown";
+  // V2 runtimes list pending approvals directly; older runtimes only expose activities.
+  if (Array.isArray(thread.pendingApprovals)) {
+    const actions = thread.pendingApprovals.flatMap((candidate) => {
+      if (typeof candidate !== "object" || candidate === null) return [];
+      const approval = candidate as Record<string, unknown>;
+      if (typeof approval.requestId !== "string") return [];
+      return [
+        approvalAction(
+          approval.requestId,
+          typeof approval.requestKind === "string" ? approval.requestKind : "command",
+          typeof approval.detail === "string" ? approval.detail : undefined,
+        ),
+      ];
+    });
+    return { approvalPlanId: `plan-${threadId}`, revision: 0, actions };
+  }
   const pending = new Map<string, Record<string, unknown>>();
   const activities = (Array.isArray(thread.activities) ? thread.activities : []).toSorted(
     (left, right) => {
@@ -515,16 +843,14 @@ function approvalPlan(thread: Record<string, unknown>) {
     if (typeof activity.sequence === "number") revision = Math.max(revision, activity.sequence);
     if (requestId === undefined) continue;
     if (activity.kind === "approval.requested") {
-      const requestKind = typeof payload.requestKind === "string" ? payload.requestKind : "command";
-      pending.set(requestId, {
-        approvalActionId: requestId,
-        requestKind,
-        detail: typeof payload.detail === "string" ? payload.detail : "Approval requested",
-        risk: requestKind === "file-read" ? "low" : "high",
-        reversible: requestKind !== "command",
-        requiresDestructiveConfirmation: requestKind === "command" || requestKind === "file-change",
-        modifiableFields: ["decision"],
-      });
+      pending.set(
+        requestId,
+        approvalAction(
+          requestId,
+          typeof payload.requestKind === "string" ? payload.requestKind : "command",
+          typeof payload.detail === "string" ? payload.detail : undefined,
+        ),
+      );
     } else if (activity.kind === "approval.resolved") {
       pending.delete(requestId);
     } else if (
@@ -534,28 +860,11 @@ function approvalPlan(thread: Record<string, unknown>) {
       pending.delete(requestId);
     }
   }
-  const threadId = typeof thread.id === "string" ? thread.id : "unknown";
   return {
     approvalPlanId: `plan-${threadId}`,
     revision,
     actions: [...pending.values()],
   };
-}
-
-function requiredStringArray(input: Record<string, unknown>, key: string): ReadonlyArray<string> {
-  const value = input[key];
-  if (
-    !Array.isArray(value) ||
-    value.length === 0 ||
-    value.some((item) => typeof item !== "string" || item.trim() === "")
-  ) {
-    throw new GatewayError({
-      code: "invalid_input",
-      message: `${key} must be a non-empty array of strings.`,
-      retryable: false,
-    });
-  }
-  return value as ReadonlyArray<string>;
 }
 
 function pullRequestRef(input: Record<string, unknown>) {
@@ -926,10 +1235,13 @@ export async function callGatewayTool(
         throw new Error("Linking chats is unavailable in this runtime.");
       const parentThreadId =
         input.parentThreadId === null ? null : requiredString(input, "parentThreadId");
+      const parentEnvironmentId =
+        typeof input.parentEnvironmentId === "string" ? input.parentEnvironmentId : undefined;
       return context.port.setThreadParent(
         environmentId,
         requiredString(input, "threadId"),
         parentThreadId,
+        ...(parentEnvironmentId === undefined ? [] : [parentEnvironmentId]),
       );
     }
     case "t3_list_skills": {
@@ -1031,32 +1343,19 @@ export async function callGatewayTool(
       return context.port.openAgents(environmentId);
     }
     case "t3_list_projects": {
-      const environmentId = environmentWithScope(context, input, "read");
-      return context.port.listProjects(environmentId);
+      return discoveredPage(
+        await discover(context, input, async (target) =>
+          tagged(target, await context.port.listProjects(target.environmentId)),
+        ),
+      );
     }
     case "t3_list_threads": {
-      const environmentId = environmentWithScope(context, input, "read");
-      const state = z.enum(["all", "active", "settled"]).default("all").parse(input.state);
-      const executionState = parseExecutionStateFilter(input);
-      const page = await context.port.listThreads(environmentId);
-      const projectId = typeof input.projectId === "string" ? input.projectId : undefined;
-      const profileId = typeof input.profileId === "string" ? input.profileId : undefined;
-      const parentThreadId =
-        typeof input.parentThreadId === "string" ? input.parentThreadId : undefined;
-      return {
-        ...page,
-        items: page.items.filter((thread) => {
-          const snapshot = thread.profileSnapshot as { profileId?: string } | undefined;
-          return (
-            (projectId === undefined || thread.projectId === projectId) &&
-            (parentThreadId === undefined || thread.parentThreadId === parentThreadId) &&
-            (profileId === undefined || snapshot?.profileId === profileId) &&
-            (state === "all" ||
-              (state === "settled" ? thread.settledAt != null : thread.settledAt == null)) &&
-            (executionState === undefined || readThreadExecutionState(thread) === executionState)
-          );
-        }),
-      };
+      // Validate filters once so a bad input fails the call instead of every environment.
+      z.enum(["all", "active", "settled"]).optional().parse(input.state);
+      parseExecutionStateFilter(input);
+      return discoveredPage(
+        await discover(context, input, (target) => listGatewayThreads(context, target, input)),
+      );
     }
     case "t3_list_devices": {
       const environmentId = environmentWithScope(context, input, "read");
@@ -1094,7 +1393,7 @@ export async function callGatewayTool(
       }
       return context.port.scheduledTask(environmentId, {
         action: "create",
-        input: fields as GatewayScheduledTaskCreate,
+        input: fields as unknown as GatewayScheduledTaskCreate,
       });
     }
     case "t3_update_scheduled_task": {
@@ -1129,6 +1428,47 @@ export async function callGatewayTool(
         taskId: requiredString(input, "taskId"),
       });
     }
+    case "t3_list_todos": {
+      const environmentId = environmentWithScope(context, input, "read");
+      if (!context.port.todo) throw new Error("Todos are unavailable in this runtime. Update T3.");
+      return context.port.todo(environmentId, {
+        action: "list",
+        projectId: requiredString(input, "projectId"),
+      });
+    }
+    case "t3_add_todo": {
+      const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);
+      if (!context.port.todo) throw new Error("Todos are unavailable in this runtime. Update T3.");
+      return context.port.todo(environmentId, {
+        action: "add",
+        projectId: requiredString(input, "projectId"),
+        text: requiredString(input, "text"),
+      });
+    }
+    case "t3_update_todo": {
+      const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);
+      if (!context.port.todo) throw new Error("Todos are unavailable in this runtime. Update T3.");
+      return context.port.todo(environmentId, {
+        action: "update",
+        todoId: requiredString(input, "todoId"),
+        text: requiredString(input, "text"),
+      });
+    }
+    case "t3_settle_todo":
+    case "t3_unsettle_todo":
+    case "t3_remove_todo": {
+      const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);
+      if (!context.port.todo) throw new Error("Todos are unavailable in this runtime. Update T3.");
+      return context.port.todo(environmentId, {
+        action:
+          name === "t3_settle_todo"
+            ? "settle"
+            : name === "t3_unsettle_todo"
+              ? "unsettle"
+              : "remove",
+        todoId: requiredString(input, "todoId"),
+      });
+    }
     case "t3_open_thread": {
       const environmentId = environmentWithScope(context, input, "read");
       return context.port.openThread(environmentId, requiredString(input, "threadId"));
@@ -1141,6 +1481,7 @@ export async function callGatewayTool(
       const environmentId = environmentWithScope(context, input, "read");
       const thread = await context.port.getThread(environmentId, requiredString(input, "threadId"));
       const plan = approvalPlan(thread);
+      const pendingQuestions = pendingQuestionsOf(thread);
       const session =
         typeof thread.session === "object" && thread.session !== null
           ? (thread.session as Record<string, unknown>)
@@ -1154,13 +1495,15 @@ export async function callGatewayTool(
           ? "settled"
           : plan.actions.length > 0
             ? "waiting-approval"
-            : typeof thread.status === "string"
-              ? thread.status
-              : typeof latestTurn?.state === "string"
-                ? latestTurn.state
-                : typeof session?.status === "string"
-                  ? session.status
-                  : "queued";
+            : pendingQuestions.length > 0
+              ? "waiting-input"
+              : typeof thread.status === "string"
+                ? thread.status
+                : typeof latestTurn?.state === "string"
+                  ? latestTurn.state
+                  : typeof session?.status === "string"
+                    ? session.status
+                    : "queued";
       return {
         environmentId,
         threadId: thread.id,
@@ -1169,94 +1512,70 @@ export async function callGatewayTool(
         summary: session?.lastError ?? `Thread is ${status}.`,
         blockers: plan.actions,
         approvalPlan: plan,
+        pendingQuestions,
         artifacts: Array.isArray(thread.artifacts) ? thread.artifacts : [],
         nextAction:
           plan.actions.length > 0
             ? "approve_actions"
-            : status === "running" || status === "queued"
-              ? "await_event"
-              : null,
+            : pendingQuestions.length > 0
+              ? "provide_input"
+              : status === "running" || status === "queued"
+                ? "await_event"
+                : null,
         snapshotAt: thread.updatedAt ?? "runtime",
       };
     }
     case "t3_get_agents_view": {
-      const environmentId = environmentWithScope(context, input, "read");
-      const { profileId, state } = z
-        .object({
-          profileId: z.string().trim().min(1).optional(),
-          state: z.enum(["active", "settled", "all"]).default("active"),
-        })
-        .parse(input);
-      const executionState = parseExecutionStateFilter(input);
-      const [profiles, page] = await Promise.all([
-        authoritativeProfiles(context, environmentId),
-        context.port.listThreads(environmentId),
-      ]);
-      const runsByProfile = new Map<string, Record<string, unknown>[]>();
-      for (const thread of page.items) {
-        const snapshot = thread.profileSnapshot as { profileId?: string } | null | undefined;
-        const agentId = snapshot?.profileId;
-        if (!agentId || (profileId !== undefined && profileId !== agentId)) continue;
-        if (
-          state !== "all" &&
-          (state === "settled" ? thread.settledAt == null : thread.settledAt != null)
-        )
-          continue;
-        if (executionState !== undefined && readThreadExecutionState(thread) !== executionState)
-          continue;
-        const runs = runsByProfile.get(agentId) ?? [];
-        runs.push({
-          threadId: thread.id,
-          environmentId,
-          projectId: thread.projectId,
-          title: thread.title,
-          status: thread.status,
-          settledAt: thread.settledAt ?? null,
-          createdAt: thread.createdAt,
-          updatedAt: thread.updatedAt,
-        });
-        runsByProfile.set(agentId, runs);
+      // Validate filters once so a bad input fails the call instead of every environment.
+      z.enum(["active", "settled", "all"]).optional().parse(input.state);
+      parseExecutionStateFilter(input);
+      const discovered = await discover(context, input, (target) =>
+        agentsView(context, target, input),
+      );
+      if (discovered.coverage === undefined) return discovered.results[0]!.value;
+      // The Agents library is shared, so one card per agent collects its runs from every machine.
+      const cards = new Map<string, Awaited<ReturnType<typeof agentsView>>["items"][number]>();
+      for (const { value } of discovered.results) {
+        for (const card of value.items) {
+          const key = card.profileId ?? card.name;
+          const existing = cards.get(key);
+          cards.set(key, existing ? { ...existing, runs: [...existing.runs, ...card.runs] } : card);
+        }
       }
-      const items = profiles
-        .filter((profile) => profileId === undefined || profile.profileId === profileId)
-        .map((profile) => {
-          const runs = profile.profileId ? (runsByProfile.get(profile.profileId) ?? []) : [];
-          if (profile.profileId) runsByProfile.delete(profile.profileId);
-          return {
-            profileId: profile.profileId,
-            name: profile.name,
-            description: profile.description ?? "",
-            providerLabel: profile.providerLabel,
-            modelLabel: profile.modelLabel,
-            environmentIds: profile.environmentIds ?? [],
-            runs,
-          };
-        });
       return {
-        environmentId,
-        items,
-        orphanedRuns: [...runsByProfile].flatMap(([profileId, runs]) =>
-          runs.map((run) => ({ ...run, profileId })),
-        ),
-        snapshotAt: page.snapshotAt,
-      };
-    }
-    case "t3_list_agents": {
-      const environmentId = environmentWithScope(context, input, "read");
-      return {
-        items: (await authoritativeProfiles(context, environmentId)).filter(
-          (profile) =>
-            !Array.isArray(profile.environmentIds) ||
-            profile.environmentIds.length === 0 ||
-            profile.environmentIds.includes(environmentId),
-        ),
+        items: [...cards.values()],
+        orphanedRuns: discovered.results.flatMap(({ value }) => value.orphanedRuns),
+        environments: discovered.coverage,
         snapshotAt: "runtime",
       };
     }
-    case "t3_get_approval_plan": {
-      const environmentId = environmentWithScope(context, input, "approval");
-      const thread = await context.port.getThread(environmentId, requiredString(input, "threadId"));
-      return approvalPlan(thread);
+    case "t3_list_agents": {
+      const includeSystemPrompt = input.includeSystemPrompt === true;
+      const discovered = await discover(context, input, async (target) =>
+        (await availableProfiles(context, target.environmentId)).map((profile) => {
+          if (includeSystemPrompt) return profile;
+          const { systemPrompt: _systemPrompt, ...rest } = profile;
+          return rest;
+        }),
+      );
+      if (discovered.coverage === undefined) {
+        return { items: discovered.results[0]!.value, snapshotAt: "runtime" };
+      }
+      // One entry per shared agent, listing the machines it is available on.
+      const agents = new Map<string, GatewayProfile & { availableEnvironmentIds: string[] }>();
+      for (const { target, value } of discovered.results) {
+        for (const profile of value) {
+          const key = profile.profileId ?? profile.name;
+          const existing = agents.get(key);
+          if (existing) existing.availableEnvironmentIds.push(target.environmentId);
+          else agents.set(key, { ...profile, availableEnvironmentIds: [target.environmentId] });
+        }
+      }
+      return {
+        items: [...agents.values()],
+        environments: discovered.coverage,
+        snapshotAt: "runtime",
+      };
     }
     case "t3_get_messages": {
       const environmentId = environmentWithScope(context, input, "read");
@@ -1267,29 +1586,6 @@ export async function callGatewayTool(
       return {
         items: messages.slice(-limit),
         snapshotAt: typeof thread.updatedAt === "string" ? thread.updatedAt : "runtime",
-      };
-    }
-    case "t3_get_thread_history": {
-      const environmentId = environmentWithScope(context, input, "read");
-      const thread = await context.port.getThread(environmentId, requiredString(input, "threadId"));
-      const afterSequence =
-        typeof input.afterSequence === "number" ? Math.max(0, Math.trunc(input.afterSequence)) : 0;
-      const requestedLimit = typeof input.limit === "number" ? input.limit : 200;
-      const limit = Math.max(1, Math.min(500, Math.trunc(requestedLimit)));
-      const activities = (Array.isArray(thread.activities) ? thread.activities : [])
-        .filter(
-          (activity): activity is Record<string, unknown> =>
-            typeof activity === "object" &&
-            activity !== null &&
-            !Array.isArray(activity) &&
-            typeof (activity as Record<string, unknown>).sequence === "number" &&
-            ((activity as Record<string, unknown>).sequence as number) > afterSequence,
-        )
-        .slice(0, limit);
-      const lastSequence = activities.at(-1)?.sequence;
-      return {
-        items: activities,
-        ...(typeof lastSequence === "number" ? { nextCursor: String(lastSequence) } : {}),
       };
     }
     case "t3_get_operation_history": {
@@ -1310,75 +1606,6 @@ export async function callGatewayTool(
         ...(items.at(-1) === undefined ? {} : { nextCursor: String(items.at(-1)?.sequence) }),
         hasMore: items.length === limit,
       };
-    }
-    case "t3_list_artifacts": {
-      const environmentId = environmentWithScope(context, input, "artifact");
-      const thread = await context.port.getThread(environmentId, requiredString(input, "threadId"));
-      const items = (Array.isArray(thread.artifacts) ? thread.artifacts : [])
-        .slice(0, 2_000)
-        .flatMap((artifact) => {
-          try {
-            const projected = gatewayArtifactRecord(artifact);
-            return projected === undefined ? [] : [projected];
-          } catch {
-            return [];
-          }
-        });
-      return { items };
-    }
-    case "t3_get_artifact": {
-      const environmentId = environmentWithScope(context, input, "artifact");
-      const threadId = requiredString(input, "threadId");
-      const artifactId = requiredString(input, "artifactId");
-      const thread = await context.port.getThread(environmentId, threadId);
-      const artifact = (Array.isArray(thread.artifacts) ? thread.artifacts : [])
-        .slice(0, 2_000)
-        .flatMap((candidate) => {
-          try {
-            const projected = gatewayArtifactRecord(candidate);
-            return projected === undefined ? [] : [projected];
-          } catch {
-            return [];
-          }
-        })
-        .find((candidate) => candidate.artifactId === artifactId);
-      if (artifact === undefined) {
-        throw new GatewayError({
-          code: "invalid_input",
-          message: `Artifact ${artifactId} does not belong to thread ${threadId}.`,
-          retryable: false,
-          environmentId,
-        });
-      }
-      if (artifact.availability !== "available") {
-        throw new GatewayError({
-          code: "invalid_input",
-          message: `Artifact ${artifactId} is ${String(artifact.availability)}.`,
-          retryable: false,
-          environmentId,
-        });
-      }
-      if (artifact.kind === "attachment" && typeof artifact.sourceId === "string") {
-        const download = await context.port.createAssetUrl(environmentId, {
-          _tag: "attachment",
-          attachmentId: artifactId,
-        });
-        return { ...artifact, environmentId, threadId, download };
-      }
-      if (artifact.kind === "workspace-file" && typeof artifact.path === "string") {
-        const download = await context.port.createAssetUrl(environmentId, {
-          _tag: "workspace-file",
-          threadId,
-          path: artifact.path,
-        });
-        return { ...artifact, environmentId, threadId, download };
-      }
-      throw new GatewayError({
-        code: "invalid_input",
-        message: `Unsupported artifact record ${artifactId}.`,
-        retryable: false,
-        environmentId,
-      });
     }
     case "t3_get_pr": {
       const environmentId = environmentWithScope(context, input, "review");
@@ -1403,124 +1630,6 @@ export async function callGatewayTool(
           (thread as Record<string, unknown>).isResolved !== true,
       );
       return { items, unresolvedCount: items.length };
-    }
-    case "t3_modify_actions": {
-      const environmentId = environmentWithScope(context, input, "approval");
-      const idempotencyKey = requiredIdempotencyKey(input);
-      const threadId = requiredString(input, "threadId");
-      const requestedRevision = Number(input.planRevision);
-      const modifications = Array.isArray(input.modifications) ? input.modifications : [];
-      const execute = requireOperationPort(context);
-      const authoritativeRequestId = scopedIdFor(
-        "approval-plan",
-        environmentId,
-        threadId,
-        idempotencyKey,
-      );
-      const legacyRequestId = idFor("approval-plan", idempotencyKey);
-      return withIdempotency(
-        context,
-        `${environmentId}::${threadId}::${idFor("approval-plan", idempotencyKey)}`,
-        idempotencyCommandPayload("approval.modify", input),
-        (prepared) => {
-          const dispatch = prepared ?? {
-            payload: { threadId, planRevision: requestedRevision, modifications },
-            requestId: authoritativeRequestId,
-          };
-          if (
-            dispatch.requestId !== authoritativeRequestId &&
-            dispatch.requestId !== legacyRequestId
-          ) {
-            throw new GatewayError({
-              code: "idempotency_conflict",
-              message: "This approval request has no recoverable authoritative command identity.",
-              retryable: false,
-              environmentId,
-              requestId: authoritativeRequestId,
-            });
-          }
-          return execute({
-            environmentId,
-            operation: "approval.modify",
-            payload: dispatch.payload,
-            requestId: dispatch.requestId,
-          });
-        },
-        async () => {
-          const thread = await context.port.getThread(environmentId, threadId);
-          const plan = approvalPlan(thread);
-          if (!Number.isInteger(requestedRevision) || requestedRevision !== plan.revision) {
-            throw new GatewayError({
-              code: "stale_plan",
-              message: `Approval plan changed from revision ${String(input.planRevision)} to ${plan.revision}.`,
-              retryable: false,
-              environmentId,
-              details: { approvalPlanId: plan.approvalPlanId, currentRevision: plan.revision },
-            });
-          }
-          if (modifications.length === 0) {
-            throw new GatewayError({
-              code: "invalid_input",
-              message: "modifications cannot be empty.",
-              retryable: false,
-              environmentId,
-            });
-          }
-          for (const modification of modifications) {
-            if (
-              typeof modification !== "object" ||
-              modification === null ||
-              Array.isArray(modification)
-            ) {
-              throw new GatewayError({
-                code: "invalid_input",
-                message: "Each modification must identify one pending action.",
-                retryable: false,
-                environmentId,
-              });
-            }
-            const value = modification as Record<string, unknown>;
-            const action = plan.actions.find(
-              (candidate) => candidate.approvalActionId === value.actionId,
-            );
-            const fields = record(value.fields);
-            if (
-              action === undefined ||
-              fields === undefined ||
-              Object.keys(fields).some(
-                (field) =>
-                  !(
-                    Array.isArray(action.modifiableFields) &&
-                    action.modifiableFields.includes(field)
-                  ),
-              )
-            ) {
-              throw new GatewayError({
-                code: "invalid_input",
-                message: `Action ${String(value.actionId)} contains fields that are not modifiable.`,
-                retryable: false,
-                environmentId,
-              });
-            }
-            if (
-              action.requiresDestructiveConfirmation === true &&
-              (fields.decision === "accept" || fields.decision === "acceptForSession") &&
-              input.confirmDestructive !== true
-            ) {
-              throw new GatewayError({
-                code: "destructive_confirmation_required",
-                message: `Action ${String(value.actionId)} requires confirmDestructive: true.`,
-                retryable: false,
-                environmentId,
-              });
-            }
-          }
-          return {
-            payload: { threadId, planRevision: requestedRevision, modifications },
-            requestId: authoritativeRequestId,
-          };
-        },
-      );
     }
     case "t3_replay_events": {
       const events = requireEventStore(context);
@@ -1657,15 +1766,21 @@ export async function callGatewayTool(
     case "t3_create_thread": {
       const environmentId = environmentWithScope(context, input, "create");
       const idempotencyKey = requiredIdempotencyKey(input);
-      // Explicit null opts out; otherwise a chat creating chats in its own environment parents them.
+      // Explicit null opts out; otherwise a chat creating chats, on any environment, parents them.
       const parentThreadId =
         input.parentThreadId === null
           ? undefined
           : typeof input.parentThreadId === "string"
             ? input.parentThreadId.trim()
-            : invocation.caller?.environmentId === environmentId
-              ? invocation.caller.threadId
-              : undefined;
+            : invocation.caller?.threadId;
+      const parentEnvironmentId =
+        parentThreadId === undefined
+          ? undefined
+          : typeof input.parentThreadId === "string"
+            ? typeof input.parentEnvironmentId === "string"
+              ? input.parentEnvironmentId.trim()
+              : undefined
+            : invocation.caller?.environmentId;
       const profileName = typeof input.profile === "string" ? input.profile.trim() : "";
       const profileIdInput = typeof input.profileId === "string" ? input.profileId.trim() : "";
       const legacyIdentity = {
@@ -1822,6 +1937,9 @@ export async function callGatewayTool(
             ? {}
             : { baseBranch: requiredString(input, "baseBranch") }),
           ...(parentThreadId === undefined ? {} : { parentThreadId }),
+          ...(parentEnvironmentId === undefined || parentEnvironmentId === environmentId
+            ? {}
+            : { parentEnvironmentId }),
           ...(authoritativeProfileRef === undefined
             ? {}
             : {
@@ -2197,6 +2315,87 @@ export async function callGatewayTool(
         () => ({ requestId: authoritativeRequestId, messageId: authoritativeMessageId }),
       );
     }
+    case "t3_get_pending_questions": {
+      const environmentId = environmentWithScope(context, input, "read");
+      const thread = await context.port.getThread(environmentId, requiredString(input, "threadId"));
+      return {
+        environmentId,
+        threadId: thread.id,
+        title: thread.title,
+        status: thread.status,
+        pendingQuestions: pendingQuestionsOf(thread),
+      };
+    }
+    case "t3_answer_question": {
+      const environmentId = environmentWithScope(context, input, "send");
+      const idempotencyKey = requiredIdempotencyKey(input);
+      const threadId = requiredString(input, "threadId");
+      const respond = context.port.respondToUserInput;
+      if (respond === undefined) {
+        throw new Error("Answering questions is unavailable in this runtime. Update T3.");
+      }
+      const answers = z
+        .array(
+          z.object({
+            questionId: z.string().optional(),
+            options: z.array(z.string()).optional(),
+            text: z.string().optional(),
+          }),
+        )
+        .min(1)
+        .parse(input.answers);
+      return withIdempotency(
+        context,
+        `${environmentId}::${threadId}::${idFor("request", idempotencyKey)}`,
+        idempotencyCommandPayload("user-input.respond", input),
+        async (prepared) => {
+          const receipt = await respond({
+            environmentId,
+            threadId,
+            userInputRequestId: prepared!.questionRequestId,
+            answers: prepared!.answers,
+            requestId: prepared!.requestId,
+          });
+          return {
+            ...receipt,
+            questionRequestId: prepared!.questionRequestId,
+            answers: prepared!.answers,
+          };
+        },
+        async () => {
+          // Answers are checked against the live question, so a stale or
+          // mistyped choice fails here instead of reaching the provider.
+          const pending = pendingQuestionsOf(await context.port.getThread(environmentId, threadId));
+          const wanted =
+            typeof input.questionRequestId === "string" ? input.questionRequestId : undefined;
+          const request =
+            wanted === undefined
+              ? pending.length === 1
+                ? pending[0]
+                : undefined
+              : pending.find((candidate) => candidate.questionRequestId === wanted);
+          if (request === undefined) {
+            throw new GatewayError({
+              code: pending.length === 0 || wanted !== undefined ? "stale_plan" : "invalid_input",
+              message:
+                pending.length === 0
+                  ? "This chat is not waiting on a question."
+                  : wanted === undefined
+                    ? `This chat has ${pending.length} pending questions; pass questionRequestId.`
+                    : `Question request ${wanted} is no longer pending. Read the pending questions again.`,
+              retryable: false,
+              environmentId,
+              details: { threadId, pendingQuestions: pending },
+            });
+          }
+          return {
+            questionRequestId: request.questionRequestId,
+            answers: resolveQuestionAnswers(request, answers),
+            requestId: scopedIdFor("user-input-response", environmentId, threadId, idempotencyKey),
+          };
+        },
+      );
+    }
     case "t3_respond_to_approval": {
       const environmentId = environmentWithScope(context, input, "approval");
       const idempotencyKey = requiredIdempotencyKey(input);
@@ -2268,120 +2467,6 @@ export async function callGatewayTool(
             });
           }
           return { requestId: authoritativeRequestId };
-        },
-      );
-    }
-    case "t3_approve_actions":
-    case "t3_reject_actions": {
-      const environmentId = environmentWithScope(context, input, "approval");
-      const threadId = requiredString(input, "threadId");
-      const idempotencyKey = requiredIdempotencyKey(input);
-      const actionIds = requiredStringArray(input, "actionIds");
-      const requestedRevision = Number(input.planRevision);
-      const decision: GatewayApprovalDecision =
-        name === "t3_approve_actions" ? "accept" : "decline";
-      const authoritativeRequestId = scopedIdFor(
-        "approval-plan",
-        environmentId,
-        threadId,
-        idempotencyKey,
-      );
-      const legacyRequestId = idFor("approval-plan", idempotencyKey);
-      return withIdempotency(
-        context,
-        `${environmentId}::${threadId}::${idFor("approval-plan", idempotencyKey)}`,
-        idempotencyCommandPayload(`approval.respond.${decision}`, input),
-        async (prepared) => {
-          if (context.port.respondToApprovals === undefined) {
-            throw new GatewayError({
-              code: "not_configured",
-              message: "The connected runtime does not support atomic grouped approvals.",
-              retryable: false,
-              environmentId,
-            });
-          }
-          const dispatch = prepared ?? {
-            approvalPlanId: `plan-${threadId}`,
-            revision: requestedRevision,
-            actionIds,
-            decision,
-            pending: 0,
-            requestId: authoritativeRequestId,
-          };
-          if (
-            dispatch.requestId !== authoritativeRequestId &&
-            dispatch.requestId !== legacyRequestId
-          ) {
-            throw new GatewayError({
-              code: "idempotency_conflict",
-              message: "This approval request has no recoverable authoritative command identity.",
-              retryable: false,
-              environmentId,
-              requestId: authoritativeRequestId,
-            });
-          }
-          const receipt = await context.port.respondToApprovals({
-            environmentId,
-            threadId,
-            responses: dispatch.actionIds.map((approvalRequestId) => ({
-              approvalRequestId,
-              decision: dispatch.decision,
-            })),
-            expectedRevision: dispatch.revision,
-            requestId: dispatch.requestId,
-          });
-          return {
-            approvalPlanId: dispatch.approvalPlanId,
-            revision: dispatch.revision,
-            approved: dispatch.decision === "accept" ? dispatch.actionIds.length : 0,
-            rejected: dispatch.decision === "decline" ? dispatch.actionIds.length : 0,
-            pending: dispatch.pending,
-            receipt,
-          };
-        },
-        async () => {
-          const thread = await context.port.getThread(environmentId, threadId);
-          const plan = approvalPlan(thread);
-          if (!Number.isInteger(requestedRevision) || requestedRevision !== plan.revision) {
-            throw new GatewayError({
-              code: "stale_plan",
-              message: `Approval plan changed from revision ${String(input.planRevision)} to ${plan.revision}.`,
-              retryable: false,
-              environmentId,
-              details: { approvalPlanId: plan.approvalPlanId, currentRevision: plan.revision },
-            });
-          }
-          const selected = plan.actions.filter((action) =>
-            actionIds.includes(action.approvalActionId as string),
-          );
-          if (selected.length !== actionIds.length) {
-            throw new GatewayError({
-              code: "invalid_input",
-              message: "One or more approval action IDs are not pending in this plan.",
-              retryable: false,
-              environmentId,
-            });
-          }
-          if (
-            name === "t3_approve_actions" &&
-            input.confirmDestructive !== true &&
-            selected.some((action) => action.requiresDestructiveConfirmation === true)
-          ) {
-            throw new GatewayError({
-              code: "destructive_confirmation_required",
-              message: "One or more selected actions require confirmDestructive: true.",
-              retryable: false,
-              environmentId,
-            });
-          }
-          return {
-            approvalPlanId: plan.approvalPlanId,
-            revision: plan.revision,
-            actionIds: selected.map((action) => action.approvalActionId as string),
-            decision,
-            pending: plan.actions.length - selected.length,
-            requestId: authoritativeRequestId,
-          };
         },
       );
     }

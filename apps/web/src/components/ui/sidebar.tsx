@@ -1,11 +1,12 @@
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
 import { cva, type VariantProps } from "class-variance-authority";
-import { PanelLeftCloseIcon, PanelLeftIcon } from "lucide-react";
+import { PanelLeft, PanelLeftClose } from "lucide";
 import * as React from "react";
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
 import { Input, type InputProps } from "~/components/ui/input";
+import { MorphIcon } from "~/components/MorphIcon";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import {
   Sheet,
@@ -233,7 +234,7 @@ function Sidebar({
   if (isMobile) {
     return (
       <SidebarInstanceContext value={instanceContextValue}>
-        <Sheet onOpenChange={setOpenMobile} open={openMobile} {...props}>
+        <Sheet onOpenChange={setOpenMobile} open={openMobile}>
           <SheetPopup
             className={cn(
               "w-(--sidebar-width) max-w-none bg-sidebar surface-grain p-0 text-sidebar-foreground",
@@ -259,6 +260,7 @@ function Sidebar({
                 "flex h-full w-full flex-col pb-safe pt-safe",
                 side === "left" ? "pl-safe" : "pr-safe",
               )}
+              {...props}
             >
               {children}
             </div>
@@ -341,7 +343,7 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       variant="ghost"
       {...props}
     >
-      {isOpen ? <PanelLeftCloseIcon className="size-4" /> : <PanelLeftIcon className="size-4" />}
+      <MorphIcon className="size-4" icon={isOpen ? PanelLeftClose : PanelLeft} />
       <span className="sr-only">Toggle Sidebar</span>
     </Button>
   );
@@ -597,6 +599,10 @@ function SidebarContent({
         hideScrollbars
         scrollFade
         scrollFadePadding={false}
+        // Thread rows provide keyboard access to this scroll region. Keeping
+        // Base UI's viewport out of the tab order lets its presentational role
+        // flatten in WebKit instead of becoming a VoiceOver interaction group.
+        viewportTabIndex={-1}
         className="h-auto min-h-0 flex-1 [&>[data-slot=scroll-area-viewport]]:[--fade-size:0.75rem]"
       >
         <div

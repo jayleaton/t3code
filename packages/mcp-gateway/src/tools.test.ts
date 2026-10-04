@@ -19,7 +19,6 @@ import { callGatewayTool } from "./tools.ts";
 function makePort(input?: {
   readonly controls?: Array<{ action: GatewayThreadControlAction; requestId: string }>;
   readonly approvals?: Array<{ requestId: string; decision: string }>;
-  readonly approvalBatches?: Array<ReadonlyArray<{ approvalRequestId: string; decision: string }>>;
   readonly operations?: Array<{ operation: string; payload: Readonly<Record<string, unknown>> }>;
   readonly creates?: Array<{
     instanceId?: string;
@@ -123,27 +122,6 @@ function makePort(input?: {
               { id: "event-2", sequence: 8, kind: "info", summary: "Completed" },
             ]),
       checkpoints: [{ turnId: "turn-1", files: [{ path: "src/index.ts", kind: "modified" }] }],
-      artifacts: [
-        {
-          artifactId: "asset-1",
-          kind: "attachment",
-          sourceId: "message-1",
-          name: "result.png",
-          availability: "available",
-        },
-        {
-          artifactId: "workspace-turn-1-0",
-          kind: "workspace-file",
-          sourceId: "turn-1",
-          path: "src/index.ts",
-          changeKind: "modified",
-          availability: "available",
-        },
-      ],
-    }),
-    createAssetUrl: async () => ({
-      relativeUrl: "/asset",
-      expiresAt: 1_800_000_000_000,
     }),
     getPullRequest: async () => ({}),
     getPullRequestActivity: async () => ({}),
@@ -185,20 +163,6 @@ function makePort(input?: {
     }),
     controlThread: async (request) => {
       input?.controls?.push({ action: request.action, requestId: request.requestId });
-      return {
-        requestId: request.requestId,
-        commandId: request.requestId,
-        status: "accepted",
-        threadId: request.threadId,
-      };
-    },
-    respondToApprovals: async (request) => {
-      input?.approvalBatches?.push(
-        request.responses.map((response) => ({
-          approvalRequestId: response.approvalRequestId,
-          decision: response.decision,
-        })),
-      );
       return {
         requestId: request.requestId,
         commandId: request.requestId,
@@ -320,6 +284,41 @@ describe("gateway chat tools", () => {
     expect(focused).toHaveLength(3);
   });
 
+  it("routes todo tools to the runtime port, writes needing create access", async () => {
+    const requests: unknown[] = [];
+    const context = {
+      port: {
+        ...makePort(),
+        todo: async (_environmentId: string, request: unknown) => {
+          requests.push(request);
+          return { removed: "t1" };
+        },
+      },
+      grants: { remote: ["read", "create"] as const, readOnly: ["read"] as const },
+    };
+    await callGatewayTool(context, "t3_list_todos", { environmentId: "remote", projectId: "p" });
+    await callGatewayTool(context, "t3_add_todo", {
+      environmentId: "remote",
+      projectId: "p",
+      text: "Ship it",
+    });
+    await callGatewayTool(context, "t3_settle_todo", { environmentId: "remote", todoId: "t1" });
+    await callGatewayTool(context, "t3_unsettle_todo", { environmentId: "remote", todoId: "t1" });
+    await callGatewayTool(context, "t3_remove_todo", { environmentId: "remote", todoId: "t1" });
+    expect(requests).toEqual([
+      { action: "list", projectId: "p" },
+      { action: "add", projectId: "p", text: "Ship it" },
+      { action: "settle", todoId: "t1" },
+      { action: "unsettle", todoId: "t1" },
+      { action: "remove", todoId: "t1" },
+    ]);
+
+    await expect(
+      callGatewayTool(context, "t3_settle_todo", { environmentId: "readOnly", todoId: "t1" }),
+    ).rejects.toMatchObject({ code: "scope_required" });
+    expect(requests).toHaveLength(5);
+  });
+
   it("turns runAt or cron into a schedule for scheduled tasks", async () => {
     const requests: unknown[] = [];
     const context = {
@@ -355,7 +354,7 @@ describe("gateway chat tools", () => {
           prompt: "git pull",
           profileId: "a",
           projectId: "p",
-          schedule: { kind: "cron", expression: "0 7 * * *", timezone: "Asia/Bangkok" },
+          schedule: { type: "cron", expression: "0 7 * * *", timezone: "Asia/Bangkok" },
         },
       },
       {
@@ -364,7 +363,7 @@ describe("gateway chat tools", () => {
           prompt: "git pull",
           profileId: "a",
           projectId: "p",
-          schedule: { kind: "once", runAt: "2026-09-25T02:00:00Z" },
+          schedule: { type: "once", runAt: "2026-09-25T02:00:00Z" },
         },
       },
       { action: "update", taskId: "t1", patch: { enabled: false } },
@@ -421,14 +420,14 @@ describe("gateway chat tools", () => {
     expect(read.items[0]).toMatchObject({ text: `hello from ${environmentId}` });
   });
 
-  it("parents chats created by a T3 chat in its own environment", async () => {
+  it("parents chats a T3 chat creates on any environment", async () => {
     const base = makePort();
-    const parents: Array<string | undefined> = [];
+    const parents: Array<[string | undefined, string | undefined]> = [];
     const context = {
       port: {
         ...base,
         createThread: async (request: Parameters<typeof base.createThread>[0]) => {
-          parents.push(request.parentThreadId);
+          parents.push([request.parentThreadId, request.parentEnvironmentId]);
           return base.createThread(request);
         },
       },
@@ -468,7 +467,14 @@ describe("gateway chat tools", () => {
       invocation,
     );
 
-    expect(parents).toEqual(["coordinator", "other-parent", undefined, undefined, "coordinator"]);
+    expect(parents).toEqual([
+      ["coordinator", undefined],
+      ["other-parent", undefined],
+      [undefined, undefined],
+      // A chat on another machine records which environment its parent is on.
+      ["coordinator", "local"],
+      ["coordinator", undefined],
+    ]);
   });
 
   it.each(["constructor", "toString", "__proto__"])(
@@ -562,51 +568,6 @@ describe("gateway chat tools", () => {
       code: "scope_required",
     });
     expect(controls).toHaveLength(1);
-  });
-
-  it("queries replayable progress history and artifact metadata", async () => {
-    const context = { port: makePort(), grants };
-    const history = await callGatewayTool(context, "t3_get_thread_history", {
-      environmentId: "local",
-      threadId: "thread-1",
-      afterSequence: 7,
-    });
-    const artifacts = await callGatewayTool(context, "t3_list_artifacts", {
-      environmentId: "local",
-      threadId: "thread-1",
-    });
-    const image = await callGatewayTool(context, "t3_get_artifact", {
-      environmentId: "local",
-      threadId: "thread-1",
-      artifactId: "asset-1",
-      kind: "image",
-    });
-
-    expect(history).toEqual({
-      items: [{ id: "event-2", sequence: 8, kind: "info", summary: "Completed" }],
-      nextCursor: "8",
-    });
-    expect(artifacts.items).toEqual([
-      {
-        artifactId: "asset-1",
-        kind: "attachment",
-        sourceId: "message-1",
-        name: "result.png",
-        availability: "available",
-      },
-      {
-        artifactId: "workspace-turn-1-0",
-        kind: "workspace-file",
-        sourceId: "turn-1",
-        path: "src/index.ts",
-        availability: "available",
-      },
-    ]);
-    expect(image).toMatchObject({
-      artifactId: "asset-1",
-      availability: "available",
-      download: { relativeUrl: "/asset" },
-    });
   });
 
   it("defers named profile defaults to the server while keeping the agent's permission mode", async () => {
@@ -757,6 +718,35 @@ describe("gateway chat tools", () => {
       confirmDestructive: true,
     });
     expect(approvals).toEqual([{ requestId: "approval-1", decision: "accept" }]);
+  });
+
+  it("accepts approvals that a V2 runtime lists as pending", async () => {
+    const approvals: Array<{ requestId: string; decision: string }> = [];
+    const port = makePort({ approvals });
+    const getThread = port.getThread;
+    port.getThread = async (environmentId, threadId) => ({
+      ...(await getThread(environmentId, threadId)),
+      activities: undefined,
+      pendingApprovals: [
+        { requestId: "approval-v2", requestKind: "command", detail: "rm -rf build" },
+      ],
+    });
+    const context = { port, grants: { local: ["read", "approval"] } } as const;
+
+    const summary = await callGatewayTool(context, "t3_summarize_thread", {
+      environmentId: "local",
+      threadId: "thread-1",
+    });
+    expect(JSON.stringify(summary)).toContain("rm -rf build");
+    await callGatewayTool(context, "t3_respond_to_approval", {
+      environmentId: "local",
+      threadId: "thread-1",
+      approvalRequestId: "approval-v2",
+      decision: "accept",
+      confirmDestructive: true,
+      idempotencyKey: "approval-v2-accept",
+    });
+    expect(approvals).toEqual([{ requestId: "approval-v2", decision: "accept" }]);
   });
 
   it("rejects destructive acceptance for approval requests absent from the plan", async () => {
@@ -1011,418 +1001,6 @@ describe("gateway chat tools", () => {
         code: "scope_required",
       });
       events.close();
-    },
-  );
-
-  it.each(["t3_approve_actions", "t3_reject_actions", "t3_modify_actions"] as const)(
-    "replays resolved and reopened %s receipts before validating mutable plan state",
-    async (toolName) => {
-      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-mcp-grouped-"));
-      const file = NodePath.join(directory, "events.sqlite");
-      const activities: Array<Record<string, unknown>> = [
-        {
-          id: "approval-1",
-          sequence: 1,
-          kind: "approval.requested",
-          payload: { requestId: "approval-1", requestKind: "command", detail: "Run command" },
-        },
-      ];
-      let approvalGranted = true;
-      let dispatches = 0;
-      const port = makePort({ threadActivities: activities });
-      const accept = (requestId: string, threadId: string) => {
-        dispatches += 1;
-        activities.push({
-          id: "approval-resolved-1",
-          sequence: 2,
-          kind: "approval.resolved",
-          payload: { requestId: "approval-1" },
-        });
-        return { requestId, commandId: requestId, status: "accepted" as const, threadId };
-      };
-      port.respondToApprovals = async (request) => accept(request.requestId, request.threadId);
-      port.executeOperation = async (request) => ({
-        accepted: true,
-        requestId: accept(request.requestId ?? "", "thread-1").requestId,
-      });
-      const request =
-        toolName === "t3_modify_actions"
-          ? {
-              environmentId: "local",
-              threadId: "thread-1",
-              planRevision: 1,
-              modifications: [{ actionId: "approval-1", fields: { decision: "decline" } }],
-              idempotencyKey: `grouped-replay-${toolName}`,
-            }
-          : {
-              environmentId: "local",
-              threadId: "thread-1",
-              planRevision: 1,
-              actionIds: ["approval-1"],
-              ...(toolName === "t3_approve_actions" ? { confirmDestructive: true } : {}),
-              idempotencyKey: `grouped-replay-${toolName}`,
-            };
-      const context = () => ({
-        port,
-        events,
-        grants: () => ({ local: approvalGranted ? (["approval"] as const) : ([] as const) }),
-      });
-      let events = createGatewayEventStore({ file });
-      try {
-        const first = await callGatewayTool(context(), toolName, request);
-        events.close();
-        events = createGatewayEventStore({ file });
-
-        await expect(callGatewayTool(context(), toolName, request)).resolves.toEqual(first);
-        const changed =
-          toolName === "t3_modify_actions"
-            ? {
-                ...request,
-                modifications: [{ actionId: "approval-1", fields: { decision: "accept" } }],
-              }
-            : { ...request, actionIds: ["approval-other"] };
-        await expect(callGatewayTool(context(), toolName, changed)).rejects.toMatchObject({
-          code: "idempotency_conflict",
-        });
-        approvalGranted = false;
-        await expect(callGatewayTool(context(), toolName, request)).rejects.toMatchObject({
-          code: "scope_required",
-        });
-        approvalGranted = true;
-        await expect(
-          callGatewayTool(context(), toolName, {
-            ...request,
-            idempotencyKey: `${request.idempotencyKey}-new`,
-          }),
-        ).rejects.toMatchObject({ code: "stale_plan" });
-        expect(dispatches).toBe(1);
-      } finally {
-        events.close();
-        NodeFS.rmSync(directory, { recursive: true, force: true });
-      }
-    },
-  );
-
-  it.each([
-    ["t3_reject_actions", "t3_approve_actions", false],
-    ["t3_approve_actions", "t3_reject_actions", false],
-    ["t3_reject_actions", "t3_approve_actions", true],
-    ["t3_approve_actions", "t3_reject_actions", true],
-  ] as const)(
-    "rejects completed opposite operation reuse from %s to %s (reopen=%s)",
-    async (firstTool, oppositeTool, reopen) => {
-      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-mcp-identity-"));
-      const file = NodePath.join(directory, "events.sqlite");
-      const approvalBatches: Array<ReadonlyArray<{ approvalRequestId: string; decision: string }>> =
-        [];
-      const port = makePort({ pendingApprovalPlan: true, approvalBatches });
-      const request = {
-        environmentId: "local",
-        threadId: "thread-1",
-        planRevision: 10,
-        actionIds: ["approval-1"],
-        ...(firstTool === "t3_approve_actions" ? { confirmDestructive: true } : {}),
-        idempotencyKey: `opposite-completed-${firstTool}-${String(reopen)}`,
-      };
-      let events = createGatewayEventStore({ file });
-      try {
-        await callGatewayTool({ port, grants, events }, firstTool, request);
-        if (reopen) {
-          events.close();
-          events = createGatewayEventStore({ file });
-        }
-
-        await expect(
-          callGatewayTool({ port, grants, events }, oppositeTool, request),
-        ).rejects.toMatchObject({ code: "idempotency_conflict" });
-        expect(approvalBatches).toEqual([
-          [
-            {
-              approvalRequestId: "approval-1",
-              decision: firstTool === "t3_approve_actions" ? "accept" : "decline",
-            },
-          ],
-        ]);
-      } finally {
-        events.close();
-        NodeFS.rmSync(directory, { recursive: true, force: true });
-      }
-    },
-  );
-
-  it.each([
-    ["t3_reject_actions", "t3_approve_actions"],
-    ["t3_approve_actions", "t3_reject_actions"],
-  ] as const)(
-    "rejects in-flight opposite operation reuse from %s to %s",
-    async (firstTool, oppositeTool) => {
-      const response = Promise.withResolvers<GatewayMutationResult>();
-      const entered = Promise.withResolvers<void>();
-      const approvalBatches: Array<ReadonlyArray<{ approvalRequestId: string; decision: string }>> =
-        [];
-      const port = makePort({ pendingApprovalPlan: true, approvalBatches });
-      port.respondToApprovals = async (request) => {
-        approvalBatches.push(request.responses);
-        entered.resolve();
-        return response.promise;
-      };
-      const events = createGatewayEventStore();
-      const request = {
-        environmentId: "local",
-        threadId: "thread-1",
-        planRevision: 10,
-        actionIds: ["approval-1"],
-        ...(firstTool === "t3_approve_actions" ? { confirmDestructive: true } : {}),
-        idempotencyKey: `opposite-in-flight-${firstTool}`,
-      };
-      const first = callGatewayTool({ port, grants, events }, firstTool, request);
-      await entered.promise;
-      const opposite = callGatewayTool({ port, grants, events }, oppositeTool, request);
-      response.resolve({
-        requestId: `mcp-request-${request.idempotencyKey}`,
-        commandId: `mcp-request-${request.idempotencyKey}`,
-        status: "accepted",
-        threadId: "thread-1",
-      });
-
-      await first;
-      await expect(opposite).rejects.toMatchObject({ code: "idempotency_conflict" });
-      expect(approvalBatches).toHaveLength(1);
-      events.close();
-    },
-  );
-
-  it.each(["completed", "dispatched"] as const)(
-    "fails closed for ambiguous legacy grouped approval rows in %s state",
-    async (state) => {
-      const approvalBatches: Array<ReadonlyArray<{ approvalRequestId: string; decision: string }>> =
-        [];
-      const port = makePort({ pendingApprovalPlan: true, approvalBatches });
-      const events = createGatewayEventStore();
-      const request = {
-        environmentId: "local",
-        threadId: "thread-1",
-        planRevision: 10,
-        actionIds: ["approval-1"],
-        idempotencyKey: `legacy-ambiguous-${state}`,
-      };
-      const key = `local::thread-1::mcp-approval-plan-${request.idempotencyKey}`;
-      const legacyPayload =
-        `{"actionIds":["approval-1"],"environmentId":"local","idempotencyKey":` +
-        `"${request.idempotencyKey}","planRevision":10,"threadId":"thread-1"}`;
-      events.rememberRequest(key, legacyPayload, null);
-      if (state === "completed") {
-        events.completeRequest(key, { rejected: 1 });
-      } else {
-        events.markRequestDispatched(key, {
-          approvalPlanId: "plan-thread-1",
-          revision: 10,
-          actionIds: ["approval-1"],
-          pending: 1,
-        });
-      }
-
-      await expect(
-        callGatewayTool({ port, grants, events }, "t3_reject_actions", request),
-      ).rejects.toMatchObject({ code: "idempotency_conflict" });
-      expect(approvalBatches).toEqual([]);
-      events.close();
-    },
-  );
-
-  it("fails closed for pre-scoped dispatched grouped approvals", async () => {
-    const approvalBatches: Array<ReadonlyArray<{ approvalRequestId: string; decision: string }>> =
-      [];
-    const port = makePort({ pendingApprovalPlan: true, approvalBatches });
-    const events = createGatewayEventStore();
-    const request = {
-      environmentId: "local",
-      threadId: "thread-1",
-      planRevision: 10,
-      actionIds: ["approval-1"],
-      idempotencyKey: "pre-scoped-dispatched",
-    };
-    const key = `local::thread-1::mcp-approval-plan-${request.idempotencyKey}`;
-    events.rememberRequest(
-      key,
-      `{"input":{"actionIds":["approval-1"],"environmentId":"local","idempotencyKey":"pre-scoped-dispatched","planRevision":10,"threadId":"thread-1"},"operation":"approval.respond.decline"}`,
-      null,
-    );
-    events.markRequestDispatched(key, {
-      approvalPlanId: "plan-thread-1",
-      revision: 10,
-      actionIds: ["approval-1"],
-      decision: "decline",
-      pending: 1,
-    });
-
-    await expect(
-      callGatewayTool({ port, grants, events }, "t3_reject_actions", request),
-    ).rejects.toMatchObject({ code: "idempotency_conflict" });
-    expect(approvalBatches).toEqual([]);
-    events.close();
-  });
-
-  it.each(["t3_approve_actions", "t3_reject_actions", "t3_modify_actions"] as const)(
-    "joins an in-flight %s receipt after the approval plan resolves",
-    async (toolName) => {
-      const activities: Array<Record<string, unknown>> = [
-        {
-          id: "approval-1",
-          sequence: 1,
-          kind: "approval.requested",
-          payload: { requestId: "approval-1", requestKind: "command", detail: "Run command" },
-        },
-      ];
-      const response = Promise.withResolvers<Record<string, unknown>>();
-      const entered = Promise.withResolvers<void>();
-      let dispatches = 0;
-      const port = makePort({ threadActivities: activities });
-      const accept = () => {
-        dispatches += 1;
-        activities.push({
-          id: "approval-resolved-1",
-          sequence: 2,
-          kind: "approval.resolved",
-          payload: { requestId: "approval-1" },
-        });
-        entered.resolve();
-        return response.promise;
-      };
-      port.respondToApprovals = async (request) => {
-        const result = await accept();
-        return {
-          requestId: request.requestId,
-          commandId: request.requestId,
-          status: "accepted",
-          threadId: request.threadId,
-          ...result,
-        };
-      };
-      port.executeOperation = async () => accept();
-      const request =
-        toolName === "t3_modify_actions"
-          ? {
-              environmentId: "local",
-              threadId: "thread-1",
-              planRevision: 1,
-              modifications: [{ actionId: "approval-1", fields: { decision: "decline" } }],
-              idempotencyKey: `grouped-in-flight-${toolName}`,
-            }
-          : {
-              environmentId: "local",
-              threadId: "thread-1",
-              planRevision: 1,
-              actionIds: ["approval-1"],
-              ...(toolName === "t3_approve_actions" ? { confirmDestructive: true } : {}),
-              idempotencyKey: `grouped-in-flight-${toolName}`,
-            };
-      const events = createGatewayEventStore();
-      const context = { port, grants, events };
-      const first = callGatewayTool(context, toolName, request);
-      await entered.promise;
-      const replay = callGatewayTool(context, toolName, request);
-      const changed =
-        toolName === "t3_modify_actions"
-          ? {
-              ...request,
-              modifications: [{ actionId: "approval-1", fields: { decision: "accept" } }],
-            }
-          : { ...request, actionIds: ["approval-other"] };
-      await expect(callGatewayTool(context, toolName, changed)).rejects.toMatchObject({
-        code: "idempotency_conflict",
-      });
-      response.resolve({ accepted: true });
-
-      await expect(replay).resolves.toEqual(await first);
-      expect(dispatches).toBe(1);
-      events.close();
-    },
-  );
-
-  it.each(["t3_approve_actions", "t3_reject_actions", "t3_modify_actions"] as const)(
-    "recovers an authoritative %s receipt after response loss and store reopen",
-    async (toolName) => {
-      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-mcp-group-lost-"));
-      const file = NodePath.join(directory, "events.sqlite");
-      const activities: Array<Record<string, unknown>> = [
-        {
-          id: "approval-1",
-          sequence: 1,
-          kind: "approval.requested",
-          payload: { requestId: "approval-1", requestKind: "command", detail: "Run command" },
-        },
-      ];
-      const receipts = new Map<string, Record<string, unknown>>();
-      let sideEffects = 0;
-      let loseResponse = true;
-      const port = makePort({ threadActivities: activities });
-      const accept = async (requestId: string) => {
-        const previous = receipts.get(requestId);
-        if (previous !== undefined) return previous;
-        sideEffects += 1;
-        activities.push({
-          id: "approval-resolved-1",
-          sequence: 2,
-          kind: "approval.resolved",
-          payload: { requestId: "approval-1" },
-        });
-        const receipt = { accepted: true, requestId };
-        receipts.set(requestId, receipt);
-        if (loseResponse) throw new Error("transport disconnected after authoritative acceptance");
-        return receipt;
-      };
-      port.respondToApprovals = async (request) => ({
-        requestId: request.requestId,
-        commandId: request.requestId,
-        status: "accepted",
-        threadId: request.threadId,
-        ...(await accept(request.requestId)),
-      });
-      port.executeOperation = async (request) => accept(request.requestId ?? "");
-      const request =
-        toolName === "t3_modify_actions"
-          ? {
-              environmentId: "local",
-              threadId: "thread-1",
-              planRevision: 1,
-              modifications: [{ actionId: "approval-1", fields: { decision: "decline" } }],
-              idempotencyKey: `grouped-lost-${toolName}`,
-            }
-          : {
-              environmentId: "local",
-              threadId: "thread-1",
-              planRevision: 1,
-              actionIds: ["approval-1"],
-              ...(toolName === "t3_approve_actions" ? { confirmDestructive: true } : {}),
-              idempotencyKey: `grouped-lost-${toolName}`,
-            };
-      let events = createGatewayEventStore({ file });
-      try {
-        await expect(callGatewayTool({ port, grants, events }, toolName, request)).rejects.toThrow(
-          "transport disconnected after authoritative acceptance",
-        );
-        events.close();
-        events = createGatewayEventStore({ file });
-        loseResponse = false;
-
-        await expect(
-          callGatewayTool({ port, grants, events }, toolName, request),
-        ).resolves.toMatchObject(
-          toolName === "t3_modify_actions"
-            ? { accepted: true }
-            : {
-                approvalPlanId: "plan-thread-1",
-                revision: 1,
-                pending: 0,
-                receipt: { requestId: expect.stringMatching(/^mcp-approval-plan-v2-/u) },
-              },
-        );
-        expect(sideEffects).toBe(1);
-      } finally {
-        events.close();
-        NodeFS.rmSync(directory, { recursive: true, force: true });
-      }
     },
   );
 
@@ -1944,96 +1522,6 @@ describe("gateway v3 event delivery tools", () => {
     ).rejects.toMatchObject({ code: "idempotency_conflict" });
   });
 
-  it("uses first-class artifact records instead of inferring message payloads", async () => {
-    const result = await callGatewayTool(
-      {
-        port: {
-          ...makePort(),
-          getThread: async () => ({
-            artifacts: [
-              {
-                artifactId: "attachment-1",
-                kind: "attachment",
-                sourceId: "message-1",
-                name: "diagram.png",
-                mimeType: "image/png",
-                sizeBytes: 42,
-                availability: "available",
-              },
-            ],
-            messages: [
-              {
-                id: "message-evil",
-                attachments: [{ id: "leaked", hostPath: "/home/user/secret" }],
-              },
-            ],
-          }),
-        },
-        grants: { local: ["artifact"] },
-      },
-      "t3_list_artifacts",
-      { environmentId: "local", threadId: "thread-1" },
-    );
-
-    expect(result).toEqual({
-      items: [
-        {
-          artifactId: "attachment-1",
-          kind: "attachment",
-          sourceId: "message-1",
-          name: "diagram.png",
-          mimeType: "image/png",
-          sizeBytes: 42,
-          availability: "available",
-        },
-      ],
-    });
-  });
-
-  it("forwards an atomic approval-plan modification with a revision guard", async () => {
-    const operations: Array<{ operation: string; payload: Readonly<Record<string, unknown>> }> = [];
-    const request = {
-      environmentId: "local",
-      threadId: "thread-1",
-      planRevision: 10,
-      modifications: [{ actionId: "approval-1", fields: { decision: "accept" } }],
-      idempotencyKey: "modify-approval-1",
-    };
-    await expect(
-      callGatewayTool(
-        {
-          port: makePort({ operations, pendingApprovalPlan: true }),
-          grants: { local: ["read", "approval"] },
-        },
-        "t3_modify_actions",
-        request,
-      ),
-    ).rejects.toMatchObject({ code: "destructive_confirmation_required" });
-    const result = await callGatewayTool(
-      {
-        port: makePort({ operations, pendingApprovalPlan: true }),
-        grants: { local: ["read", "approval"] },
-      },
-      "t3_modify_actions",
-      { ...request, confirmDestructive: true },
-    );
-
-    expect(result).toMatchObject({
-      accepted: true,
-      requestId: expect.stringMatching(/^mcp-approval-plan-v2-/u),
-    });
-    expect(operations).toEqual([
-      {
-        operation: "approval.modify",
-        payload: {
-          threadId: "thread-1",
-          planRevision: 10,
-          modifications: [{ actionId: "approval-1", fields: { decision: "accept" } }],
-        },
-      },
-    ]);
-  });
-
   it("emits lifecycle events and serves replay with cursors and acks", async () => {
     const events = createGatewayEventStore({ now: () => "2026-09-04T00:00:02.000Z" });
     const context = { port: makePort(), grants, events };
@@ -2217,38 +1705,16 @@ describe("gateway v3 event delivery tools", () => {
     events.close();
   });
 
-  it("applies grouped approvals through one atomic runtime command", async () => {
-    const approvalBatches: Array<ReadonlyArray<{ approvalRequestId: string; decision: string }>> =
-      [];
-    const port = makePort({ approvalBatches, pendingApprovalPlan: true });
-
-    const result = await callGatewayTool({ port, grants }, "t3_approve_actions", {
-      environmentId: "local",
-      threadId: "thread-1",
-      actionIds: ["approval-1", "approval-2"],
-      planRevision: 10,
-      confirmDestructive: true,
-      idempotencyKey: "approve-group-1",
-    });
-
-    expect(approvalBatches).toEqual([
-      [
-        { approvalRequestId: "approval-1", decision: "accept" },
-        { approvalRequestId: "approval-2", decision: "accept" },
-      ],
-    ]);
-    expect(result).toMatchObject({ approved: 2, pending: 0 });
-  });
-
   it("removes approvals that the canonical server marked stale", async () => {
-    const plan = await callGatewayTool(
+    const summary = await callGatewayTool(
       {
         port: makePort({ pendingApprovalPlan: true, staleApprovalPlan: true }),
         grants,
       },
-      "t3_get_approval_plan",
+      "t3_summarize_thread",
       { environmentId: "local", threadId: "thread-1" },
     );
+    const plan = (summary as { approvalPlan: unknown }).approvalPlan;
 
     expect(plan).toMatchObject({ revision: 11 });
     expect((plan as { actions: Array<{ approvalActionId: string }> }).actions).toEqual([
@@ -2656,6 +2122,43 @@ describe("agent profile tools", () => {
     await expect(
       callGatewayTool({ port, grants: {} }, "t3_open_agents", { environmentId: "local" }),
     ).rejects.toMatchObject({ code: "unknown_environment" });
+  });
+
+  it("keeps system prompts out of listings unless one chat or an opt-in asks", async () => {
+    const port = profilesPort();
+    const context = { port, grants: { local: ["admin", "read"] } as const };
+    await callGatewayTool(context, "t3_create_agent", { ...input, systemPrompt: "Long prompt" });
+    const thread = {
+      id: "chat",
+      projectId: "p",
+      profileSnapshot: {
+        profileId: "write",
+        profileName: "Write",
+        revision: 2,
+        systemPrompt: "Long prompt",
+      },
+    };
+    port.listThreads = async () => ({ snapshotAt: "now", items: [thread] });
+    port.getThread = async () => thread;
+
+    const listed = await callGatewayTool(context, "t3_list_threads", { environmentId: "local" });
+    expect(listed).toMatchObject({
+      items: [{ profileSnapshot: { profileId: "write", profileName: "Write", revision: 2 } }],
+    });
+    expect(JSON.stringify(listed)).not.toContain("Long prompt");
+    expect(
+      await callGatewayTool(context, "t3_get_thread", { environmentId: "local", threadId: "chat" }),
+    ).toMatchObject({ profileSnapshot: { systemPrompt: "Long prompt" } });
+
+    const agents = await callGatewayTool(context, "t3_list_agents", { environmentId: "local" });
+    expect(agents).toMatchObject({ items: [{ profileId: "write", name: "Write" }] });
+    expect(JSON.stringify(agents)).not.toContain("Long prompt");
+    expect(
+      await callGatewayTool(context, "t3_list_agents", {
+        environmentId: "local",
+        includeSystemPrompt: true,
+      }),
+    ).toMatchObject({ items: [{ systemPrompt: "Long prompt" }] });
   });
 });
 
@@ -3367,5 +2870,358 @@ describe("shared skill tools", () => {
         input,
       ),
     ).toMatchObject({ skill: { skillId: "review" }, sync: { failedEnvironmentIds: ["remote"] } });
+  });
+});
+
+describe("pending question tools", () => {
+  const pendingQuestions = [
+    {
+      questionRequestId: "question-1",
+      askedAt: "2026-09-26T00:00:00.000Z",
+      questions: [
+        {
+          questionId: "approach",
+          header: "Approach",
+          question: "How should the hosted /mcp reuse the CLI API's checks?",
+          multiSelect: false,
+          allowsFreeText: true,
+          options: [
+            { label: "Shared operation layer", description: "Move the checks in-process." },
+            { label: "HTTP loopback", description: "Call /api/cli/v1.", value: "loopback" },
+          ],
+        },
+        {
+          questionId: "surfaces",
+          header: "Surfaces",
+          question: "Which clients should ship first?",
+          multiSelect: true,
+          allowsFreeText: false,
+          options: [
+            { label: "Web", description: "" },
+            { label: "Desktop", description: "" },
+            { label: "Mobile", description: "" },
+          ],
+        },
+      ],
+    },
+  ];
+
+  function questionPort(pending: ReadonlyArray<unknown> = pendingQuestions) {
+    const port = makePort();
+    port.getThread = async (_environmentId, threadId) => ({
+      id: threadId,
+      title: "Plan the hosted MCP",
+      status: "waiting-input",
+      pendingQuestions: pending,
+    });
+    const respondToUserInput = vi.fn(async (input: { requestId: string; threadId: string }) => ({
+      requestId: input.requestId,
+      commandId: input.requestId,
+      status: "accepted" as const,
+      threadId: input.threadId,
+    }));
+    port.respondToUserInput = respondToUserInput;
+    return { port, respondToUserInput };
+  }
+  const grants = { local: ["read", "send"] as const };
+  const answer = (answers: ReadonlyArray<Record<string, unknown>>, key = "answer-1") => ({
+    environmentId: "local",
+    threadId: "chat",
+    answers,
+    idempotencyKey: key,
+  });
+
+  it("reads every question and option with read access", async () => {
+    const { port } = questionPort();
+    await expect(
+      callGatewayTool({ port, grants: { local: ["read"] } }, "t3_get_pending_questions", {
+        environmentId: "local",
+        threadId: "chat",
+      }),
+    ).resolves.toMatchObject({ threadId: "chat", status: "waiting-input", pendingQuestions });
+  });
+
+  it("answers by option label, multi-select, and free text with the provider's values", async () => {
+    const { port, respondToUserInput } = questionPort();
+    const receipt = await callGatewayTool(
+      { port, grants },
+      "t3_answer_question",
+      answer([
+        { questionId: "approach", options: ["http loopback"] },
+        { questionId: "surfaces", options: ["Web", "Mobile", "Web"] },
+      ]),
+    );
+    expect(receipt).toMatchObject({
+      status: "accepted",
+      questionRequestId: "question-1",
+      answers: { approach: "loopback", surfaces: ["Web", "Mobile"] },
+    });
+    expect(respondToUserInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environmentId: "local",
+        threadId: "chat",
+        userInputRequestId: "question-1",
+        answers: { approach: "loopback", surfaces: ["Web", "Mobile"] },
+      }),
+    );
+
+    await callGatewayTool(
+      { port, grants },
+      "t3_answer_question",
+      answer(
+        [
+          { questionId: "approach", text: "Plan only for now" },
+          { questionId: "surfaces", options: ["Desktop"] },
+        ],
+        "answer-2",
+      ),
+    );
+    expect(respondToUserInput).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        answers: { approach: "Plan only for now", surfaces: ["Desktop"] },
+      }),
+    );
+  });
+
+  it("rejects answers the question cannot take before reaching the provider", async () => {
+    const { port, respondToUserInput } = questionPort();
+    const rejected = async (answers: ReadonlyArray<Record<string, unknown>>, message: string) => {
+      await expect(
+        callGatewayTool({ port, grants }, "t3_answer_question", answer(answers)),
+      ).rejects.toThrow(message);
+    };
+    await rejected(
+      [
+        { questionId: "approach", options: ["Shared operation layer", "HTTP loopback"] },
+        { questionId: "surfaces", options: ["Web"] },
+      ],
+      '"Approach" takes exactly one option.',
+    );
+    await rejected(
+      [
+        { questionId: "approach", options: ["Shared operation layer"] },
+        { questionId: "surfaces", text: "All of them" },
+      ],
+      '"Surfaces" only accepts one of its options.',
+    );
+    await rejected(
+      [
+        { questionId: "approach", options: ["Rewrite it"] },
+        { questionId: "surfaces", options: ["Web"] },
+      ],
+      '"Rewrite it" is not an option for "Approach". Options: Shared operation layer, HTTP loopback.',
+    );
+    await rejected(
+      [{ questionId: "approach", options: ["Shared operation layer"] }],
+      "Missing: Surfaces.",
+    );
+    await rejected([{ options: ["Web"] }], "pass questionId with each answer");
+    expect(respondToUserInput).not.toHaveBeenCalled();
+  });
+
+  it("reports a chat that is no longer waiting instead of answering", async () => {
+    const { port, respondToUserInput } = questionPort([]);
+    await expect(
+      callGatewayTool(
+        { port, grants },
+        "t3_answer_question",
+        answer([{ options: ["Shared operation layer"] }]),
+      ),
+    ).rejects.toMatchObject({ code: "stale_plan" });
+    expect(respondToUserInput).not.toHaveBeenCalled();
+  });
+
+  it("needs send access, and a retry does not answer twice", async () => {
+    const single = [{ ...pendingQuestions[0]!, questions: [pendingQuestions[0]!.questions[0]!] }];
+    const { port, respondToUserInput } = questionPort(single);
+    const request = answer([{ options: ["Shared operation layer"] }]);
+    await expect(
+      callGatewayTool({ port, grants: { local: ["read"] } }, "t3_answer_question", request),
+    ).rejects.toThrow();
+    const events = createGatewayEventStore();
+    const first = await callGatewayTool({ port, grants, events }, "t3_answer_question", request);
+    const retry = await callGatewayTool({ port, grants, events }, "t3_answer_question", request);
+    expect(retry).toEqual(first);
+    expect(respondToUserInput).toHaveBeenCalledTimes(1);
+    expect(respondToUserInput).toHaveBeenCalledWith(
+      expect.objectContaining({ answers: { approach: "Shared operation layer" } }),
+    );
+  });
+
+  it("attaches pending questions to waiting chats in the thread list on request", async () => {
+    const { port } = questionPort();
+    port.listThreads = async () => ({
+      snapshotAt: "runtime",
+      items: [
+        { id: "chat", hasPendingUserInput: true, status: "waiting-input" },
+        { id: "busy", hasPendingUserInput: false, status: "running" },
+      ],
+    });
+    const listed = (await callGatewayTool({ port, grants }, "t3_list_threads", {
+      environmentId: "local",
+      includeQuestions: true,
+    })) as { items: ReadonlyArray<Record<string, unknown>> };
+    expect(listed.items[0]).toMatchObject({ id: "chat", pendingQuestions });
+    expect(listed.items[1]).not.toHaveProperty("pendingQuestions");
+  });
+});
+
+describe("cross-environment discovery", () => {
+  const profile = (profileId: string, environmentIds?: ReadonlyArray<string>): GatewayProfile => ({
+    profileId,
+    name: profileId,
+    providerLabel: "Codex",
+    modelLabel: "GPT-5",
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    ...(environmentIds === undefined ? {} : { environmentIds }),
+  });
+  const threadsByEnvironment: Record<string, ReadonlyArray<Record<string, unknown>>> = {
+    macbook: [
+      { id: "mac-idle", projectId: "t3", status: "idle", profileSnapshot: { profileId: "code" } },
+    ],
+    "dev-box": [
+      {
+        id: "tensorfold",
+        projectId: "tf",
+        status: "running",
+        profileSnapshot: { profileId: "code" },
+      },
+    ],
+  };
+  function discoveryPort(): GatewayRuntimePort {
+    return {
+      ...makePort(),
+      listEnvironments: async () => [
+        {
+          environmentId: "macbook",
+          label: "MacBook",
+          targetKind: "primary",
+          connectionState: "connected",
+        },
+        {
+          environmentId: "dev-box",
+          label: "dev-box",
+          targetKind: "relay",
+          connectionState: "connected",
+        },
+        {
+          environmentId: "broken",
+          label: "Broken",
+          targetKind: "relay",
+          connectionState: "connected",
+        },
+        {
+          environmentId: "laptop",
+          label: "Laptop",
+          targetKind: "relay",
+          connectionState: "disconnected",
+        },
+        {
+          environmentId: "phone",
+          label: "Phone",
+          targetKind: "relay",
+          connectionState: "connected",
+        },
+        {
+          environmentId: "ungranted",
+          label: "Other",
+          targetKind: "relay",
+          connectionState: "connected",
+        },
+      ],
+      listThreads: async (environmentId) => {
+        if (environmentId === "broken") throw new Error("snapshot timed out");
+        return { snapshotAt: "now", items: threadsByEnvironment[environmentId] ?? [] };
+      },
+      listProfiles: async () => [profile("code"), profile("review", ["dev-box"])],
+    };
+  }
+  const context = {
+    port: discoveryPort(),
+    grants: {
+      macbook: ["read"],
+      "dev-box": ["read"],
+      broken: ["read"],
+      laptop: ["read"],
+      phone: ["create"],
+    },
+  } as const;
+  const coverage = [
+    { environmentId: "macbook", environmentLabel: "MacBook", status: "listed" },
+    { environmentId: "dev-box", environmentLabel: "dev-box", status: "listed" },
+    { environmentId: "broken", status: "failed", reason: "snapshot timed out" },
+    { environmentId: "laptop", status: "skipped", reason: "disconnected" },
+    { environmentId: "phone", status: "skipped", reason: "read not granted" },
+  ];
+
+  it("lists chats from every connected environment, tagged, and reports what it missed", async () => {
+    const listed = await callGatewayTool(context, "t3_list_threads", {});
+    expect(listed.items).toEqual([
+      expect.objectContaining({
+        id: "mac-idle",
+        environmentId: "macbook",
+        environmentLabel: "MacBook",
+      }),
+      expect.objectContaining({
+        id: "tensorfold",
+        environmentId: "dev-box",
+        environmentLabel: "dev-box",
+      }),
+    ]);
+    expect(listed.environments).toMatchObject(coverage);
+
+    const running = await callGatewayTool(context, "t3_list_threads", {
+      executionState: "running",
+    });
+    expect(running.items.map((thread: { id: string }) => thread.id)).toEqual(["tensorfold"]);
+    await expect(
+      callGatewayTool(context, "t3_list_threads", { executionState: "sleeping" }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+  });
+
+  it("keeps one-environment listings scoped while tagging their items", async () => {
+    const listed = await callGatewayTool(context, "t3_list_threads", { environmentId: "dev-box" });
+    expect(listed).toEqual({
+      snapshotAt: "now",
+      items: [expect.objectContaining({ id: "tensorfold", environmentLabel: "dev-box" })],
+    });
+    await expect(
+      callGatewayTool(context, "t3_list_threads", { environmentId: "phone" }),
+    ).rejects.toMatchObject({ code: "scope_required" });
+  });
+
+  it("lists projects across environments", async () => {
+    const listed = await callGatewayTool(context, "t3_list_projects", {});
+    expect(listed.items).toEqual([
+      expect.objectContaining({ id: "macbook-project", environmentId: "macbook" }),
+      expect.objectContaining({ id: "dev-box-project", environmentId: "dev-box" }),
+      expect.objectContaining({ id: "broken-project", environmentId: "broken" }),
+    ]);
+  });
+
+  it("lists each shared agent once with the machines it is available on", async () => {
+    const listed = await callGatewayTool(context, "t3_list_agents", {});
+    expect(listed.items).toEqual([
+      expect.objectContaining({
+        profileId: "code",
+        availableEnvironmentIds: ["macbook", "dev-box", "broken"],
+      }),
+      expect.objectContaining({ profileId: "review", availableEnvironmentIds: ["dev-box"] }),
+    ]);
+  });
+
+  it("collects each agent's runs from every environment onto one board card", async () => {
+    const board = await callGatewayTool(context, "t3_get_agents_view", { profileId: "code" });
+    expect(board.items).toEqual([
+      expect.objectContaining({
+        profileId: "code",
+        runs: [
+          expect.objectContaining({ threadId: "mac-idle", environmentId: "macbook" }),
+          expect.objectContaining({ threadId: "tensorfold", environmentLabel: "dev-box" }),
+        ],
+      }),
+    ]);
+    expect(board.environments).toMatchObject(coverage);
   });
 });

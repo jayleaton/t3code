@@ -74,6 +74,8 @@ export class DesktopEnvironment extends Context.Service<
     readonly clientAssetsDir: string;
     readonly backendCwd: string;
     readonly preloadPath: string;
+    // Preload that turns on the V8 compile cache for the local backend.
+    readonly compileCachePath: string;
     readonly appUpdateYmlPath: string;
     readonly devServerUrl: Option.Option<URL>;
     readonly devRemoteT3ServerEntryPath: Option.Option<string>;
@@ -92,8 +94,6 @@ export class DesktopEnvironment extends Context.Service<
     readonly linuxWmClass: string;
     readonly linuxApplicationsDir: string;
     readonly appImagePath: Option.Option<string>;
-    readonly userDataDirName: string;
-    readonly legacyUserDataDirName: string;
     readonly defaultDesktopSettings: DesktopAppSettings.DesktopSettings;
     readonly runtimeInfo: DesktopRuntimeInfo;
     readonly resolvePickFolderDefaultPath: (rawOptions: unknown) => Option.Option<string>;
@@ -197,8 +197,6 @@ const make = Effect.fn("desktop.environment.make")(function* (
     joinPath: path.join,
     t3Home: config.t3Home,
   });
-  const userDataDirName = isDevelopment ? "t3code-dev" : "t3code";
-  const legacyUserDataDirName = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
   const linuxApplicationsDir = path.join(
     Option.getOrElse(config.xdgDataHome, () => path.join(homeDirectory, ".local", "share")),
     "applications",
@@ -232,6 +230,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     clientAssetsDir: path.join(serverRoot, "apps/server/dist/client"),
     backendCwd: input.isPackaged ? homeDirectory : appRoot,
     preloadPath: path.join(input.dirname, "preload.cjs"),
+    compileCachePath: path.join(input.dirname, "compileCache.cjs"),
     appUpdateYmlPath: input.isPackaged
       ? path.join(resourcesPath, "app-update.yml")
       : path.join(input.appPath, "dev-app-update.yml"),
@@ -260,8 +259,6 @@ const make = Effect.fn("desktop.environment.make")(function* (
     linuxWmClass: resolveLinuxWmClass(isDevelopment, input.brand ?? desktopBrand),
     linuxApplicationsDir,
     appImagePath: config.appImagePath,
-    userDataDirName,
-    legacyUserDataDirName,
     defaultDesktopSettings: DesktopAppSettings.resolveDefaultDesktopSettings(input.appVersion),
     runtimeInfo: resolveDesktopRuntimeInfo({
       platform: input.platform,

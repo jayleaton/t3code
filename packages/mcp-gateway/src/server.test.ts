@@ -15,7 +15,6 @@ const port: GatewayRuntimePort = {
   listProjects: async () => ({ items: [], snapshotAt: "snapshot-1" }),
   listThreads: async () => ({ items: [], snapshotAt: "snapshot-1" }),
   getThread: async (environmentId, threadId) => ({ environmentId, id: threadId, messages: [] }),
-  createAssetUrl: async () => ({ relativeUrl: "/asset", expiresAt: 1_800_000_000_000 }),
   getPullRequest: async () => ({}),
   getPullRequestActivity: async () => ({}),
   createThread: async (input) => ({
@@ -158,7 +157,7 @@ describe("MCP gateway server", () => {
 
     const listedTools = await client.listTools();
     const toolNames = listedTools.tools.map((tool) => tool.name);
-    expect(toolNames).toHaveLength(73);
+    expect(toolNames).toHaveLength(74);
     expect(
       listedTools.tools.find((tool) => tool.name === "t3_update_agent")?.inputSchema.properties
         ?.patch,
@@ -193,7 +192,7 @@ describe("MCP gateway server", () => {
     });
     const agents = await client.callTool({
       name: "t3_list_agents",
-      arguments: { environmentId: "local" },
+      arguments: { environmentId: "local", includeSystemPrompt: true },
     });
     expect(agents.isError).not.toBe(true);
     const board = await client.callTool({
@@ -240,10 +239,11 @@ describe("MCP gateway server", () => {
         "t3_update_scheduled_task",
         "t3_delete_scheduled_task",
         "t3_run_scheduled_task",
-        "t3_get_artifact",
-        "t3_get_approval_plan",
-        "t3_approve_actions",
-        "t3_reject_actions",
+        "t3_list_todos",
+        "t3_add_todo",
+        "t3_settle_todo",
+        "t3_get_pending_questions",
+        "t3_answer_question",
         "t3_rotate_webhook_secret",
         "t3_get_pr",
         "t3_get_pr_checks",

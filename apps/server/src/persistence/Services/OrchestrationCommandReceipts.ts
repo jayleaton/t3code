@@ -10,10 +10,9 @@ import {
   CommandId,
   IsoDateTime,
   NonNegativeInt,
-  OrchestrationAggregateKind,
-  OrchestrationCommandReceiptStatus,
   ProjectId,
   ThreadId,
+  TodoId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -24,11 +23,12 @@ import type { OrchestrationCommandReceiptRepositoryError } from "../Errors.ts";
 
 export const OrchestrationCommandReceipt = Schema.Struct({
   commandId: CommandId,
-  aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId]),
+  aggregateKind: Schema.Literals(["project", "thread", "todo"]),
+  aggregateId: Schema.Union([ProjectId, ThreadId, TodoId]),
+  commandType: Schema.String,
   acceptedAt: IsoDateTime,
   resultSequence: NonNegativeInt,
-  status: OrchestrationCommandReceiptStatus,
+  status: Schema.Literals(["accepted", "rejected"]),
   error: Schema.NullOr(Schema.String),
 });
 export type OrchestrationCommandReceipt = typeof OrchestrationCommandReceipt.Type;
@@ -42,6 +42,10 @@ export type GetByCommandIdInput = typeof GetByCommandIdInput.Type;
  * OrchestrationCommandReceiptRepositoryShape - Service API for command receipts.
  */
 export interface OrchestrationCommandReceiptRepositoryShape {
+  readonly insertIfAbsent: (
+    receipt: OrchestrationCommandReceipt,
+  ) => Effect.Effect<boolean, OrchestrationCommandReceiptRepositoryError>;
+
   /**
    * Insert or replace a command receipt row.
    *

@@ -7,18 +7,8 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import * as Crypto from "effect/Crypto";
+import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import * as DateTime from "effect/DateTime";
-import * as Deferred from "effect/Deferred";
-import * as Queue from "effect/Queue";
-import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
-import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
-import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { afterEach, describe, expect, it, vi } from "@effect/vitest";
 import WebSocket, { WebSocketServer } from "ws";
 
@@ -32,13 +22,6 @@ import {
 import { connectMcpSession } from "./sharedTransport.ts";
 import { resolveMcpGatewayLaunchConfig } from "../../../apps/desktop/src/mcpGatewayLaunchConfig.ts";
 import { buildMcpGatewayHostConfig } from "../../../apps/web/src/mcpGatewayLaunchConfig.ts";
-import { createManagedGatewayHost } from "./managedHost.ts";
-import * as GatewayBroker from "../../../apps/server/src/mcp/McpGatewayBroker.ts";
-import { handler as gatewayHttpHandler } from "../../../apps/server/src/mcp/McpGatewayHttpServer.ts";
-import { McpSessionRegistry } from "../../../apps/server/src/mcp/McpSessionRegistry.ts";
-
-const decodeJsonMessage = Schema.decodeUnknownEffect(Schema.JsonObject);
-const encodeJsonMessage = Schema.encodeSync(Schema.fromJsonString(Schema.JsonObject));
 
 const TOKEN = "test-shared-gateway-token";
 const cleanup: Array<() => void | Promise<void>> = [];
@@ -81,9 +64,10 @@ async function mcp(
   launch = async () => {
     await owner(input);
   },
+  build?: string,
 ) {
   const client = new Client({ name: "shared-gateway-test", version: "1.0.0" });
-  const transport = await connectSharedGateway(input, launch);
+  const transport = await connectSharedGateway(input, launch, build);
   await client.connect(transport);
   cleanup.push(() => client.close());
   return client;
@@ -152,228 +136,6 @@ function body(result: Awaited<ReturnType<Client["callTool"]>>) {
 }
 
 describe("shared MCP gateway", () => {
-  it.effect(
-    "gives local and remote managed sessions tools through authenticated provider endpoints and withdraws them on disable",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const input = yield* Effect.promise(config);
-          const entryPoint =
-            process.env.T3_MCP_TEST_ENTRYPOINT ??
-            NodeURL.fileURLToPath(new URL("./bin.ts", import.meta.url));
-          const launch = resolveMcpGatewayLaunchConfig({
-            isPackaged: true,
-            executablePath: process.env.T3_MCP_TEST_EXECUTABLE ?? process.execPath,
-            resourcesPath: NodePath.dirname(entryPoint),
-            stateFile: input.stateFile,
-          })!;
-          const crypto = Crypto.make({
-            randomBytes: NodeCrypto.randomBytes,
-            digest: () => Effect.die("unused"),
-          });
-          const brokers = yield* Effect.all(
-            [0, 1].map(() => GatewayBroker.make.pipe(Effect.provideService(Crypto.Crypto, crypto))),
-          );
-          type DesktopEvent = Parameters<typeof createManagedGatewayHost>[1] extends (
-            event: infer E,
-          ) => void
-            ? E
-            : never;
-          const desktopEvents = yield* Queue.unbounded<DesktopEvent>();
-          const managed = yield* Effect.promise(() =>
-            createManagedGatewayHost(
-              {
-                ...launch,
-                args: [entryPoint],
-                env: {
-                  ...launch.env,
-                  T3_MCP_BRIDGE_TOKEN: input.token,
-                  T3_MCP_BRIDGE_PORT: String(input.port),
-                  T3CODE_HOME: NodePath.dirname(input.stateFile),
-                },
-              },
-              (event) => {
-                Queue.offerUnsafe(desktopEvents, event);
-              },
-            ),
-          );
-          yield* Effect.addFinalizer(() => Effect.promise(() => managed.close()));
-          const desktop = yield* Effect.promise(() => runtime(input));
-          const ownerClosed = new Promise<void>((resolve) =>
-            desktop.socket.once("close", () => resolve()),
-          );
-          yield* Effect.addFinalizer(() =>
-            Effect.promise(async () => {
-              await managed.close();
-              await ownerClosed;
-            }),
-          );
-          yield* Stream.fromQueue(desktopEvents).pipe(
-            Stream.runForEach((event) =>
-              Effect.gen(function* () {
-                const [index, connectionId, sessionId] = event.sessionId.split(":");
-                if (!connectionId || !sessionId) return;
-                const message = event.message ? yield* decodeJsonMessage(event.message) : undefined;
-                yield* brokers[Number(index)]!.respond("desktop", {
-                  connectionId,
-                  sessionId,
-                  ...(message ? { message } : {}),
-                  ...(event.error ? { error: event.error } : {}),
-                }).pipe(Effect.ignore);
-              }),
-            ),
-            Effect.forkScoped,
-          );
-          const clients: Client[] = [];
-          yield* Effect.addFinalizer(() =>
-            Effect.promise(async () => {
-              await Promise.all(clients.map((client) => client.close()));
-            }),
-          );
-          const relays = [];
-          for (const [index, broker] of brokers.entries()) {
-            const ready = yield* Deferred.make<void>();
-            const relay = yield* broker.connect("desktop").pipe(
-              Stream.runForEach((event) => {
-                if (event.type === "connected") return Deferred.succeed(ready, undefined);
-                const id = `${index}:${event.connectionId}:${event.sessionId}`;
-                return Effect.promise(() =>
-                  event.type === "close"
-                    ? managed.closeSession(id)
-                    : managed.send(id, event.message),
-                );
-              }),
-              Effect.forkScoped,
-            );
-            relays.push(relay);
-            yield* Deferred.await(ready);
-            const credential = `provider-token-${index}`;
-            const scope = {
-              environmentId: EnvironmentId.make(index === 0 ? "local" : "remote"),
-              threadId: ThreadId.make(`thread-${index}`),
-              providerSessionId: `provider-${index}`,
-              providerInstanceId: ProviderInstanceId.make("opencode"),
-              capabilities: new Set(["gateway"] as const),
-              issuedAt: 1,
-            };
-            const registry: McpSessionRegistry["Service"] = {
-              resolve: (token) => Effect.succeed(token === credential ? scope : undefined),
-              issue: () => Effect.die("unused"),
-              touch: () => Effect.void,
-              revokeThread: () => Effect.void,
-              revokeProviderSession: () => Effect.void,
-              revokeAll: Effect.void,
-            };
-            const httpRequests = yield* Queue.unbounded<{
-              request: Request;
-              resolve: (response: Response) => void;
-              reject: (error: unknown) => void;
-            }>();
-            yield* Stream.fromQueue(httpRequests).pipe(
-              Stream.runForEach((request) =>
-                gatewayHttpHandler.pipe(
-                  Effect.provideService(McpSessionRegistry, registry),
-                  Effect.provideService(GatewayBroker.McpGatewayBroker, broker),
-                  Effect.provideService(
-                    HttpServerRequest.HttpServerRequest,
-                    HttpServerRequest.fromWeb(request.request),
-                  ),
-                  Effect.match({
-                    onFailure: request.reject,
-                    onSuccess: (response) => request.resolve(HttpServerResponse.toWeb(response)),
-                  }),
-                ),
-              ),
-              Effect.forkScoped,
-            );
-            const fetchEndpoint: typeof fetch = (url, init) =>
-              new Promise((resolve, reject) => {
-                Queue.offerUnsafe(httpRequests, {
-                  request: new Request(url, init),
-                  resolve,
-                  reject,
-                });
-              });
-            expect(
-              (yield* Effect.promise(() =>
-                fetchEndpoint("http://provider.test/mcp/gateway", { method: "POST", body: "{}" }),
-              )).status,
-            ).toBe(401);
-            const client = new Client({ name: `managed-${index}`, version: "1.0.0" });
-            clients.push(client);
-            yield* Effect.promise(() =>
-              client.connect(
-                new StreamableHTTPClientTransport(new URL("http://provider.test/mcp/gateway"), {
-                  fetch: fetchEndpoint,
-                  requestInit: { headers: { Authorization: `Bearer ${credential}` } },
-                  // SDK getter is string | undefined while Transport declares an exact optional property.
-                }) as Transport,
-              ),
-            );
-          }
-          yield* Effect.promise(async () => {
-            for (const client of clients) {
-              expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(
-                expect.arrayContaining([
-                  "t3_create_thread",
-                  "t3_create_agent",
-                  "t3_get_agents_view",
-                  "t3_control_thread",
-                  "t3_get_environment_health",
-                ]),
-              );
-              expect(
-                body(await client.callTool({ name: "t3_list_environments", arguments: {} })).data,
-              ).toMatchObject({ items: [{ environmentId: "local" }] });
-            }
-            const notification = Promise.withResolvers<unknown>();
-            const unrelated: unknown[] = [];
-            clients[0]!.fallbackNotificationHandler = async (value) => {
-              notification.resolve(value.params);
-            };
-            clients[1]!.fallbackNotificationHandler = async (value) => {
-              unrelated.push(value);
-            };
-            const subscription = body(
-              await clients[0]!.callTool({
-                name: "t3_subscribe_events",
-                arguments: { environmentId: "local" },
-              }),
-            ).data as { subscriptionId: string };
-            desktop.socket.send(
-              encodeJsonMessage({
-                type: "event",
-                event: {
-                  eventId: "managed-event",
-                  environmentId: "local",
-                  sequence: 1,
-                  type: "thread.started",
-                  occurredAt: DateTime.formatIso(DateTime.nowUnsafe()),
-                  data: {},
-                },
-              }),
-            );
-            expect(await notification.promise).toMatchObject({
-              subscriptionId: subscription.subscriptionId,
-              event: { eventId: "managed-event" },
-            });
-            await clients[1]!.callTool({ name: "t3_get_gateway_health", arguments: {} });
-            expect(unrelated).toEqual([]);
-          });
-          yield* Fiber.interrupt(relays[1]!);
-          yield* Effect.promise(async () => {
-            await expect(clients[1]!.listTools()).rejects.toThrow();
-            expect(
-              body(await clients[0]!.callTool({ name: "t3_get_gateway_health", arguments: {} }))
-                .data,
-            ).toMatchObject({ bridge: "connected" });
-            expect(NodeFS.existsSync(input.stateFile)).toBe(true);
-          });
-        }),
-      ),
-    45_000,
-  );
-
   it("discovers tools through the desktop's OpenCode launch configuration without a prestarted owner", async () => {
     const input = await config();
     const entryPoint =
@@ -754,6 +516,55 @@ describe("shared MCP gateway", () => {
     expect(sends).toBe(1);
   });
 
+  it("retires an owner whose script was replaced when a launcher on the new build connects", async () => {
+    const input = await config();
+    await owner(input, { build: { id: "old", isCurrent: () => false } });
+    await runtime(input);
+    const stale = await mcp(input);
+    const staleClosed = Promise.withResolvers<void>();
+    // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client exposes an onclose callback rather than a DOM event API.
+    stale.onclose = staleClosed.resolve;
+    const launch = vi.fn(async () => {
+      await owner(input, { build: { id: "new", isCurrent: () => true } });
+    });
+    const fresh = await mcp(input, launch, "new");
+    await staleClosed.promise;
+    expect(launch).toHaveBeenCalledTimes(1);
+    // The desktop reconnects to the replacement; the first call waits for it instead of failing.
+    const status = fresh.callTool({
+      name: "t3_get_environment_status",
+      arguments: { environmentId: "local" },
+    });
+    await runtime(input);
+    expect(body(await status).data).toMatchObject({ environmentId: "local" });
+  });
+
+  it("keeps a current owner when a launcher from another install connects", async () => {
+    const input = await config();
+    await owner(input, { build: { id: "installed", isCurrent: () => true } });
+    await runtime(input);
+    const launch = vi.fn(async () => undefined);
+    const client = await mcp(input, launch, "other-install");
+    expect(launch).not.toHaveBeenCalled();
+    expect(
+      body(await client.callTool({ name: "t3_get_gateway_health", arguments: {} })).data,
+    ).toMatchObject({ bridge: "connected" });
+  });
+
+  it("resolves grants from the desktop for a session opened before the desktop configures", async () => {
+    const input = await config();
+    await owner(input);
+    const early = await mcp(input);
+    const status = early.callTool({
+      name: "t3_get_environment_status",
+      arguments: { environmentId: "local" },
+    });
+    await runtime(input);
+    const result = await status;
+    expect(result.isError).not.toBe(true);
+    expect(body(result).data).toMatchObject({ environmentId: "local" });
+  });
+
   it("releases an idle owner and permits a fresh owner without changing durable state", async () => {
     const input = await config();
     const idle = Promise.withResolvers<void>();
@@ -772,6 +583,49 @@ describe("shared MCP gateway", () => {
     });
     await transport.close();
   });
+
+  it("moves a running stdio session to the next owner and announces the tool change", async () => {
+    const input = await config();
+    const entryPoint =
+      process.env.T3_MCP_TEST_ENTRYPOINT ??
+      NodeURL.fileURLToPath(new URL("./bin.ts", import.meta.url));
+    const first = await owner(input);
+    const client = new Client({ name: "owner-handover", version: "1.0.0" });
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [entryPoint],
+      stderr: "pipe",
+      env: {
+        T3_MCP_BRIDGE_PORT: String(input.port),
+        T3_MCP_BRIDGE_TOKEN: input.token,
+        T3_MCP_STATE_FILE: input.stateFile,
+        T3_MCP_EVENT_RETENTION: String(input.retentionEvents),
+        T3_MCP_REPOSITORY_ALLOWLIST: input.repositoryAllowlist.join(","),
+        T3_MCP_GRANTS: "{}",
+      },
+    });
+    cleanup.push(() => client.close());
+    await client.connect(transport);
+    const changed = Promise.withResolvers<void>();
+    client.setNotificationHandler(ToolListChangedNotificationSchema, () => changed.resolve());
+    expect((await client.listTools()).tools.length).toBeGreaterThan(0);
+
+    await first!.close();
+    await changed.promise;
+    // The session launched a detached owner. Let it finish its normal idle shutdown once the
+    // session closes; never find or kill a PID by port.
+    const desktop = await runtime(input);
+    const ownerClosed = new Promise<void>((resolve) =>
+      desktop.socket.once("close", () => resolve()),
+    );
+    cleanup.push(async () => {
+      await client.close();
+      await ownerClosed;
+    });
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toContain(
+      "t3_set_thread_parent",
+    );
+  }, 30_000);
 });
 
 it("shares lifecycle grant updates and chat focus across already-connected MCP sessions", async () => {

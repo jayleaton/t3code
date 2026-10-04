@@ -1,3 +1,4 @@
+import { ComposerContextLabel } from "./ComposerContextLabel";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import {
@@ -28,7 +29,6 @@ import {
   resolveContextStripLabelsCompact,
   resolveCurrentWorkspaceLabel,
   resolveEnvModeLabel,
-  resolveEffectiveEnvMode,
   resolveLockedWorkspaceLabel,
   resolvePreviousWorktreeLabel,
   resolvePreviousWorktreeSeed,
@@ -67,6 +67,8 @@ export interface BranchToolbarHandle {
 }
 
 interface BranchToolbarProps {
+  layout?: "composer" | "panel";
+  panelSection?: "all" | "workspace" | "branch";
   forceNewWorktree?: boolean;
   ref?: Ref<BranchToolbarHandle>;
   environmentId: EnvironmentId;
@@ -74,7 +76,8 @@ interface BranchToolbarProps {
   showGitControls: boolean;
   draftId?: DraftId;
   onEnvModeChange: (mode: EnvMode) => void;
-  effectiveEnvModeOverride?: EnvMode;
+  /** The thread's env mode as ChatView resolves it. */
+  envMode: EnvMode;
   activeThreadBranchOverride?: string | null;
   onActiveThreadBranchOverrideChange?: (branch: string | null) => void;
   startFromOrigin: boolean;
@@ -141,7 +144,7 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
   const workspaceLabel = forceNewWorktree
     ? resolveEnvModeLabel("worktree")
     : envModeLocked
-      ? resolveLockedWorkspaceLabel(activeWorktreePath)
+      ? resolveLockedWorkspaceLabel(activeWorktreePath, effectiveEnvMode)
       : effectiveEnvMode === "worktree"
         ? resolveEnvModeLabel("worktree")
         : resolveCurrentWorkspaceLabel(activeWorktreePath);
@@ -179,18 +182,10 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
   const triggerContent = (
     <>
       {icon}
-      <span
-        data-composer-label
-        className="min-w-0 max-w-[240px] group-data-[compact]/composer-context:max-w-0"
-      >
-        <span
-          data-composer-label-motion
-          className="block w-full min-w-0 max-w-[240px] truncate transition-opacity duration-180 ease-drawer group-data-[compact]/composer-context:opacity-0 motion-reduce:transition-none"
-        >
-          {autoEnvironmentLabel ??
-            (showEnvironmentIndicator ? (activeEnvironment?.label ?? "Run on") : workspaceLabel)}
-        </span>
-      </span>
+      <ComposerContextLabel>
+        {autoEnvironmentLabel ??
+          (showEnvironmentIndicator ? (activeEnvironment?.label ?? "Run on") : workspaceLabel)}
+      </ComposerContextLabel>
     </>
   );
 
@@ -504,6 +499,8 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
 }
 
 export const BranchToolbar = memo(function BranchToolbar({
+  layout = "composer",
+  panelSection = "all",
   forceNewWorktree = false,
   ref,
   environmentId,
@@ -511,7 +508,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   showGitControls,
   draftId,
   onEnvModeChange,
-  effectiveEnvModeOverride,
+  envMode,
   activeThreadBranchOverride,
   onActiveThreadBranchOverrideChange,
   startFromOrigin,
@@ -546,13 +543,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   const activeWorktreePath = forceNewWorktree
     ? null
     : (serverThread?.worktreePath ?? draftThread?.worktreePath ?? null);
-  const effectiveEnvMode =
-    (forceNewWorktree ? "worktree" : effectiveEnvModeOverride) ??
-    resolveEffectiveEnvMode({
-      activeWorktreePath,
-      hasServerThread: serverThread !== null,
-      draftThreadEnvMode: draftThread?.envMode,
-    });
+  const effectiveEnvMode = forceNewWorktree ? "worktree" : envMode;
   const envModeLocked = envLocked || (serverThread !== null && activeWorktreePath !== null);
 
   // "Previous worktree" hops a draft into the most recently active worktree
@@ -622,6 +613,40 @@ export const BranchToolbar = memo(function BranchToolbar({
   const labelsOverflow = useLabelsOverflow(stripElement);
 
   if (!hasActiveThread || !activeProject) return null;
+
+  if (layout === "panel") {
+    return (
+      <div className="flex w-full flex-col" data-thread-panel-run-context>
+        {panelSection !== "branch" ? (
+          <BranchToolbarEnvModeSelector
+            displayMode="panel"
+            envLocked={envModeLocked}
+            effectiveEnvMode={effectiveEnvMode}
+            activeWorktreePath={activeWorktreePath}
+            workspaceRoot={activeProject.workspaceRoot}
+            onEnvModeChange={onEnvModeChange}
+          />
+        ) : null}
+        {panelSection !== "workspace" ? (
+          <BranchToolbarBranchSelector
+            displayMode="panel"
+            className="w-full"
+            environmentId={environmentId}
+            threadId={threadId}
+            {...(draftId ? { draftId } : {})}
+            envLocked={envLocked}
+            effectiveEnvModeOverride={effectiveEnvMode}
+            {...(activeThreadBranchOverride !== undefined ? { activeThreadBranchOverride } : {})}
+            {...(onActiveThreadBranchOverrideChange ? { onActiveThreadBranchOverrideChange } : {})}
+            startFromOrigin={startFromOrigin}
+            onStartFromOriginChange={onStartFromOriginChange}
+            {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
+            {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
+          />
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <ComposerSurface.ContextStrip
@@ -720,11 +745,7 @@ export const BranchToolbar = memo(function BranchToolbar({
           threadId={threadId}
           {...(draftId ? { draftId } : {})}
           envLocked={envLocked}
-          {...(forceNewWorktree
-            ? { effectiveEnvModeOverride: "worktree" }
-            : effectiveEnvModeOverride
-              ? { effectiveEnvModeOverride }
-              : {})}
+          effectiveEnvModeOverride={effectiveEnvMode}
           {...(activeThreadBranchOverride !== undefined ? { activeThreadBranchOverride } : {})}
           {...(onActiveThreadBranchOverrideChange ? { onActiveThreadBranchOverrideChange } : {})}
           startFromOrigin={startFromOrigin}

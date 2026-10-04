@@ -29,6 +29,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 
@@ -55,6 +56,12 @@ import {
   serializeEditorDoc,
   type SkillMeta,
 } from "~/composer-rich-text-doc";
+import {
+  COMPOSER_UNDO_GROUP_DELAY,
+  type ComposerChangeKind,
+  groupUndoByChangeKind,
+  markAsClipboardEdit,
+} from "~/composer-undo-grouping";
 import { collectInlineContextIds } from "~/lib/composerContextReferences";
 import { cn, isMacPlatform } from "~/lib/utils";
 import { basenameOfPath } from "~/pierre-icons";
@@ -120,6 +127,11 @@ export interface ComposerPromptEditorProps {
   skills: ReadonlyArray<ServerProviderSkill>;
   disabled: boolean;
   placeholder: string;
+  ariaLabel?: string | undefined;
+  /** Identifies an editor with suggestions, even while its list is closed. */
+  suggestionListId?: string | undefined;
+  /** References the highlighted option only while its list is rendered. */
+  activeSuggestionId?: string | undefined;
   containerClassName?: string;
   className?: string;
   placeholderClassName?: string;
@@ -131,11 +143,7 @@ export interface ComposerPromptEditorProps {
     contextIds: string[],
   ) => void;
   onVisibleSelectionChange?: () => void;
-  onCommandKeyDown?: (
-    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Escape",
-    event: KeyboardEvent,
-    isTaskItem?: boolean,
-  ) => boolean;
+  onCommandKeyDown?: (key: string, event: KeyboardEvent, isTaskItem?: boolean) => boolean;
   onPageScrollKeyDown?: (key: "PageUp" | "PageDown") => void;
   onPageScrollKeyUp?: (key: string) => void;
   onPageScrollRelease?: () => void;
@@ -371,6 +379,16 @@ function ComposerCitationNodeView({ node, editor, getPos }: NodeViewProps) {
       .run();
   }, [editor, nodePos]);
 
+  // Put the caret right after the chip so Enter sends and typing continues the prompt.
+  const onRestoreFocus = useCallback(() => {
+    if (!editor.isEditable) return;
+    const pos = nodePos();
+    if (pos === null) return;
+    const current = editor.state.doc.nodeAt(pos);
+    if (!current || current.type.name !== "composer-citation") return;
+    editor.commands.focus(pos + current.nodeSize);
+  }, [editor, nodePos]);
+
   return (
     <NodeViewWrapper
       as="span"
@@ -378,6 +396,23 @@ function ComposerCitationNodeView({ node, editor, getPos }: NodeViewProps) {
       contentEditable={false}
       spellCheck={false}
       data-composer-citation-chip="true"
+      onKeyDown={(event: ReactKeyboardEvent<HTMLElement>) => {
+        // Tab from the comment button returns to the caret after the chip.
+        if (
+          !editor.isEditable ||
+          event.key !== "Tab" ||
+          event.shiftKey ||
+          event.altKey ||
+          event.metaKey ||
+          event.ctrlKey ||
+          !(event.target instanceof HTMLElement) ||
+          event.target.dataset.citationCommentTrigger === undefined
+        ) {
+          return;
+        }
+        event.preventDefault();
+        onRestoreFocus();
+      }}
     >
       <AssistantCitationChip
         citation={citation}
@@ -396,6 +431,7 @@ function ComposerCitationNodeView({ node, editor, getPos }: NodeViewProps) {
             commentContext.onSubmitAndSend();
             return true;
           },
+          onRestoreFocus,
         }}
       />
     </NodeViewWrapper>
@@ -552,6 +588,26 @@ export function ComposerPromptEditorTiptap(props: ComposerPromptEditorProps) {
   );
 }
 
+/**
+ * Starts a new undo step when the kind of change switches (typing, deleting,
+ * a paste or a store rewrite), the way the Lexical composer grouped undo.
+ * Runs as dispatch middleware because the grouping has to be decided before
+ * the history plugin applies the transaction.
+ */
+const ComposerUndoGroupingExtension = Extension.create<
+  Record<string, never>,
+  { previous: ComposerChangeKind | null }
+>({
+  name: "composer-undo-grouping",
+  addStorage() {
+    return { previous: null };
+  },
+  dispatchTransaction({ transaction, next }) {
+    this.storage.previous = groupUndoByChangeKind(transaction, this.storage.previous);
+    next(transaction);
+  },
+});
+
 function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
   const {
     value,
@@ -563,6 +619,9 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
     skills,
     disabled,
     placeholder,
+    ariaLabel,
+    suggestionListId,
+    activeSuggestionId,
     containerClassName,
     className,
     placeholderClassName,
@@ -723,9 +782,25 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
       ),
       "data-testid": "composer-editor",
       "data-composer-rich-text": richText ? "true" : "false",
+      role: "textbox",
+      "aria-multiline": "true",
+      ...(ariaLabel ? { "aria-label": ariaLabel } : {}),
+      ...(disabled ? { "aria-readonly": "true" } : {}),
+      ...(!disabled && suggestionListId
+        ? {
+            "aria-autocomplete": "list",
+            "aria-haspopup": "listbox",
+            ...(activeSuggestionId
+              ? {
+                  "aria-controls": suggestionListId,
+                  "aria-activedescendant": activeSuggestionId,
+                }
+              : {}),
+          }
+        : {}),
       "aria-placeholder": placeholder,
     }),
-    [className, placeholder, richText],
+    [activeSuggestionId, ariaLabel, className, disabled, placeholder, richText, suggestionListId],
   );
 
   const editor = useEditor(
@@ -735,7 +810,6 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
           blockquote: false,
           bulletList: false,
           codeBlock: false,
-          code: false,
           heading: false,
           horizontalRule: false,
           listItem: false,
@@ -745,9 +819,12 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
           dropcursor: false,
           gapcursor: false,
           trailingNode: false,
+          code: false,
+          undoRedo: { newGroupDelay: COMPOSER_UNDO_GROUP_DELAY },
           // Plain mode has no marks: typed markers stay literal characters.
           ...(richText ? {} : { bold: false, italic: false, strike: false }),
         }),
+        ComposerUndoGroupingExtension,
         ComposerMentionExtension,
         ComposerSkillExtension,
         ComposerCitationExtension,
@@ -856,6 +933,32 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
               return true;
             }
           }
+          // Shift+Tab from just after a citation reaches its comment button, which
+          // native tab order skips because the chip lives inside the editor.
+          if (
+            event.key === "Tab" &&
+            event.shiftKey &&
+            !event.altKey &&
+            !event.metaKey &&
+            !event.ctrlKey &&
+            view.state.selection.empty
+          ) {
+            const { $from } = view.state.selection;
+            const citation = $from.nodeBefore;
+            if (citation?.type.name === "composer-citation") {
+              const chip = view.nodeDOM($from.pos - citation.nodeSize);
+              const commentButton =
+                chip instanceof HTMLElement
+                  ? chip.querySelector<HTMLElement>("[data-citation-comment-trigger]")
+                  : null;
+              if (commentButton) {
+                event.preventDefault();
+                event.stopPropagation();
+                commentButton.focus();
+                return true;
+              }
+            }
+          }
           if (event.key === "Enter" && (event.isComposing || event.keyCode === 229)) {
             event.stopPropagation();
             return true;
@@ -894,18 +997,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
             });
           }
           if (!handler) return false;
-          const key =
-            event.key === "Tab"
-              ? ("Tab" as const)
-              : event.key === "ArrowDown"
-                ? ("ArrowDown" as const)
-                : event.key === "ArrowUp"
-                  ? ("ArrowUp" as const)
-                  : event.key === "Escape"
-                    ? ("Escape" as const)
-                    : null;
-          if (!key) return false;
-          const handled = handler(key, event);
+          const handled = handler(event.key, event);
           if (handled) {
             event.preventDefault();
             event.stopPropagation();
@@ -969,7 +1061,16 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
           const editorInstance = editorHolder.current;
           if (editorInstance) {
             insertMarkdownParagraphs(text, skillLabelFor, { styling: richText }, (content) => {
-              editorInstance.commands.insertContent(content);
+              // Tagged on the same transaction insertContent builds, so the
+              // paste is one undo step of its own.
+              editorInstance
+                .chain()
+                .command(({ tr }) => {
+                  markAsClipboardEdit(tr, "paste");
+                  return true;
+                })
+                .insertContent(content)
+                .run();
             });
             scrollTiptapCaretIntoView(editorInstance);
           }
@@ -1230,7 +1331,15 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
         clipboardData.setData("text/html", encodeComposerContextClipboardHtml(text, fragment));
       }
       if (cut) {
-        editor.chain().focus().deleteSelection().run();
+        editor
+          .chain()
+          .focus()
+          .command(({ tr }) => {
+            markAsClipboardEdit(tr, "cut");
+            return true;
+          })
+          .deleteSelection()
+          .run();
       }
     },
     [editor],

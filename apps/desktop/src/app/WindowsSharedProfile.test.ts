@@ -65,17 +65,15 @@ describe("Windows shared profile startup", () => {
     ).toBeUndefined();
   });
 
-  for (const override of [
+  it.each([
     { platform: "linux" },
     { platform: "darwin" },
     { brand: "t3" },
     { isPackaged: false },
     { isDevelopment: true },
-  ]) {
-    it(`leaves unrelated launches alone: ${JSON.stringify(override)}`, () => {
-      expect(sharedProfileRelaunchArgs({ ...input, ...override })).toBeUndefined();
-    });
-  }
+  ])("leaves unrelated launches alone: %o", (override) => {
+    expect(sharedProfileRelaunchArgs({ ...input, ...override })).toBeUndefined();
+  });
 
   it("stops the initial packaged process before application services can open state", () => {
     vi.stubGlobal("__T3CODE_DESKTOP_BRAND__", "agents");

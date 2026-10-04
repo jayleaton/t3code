@@ -91,6 +91,7 @@ function IndexDraftLanding() {
 function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
+      {isElectron ? <WorkspacePageHeader electron /> : null}
       <Empty className="flex-1">
         <EmptyHeader className="max-w-md">
           <EmptyTitle>Couldn’t start a new thread</EmptyTitle>
@@ -141,8 +142,8 @@ function HostedStaticOnboardingState() {
               </div>
               <EmptyTitle>Connect to a computer running T3 Agents</EmptyTitle>
               <EmptyDescription>
-                This app connects to T3 Agents running on your computer or a server. Start the T3
-                Agents desktop app or command-line server on that machine and keep it running.
+                This app connects to T3 Agents running on your computer or a server. Start the T3 Agents
+                desktop app or command-line server on that machine and keep it running.
               </EmptyDescription>
               <EmptyDescription>{description}</EmptyDescription>
               <div className="mt-6 flex justify-center">

@@ -10,7 +10,7 @@ import { startWebhookDeliveryWorker } from "./deliver.ts";
 import { createGatewayEventStore, type GatewayEventStore } from "./events.ts";
 import { hasGatewayScopes } from "./port.ts";
 import { createMcpGateway } from "./server.ts";
-import { acceptMcpSession } from "./sharedTransport.ts";
+import { acceptMcpSession, rejectRetiring, type GatewayBuild } from "./sharedTransport.ts";
 
 export interface SharedGatewayConfig {
   readonly port: number;
@@ -38,15 +38,39 @@ export function sharedGatewayConfiguration(config: SharedGatewayConfig): string 
     .digest("hex");
 }
 
+function fileHash(file: string): string {
+  return NodeCrypto.createHash("sha256").update(NodeFS.readFileSync(file)).digest("hex");
+}
+
+/** The running script's identity; it stops being current when the file on disk is replaced. */
+export function gatewayBuild(entryPoint: string): GatewayBuild {
+  const id = fileHash(entryPoint);
+  return {
+    id,
+    isCurrent: () => {
+      try {
+        return fileHash(entryPoint) === id;
+      } catch {
+        return false;
+      }
+    },
+  };
+}
+
+const UNKNOWN_BUILD: GatewayBuild = { id: "unknown", isCurrent: () => true };
+
 /** One owner holds the runtime bridge, SQLite store and webhook worker for all MCP sessions. */
 export async function startSharedGatewayOwner(
   config: SharedGatewayConfig,
   options: {
     readonly idleTimeoutMs?: number;
     readonly onIdle?: () => void;
+    /** Launchers from a newer install retire this owner once its own script is replaced. */
+    readonly build?: GatewayBuild;
   } = {},
 ) {
   const configuration = sharedGatewayConfiguration(config);
+  const build = options.build ?? UNKNOWN_BUILD;
   const sessions = new Map<WebSocket, ReturnType<typeof createMcpGateway>>();
   const statusListeners = new Set<() => void>();
   let events: GatewayEventStore | undefined;
@@ -66,6 +90,20 @@ export async function startSharedGatewayOwner(
       { once: true },
     );
   };
+  let unsubscribeStatus: (() => void) | undefined;
+  let delivery: ReturnType<typeof startWebhookDeliveryWorker> | undefined;
+  const close = async () => {
+    if (closing) return;
+    closing = true;
+    idleController?.abort();
+    unsubscribeStatus?.();
+    await Promise.allSettled([
+      delivery?.stop(),
+      ...[...sessions.values()].map((gateway) => gateway.close()),
+    ]);
+    await bridge.close();
+    events?.close();
+  };
   const store = () => {
     if (events === undefined) throw new Error("Shared gateway store is not ready.");
     return events;
@@ -84,25 +122,40 @@ export async function startSharedGatewayOwner(
       };
     },
     onMcpConnection: (socket) => {
-      void acceptMcpSession(socket, config.token, configuration, async (transport) => {
-        if (closing) throw new Error("Shared gateway is shutting down.");
-        const gateway = createMcpGateway({
-          port: bridge.port,
-          grants: bridge.getGrants,
-          profiles: bridge.getProfiles,
-          repositoryAllowlist: config.repositoryAllowlist,
-          events: store(),
-          health: bridge.getHealth,
-        });
-        sessions.set(socket, gateway);
-        idleController?.abort();
-        socket.once("close", () => {
-          sessions.delete(socket);
-          void gateway.close().catch(() => undefined);
-          scheduleIdle();
-        });
-        await gateway.connect(transport);
-      }).catch(() => socket.terminate());
+      if (closing) {
+        rejectRetiring(socket);
+        return;
+      }
+      void acceptMcpSession(
+        socket,
+        config.token,
+        configuration,
+        build,
+        async (transport) => {
+          if (closing) throw new Error("Shared gateway is shutting down.");
+          const gateway = createMcpGateway({
+            port: bridge.port,
+            grants: bridge.getGrants,
+            profiles: bridge.getProfiles,
+            repositoryAllowlist: config.repositoryAllowlist,
+            events: store(),
+            health: bridge.getHealth,
+            waitForRuntime: bridge.waitForClient,
+          });
+          sessions.set(socket, gateway);
+          idleController?.abort();
+          socket.once("close", () => {
+            sessions.delete(socket);
+            void gateway.close().catch(() => undefined);
+            scheduleIdle();
+          });
+          await gateway.connect(transport);
+        },
+        () => {
+          // Sessions on the replaced build end; their hosts relaunch the installed script.
+          void close();
+        },
+      ).catch(() => socket.terminate());
     },
   });
   const startup = await bridge.ready;
@@ -122,25 +175,12 @@ export async function startSharedGatewayOwner(
     await bridge.close();
     throw error;
   }
-  const unsubscribeStatus = events.onStatusChange(() => {
+  unsubscribeStatus = events.onStatusChange(() => {
     for (const listener of statusListeners) listener();
   });
-  const delivery = startWebhookDeliveryWorker(events, {
+  delivery = startWebhookDeliveryWorker(events, {
     isAuthorized: (id) => hasGatewayScopes(bridge.getGrants(), id, ["read", "delivery"]),
   });
   scheduleIdle();
-  return {
-    close: async () => {
-      if (closing) return;
-      closing = true;
-      idleController?.abort();
-      unsubscribeStatus();
-      await Promise.allSettled([
-        delivery.stop(),
-        ...[...sessions.values()].map((gateway) => gateway.close()),
-      ]);
-      await bridge.close();
-      events?.close();
-    },
-  };
+  return { close };
 }

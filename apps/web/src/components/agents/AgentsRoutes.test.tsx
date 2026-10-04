@@ -15,6 +15,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 vi.mock("./AgentChatRail", () => ({ AgentChatRail: () => <nav>Agent chats</nav> }));
 vi.mock("./AgentHandoffDialog", () => ({ AgentHandoffDialog: () => <div>Handoff dialog</div> }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => [] }));
+vi.mock("../../hooks/useThreadVisitedMigration", () => ({ useThreadVisitedMigration: () => {} }));
 vi.mock("../../state/server", () => ({ primaryServerKeybindingsAtom: {} }));
 vi.mock("../../hooks/useSettings", () => ({
   useLegacySidebarEnabled: () => false,
@@ -40,7 +41,10 @@ vi.mock("../LegacySidebar", () => ({ default: () => <div>Legacy navigation</div>
 vi.mock("../settings/SettingsSidebarNav", () => ({
   SettingsSidebarNav: () => <div>Settings navigation</div>,
 }));
-vi.mock("../sidebar/SidebarChrome", () => ({ SidebarChromeHeader: () => null }));
+vi.mock("../sidebar/SidebarChrome", () => ({
+  SidebarBrandWidthProbe: () => null,
+  SidebarChromeHeader: () => null,
+}));
 vi.mock("../ChatView", () => ({
   default: ({ showBackToAgents }: { showBackToAgents?: boolean }) => {
     const sidebar = useSidebar();

@@ -9,6 +9,9 @@ NODE_ENV=test vp test run \
   packages/client-runtime/src/gateway \
   packages/mcp-gateway/src \
   apps/server/src/mcp/toolkits/workspace \
+  apps/server/src/mcp/agents \
+  apps/server/src/mcp/McpGatewayBroker.test.ts \
+  apps/server/src/orchestration-v2/Orchestrator.parentThread.test.ts \
   apps/server/src/scheduledTasks \
   apps/server/src/clients \
   scripts/build-desktop-artifact.test.ts

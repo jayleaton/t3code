@@ -1,173 +1,96 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import * as Deferred from "effect/Deferred";
+import type { McpGatewayRelayGrants } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
-import { MCP_GATEWAY_CALLER_META_KEY, make } from "./McpGatewayBroker.ts";
+import { make } from "./McpGatewayBroker.ts";
 
-it.effect(
-  "keeps identical MCP request IDs and notifications isolated across provider sessions",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const broker = yield* make;
-        expect(broker.available()).toBe(false);
-        const ready = yield* Deferred.make<string>();
-        const host = yield* broker.connect("desktop-auth-session").pipe(
-          Stream.runForEach((event) => {
-            if (event.type === "connected") return Deferred.succeed(ready, event.connectionId);
-            if (event.type === "close") return Effect.void;
-            return broker.respond("desktop-auth-session", {
-              connectionId: event.connectionId,
-              sessionId: event.sessionId,
-              message: {
-                jsonrpc: "2.0",
-                id: event.message.id!,
-                result: { sessionId: event.sessionId },
-              },
-            });
-          }),
-          Effect.forkScoped,
-        );
-        const connectionId = yield* Deferred.await(ready);
-        const first = yield* broker.open("provider-a", {
-          environmentId: "env",
-          threadId: "thread-a",
-        });
-        const second = yield* broker.open("provider-b", {
-          environmentId: "env",
-          threadId: "thread-b",
-        });
-        const results = yield* Effect.all(
-          [
-            broker.send(first, "provider-a", { jsonrpc: "2.0", id: 1, method: "tools/list" }),
-            broker.send(second, "provider-b", { jsonrpc: "2.0", id: 1, method: "tools/list" }),
-          ],
-          { concurrency: "unbounded" },
-        );
-        expect(results.map((message) => message?.result)).toEqual([
-          { sessionId: first },
-          { sessionId: second },
-        ]);
-        expect(broker.lookup(first, "provider-b")).toBeUndefined();
-        const forged = yield* Effect.result(
-          broker.respond("unrelated-auth-session", {
-            connectionId,
-            sessionId: first,
-            message: { jsonrpc: "2.0", method: "notifications/t3/events", params: {} },
-          }),
-        );
-        expect(forged._tag).toBe("Failure");
-        yield* broker.respond("desktop-auth-session", {
-          connectionId,
-          sessionId: second,
-          message: { jsonrpc: "2.0", method: "notifications/t3/events", params: { sequence: 1 } },
-        });
-        expect(yield* Queue.take(broker.lookup(second, "provider-b")!.notifications)).toMatchObject(
-          { params: { sequence: 1 } },
-        );
-        expect(yield* Queue.size(broker.lookup(first, "provider-a")!.notifications)).toBe(0);
-        yield* Fiber.interrupt(host);
-        expect(broker.available()).toBe(false);
-        expect(broker.lookup(first, "provider-a")).toBeUndefined();
-        expect(
-          (yield* Effect.result(
-            broker.open("provider-c", { environmentId: "env", threadId: "thread-c" }),
-          ))._tag,
-        ).toBe("Failure");
+type Broker = Effect.Success<typeof make>;
+
+const failureMessage = <E extends { readonly message: string }>(
+  effect: Effect.Effect<unknown, E>,
+) => effect.pipe(Effect.match({ onFailure: (error) => error.message, onSuccess: () => "ok" }));
+
+/** Connects an app that answers every call with what `answer` returns for its method. */
+const serve = (
+  broker: Broker,
+  owner: string,
+  grants: McpGatewayRelayGrants,
+  answer: (method: string, args: ReadonlyArray<unknown>) => { result?: unknown; error?: string },
+) =>
+  broker.connect(owner, grants).pipe(
+    Stream.runForEach((event) =>
+      broker.respond(owner, {
+        connectionId: event.connectionId,
+        invocationId: event.invocationId,
+        ...answer(event.method, event.args),
       }),
-    ).pipe(Effect.provide(NodeServices.layer)),
-);
+    ),
+    Effect.forkScoped({ startImmediately: true }),
+  );
 
-it.effect(
-  "fails pending work on disconnect without moving it to another desktop or replaying it",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const broker = yield* make;
-        const ready = yield* Deferred.make<void>();
-        const received = yield* Deferred.make<void>();
-        const host = yield* broker.connect("desktop").pipe(
-          Stream.runForEach((event) =>
-            event.type === "connected"
-              ? Deferred.succeed(ready, undefined)
-              : Deferred.succeed(received, undefined),
-          ),
-          Effect.forkScoped,
-        );
-        yield* Deferred.await(ready);
-        const sessionId = yield* broker.open("provider", {
-          environmentId: "env",
-          threadId: "thread",
-        });
-        const request = yield* broker
-          .send(sessionId, "provider", { jsonrpc: "2.0", id: "create", method: "tools/call" })
-          .pipe(Effect.result, Effect.forkScoped);
-        yield* Deferred.await(received);
-        yield* Fiber.interrupt(host);
-        expect((yield* Fiber.join(request))._tag).toBe("Failure");
-      }),
-    ).pipe(Effect.provide(NodeServices.layer)),
-);
-
-it.effect("stamps tool calls with the calling thread, replacing any agent-supplied caller", () =>
+it.effect("runs calls on the newest app that reaches every environment in them", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const broker = yield* make;
-      const ready = yield* Deferred.make<void>();
-      yield* broker.connect("desktop").pipe(
-        Stream.runForEach((event) => {
-          if (event.type === "connected") return Deferred.succeed(ready, undefined);
-          if (event.type === "close") return Effect.void;
-          return broker.respond("desktop", {
-            connectionId: event.connectionId,
-            sessionId: event.sessionId,
-            message: { jsonrpc: "2.0", id: event.message.id!, result: { echo: event.message } },
-          });
-        }),
-        Effect.forkScoped,
+      expect(broker.available()).toBe(false);
+      yield* serve(broker, "laptop", { remote: ["read"] }, (method) => ({
+        result: `laptop:${method}`,
+      }));
+      yield* serve(broker, "desktop", { remote: ["read", "send"], other: ["read"] }, (method) => ({
+        result: `desktop:${method}`,
+      }));
+      expect(broker.available()).toBe(true);
+      expect(broker.grants()).toEqual({ remote: ["read", "send"], other: ["read"] });
+      expect(yield* broker.invoke("listProjects", ["remote"], ["remote"])).toBe(
+        "desktop:listProjects",
       );
-      yield* Deferred.await(ready);
-      const sessionId = yield* broker.open("provider", {
-        environmentId: "env-1",
-        threadId: "parent",
-      });
-      const call = yield* broker.send(sessionId, "provider", {
-        jsonrpc: "2.0",
-        id: 1,
-        method: "tools/call",
-        params: {
-          name: "t3_create_thread",
-          arguments: { title: "Child" },
-          _meta: {
-            progressToken: 7,
-            [MCP_GATEWAY_CALLER_META_KEY]: { environmentId: "env-1", threadId: "forged" },
-          },
-        },
-      });
-      expect(call?.result).toEqual({
-        echo: {
-          jsonrpc: "2.0",
-          id: 1,
-          method: "tools/call",
-          params: {
-            name: "t3_create_thread",
-            arguments: { title: "Child" },
-            _meta: {
-              progressToken: 7,
-              [MCP_GATEWAY_CALLER_META_KEY]: { environmentId: "env-1", threadId: "parent" },
-            },
-          },
-        },
-      });
-      const list = yield* broker.send(sessionId, "provider", {
-        jsonrpc: "2.0",
-        id: 2,
-        method: "tools/list",
-      });
-      expect(list?.result).toEqual({ echo: { jsonrpc: "2.0", id: 2, method: "tools/list" } });
+      expect(yield* broker.invoke("listThreads", ["other"], ["other"])).toBe("desktop:listThreads");
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("fails calls no connected app can run, and reports app errors", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* make;
+      const none = yield* Effect.exit(broker.invoke("listProjects", ["remote"], ["remote"]));
+      expect(Exit.isFailure(none)).toBe(true);
+      yield* serve(broker, "desktop", { remote: ["read"] }, () => ({ error: "not granted" }));
+      expect(yield* failureMessage(broker.invoke("listProjects", ["other"], ["other"]))).toContain(
+        "other",
+      );
+      expect(yield* failureMessage(broker.invoke("listProjects", ["remote"], ["remote"]))).toBe(
+        "not granted",
+      );
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("rejects answers from another app and fails calls when their app disconnects", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* make;
+      const events = yield* broker
+        .connect("desktop", { remote: ["read"] })
+        .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped({ startImmediately: true }));
+      const call = yield* broker
+        .invoke("listProjects", ["remote"], ["remote"])
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      const [event] = yield* Fiber.join(events);
+      const spoofed = yield* Effect.exit(
+        broker.respond("intruder", {
+          connectionId: event!.connectionId,
+          invocationId: event!.invocationId,
+          result: "spoofed",
+        }),
+      );
+      expect(Exit.isFailure(spoofed)).toBe(true);
+      // The stream ended after one event, which disconnects its app.
+      expect(yield* failureMessage(Fiber.join(call))).toContain("disconnected");
+      expect(broker.available()).toBe(false);
     }),
   ).pipe(Effect.provide(NodeServices.layer)),
 );

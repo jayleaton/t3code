@@ -120,6 +120,8 @@ export function createBridgeRuntimePort(input: {
     readonly bridge: "connected" | "disconnected" | "degraded";
     readonly degradedReasons: ReadonlyArray<string>;
   };
+  /** Resolves once a runtime is configured, or when none is expected soon. */
+  readonly waitForClient: () => Promise<void>;
   readonly ready: Promise<GatewayBridgeStartupResult>;
   readonly close: () => Promise<void>;
 } {
@@ -159,6 +161,14 @@ export function createBridgeRuntimePort(input: {
   let statusNotificationQueued = false;
   let nextId = 1;
   const pending = new Map<number, PendingRequest>();
+  // The desktop reconnects about a second after the bridge starts or drops it. Calls in that
+  // window wait for its grants instead of failing against an empty or stale grant set.
+  const clientGraceMs = 10_000;
+  let clientExpected = AbortSignal.timeout(clientGraceMs);
+  const clientWaiters = new Set<() => void>();
+  const releaseClientWaiters = () => {
+    for (const release of clientWaiters) release();
+  };
 
   const rejectPending = (message: string) => {
     for (const request of pending.values()) {
@@ -254,6 +264,7 @@ export function createBridgeRuntimePort(input: {
             (capabilities as Record<string, unknown>).statusSnapshots === true;
           client = socket;
           configured = true;
+          releaseClientWaiters();
           authenticationSignal.removeEventListener("abort", onAuthenticationTimeout);
           const cursors = Object.fromEntries(
             Object.keys(nextGrants).map((environmentId) => [
@@ -320,6 +331,7 @@ export function createBridgeRuntimePort(input: {
       authenticationSignal.removeEventListener("abort", onAuthenticationTimeout);
       if (client !== socket) return;
       client = null;
+      clientExpected = AbortSignal.timeout(clientGraceMs);
       supportsStatusSnapshots = false;
       rejectPending("T3 gateway client disconnected.");
     });
@@ -367,6 +379,21 @@ export function createBridgeRuntimePort(input: {
         ],
       };
     },
+    waitForClient: () =>
+      new Promise<void>((resolve) => {
+        const expected = clientExpected;
+        if ((client !== null && client.readyState === client.OPEN) || expected.aborted) {
+          resolve();
+          return;
+        }
+        const release = () => {
+          expected.removeEventListener("abort", release);
+          clientWaiters.delete(release);
+          resolve();
+        };
+        clientWaiters.add(release);
+        expected.addEventListener("abort", release, { once: true });
+      }),
     ready,
     port: {
       openAgents: (environmentId) => invoke("openAgents", [environmentId]),
@@ -394,6 +421,7 @@ export function createBridgeRuntimePort(input: {
       focusDevice: (environmentId, device, target) =>
         invoke("focusDevice", [environmentId, device, target]),
       scheduledTask: (environmentId, request) => invoke("scheduledTask", [environmentId, request]),
+      todo: (environmentId, request) => invoke("todo", [environmentId, request]),
       listEnvironments: () => invoke("listEnvironments", []),
       getEnvironmentStatus: (environmentId) => invoke("getEnvironmentStatus", [environmentId]),
       listProfiles: (environmentId) => invoke("listProfiles", [environmentId]),
@@ -404,8 +432,6 @@ export function createBridgeRuntimePort(input: {
       getThread: (environmentId, threadId) => invoke("getThread", [environmentId, threadId]),
       hasThreadMessage: (environmentId, threadId, messageId) =>
         invoke("hasThreadMessage", [environmentId, threadId, messageId]),
-      createAssetUrl: (environmentId, resource) =>
-        invoke("createAssetUrl", [environmentId, resource]),
       getPullRequest: (environmentId, ref) => invoke("getPullRequest", [environmentId, ref]),
       getPullRequestActivity: (environmentId, ref) =>
         invoke("getPullRequestActivity", [environmentId, ref]),
@@ -414,13 +440,14 @@ export function createBridgeRuntimePort(input: {
       createThread: (request) => invoke("createThread", [request]),
       sendMessage: (request) => invoke("sendMessage", [request]),
       controlThread: (request) => invoke("controlThread", [request]),
-      respondToApprovals: (request) => invoke("respondToApprovals", [request]),
       respondToApproval: (request) => invoke("respondToApproval", [request]),
+      respondToUserInput: (request) => invoke("respondToUserInput", [request]),
       executeOperation: (request) => invoke("executeOperation", [request]),
     },
     close: () =>
       new Promise((resolve, reject) => {
         unsubscribeStatus?.();
+        releaseClientWaiters();
         rejectPending("Gateway stopped.");
         for (const socket of server.clients) socket.terminate();
         server.close((error) => (error === undefined ? resolve() : reject(error)));

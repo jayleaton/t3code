@@ -29,15 +29,16 @@ export function agentThreadStatus(thread: EnvironmentThreadShell) {
   if (thread.settledAt !== null) return "done";
   // Questions and approvals arrive mid-turn, so they outrank the running turn.
   if (thread.hasPendingApprovals || thread.hasPendingUserInput) return "attention";
-  if (thread.session?.status === "running" || thread.latestTurn?.state === "running")
+  if (thread.runtime?.status === "running" || thread.latestRun?.status === "running")
     return "running";
-  if (thread.session?.status === "starting") return "queued";
-  if (thread.session?.status === "error" || thread.latestTurn?.state === "error") return "error";
-  // A turn can settle while native background work runs on, as in the thread
-  // sidebar: sub-agent fleets still count as work, watch loops as monitoring.
-  if (thread.backgroundLiveness === "working") return "running";
-  if (thread.backgroundLiveness === "monitoring") return "monitoring";
-  if (thread.latestTurn?.state === "completed") return "done";
+  if (thread.runtime?.status === "starting" || thread.runtime?.status === "preparing")
+    return "queued";
+  if (thread.runtime?.status === "failed" || thread.latestRun?.status === "failed") return "error";
+  // A turn can settle while native background work runs on: sub-agents are
+  // still doing the work, while commands, monitors, and other tasks watch or wait.
+  if (thread.pendingBackgroundTasks.some((task) => task.kind === "subagent")) return "running";
+  if (thread.pendingBackgroundTasks.length > 0) return "monitoring";
+  if (thread.latestRun?.status === "completed") return "done";
   return "idle";
 }
 
@@ -62,7 +63,7 @@ export function isAgentChatInFocus(
   if (thread.settledAt !== null) return false;
   const status = agentThreadStatus(thread);
   if (status !== "done") return true;
-  const completedAt = thread.latestTurn?.completedAt;
+  const completedAt = thread.latestRun?.completedAt;
   if (!completedAt) return false;
   // A chat created from the board may complete before it has ever been opened.
   return (
@@ -160,13 +161,15 @@ type AgentRun = Pick<
   | "environmentId"
   | "id"
   | "parentThreadId"
+  | "lineage"
   | "createdAt"
   | "settledAt"
   | "pinnedAt"
   | "archivedAt"
   | "activeOrderKey"
   | "unsettledAt"
->;
+> &
+  Partial<Pick<EnvironmentThreadShell, "parentEnvironmentId">>;
 
 export interface AgentChildRun<T> {
   readonly thread: T;
@@ -181,6 +184,26 @@ export interface AgentCardChildren<T> {
   readonly live: readonly AgentChildRun<T>[];
   /** Settled direct sub-runs (and theirs), shown last like the board's Settled shelf. */
   readonly settled: readonly AgentChildRun<T>[];
+}
+
+/** Sidebar cards summarize the whole fleet without mounting individual run rows. */
+export function agentChildRunsSummary(runs: AgentCardChildren<EnvironmentThreadShell>) {
+  let total = 0;
+  let running = 0;
+  let attention = 0;
+  for (const group of [runs.live, runs.settled]) {
+    for (const { thread } of group) {
+      total += 1;
+      const status = agentThreadStatus(thread);
+      if (status === "running" || status === "queued" || status === "monitoring") running += 1;
+      if (status === "attention" || status === "error") attention += 1;
+    }
+  }
+  return [
+    `${total} subagent${total === 1 ? "" : "s"}`,
+    ...(running > 0 ? [`${running} running`] : []),
+    ...(attention > 0 ? [`${attention} need${attention === 1 ? "s" : ""} attention`] : []),
+  ].join(" · ");
 }
 
 type AgentRunList = "pinned" | "active" | "settled";
@@ -209,6 +232,8 @@ function sortSiblingRuns<T extends AgentRun>(runs: readonly T[]): T[] {
 export function nestAgentRuns<T extends AgentRun>(input: {
   readonly lists: Readonly<Record<AgentRunList, readonly T[]>>;
   readonly all: readonly T[];
+  /** Only delegated relationships collapse in the sidebar; Agent chats stay first-class. */
+  readonly subagentsOnly?: boolean;
 }): {
   readonly lists: Readonly<Record<AgentRunList, readonly T[]>>;
   readonly childrenByKey: ReadonlyMap<string, AgentCardChildren<T>>;
@@ -221,10 +246,14 @@ export function nestAgentRuns<T extends AgentRun>(input: {
   for (const run of [...input.all, ...input.lists.pinned, ...input.lists.active]) {
     if (run.archivedAt === null) runByKey.set(threadKey(run), run);
   }
+  const isSubagent = (run: T) =>
+    run.lineage.relationshipToParent === "subagent" && run.lineage.parentThreadId !== null;
   const parentKeyOf = (run: T) =>
-    run.parentThreadId == null || run.parentThreadId === run.id
-      ? null
-      : threadKey({ environmentId: run.environmentId, id: run.parentThreadId });
+    input.subagentsOnly
+      ? isSubagent(run)
+        ? threadKey({ environmentId: run.environmentId, id: run.lineage.parentThreadId! })
+        : null
+      : agentRunParentKey(run);
   const anchorByKey = new Map<string, string | null>();
   const resolveAnchor = (run: T, visiting: Set<string>): string | null => {
     const key = threadKey(run);
@@ -240,7 +269,7 @@ export function nestAgentRuns<T extends AgentRun>(input: {
       visiting.delete(key);
       if (
         candidate !== null &&
-        (listByKey.get(candidate) !== "settled" || run.settledAt !== null)
+        (input.subagentsOnly || listByKey.get(candidate) !== "settled" || run.settledAt !== null)
       ) {
         anchor = candidate;
       }
@@ -275,7 +304,9 @@ export function nestAgentRuns<T extends AgentRun>(input: {
     childrenByKey.set(anchor, { live, settled });
   }
   const keep = (runs: readonly T[]) =>
-    runs.filter((run) => anchorByKey.get(threadKey(run)) == null);
+    runs.filter((run) =>
+      input.subagentsOnly ? !isSubagent(run) : anchorByKey.get(threadKey(run)) == null,
+    );
   return {
     lists: {
       pinned: keep(input.lists.pinned),
@@ -286,39 +317,49 @@ export function nestAgentRuns<T extends AgentRun>(input: {
   };
 }
 
-type AgentRunLink = Pick<AgentRun, "environmentId" | "id" | "parentThreadId">;
+type AgentRunLink = Pick<
+  AgentRun,
+  "environmentId" | "id" | "parentThreadId" | "parentEnvironmentId"
+>;
+
+/** Key of the run `run` is nested under, which may be on another environment. */
+export function agentRunParentKey(
+  run: Pick<AgentRunLink, "environmentId" | "id" | "parentThreadId" | "parentEnvironmentId">,
+): string | null {
+  if (run.parentThreadId == null) return null;
+  const environmentId = run.parentEnvironmentId ?? run.environmentId;
+  if (environmentId === run.environmentId && run.parentThreadId === run.id) return null;
+  return threadKey({ environmentId, id: run.parentThreadId });
+}
 
 /**
- * Keys of the runs `child` may become a sub-run of. Links stay within one
- * environment, and a run cannot move under itself, its current parent, or one
- * of its own sub-runs. Computed once per drag, not per pointer move.
+ * Keys of the runs `child` may become a sub-run of, on any environment. A run cannot move
+ * under itself, its current parent, or one of its own sub-runs. Computed once per drag, not
+ * per pointer move.
  */
 export function agentRunLinkTargets(
   child: AgentRunLink,
   all: readonly AgentRunLink[],
 ): ReadonlySet<string> {
-  const sameEnvironment = all.filter((run) => run.environmentId === child.environmentId);
-  const childIdsByParent = new Map<string, string[]>();
-  for (const run of sameEnvironment) {
-    if (run.parentThreadId == null) continue;
-    const siblings = childIdsByParent.get(run.parentThreadId);
-    if (siblings) siblings.push(run.id);
-    else childIdsByParent.set(run.parentThreadId, [run.id]);
+  const childKeysByParent = new Map<string, string[]>();
+  for (const run of all) {
+    const parentKey = agentRunParentKey(run);
+    if (parentKey === null) continue;
+    const siblings = childKeysByParent.get(parentKey);
+    if (siblings) siblings.push(threadKey(run));
+    else childKeysByParent.set(parentKey, [threadKey(run)]);
   }
-  const ownRuns = new Set<string>([child.id]);
-  const pending: string[] = [child.id];
-  for (let id = pending.pop(); id !== undefined; id = pending.pop()) {
-    for (const childId of childIdsByParent.get(id) ?? []) {
-      if (ownRuns.has(childId)) continue;
-      ownRuns.add(childId);
-      pending.push(childId);
+  const ownRuns = new Set<string>([threadKey(child)]);
+  const pending: string[] = [threadKey(child)];
+  for (let key = pending.pop(); key !== undefined; key = pending.pop()) {
+    for (const childKey of childKeysByParent.get(key) ?? []) {
+      if (ownRuns.has(childKey)) continue;
+      ownRuns.add(childKey);
+      pending.push(childKey);
     }
   }
-  return new Set(
-    sameEnvironment
-      .filter((run) => !ownRuns.has(run.id) && run.id !== child.parentThreadId)
-      .map(threadKey),
-  );
+  const currentParent = agentRunParentKey(child);
+  return new Set(all.map(threadKey).filter((key) => !ownRuns.has(key) && key !== currentParent));
 }
 
 export type AgentRunDropZone = "before" | "nest" | "after";

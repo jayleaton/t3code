@@ -58,12 +58,17 @@ update it with `git pull` and a rebuild.
 Download a release from [GitHub Releases](https://github.com/pingdotgg/t3code/releases),
 or use a package manager:
 
-| Platform           | Install                         |
-| ------------------ | ------------------------------- |
-| Windows            | `winget install T3Tools.T3Code` |
-| macOS              | `brew install --cask t3-code`   |
-| Arch Linux         | `yay -S t3code-bin`             |
-| Arch Linux nightly | `yay -S t3code-nightly-bin`     |
+| Platform           | Install                            |
+| ------------------ | ---------------------------------- |
+| Windows            | `winget install T3Tools.T3Code`    |
+| macOS              | `brew install --cask t3-code`      |
+| Debian, Ubuntu     | `sudo apt install ./T3-Code-*.deb` |
+| Arch Linux         | `yay -S t3code-bin`                |
+| Arch Linux nightly | `yay -S t3code-nightly-bin`        |
+
+The `.deb` updates itself like the other desktop builds. It asks for your
+password to install each update. If your desktop has no password prompt, the
+update fails. Download the new `.deb` and install it the same way.
 
 ### Windows Subsystem for Linux
 
@@ -93,6 +98,14 @@ Install T3 Code from the
 The phone connects to a server on another machine. Follow
 [remote access](./remote-access.md) to link it through T3 Connect or a pairing URL.
 
+Nightly builds need the beta app. The store apps cannot connect to them. A Nightly build also
+shows these links as QR codes in **Settings → General → Mobile app**.
+
+- **iPhone and iPad:** join the [TestFlight beta](https://testflight.apple.com/join/XgaxaRtd).
+- **Android:** join the [beta group](https://groups.google.com/g/t3-code-v2-beta). With the same
+  Google account, open the [Google Play testing page](https://play.google.com/apps/testing/com.t3tools.t3code)
+  and become a tester.
+
 If the app crashes during launch, open Settings → Diagnostics on the next launch
 that succeeds. It lists startup crashes from the last 7 days with the error and
 component stack that store crash reports leave out. Copy the report and paste it
@@ -106,19 +119,21 @@ and enable the provider you want. Installation, login, and configuration belong
 to that environment's machine, even when you connect from a phone or another
 computer.
 
-| Provider    | Install and authenticate                                                                     |
-| ----------- | -------------------------------------------------------------------------------------------- |
-| Codex       | Install [Codex CLI](https://developers.openai.com/codex/cli), then run `codex login`.        |
-| Claude      | Install [Claude Code](https://claude.com/product/claude-code), then run `claude auth login`. |
-| Cursor      | Install [Cursor CLI](https://cursor.com/cli), then run `agent login`.                        |
-| Grok Build  | Install [Grok Build CLI](https://x.ai/cli), then run `grok login`.                           |
-| OpenCode    | Install [OpenCode](https://opencode.ai), then run `opencode auth login`.                     |
-| Antigravity | Install and sign in with Google from T3 Code's provider settings.                            |
+| Provider    | Install and authenticate                                                                                                                                  |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Codex       | [Connect with ChatGPT](./providers-codex.md#connect-with-chatgpt), or install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`. |
+| Claude      | Install [Claude Code](https://claude.com/product/claude-code), then run `claude auth login`.                                                              |
+| Cursor      | Install [Cursor CLI](https://cursor.com/cli), then run `agent login`.                                                                                     |
+| Grok Build  | Install [Grok Build CLI](https://x.ai/cli), then run `grok login`.                                                                                        |
+| OpenCode    | Install [OpenCode](https://opencode.ai), then run `opencode auth login`.                                                                                  |
+| Antigravity | Install and sign in with Google from T3 Code's provider settings.                                                                                         |
+| Pi          | Install [Pi](https://pi.dev), then run `pi` once to finish its login or API-key setup.                                                                    |
 
 Provider CLIs must be on the server's `PATH`. If T3 Code cannot find one, set its
 **Binary path** in provider settings, especially when using a version manager.
 Cursor's executable is `cursor-agent`, although its login command is
-`agent login`. Antigravity can use its managed runtime without a `PATH` entry.
+`agent login`. Codex connected through ChatGPT and Antigravity can use their
+managed runtimes without a `PATH` entry.
 
 T3 Code warns when a provider version has known compatibility problems with your
 release. Check **Settings → Providers** on that environment for the recommended
@@ -139,8 +154,8 @@ base URL. Mark secret values as sensitive; after saving, T3 Code does not displa
 their original values.
 
 For provider-specific setup and accounts, see [Codex](./providers-codex.md),
-[Claude](./providers-claude.md), [OpenCode](./providers-opencode.md), and
-[Antigravity](./providers-antigravity.md).
+[Claude](./providers-claude.md), [OpenCode](./providers-opencode.md),
+[Antigravity](./providers-antigravity.md), and [Pi](./providers-pi.md).
 
 ## Next steps
 
