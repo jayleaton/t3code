@@ -63,6 +63,7 @@ import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -72,6 +73,7 @@ import {
   SHARED_WORKSPACE_RESTORE_MESSAGE,
 } from "./CheckpointRestoreSafety.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
+import { findBrokenThreadParentLinks } from "./threadParentLinks.ts";
 import { CommandPolicyV2, resolveMessageDispatchIntent } from "./CommandPolicy.ts";
 import { CommandReceiptStoreV2 } from "./CommandReceiptStore.ts";
 import { ContextHandoffServiceV2 } from "./ContextHandoffService.ts";
@@ -247,6 +249,12 @@ export interface OrchestratorV2Shape {
   readonly resumeQueuedRuns: Effect.Effect<number, OrchestratorV2Error>;
   /** Startup pass that settles delegated-task results and deliveries runs left behind. */
   readonly recoverDelegatedTasks: Effect.Effect<void>;
+  /**
+   * Startup pass that detaches chats whose board parent is missing, deleted,
+   * the chat itself, or part of a cycle, through the normal metadata command.
+   * Returns the detached thread ids.
+   */
+  readonly repairThreadParents: Effect.Effect<ReadonlyArray<ThreadId>>;
   /** Settles a delegated child whose restart continuation of `sourceRunId` declined or failed. */
   readonly recoverDelegatedTask: (threadId: ThreadId, sourceRunId: RunId) => Effect.Effect<void>;
   /**
@@ -731,6 +739,21 @@ function lastDeliveredRunForProviderThread(
       run.providerThreadId === providerThreadId &&
       (run.status === "completed" ||
         projection.providerTurns.some((turn) => turn.runAttemptId === run.activeAttemptId)),
+  );
+}
+
+/** A metadata update that only nests, re-parents, or detaches the chat. */
+function isParentOnlyUpdate(
+  command: Extract<OrchestrationV2Command, { readonly type: "thread.metadata.update" }>,
+): boolean {
+  return (
+    command.parentThreadId !== undefined &&
+    command.title === undefined &&
+    command.regenerateTitle === undefined &&
+    command.branch === undefined &&
+    command.worktreePath === undefined &&
+    command.limitRecovery === undefined &&
+    command.linkedPullRequest === undefined
   );
 }
 
@@ -2134,15 +2157,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandType: command.type,
         cause,
       });
+    if (parentThreadId === command.threadId) {
+      return yield* reject("A chat cannot be its own parent.");
+    }
     const parent = yield* projectionStore.getThread(parentThreadId).pipe(Effect.option);
     if (Option.isNone(parent) || parent.value.deletedAt !== null) {
-      return yield* reject(`Parent thread ${parentThreadId} does not exist.`);
+      return yield* reject(`Parent chat ${parentThreadId} does not exist.`);
+    }
+    if (command.type === "thread.metadata.update" && parent.value.archivedAt !== null) {
+      return yield* reject(`Parent chat ${parentThreadId} is archived.`);
     }
     const visited = new Set<ThreadId>();
     let ancestor: OrchestrationV2AppThread | undefined = parent.value;
     while (ancestor !== undefined && !visited.has(ancestor.id)) {
       if (ancestor.id === command.threadId) {
-        return yield* reject(`Thread ${command.threadId} cannot be its own ancestor.`);
+        return yield* reject("A chat cannot move under one of its own sub-runs.");
       }
       visited.add(ancestor.id);
       const nextId: ThreadId | null = ancestor.parentThreadId ?? null;
@@ -2407,6 +2436,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return yield* new OrchestratorSubagentThreadReadOnlyError({
         commandId: command.commandId,
         threadId: command.threadId,
+      });
+    }
+    if (
+      command.type === "thread.metadata.update" &&
+      command.parentThreadId !== undefined &&
+      thread.lineage.relationshipToParent === "subagent" &&
+      (command.parentThreadId !== thread.lineage.parentThreadId ||
+        command.parentEnvironmentId != null)
+    ) {
+      // A delegated subagent belongs to the chat that delegated it and is
+      // shown only in that chat's Lineage panel, never as a board card.
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "A delegated subagent stays with the chat that delegated it.",
       });
     }
     if (
@@ -2918,7 +2962,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               : command.regenerateTitle === false || command.title !== undefined
                 ? { titleRegeneration: null }
                 : {}),
-            updatedAt: now,
+            // Nesting a chat is arranging the board, not thread activity, so
+            // repeating it projects as a no-op.
+            updatedAt: isParentOnlyUpdate(command) ? thread.updatedAt : now,
           };
         }
         case "thread.pull-request.link":
@@ -10039,10 +10085,50 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
   });
 
+  /**
+   * The cycle check reads the new parent's ancestors, which other threads'
+   * locks guard. Two crossing moves (A under B, B under A) each pass alone,
+   * so every parent change takes this one permit as well.
+   */
+  const parentLinkLock = yield* Semaphore.make(1);
+
+  /** Children of a deleted chat stand on their own instead of pointing at nothing. */
+  const detachChildren = Effect.fn("orchestrationV2.dispatch.detachChildren")(function* (
+    command: Extract<OrchestrationV2ServerCommand, { readonly type: "thread.delete" }>,
+  ) {
+    const children = yield* projectionStore
+      .getChildThreads(command.threadId)
+      .pipe(Effect.orElseSucceed(() => []));
+    for (const child of children) {
+      if (child.parentEnvironmentId != null) continue;
+      yield* dispatchWithReceipt({
+        type: "thread.metadata.update",
+        commandId: CommandId.make(`${command.commandId}:detach:${child.id}`),
+        threadId: child.id,
+        parentThreadId: null,
+      }).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Could not detach a deleted chat's sub-run", {
+            threadId: child.id,
+            cause,
+          }),
+        ),
+      );
+    }
+  });
+
   const dispatchWithReceipt = (
     command: OrchestrationV2ServerCommand,
   ): Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error> =>
     Effect.gen(function* () {
+      if (command.type === "thread.metadata.update" && command.parentThreadId !== undefined) {
+        return yield* parentLinkLock.withPermits(1)(dispatchLocked(command));
+      }
+      if (command.type === "thread.delete") {
+        const result = yield* dispatchLocked(command);
+        yield* detachChildren(command);
+        return result;
+      }
       if (command.type !== "thread.unsettle") {
         const result = yield* dispatchLocked(command);
         if (
@@ -10272,9 +10358,30 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
     );
 
+  const repairThreadParents = Effect.gen(function* () {
+    const links = yield* projectionStore.getThreadParentLinks();
+    const broken = findBrokenThreadParentLinks(links);
+    for (const threadId of broken) {
+      yield* dispatchWithReceipt({
+        type: "thread.metadata.update",
+        commandId: CommandId.make(`server:thread-parent-repair:${threadId}`),
+        threadId,
+        parentThreadId: null,
+      });
+    }
+    return broken;
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("Thread parent repair failed", { cause }).pipe(
+        Effect.as<ReadonlyArray<ThreadId>>([]),
+      ),
+    ),
+  );
+
   return OrchestratorV2.of({
     resumeQueuedRuns,
     recoverDelegatedTasks,
+    repairThreadParents,
     recoverDelegatedTask,
     delegatedTaskResultPending,
     dispatch: dispatchWithReceipt,
@@ -10395,6 +10502,7 @@ const layerUnavailable: Layer.Layer<OrchestratorV2> = Layer.succeed(
       }),
     ),
     recoverDelegatedTasks: Effect.void,
+    repairThreadParents: Effect.succeed([]),
     recoverDelegatedTask: () => Effect.void,
     delegatedTaskResultPending: () => Effect.succeed(false),
     dispatch: (command) =>

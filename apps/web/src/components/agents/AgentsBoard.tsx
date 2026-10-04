@@ -32,7 +32,8 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import { useAgentLibrary } from "../../hooks/useAgentLibrary";
 import { useScheduledTasks, useScheduledTasksSupported } from "../../state/scheduledTasks";
 import { useEnvironments } from "../../state/environments";
-import { useThreadShells, useAllEnvironmentShellsBootstrapped } from "../../state/entities";
+import { useAllEnvironmentShellsBootstrapped } from "../../state/entities";
+import { useAgentThreadShells } from "./useAgentRunParenting";
 import { AgentSkillsEditor } from "./AgentSkillsEditor";
 import { AgentEditor } from "./AgentEditor";
 import { AgentTaskDialog } from "./AgentTaskDialog";
@@ -42,7 +43,6 @@ import {
   excludePinnedAgentThreads,
   groupAgentThreads,
   nestAgentRuns,
-  selectAgentChildLinks,
   selectAgentSidebarThreads,
   selectAgentWorkspaceThreads,
   selectPinnedAgentThreads,
@@ -66,7 +66,6 @@ function AgentThreadList({
   onContextMenu,
   profiles,
   childrenByKey,
-  childLinksByKey,
   workingKeys,
   runByKey,
 }: {
@@ -74,7 +73,6 @@ function AgentThreadList({
   threads: readonly EnvironmentThreadShell[];
   pinned: readonly EnvironmentThreadShell[];
   childrenByKey: ReadonlyMap<string, AgentCardChildren<EnvironmentThreadShell>>;
-  childLinksByKey: ReadonlyMap<string, readonly EnvironmentThreadShell[]>;
   workingKeys: ReadonlySet<string>;
   runByKey: ReadonlyMap<string, EnvironmentThreadShell>;
   onContextMenu: AgentRunContextMenu;
@@ -95,7 +93,6 @@ function AgentThreadList({
         )}
         profiles={profiles}
         childRuns={childRuns}
-        childLinks={childLinksByKey.get(key)}
         childWorking={workingKeys.has(key)}
         workingKeys={childRuns ? workingKeys : undefined}
         parentRun={(() => {
@@ -182,7 +179,8 @@ export function AgentsBoard() {
   const scheduledSupported = useScheduledTasksSupported();
   const scheduledTasks = useScheduledTasks();
   const modelPreferences = useClientSettings((settings) => settings.providerModelPreferences);
-  const threads = useThreadShells();
+  // Pending parent changes show at once (see useSetAgentRunParent).
+  const threads = useAgentThreadShells();
   // Delegated tasks live in the thread details' Lineage section, never this roster.
   const sidebarThreads = useMemo(() => selectAgentSidebarThreads(threads), [threads]);
   const ready = useAllEnvironmentShellsBootstrapped();
@@ -216,13 +214,8 @@ export function AgentsBoard() {
         settled: excludePinnedAgentThreads(settled, allPinned),
       },
       all: sidebarThreads,
-      subagentsOnly: selected,
     });
-  }, [sidebarThreads, filter, query, allPinned, selected]);
-  const childLinksByKey = useMemo(
-    () => selectAgentChildLinks(sidebarThreads, childrenByKey),
-    [sidebarThreads, childrenByKey],
-  );
+  }, [sidebarThreads, filter, query, allPinned]);
   // Every chat, delegated subagents included: their work keeps a parent busy.
   const workingKeys = useMemo(() => selectWorkingParentKeys(threads), [threads]);
   const pinned = nestedLists.pinned;
@@ -526,7 +519,6 @@ export function AgentsBoard() {
             pinned={pinned}
             profiles={profiles}
             childrenByKey={childrenByKey}
-            childLinksByKey={childLinksByKey}
             workingKeys={workingKeys}
             runByKey={runByKey}
             onContextMenu={onThreadContextMenu}

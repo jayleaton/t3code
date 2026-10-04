@@ -76,6 +76,7 @@ import {
   isThreadHistoryTurnStart,
   THREAD_HISTORY_MAX_RAW_TURNS,
 } from "./threadHistoryPaging.ts";
+import type { ThreadParentLink } from "./threadParentLinks.ts";
 
 export class ProjectionStoreApplyEventError extends Schema.TaggedError<ProjectionStoreApplyEventError>()(
   "ProjectionStoreApplyEventError",
@@ -349,6 +350,11 @@ export interface ProjectionStoreV2Shape {
   readonly getChildThreads: (
     parentThreadId: ThreadId,
   ) => Effect.Effect<ReadonlyArray<OrchestrationV2AppThread>, ProjectionStoreV2Error>;
+  /** Agents-board parent link of every live (not deleted) thread, archived ones included. */
+  readonly getThreadParentLinks: () => Effect.Effect<
+    ReadonlyArray<ThreadParentLink>,
+    ProjectionStoreV2Error
+  >;
   readonly getLimitRecoveryCandidates: (options: {
     readonly now: DateTime.Utc;
     readonly autoResume: boolean;
@@ -4128,6 +4134,32 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         ),
       );
 
+    const getThreadParentLinks: ProjectionStoreV2Shape["getThreadParentLinks"] = () =>
+      sql<{
+        readonly thread_id: string;
+        readonly parent_thread_id: string | null;
+        readonly parent_environment_id: string | null;
+      }>`
+        SELECT thread_id,
+          json_extract(payload_json, '$.parentThreadId') AS parent_thread_id,
+          json_extract(payload_json, '$.parentEnvironmentId') AS parent_environment_id
+        FROM orchestration_v2_projection_threads
+        WHERE deleted_at IS NULL
+      `.pipe(
+        Effect.map((rows) =>
+          rows.map((row) => ({
+            threadId: ThreadId.make(row.thread_id),
+            parentThreadId:
+              row.parent_thread_id === null ? null : ThreadId.make(row.parent_thread_id),
+            parentEnvironmentId: row.parent_environment_id,
+          })),
+        ),
+        Effect.mapError(
+          (cause) =>
+            new ProjectionStoreReadError({ threadId: ThreadId.make("thread-parent-links"), cause }),
+        ),
+      );
+
     const getThread: ProjectionStoreV2Shape["getThread"] = (threadId) =>
       Effect.gen(function* () {
         const rows = yield* sql<PayloadRow>`
@@ -5611,6 +5643,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getThreadShell,
       getThread,
       getChildThreads,
+      getThreadParentLinks,
       getSettlementCandidates,
       getThreadsWithPullRequests,
       getThreadProjection,
@@ -5712,6 +5745,19 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             .pipe(Effect.map(threadShellFromProjection));
           return shell.deletedAt === null ? shell : null;
         }),
+      getThreadParentLinks: () =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) =>
+            [...state.projections.values()]
+              .map((projection) => projection.thread)
+              .filter((thread) => thread.deletedAt === null)
+              .map((thread) => ({
+                threadId: thread.id,
+                parentThreadId: thread.parentThreadId ?? null,
+                parentEnvironmentId: thread.parentEnvironmentId ?? null,
+              })),
+          ),
+        ),
       getChildThreads: (parentThreadId) =>
         Ref.get(replayState).pipe(
           Effect.map((state) =>

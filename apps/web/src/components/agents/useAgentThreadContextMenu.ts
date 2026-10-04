@@ -12,7 +12,6 @@ import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { readLocalApi } from "../../localApi";
 import {
   readEnvironmentSupportsActiveReorder,
-  useThreadShells,
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsTitleRegeneration,
@@ -26,6 +25,7 @@ import { useClientSettings } from "../../hooks/useSettings";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 
 import { planAgentThreadMove, type AgentRunContextMenu } from "./agents.logic";
+import { useAgentThreadShells, useSetAgentRunParent } from "./useAgentRunParenting";
 
 type AgentThreadMenuId =
   | "move-up"
@@ -61,7 +61,8 @@ function failureToast(title: string, error: unknown) {
 export function useAgentThreadContextMenu(
   visible: readonly EnvironmentThreadShell[],
 ): AgentRunContextMenu {
-  const threads = useThreadShells();
+  const threads = useAgentThreadShells();
+  const setParent = useSetAgentRunParent();
   const router = useRouter();
   const projects = useProjects();
   const {
@@ -185,8 +186,9 @@ export function useAgentThreadContextMenu(
             ]
           : []),
         { id: "mark-unread", label: "Mark unread", icon: "mail-open", separatorBefore: true },
-        ...(current.parentThreadId != null
-          ? [{ id: "detach-parent" as const, label: "Detach from parent run", icon: "unlink" }]
+        // The board's view, which includes a pending move.
+        ...(thread.parentThreadId != null
+          ? [{ id: "detach-parent" as const, label: "Remove from parent", icon: "unlink" }]
           : []),
         {
           id: "copy-path",
@@ -261,12 +263,8 @@ export function useAgentThreadContextMenu(
           markThreadUnread(scopedThreadKey(ref), current.latestRun?.completedAt);
           return;
         case "detach-parent":
-          await reportFailure("Failed to detach chat", () =>
-            updateThreadMetadata({
-              environmentId: ref.environmentId,
-              input: { threadId: ref.threadId, parentThreadId: null },
-            }),
-          );
+          // Same path as dragging a sub-run out: optimistic, rolled back on failure.
+          await setParent(thread, null);
           return;
         case "copy-path":
           if (workspacePath) copyPathToClipboard(workspacePath, { path: workspacePath });
@@ -311,6 +309,7 @@ export function useAgentThreadContextMenu(
       pinThread,
       projects,
       router,
+      setParent,
       settleThread,
       unsettleThread,
       updateThreadMetadata,

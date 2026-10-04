@@ -18,7 +18,9 @@ import {
   agentRunParentKey,
   agentRunDropZone,
   agentRunReorderOver,
-  selectAgentChildLinks,
+  applyAgentParentOverrides,
+  agentRunLinkBlockedReason,
+  withAgentRunAncestors,
   selectWorkingParentKeys,
 } from "./agents.logic";
 const profile: McpGatewayProfile = {
@@ -381,7 +383,7 @@ describe("nestAgentRuns", () => {
   });
 });
 
-describe("sidebar delegated relationships", () => {
+describe("subagents and Agent chats on the board", () => {
   const captain = thread("captain-chat", "captain");
   const cody = thread("cody-chat", "cody");
   const delegated = {
@@ -400,9 +402,13 @@ describe("sidebar delegated relationships", () => {
     lineage: { ...delegated.lineage, relationshipToParent: "fork" as const },
   };
   const all = [captain, cody, delegated, linkedCody, fork];
-  const lists = { pinned: [], active: all, settled: [] };
+  const childIds = (board: ReturnType<typeof nestAgentRuns<(typeof all)[number]>>, key: string) =>
+    board.childrenByKey
+      .get(key)
+      ?.live.map(({ thread }) => thread.id)
+      .toSorted();
 
-  it("excludes delegated named Agents from every sidebar shelf and nested roster", () => {
+  it("never makes a delegated subagent a card, in any shelf or nested roster", () => {
     const pinnedDelegation = {
       ...delegated,
       id: ThreadId.make("pinned-delegation"),
@@ -425,72 +431,40 @@ describe("sidebar delegated relationships", () => {
       lists: { pinned: selectPinnedAgentThreads(sidebarThreads), ...shelves },
       all: sidebarThreads,
     });
-    expect(
-      board.childrenByKey
-        .get("local:captain-chat")
-        ?.live.map(({ thread }) => thread.id)
-        .toSorted(),
-    ).toEqual([linkedCody.id, fork.id].toSorted());
-    expect(selectAgentSidebarThreads([delegated])).toEqual([]);
-    expect(selectAgentSidebarThreads([cody])).toEqual([cody]);
+    expect(childIds(board, "local:captain-chat")).toEqual([linkedCody.id, fork.id].toSorted());
+    // Searching the board cannot surface a subagent either.
+    expect(selectAgentWorkspaceThreads(sidebarThreads, null, "delegation").active).toEqual([]);
   });
 
-  it("summarizes delegation to a named Agent while retaining its top-level and linked chats", () => {
-    const sidebar = nestAgentRuns({ lists, all, subagentsOnly: true });
-    expect(sidebar.lists.active.map((run) => run.id)).toEqual([
-      captain.id,
-      cody.id,
+  it("nests a child Agent chat inside its parent's card instead of its own card", () => {
+    const sidebarThreads = selectAgentSidebarThreads(all);
+    const lists = { pinned: [], active: sidebarThreads, settled: [] };
+    const board = nestAgentRuns({ lists, all: sidebarThreads });
+    expect(board.lists.active.map((run) => run.id)).toEqual([captain.id, cody.id]);
+    expect(childIds(board, "local:captain-chat")).toEqual([linkedCody.id, fork.id].toSorted());
+    // Pinned parent and pinned child, as in the GLM / TensorFold report.
+    const pinnedParent = { ...captain, pinnedAt: "2026-10-04T07:00:00Z" };
+    const pinnedChild = { ...linkedCody, pinnedAt: "2026-10-04T07:01:00Z" };
+    const pinnedBoard = nestAgentRuns({
+      lists: { pinned: [pinnedChild, pinnedParent], active: [cody], settled: [] },
+      all: [pinnedParent, pinnedChild, cody],
+    });
+    expect(pinnedBoard.lists.pinned.map((run) => run.id)).toEqual([captain.id]);
+    expect(childIds(pinnedBoard, "local:captain-chat")).toEqual([linkedCody.id]);
+  });
+
+  it("keeps a child's parent card in the open-chat rail", () => {
+    const sidebarThreads = selectAgentSidebarThreads(all);
+    expect(withAgentRunAncestors([linkedCody], sidebarThreads).map((run) => run.id)).toEqual([
       linkedCody.id,
-      fork.id,
+      captain.id,
     ]);
-    expect(
-      sidebar.childrenByKey.get("local:captain-chat")?.live.map(({ thread }) => thread.id),
-    ).toEqual([delegated.id]);
-    // Profile grouping is independent of sidebar delegation folding.
-    expect(
-      groupAgentThreads([{ ...profile, profileId: "cody", name: "Cody" }], all).groups.get("cody"),
-    ).toHaveLength(4);
-    const workspace = nestAgentRuns({ lists, all });
-    expect(
-      workspace.childrenByKey
-        .get("local:captain-chat")
-        ?.live.map(({ thread }) => thread.id)
-        .toSorted(),
-    ).toEqual([delegated.id, linkedCody.id, fork.id].toSorted());
-    expect(workspace.lists.active.map((run) => run.id)).toEqual([captain.id, cody.id]);
-  });
-
-  it("uses native lineage even when a manual parent link differs, and requires a parent ID", () => {
-    const moved = { ...delegated, parentThreadId: cody.id };
-    const noParent = {
-      ...delegated,
-      id: ThreadId.make("no-parent"),
-      lineage: { ...delegated.lineage, parentThreadId: null },
-    };
-    const sidebar = nestAgentRuns({
-      lists: { ...lists, active: [captain, cody, moved, noParent] },
-      all: [captain, cody, moved, noParent],
-      subagentsOnly: true,
-    });
-    expect(
-      sidebar.childrenByKey.get("local:captain-chat")?.live.map(({ thread }) => thread.id),
-    ).toEqual([moved.id]);
-    expect(sidebar.lists.active.map((run) => run.id)).toEqual([captain.id, cody.id, noParent.id]);
-  });
-
-  it("keeps delegated rows out of the sidebar when the parent is filtered out", () => {
-    const sidebar = nestAgentRuns({
-      lists: { ...lists, active: [cody, delegated] },
-      all,
-      subagentsOnly: true,
-    });
-    expect(sidebar.lists.active).toEqual([cody]);
-    const workspace = nestAgentRuns({ lists: { ...lists, active: [cody, delegated] }, all });
-    expect(workspace.lists.active).toEqual([cody, delegated]);
+    const settledCaptain = { ...captain, settledAt: "2026-10-04T07:00:00Z" };
+    expect(withAgentRunAncestors([linkedCody], [settledCaptain, linkedCody])).toEqual([linkedCody]);
   });
 });
 
-describe("launched Agent chats", () => {
+describe("rolled-up status", () => {
   const withRun = <T extends ReturnType<typeof thread>>(
     chat: T,
     status: "running" | "completed",
@@ -505,69 +479,67 @@ describe("launched Agent chats", () => {
       assistantMessageId: null,
     },
   });
-  // Captain finished its own turn after launching Doug, who is still working.
-  const captain = withRun(thread("captain-chat", "captain"), "completed");
-  const doug = { ...withRun(thread("doug-chat", "doug"), "running"), parentThreadId: captain.id };
-  const nested = (all: readonly ReturnType<typeof thread>[]) =>
-    nestAgentRuns({ lists: { pinned: [], active: all, settled: [] }, all, subagentsOnly: true });
+  const github = withRun(thread("github-chat", "doug"), "completed");
+  const glm = { ...withRun(thread("glm-chat", "doug"), "running"), parentThreadId: github.id };
 
   it("keeps a parent in progress while a chat under it works, at any depth", () => {
-    expect(agentThreadStatus(captain)).toBe("done");
-    expect(selectWorkingParentKeys([captain, doug])).toEqual(new Set(["local:captain-chat"]));
-    expect(agentThreadStatus(captain, true)).toBe("running");
-    const dougIdle = { ...doug, latestRun: { ...doug.latestRun, status: "completed" as const } };
-    const review = { ...withRun(thread("review", "cody"), "running"), parentThreadId: doug.id };
-    expect(selectWorkingParentKeys([captain, dougIdle, review])).toEqual(
-      new Set(["local:doug-chat", "local:captain-chat"]),
+    expect(agentThreadStatus(github)).toBe("done");
+    expect(selectWorkingParentKeys([github, glm])).toEqual(new Set(["local:github-chat"]));
+    expect(agentThreadStatus(github, true)).toBe("running");
+    const glmDone = { ...glm, latestRun: { ...glm.latestRun, status: "completed" as const } };
+    const review = { ...withRun(thread("review", "cody"), "running"), parentThreadId: glm.id };
+    expect(selectWorkingParentKeys([github, glmDone, review])).toEqual(
+      new Set(["local:glm-chat", "local:github-chat"]),
     );
-    // Finished, settled, or archived children leave the parent done.
-    expect(selectWorkingParentKeys([captain, dougIdle])).toEqual(new Set());
+    expect(selectWorkingParentKeys([github, glmDone])).toEqual(new Set());
     expect(
-      selectWorkingParentKeys([captain, { ...doug, archivedAt: "2026-10-04T06:00:00Z" }]),
+      selectWorkingParentKeys([github, { ...glm, archivedAt: "2026-10-04T06:00:00Z" }]),
     ).toEqual(new Set());
-    // A settled parent stays done; settlement wins over its children's work.
-    expect(agentThreadStatus({ ...captain, settledAt: "2026-10-04T06:00:00Z" }, true)).toBe("done");
+    expect(agentThreadStatus({ ...github, settledAt: "2026-10-04T06:00:00Z" }, true)).toBe("done");
   });
+});
 
-  it("links a parent card to Agent chats that stand on their own, and follows re-parenting", () => {
-    const sidebar = nested([captain, doug]);
-    expect(sidebar.lists.active.map((run) => run.id)).toEqual([captain.id, doug.id]);
-    expect(
-      selectAgentChildLinks([captain, doug], sidebar.childrenByKey).get("local:captain-chat"),
-    ).toEqual([doug]);
-    // Unlinked: no parent, no link.
-    const detached = { ...doug, parentThreadId: null };
-    expect(
-      selectAgentChildLinks([captain, detached], nested([captain, detached]).childrenByKey).size,
-    ).toBe(0);
-    // Re-parented: the link moves with it.
-    const cody = thread("cody-chat", "cody");
-    const moved = { ...doug, parentThreadId: cody.id };
-    const links = selectAgentChildLinks(
-      [captain, cody, moved],
-      nested([captain, cody, moved]).childrenByKey,
+describe("parent changes on the board", () => {
+  const github = thread("github-chat", "doug");
+  const other = thread("other-chat", "doug");
+  const glm = { ...thread("glm-chat", "doug") };
+  const board = (threads: readonly (typeof glm)[]) =>
+    nestAgentRuns({ lists: { pinned: [], active: threads, settled: [] }, all: threads });
+
+  it("shows a pending move at once and rolls back to the server's link", () => {
+    const pending = new Map([
+      ["local:glm-chat", { parentThreadId: github.id, parentEnvironmentId: null }],
+    ]);
+    const moved = applyAgentParentOverrides([github, other, glm], pending);
+    expect(board(moved).childrenByKey.get("local:github-chat")?.live[0]?.thread.id).toBe(glm.id);
+    // Rolling back is dropping the entry: the server's state is all that is left.
+    const rolledBack = applyAgentParentOverrides([github, other, glm], new Map());
+    expect(board(rolledBack).lists.active.map((run) => run.id)).toEqual([
+      github.id,
+      other.id,
+      glm.id,
+    ]);
+    // Re-parenting and removing work the same way.
+    const nested = { ...glm, parentThreadId: github.id };
+    const reparented = applyAgentParentOverrides(
+      [github, other, nested],
+      new Map([["local:glm-chat", { parentThreadId: other.id, parentEnvironmentId: null }]]),
     );
-    expect(links.get("local:captain-chat")).toBeUndefined();
-    expect(links.get("local:cody-chat")).toEqual([moved]);
+    expect(board(reparented).childrenByKey.get("local:other-chat")?.live[0]?.thread.id).toBe(
+      glm.id,
+    );
+    const removed = applyAgentParentOverrides(
+      [github, other, nested],
+      new Map([["local:glm-chat", { parentThreadId: null, parentEnvironmentId: null }]]),
+    );
+    expect(board(removed).childrenByKey.size).toBe(0);
   });
 
-  it("does not link chats already nested in the card, settled, or delegated", () => {
-    const board = nestAgentRuns({
-      lists: { pinned: [], active: [captain, doug], settled: [] },
-      all: [captain, doug],
-    });
-    expect(selectAgentChildLinks([captain, doug], board.childrenByKey).size).toBe(0);
-    const settled = { ...doug, settledAt: "2026-10-04T06:00:00Z" };
-    expect(selectAgentChildLinks([captain, settled], new Map()).size).toBe(0);
-    const delegated = {
-      ...doug,
-      lineage: {
-        rootThreadId: captain.id,
-        parentThreadId: captain.id,
-        relationshipToParent: "subagent" as const,
-      },
-    };
-    expect(selectAgentChildLinks([captain, delegated], new Map()).size).toBe(0);
+  it("explains why a card cannot take the run", () => {
+    const nested = { ...glm, parentThreadId: github.id };
+    expect(agentRunLinkBlockedReason(nested, github)).toBe("Already under github-chat");
+    expect(agentRunLinkBlockedReason(github, nested)).toBe("Can't move under its own sub-run");
+    expect(agentRunLinkBlockedReason(glm, glm)).toBe("A chat cannot be its own parent");
   });
 });
 

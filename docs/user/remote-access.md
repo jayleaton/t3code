@@ -329,15 +329,15 @@ with `parentThreadId: null`; it needs lifecycle access. On the board, drag a run
 from any connected machine.
 
 On the Agents board, sub-runs appear inside the card of the run that created them, including
-runs by other agents. Each one shows its agent, title, and status; click it to open that chat.
+runs by other agents, on the full board and in the side list next to an open chat. Delegated
+subagents (`delegate_task`) are not cards: they appear only in their chat's **Lineage** panel. Each one shows its agent, title, and status; click it to open that chat.
 Right-click a sub-run for the same actions as a card. **Pin to top of parent** keeps it first in
 its parent's list, **Move up** and **Move down** arrange it among its siblings, and settling moves
 it into its parent's collapsed **Settled** group. A live sub-run whose parent is settled keeps its
 own card, which names its parent's agent and chat; click that name to open the parent.
 
 A run reads **In progress** while any sub-run below it is still working, even after its own turn
-finishes. With a chat open, another agent's chat keeps its own card in the side list, and its
-parent's card links to it. A chat's **Lineage** panel shows its parent and the chats it launched.
+finishes. A chat's **Lineage** panel shows its parent and the chats it launched.
 
 Settling a run also settles its sub-runs, at every depth, including when the run settles
 automatically. Settling never stops work: a sub-run that is still working or waiting on an approval
@@ -349,10 +349,13 @@ A sub-run an agent created settles on its own when it finishes, unless it is wai
 or an approval. When its parent sends it more work it returns to the active list, and it settles
 again when that work finishes. Turn off auto-settle on a sub-run to keep it active.
 
-To link runs yourself on web and desktop, drag a card onto another card's title to make it a
+To link runs yourself on web and desktop, drag a card onto the middle of another card to make it a
 sub-run, or drag a sub-run out of its card to make it independent. Dragging a sub-run onto
-another card moves it there. Links stay within one environment, and a run cannot go under its
-own sub-runs. You can also right-click a card and choose **Detach from parent run**.
+another card moves it there. The board shows the move at once and puts it back, with the reason,
+if it fails: a run cannot go under itself or its own sub-runs, or under an archived chat. To
+remove a run from its parent without dragging, right-click it (or focus it and press the context
+menu key) and choose **Remove from parent**. Deleting a chat leaves its sub-runs as their own
+cards, and a chat left pointing at a missing parent is detached when the server starts.
 
 ### Schedule prompts for an agent
 
