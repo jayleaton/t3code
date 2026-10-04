@@ -10,9 +10,9 @@
 
 This app has three variants:
 
-- `development`: Expo dev client, installable side-by-side as `T3 Code Dev`
-- `preview`: persistent internal preview build, installable side-by-side as `T3 Code Preview`
-- `production`: store/release build as `T3 Code`
+- `development`: Expo dev client, installable side-by-side as `T3 Code Personal Dev`
+- `preview`: persistent internal preview build, installable side-by-side as `T3 Code Personal Preview`
+- `production`: store/release build as `T3 Code Personal`
 
 Run commands from `apps/mobile`.
 
@@ -120,6 +120,16 @@ node ../../scripts/mobile-native-static-check.ts
 The native lint task runs SwiftLint for Swift plus ktlint and detekt for Kotlin. Missing native tools are reported as warnings and skipped locally. CI installs the default toolset from `apps/mobile/Brewfile` before running the native checks.
 
 ## EAS Builds
+
+This fork uses [@jayleaton/t3-code-personal](https://expo.dev/accounts/jayleaton/projects/t3-code-personal)
+for builds and OTA updates. Its bundle/package identifier is `com.jayleaton.t3code`, with `.dev`
+and `.preview` suffixes for the corresponding variants. EAS selects your Apple team during
+provisioning; the upstream Apple team and App Store Connect app binding are removed. TestFlight
+submission requires your own App Store Connect app record.
+
+The development, preview, and production EAS environments use the existing T3 Connect public
+configuration documented in the root `.env.example`. This continues to use T3's Clerk auth and
+relay; it does not create another backend or database. Local builds still need the root env file.
 
 Preview and production variants use Expo fingerprinting so OTA updates only reach binaries with matching native dependencies, config plugins, and patches. CI uses the `preview:dev` profile to reuse a compatible native build when possible.
 
