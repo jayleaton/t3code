@@ -240,6 +240,19 @@ function contextDraft(start: number, count: number): ComposerDraft {
 }
 
 describe("mobile composer drafts", () => {
+  it("reloads agent drafts and removes the association when the task is discarded", () => {
+    const profileSelection = { profileId: "reviewer", revision: 3, overrideFields: [] } as const;
+    const draft = { text: "Review changes", attachments: [], profileSelection };
+    const decoded = decodePersistedComposerState({
+      schemaVersion: 1,
+      drafts: { "new-task:agent": draft },
+    });
+    expect(decoded.drafts["new-task:agent"]?.profileSelection).toEqual(profileSelection);
+    expect(
+      clearComposerDraftContentState(decoded.drafts, "new-task:agent")["new-task:agent"],
+    ).toBeUndefined();
+  });
+
   it.each([false, true])(
     "restores visible file chips from legacy drafts (archived: %s)",
     async (archived) => {

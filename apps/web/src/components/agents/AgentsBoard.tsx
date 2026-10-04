@@ -7,7 +7,7 @@ import { useAgentThreadContextMenu } from "./useAgentThreadContextMenu";
 import * as Schema from "effect/Schema";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { Menu, MenuTrigger, MenuPopup, MenuItem } from "../ui/menu";
-import { AgentIcon, agentColorFor } from "./AgentIcon";
+import { AgentIcon } from "./AgentIcon";
 import { Link, Outlet, useLocation, useNavigate, type LinkProps } from "@tanstack/react-router";
 import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -39,6 +39,7 @@ import { AgentEditor } from "./AgentEditor";
 import { AgentTaskDialog } from "./AgentTaskDialog";
 import { AgentsLoadingNotice } from "./AgentsLoadingNotice";
 import {
+  agentColorFor,
   agentRunParentKey,
   excludePinnedAgentThreads,
   groupAgentThreads,

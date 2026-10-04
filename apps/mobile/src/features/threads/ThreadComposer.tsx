@@ -76,7 +76,9 @@ import {
   ComposerInlineControl,
   ComposerToolbarRow,
 } from "../../components/ComposerToolbar";
+import { AgentAvatar } from "../../components/AgentAvatar";
 import { ProviderIcon } from "../../components/ProviderIcon";
+import { useThreadAgent } from "../../state/agents";
 import {
   composerStripAttachments,
   type DraftComposerAttachment,
@@ -370,6 +372,7 @@ export function ComposerSurface(props: {
 
 export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposerProps) {
   const project = useProject(scopeProjectRef(props.environmentId, props.selectedThread.projectId));
+  const agent = useThreadAgent(props.selectedThread.profileSnapshot);
   const { themeVariables: materialTheme } = useAppearancePreferences();
   const composerPanel = materialTheme["--color-composer-panel"];
   const navigation = useNavigation();
@@ -1114,16 +1117,29 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     />
                     <View className="min-w-0 shrink">
                       <ComposerInlineControl
-                        accessibilityLabel="Model and reasoning settings"
+                        accessibilityLabel={
+                          agent
+                            ? `${agent.name} agent. Model and reasoning settings`
+                            : "Model and reasoning settings"
+                        }
                         emphasized
-                        renderIcon={(size) => (
-                          <ProviderIcon
-                            iconUrl={currentModelOption?.providerIconUrl}
-                            provider={currentModelOption?.providerDriver}
-                            size={size}
-                          />
-                        )}
-                        label={currentModelOption?.label ?? currentModelSelection.model}
+                        renderIcon={(size) =>
+                          agent ? (
+                            <AgentAvatar icon={agent.icon} color={agent.color} size={size} />
+                          ) : (
+                            <ProviderIcon
+                              iconUrl={currentModelOption?.providerIconUrl}
+                              provider={currentModelOption?.providerDriver}
+                              size={size}
+                            />
+                          )
+                        }
+                        label={[
+                          agent?.name,
+                          currentModelOption?.label ?? currentModelSelection.model,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
                         maxWidth="100%"
                         onPress={openSettings}
                       />

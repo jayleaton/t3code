@@ -5,6 +5,7 @@ import {
   extractPairingUrlFromQrPayload,
   PairingQrPayloadEmptyError,
   parsePairingUrl,
+  validateMobilePairingUrl,
 } from "./pairing";
 
 describe("buildPairingUrl", () => {
@@ -34,13 +35,16 @@ describe("extractPairingUrlFromQrPayload", () => {
     ).toBe("https://remote.example.com/pair#token=pairing-token");
   });
 
-  it("unwraps mobile deep links that carry an encoded pairing url", () => {
-    expect(
-      extractPairingUrlFromQrPayload(
-        "t3code://pair?pairingUrl=https%3A%2F%2Fremote.example.com%2Fpair%23token%3Dpairing-token",
-      ),
-    ).toBe("https://remote.example.com/pair#token=pairing-token");
-  });
+  it.each(["t3code", "t3code-personal", "t3code-personal-dev", "t3code-personal-preview"])(
+    "unwraps %s deep links that carry an encoded pairing url",
+    (scheme) => {
+      expect(
+        extractPairingUrlFromQrPayload(
+          `${scheme}://pair?pairingUrl=https%3A%2F%2Fremote.example.com%2Fpair%23token%3Dpairing-token`,
+        ),
+      ).toBe("https://remote.example.com/pair#token=pairing-token");
+    },
+  );
 
   it("rejects empty qr payloads", () => {
     expect(() => extractPairingUrlFromQrPayload("   ")).toThrowError(PairingQrPayloadEmptyError);
@@ -60,5 +64,37 @@ describe("parsePairingUrl", () => {
       host: "https://desktop.tailnet.ts.net",
       code: "pairing-token",
     });
+  });
+});
+
+describe("mobile pairing address validation", () => {
+  it.each([
+    "localhost",
+    "LOCALHOST.",
+    "127.0.0.1",
+    "127.1",
+    "127.20.0.2",
+    "[::1]",
+    "app.localhost",
+    "0.0.0.0",
+    "[::]",
+  ])("rejects unreachable phone address %s", (host) => {
+    expect(() => validateMobilePairingUrl(`http://${host}:3773/#token=secret`)).toThrow(
+      "Localhost points to this phone",
+    );
+  });
+  it("validates the backend inside a hosted pairing link", () => {
+    expect(() =>
+      validateMobilePairingUrl(
+        "https://app.t3.codes/pair?host=http%3A%2F%2Flocalhost%3A3773#token=secret",
+      ),
+    ).toThrow("Localhost points to this phone");
+  });
+  it.each([
+    "https://mac.tailnet.ts.net",
+    "http://100.101.102.103:3773",
+    "http://192.168.1.20:3773",
+  ])("accepts reachable direct server %s", (host) => {
+    expect(() => validateMobilePairingUrl(buildPairingUrl(host, "secret"))).not.toThrow();
   });
 });

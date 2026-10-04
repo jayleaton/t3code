@@ -1,10 +1,12 @@
-import { ConnectionOnboarding } from "@t3tools/client-runtime/connection";
+import { ConnectionBlockedError, ConnectionOnboarding } from "@t3tools/client-runtime/connection";
 import {
   createAtomCommandScheduler,
   createRuntimeCommand,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+
+import { validateMobilePairingUrl } from "../features/connection/pairing";
 
 import { connectionAtomRuntime } from "./runtime";
 
@@ -15,9 +17,18 @@ export const connectPairingUrl = createRuntimeCommand(connectionAtomRuntime, {
   scheduler: onboardingScheduler,
   concurrency: { mode: "singleFlight", key: (pairingUrl: string) => pairingUrl },
   execute: (pairingUrl: string) =>
-    ConnectionOnboarding.ConnectionOnboarding.pipe(
-      Effect.flatMap((onboarding) => onboarding.registerPairing({ pairingUrl })),
-    ),
+    Effect.gen(function* () {
+      yield* Effect.try({
+        try: () => validateMobilePairingUrl(pairingUrl),
+        catch: (cause) =>
+          new ConnectionBlockedError({
+            reason: "configuration",
+            detail: cause instanceof Error ? cause.message : "The pairing details are invalid.",
+          }),
+      });
+      const onboarding = yield* ConnectionOnboarding.ConnectionOnboarding;
+      return yield* onboarding.registerPairing({ pairingUrl });
+    }),
 });
 
 export const updateBearerConnection = createRuntimeCommand(connectionAtomRuntime, {

@@ -1,3 +1,5 @@
+import { resolveGatewayProfileModelSelection } from "@t3tools/client-runtime/gateway";
+import { withReasoningEffortOption } from "@t3tools/shared/model";
 import { useAtomValue } from "@effect/atom-react";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
@@ -29,6 +31,7 @@ import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useFontFamily } from "../../lib/useFontFamily";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
@@ -101,8 +104,11 @@ import {
   updateComposerDraftSettings,
   scheduleUnusedComposerAttachmentCleanup,
   type ComposerDraft,
+  useComposerDraft,
   waitForComposerDraftsLoaded,
 } from "../../state/use-composer-drafts";
+import { agentAppearance, agentModelLabel, useAgentProfiles } from "../../state/agents";
+import { AgentAvatar } from "../../components/AgentAvatar";
 import { useEnvironmentServerConfig, useProjects, useThreadShells } from "../../state/entities";
 import { useProjectClone } from "../../state/projectClones";
 import { projectEnvironment } from "../../state/projects";
@@ -175,6 +181,7 @@ function NewTaskWorkspaceIcon(props: {
 }
 
 export function NewTaskDraftScreen(props: {
+  readonly profileId?: string;
   readonly initialProjectRef?: {
     readonly environmentId?: string;
     readonly projectId?: string;
@@ -301,6 +308,57 @@ export function NewTaskDraftScreen(props: {
       states: uploadStates,
     });
   const queuesInsteadOfStarting = !environmentConnected || attachmentsUploading;
+  const draftProfileId = useComposerDraft(flow.draftKey).profileSelection?.profileId;
+  const agentProfiles = useAgentProfiles();
+  const draftAgentProfile = agentProfiles.find(
+    (profile) => profile.profileId === (draftProfileId ?? props.profileId),
+  );
+  const draftAgent = draftAgentProfile ? agentAppearance(draftAgentProfile, agentProfiles) : null;
+  const appliedAgentDraft = useRef<string | null>(null);
+  useEffect(() => {
+    if (!props.profileId || !flow.draftKey || !selectedEnvironmentServerConfig) return;
+    if (
+      appliedAgentDraft.current === null &&
+      props.initialProjectRef?.projectId &&
+      (selectedProject?.id !== props.initialProjectRef.projectId ||
+        selectedProject.environmentId !== props.initialProjectRef.environmentId)
+    )
+      return;
+    const key = `${flow.draftKey}:${selectedProject?.environmentId}:${props.profileId}`;
+    if (appliedAgentDraft.current === key) return;
+    const profile = selectedEnvironmentServerConfig.settings.mcpGatewayProfiles.find(
+      (candidate) => candidate.profileId === props.profileId,
+    );
+    const model =
+      profile &&
+      resolveGatewayProfileModelSelection(profile, selectedEnvironmentServerConfig.providers);
+    if (!profile || !model || profile.runtimeMode === "read-only") return;
+    const descriptors = selectedEnvironmentServerConfig.providers
+      .find((provider) => provider.instanceId === model.instanceId)
+      ?.models.find((candidate) => candidate.slug === model.model)?.capabilities?.optionDescriptors;
+    updateComposerDraftSettings(flow.draftKey, {
+      modelSelection: {
+        ...model,
+        instanceId: ProviderInstanceId.make(model.instanceId),
+        options: withReasoningEffortOption(model.options, profile.reasoningEffort, descriptors),
+      },
+      runtimeMode: profile.runtimeMode,
+      interactionMode: profile.interactionMode,
+      profileSelection: {
+        profileId: profile.profileId,
+        revision: profile.revision,
+        overrideFields: ["modelSelection", "runtimeMode", "interactionMode", "reasoningEffort"],
+      },
+    });
+    appliedAgentDraft.current = key;
+  }, [
+    props.profileId,
+    props.initialProjectRef,
+    flow.draftKey,
+    selectedProject,
+    selectedEnvironmentServerConfig,
+  ]);
+
   const promptInputRef = useRef<ComposerEditorHandle>(null);
   const loadedBranchesProjectKeyRef = useRef<string | null>(null);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
@@ -1199,6 +1257,26 @@ export function NewTaskDraftScreen(props: {
     const workspaceMode = draft.workspaceSelection?.mode ?? flow.workspaceMode;
     const selectedBranchName = draft.workspaceSelection?.branch ?? flow.selectedBranchName;
     const initialMessageText = draft.text.trim();
+    const requestedProfileId = props.profileId ?? draft.profileSelection?.profileId;
+    if (requestedProfileId) {
+      const profile = selectedEnvironmentServerConfig?.settings.mcpGatewayProfiles.find(
+        (candidate) => candidate.profileId === requestedProfileId,
+      );
+      if (
+        !profile ||
+        profile.runtimeMode === "read-only" ||
+        draft.profileSelection?.profileId !== requestedProfileId ||
+        draft.profileSelection.revision !== profile.revision ||
+        (profile.environmentIds?.length &&
+          !profile.environmentIds.includes(selectedProject.environmentId))
+      ) {
+        Alert.alert(
+          "Agent unavailable",
+          "Choose an environment with this agent's current configuration, or start a new chat from the Agents tab.",
+        );
+        return;
+      }
+    }
 
     if (
       attachmentBlockReason !== null ||
@@ -1480,10 +1558,32 @@ export function NewTaskDraftScreen(props: {
       static={flow.environments.length <= 1}
     />
   );
+  // An agent chat leads with who will answer, so it never reads as a plain thread.
+  const agentHeader = draftAgent ? (
+    <View
+      accessible
+      accessibilityLabel={`New chat with ${draftAgent.name}`}
+      className="items-center gap-2"
+      testID="new-task-agent"
+    >
+      <AgentAvatar icon={draftAgent.icon} color={draftAgent.color} size={56} />
+      <View className="items-center gap-0.5">
+        <Text className="text-center text-base font-t3-bold text-foreground" numberOfLines={1}>
+          New chat with {draftAgent.name}
+        </Text>
+        {draftAgentProfile ? (
+          <Text className="text-center text-sm text-foreground-muted" numberOfLines={1}>
+            {agentModelLabel(draftAgentProfile) ?? "Agent"}
+          </Text>
+        ) : null}
+      </View>
+    </View>
+  ) : null;
   // A thread without a project has no project to name, so it asks plainly,
   // like web, and puts the project picker beside the machine as a control.
   const hero = flow.isScratchDraft ? (
     <View className="items-center gap-2 px-6" testID="new-task-hero">
+      {agentHeader ? <View className="mb-4">{agentHeader}</View> : null}
       <Text className="text-center text-2xl font-t3-medium tracking-tight text-foreground">
         What should we work on?
       </Text>
@@ -1503,6 +1603,7 @@ export function NewTaskDraftScreen(props: {
     </View>
   ) : (
     <View className="items-center gap-6 px-6" testID="new-task-hero">
+      {agentHeader}
       <View className="w-full items-center gap-1.5">
         <Text className="text-center text-2xl font-t3-medium tracking-tight text-foreground">
           What should we build

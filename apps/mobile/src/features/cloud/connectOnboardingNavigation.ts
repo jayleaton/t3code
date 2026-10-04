@@ -5,6 +5,7 @@ import { useEffect } from "react";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { clearConnectOnboardingRequest, connectOnboardingRequestAtom } from "./connectOnboarding";
 import { isConnectOnboardingOptedOut } from "./connectOnboardingOptOut";
+import { hasCloudPublicConfig } from "./publicConfig";
 
 // Sign-in happens inside the Settings sheet; give its session-state transition
 // a beat to settle before presenting another formSheet on top.
@@ -21,6 +22,10 @@ export function useConnectOnboardingNavigation(): void {
   const requestedAccountId = useAtomValue(connectOnboardingRequestAtom);
 
   useEffect(() => {
+    if (!hasCloudPublicConfig()) {
+      if (requestedAccountId !== null) clearConnectOnboardingRequest();
+      return;
+    }
     if (requestedAccountId === null) {
       return;
     }

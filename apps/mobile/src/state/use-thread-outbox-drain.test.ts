@@ -670,6 +670,7 @@ describe("thread outbox recovery rollback", () => {
       ...queuedMessage({ messageId: "message-creation-restore", text: "new task text" }),
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" },
       creation: {
+        profileSelection: { profileId: "reviewer", revision: 3, overrideFields: [] },
         projectId: ProjectId.make("project-1"),
         workspaceMode: "local",
         branch: null,
@@ -690,6 +691,7 @@ describe("thread outbox recovery rollback", () => {
       text: message.text,
       attachments: message.attachments,
       modelSelection: message.modelSelection,
+      profileSelection: message.creation!.profileSelection,
       project: {
         environmentId: message.environmentId,
         projectId: message.creation!.projectId,

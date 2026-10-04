@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { EnvironmentId, ThreadId, RunId, type McpGatewayProfile } from "@t3tools/contracts";
 import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { v2ThreadShell } from "./agents.testFixtures";
+import { v2ThreadShell } from "./agents.testFixtures.ts";
 import * as DateTime from "effect/DateTime";
 import {
   planAgentThreadMove,
@@ -22,7 +22,10 @@ import {
   agentRunLinkBlockedReason,
   withAgentRunAncestors,
   selectWorkingParentKeys,
-} from "./agents.logic";
+  agentColorFor,
+  agentColors,
+  agentIconKey,
+} from "./agents.ts";
 const profile: McpGatewayProfile = {
   profileId: "write",
   name: "Write",
@@ -648,5 +651,21 @@ describe("agentRunReorderOver", () => {
 
   it("ignores cards outside the list", () => {
     expect(agentRunReorderOver(ids, "a", "pinned", "before")).toBeNull();
+  });
+});
+
+describe("agent appearance", () => {
+  it("prefers the agent's own color, then cycles the palette by library position", () => {
+    const second = { ...profile, profileId: "review" };
+    expect(agentColorFor({ ...profile, color: "#123456" }, [profile])).toBe("#123456");
+    expect(agentColorFor(second, [profile, second])).toBe(agentColors[1]);
+    expect(agentColorFor(second, [])).toBe(agentColors[0]);
+  });
+
+  it("falls back to the orb for missing or unrecognized icons", () => {
+    expect(agentIconKey("shield")).toBe("shield");
+    expect(agentIconKey(undefined)).toBe("orb");
+    expect(agentIconKey("rocket")).toBe("orb");
+    expect(agentIconKey("toString")).toBe("orb");
   });
 });
