@@ -335,3 +335,149 @@ it.effect("an agent sub-run settles when its run completes and again after each 
     assert.equal(yield* settledOverride("sub-run"), "settled");
   }).pipe(Effect.provide(testLayer)),
 );
+
+it.effect(
+  "a sub-run still working when its parent settles settles with the parent once its run completes",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const projections = yield* ProjectionStoreV2;
+      const sink = yield* EventSinkV2;
+      // User-linked sub-runs follow a settled parent too, not only agent-created ones.
+      const create = (id: string, parentThreadId?: string) =>
+        orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`create:${id}`),
+          threadId: ThreadId.make(id),
+          projectId: ProjectId.make("project:parents"),
+          title: id,
+          modelSelection: { instanceId, model: "gpt-5.1-codex" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "user",
+          creationSource: "web",
+          ...(parentThreadId === undefined
+            ? {}
+            : { parentThreadId: ThreadId.make(parentThreadId) }),
+        });
+      const settledAt = (id: string) =>
+        projections.getThread(ThreadId.make(id)).pipe(Effect.map((thread) => thread.settledAt));
+      const waitForSettled = (id: string, afterSequence: number) =>
+        sink.stream({ afterSequence, eventType: "thread.settled" }).pipe(
+          Stream.filter((stored) => stored.event.threadId === id),
+          Stream.runHead,
+        );
+
+      yield* create("card");
+      yield* create("busy", "card");
+      yield* create("busy-helper", "busy");
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("send:busy"),
+        threadId: ThreadId.make("busy"),
+        messageId: MessageId.make("message:busy"),
+        text: "Keep working",
+        attachments: [],
+        dispatchMode: { type: "defer_start" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+
+      yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("settle:card"),
+        threadId: ThreadId.make("card"),
+      });
+      const cardAt = yield* settledAt("card");
+      assert.isNotNull(cardAt);
+      // Settling never stops work: the busy sub-run and everything under it stay active.
+      assert.isNull(yield* settledAt("busy"));
+      assert.isNull(yield* settledAt("busy-helper"));
+
+      yield* TestClock.adjust("1 minute");
+      const before = yield* sink.latestSequence();
+      const run = (yield* projections.getThreadRecords(ThreadId.make("busy"), ["runs"])).runs.at(
+        -1,
+      )!;
+      const now = yield* DateTime.now;
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make(`event:complete:${run.id}`),
+            type: "run.updated",
+            threadId: ThreadId.make("busy"),
+            runId: run.id,
+            ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
+            providerInstanceId: instanceId,
+            occurredAt: now,
+            payload: { ...run, status: "completed", completedAt: now },
+          },
+        ],
+      });
+      yield* waitForSettled("busy-helper", before);
+      assert.deepEqual(yield* settledAt("busy"), cardAt);
+      assert.deepEqual(yield* settledAt("busy-helper"), cardAt);
+
+      // They settled with the card, so un-settling the card brings them back.
+      yield* orchestrator.dispatch({
+        type: "thread.unsettle",
+        commandId: CommandId.make("unsettle:card"),
+        threadId: ThreadId.make("card"),
+        reason: "user",
+      });
+      assert.isNull(yield* settledAt("busy"));
+      assert.isNull(yield* settledAt("busy-helper"));
+    }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("automatic settlement cascades but keeps a sub-run the user chose to keep active", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* OrchestratorV2;
+    const projections = yield* ProjectionStoreV2;
+    const create = (id: string, parentThreadId?: string) =>
+      orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`create:${id}`),
+        threadId: ThreadId.make(id),
+        projectId: ProjectId.make("project:parents"),
+        title: id,
+        modelSelection: { instanceId, model: "gpt-5.1-codex" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+        ...(parentThreadId === undefined ? {} : { parentThreadId: ThreadId.make(parentThreadId) }),
+      });
+    const thread = (id: string) => projections.getThread(ThreadId.make(id));
+
+    yield* create("merged");
+    yield* create("idle", "merged");
+    yield* create("idle-helper", "idle");
+    yield* create("kept", "merged");
+    yield* orchestrator.dispatch({
+      type: "thread.unsettle",
+      commandId: CommandId.make("keep:kept"),
+      threadId: ThreadId.make("kept"),
+      reason: "user",
+    });
+
+    const parent = yield* thread("merged");
+    const settledAt = DateTime.subtract(parent.updatedAt, { days: 1 });
+    yield* orchestrator.dispatch({
+      type: "thread.auto-settle",
+      commandId: CommandId.make("auto-settle:merged"),
+      threadId: ThreadId.make("merged"),
+      snapshotAt: parent.updatedAt,
+      settledAt,
+    });
+
+    assert.deepEqual((yield* thread("merged")).settledAt, settledAt);
+    assert.deepEqual((yield* thread("idle")).settledAt, settledAt);
+    assert.deepEqual((yield* thread("idle-helper")).settledAt, settledAt);
+    assert.equal((yield* thread("kept")).settledOverride, "active");
+  }).pipe(Effect.provide(testLayer)),
+);

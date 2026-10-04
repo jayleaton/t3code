@@ -194,7 +194,7 @@ export const TOOL_SPECS = {
     handoffInputSchema.shape,
   ],
   t3_settle_thread: [
-    "Settle a conversation only after the user explicitly chooses to settle it. Requires lifecycle scope. Does not delete the conversation. Idle sub-runs settle with it; ones still working are left alone. Do not call automatically after a handoff.",
+    "Settle a conversation only after the user explicitly chooses to settle it. Requires lifecycle scope. Does not delete the conversation. Its sub-runs settle with it; ones still working settle when they finish. Do not call automatically after a handoff.",
     { environmentId, threadId, confirmed: z.literal(true) },
   ],
   t3_unsettle_thread: [

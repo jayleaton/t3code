@@ -1,5 +1,4 @@
 import { resolveThreadCreateProfile } from "./AgentProfile.ts";
-import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import type {
@@ -323,6 +322,8 @@ export interface ThreadManagementServiceShape {
     input: ThreadManagementInterruptInput,
   ) => Effect.Effect<ThreadManagementInterruptResult, ThreadManagementFailure>;
   readonly getThreadEventSequence: Orchestrator.OrchestratorV2["Service"]["getThreadEventSequence"];
+  readonly recoverDelegatedTask: Orchestrator.OrchestratorV2["Service"]["recoverDelegatedTask"];
+  readonly delegatedTaskResultPending: Orchestrator.OrchestratorV2["Service"]["delegatedTaskResultPending"];
   readonly streamStoredEvents: Orchestrator.OrchestratorV2["Service"]["streamStoredEvents"];
   readonly streamStoredEventsFrom: Orchestrator.OrchestratorV2["Service"]["streamStoredEventsFrom"];
   readonly streamDomainEvents: Orchestrator.OrchestratorV2["Service"]["streamDomainEvents"];
@@ -454,7 +455,6 @@ const make = Effect.gen(function* () {
 
   const settings = yield* Effect.serviceOption(ServerSettingsService);
   const providers = yield* Effect.serviceOption(ProviderRegistry);
-  const projections = yield* Effect.serviceOption(ProjectionStoreV2);
   const setupTracker = yield* Effect.serviceOption(WorktreeSetupTracker.WorktreeSetupTracker);
   const heldRunScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(heldRunScope, Exit.void));
@@ -543,69 +543,9 @@ const make = Effect.gen(function* () {
       }
       return result;
     });
-  /**
-   * Settling a chat settles its sub-runs at every depth with the parent's settledAt; unsettling
-   * brings back only the sub-runs that settled with it. Each sub-run gets its own command so its
-   * settle guard still applies: a sub-run that is working or waiting is left alone.
-   */
-  const cascadeSettlement = Effect.fn("ThreadManagementService.cascadeSettlement")(function* (
-    command: Extract<
-      OrchestrationV2Command,
-      { readonly type: "thread.settle" | "thread.unsettle" }
-    >,
-    settledAt: DateTime.Utc,
-  ) {
-    if (Option.isNone(projections)) return;
-    const settledAtMs = DateTime.toEpochMillis(settledAt);
-    const visited = new Set<ThreadId>([command.threadId]);
-    const pending: Array<ThreadId> = [command.threadId];
-    for (let parentId = pending.pop(); parentId !== undefined; parentId = pending.pop()) {
-      const children = yield* projections.value
-        .getChildThreads(parentId)
-        .pipe(Effect.orElseSucceed(() => []));
-      for (const child of children) {
-        if (visited.has(child.id)) continue;
-        visited.add(child.id);
-        pending.push(child.id);
-        const settled = child.settledOverride === "settled";
-        const settledWithParent =
-          settled &&
-          child.settledAt != null &&
-          DateTime.toEpochMillis(child.settledAt) === settledAtMs;
-        if (command.type === "thread.settle" ? settled : !settledWithParent) continue;
-        const commandId = CommandId.make(`${command.commandId}:cascade:${child.id}`);
-        yield* orchestrator
-          .dispatch(
-            command.type === "thread.settle"
-              ? { type: "thread.settle", commandId, threadId: child.id, settledAt }
-              : { type: "thread.unsettle", commandId, threadId: child.id, reason: "user" },
-          )
-          .pipe(
-            Effect.catch((cause) =>
-              Effect.logDebug("Sub-run kept its settlement", { threadId: child.id, cause }),
-            ),
-          );
-      }
-    }
-  });
-
   const dispatch: ThreadManagementServiceShape["dispatch"] = (command) =>
     Effect.gen(function* () {
       yield* ensureCommandTranscripts(command);
-      if (command.type === "thread.settle" || command.type === "thread.unsettle") {
-        const readSettledAt = Option.isNone(projections)
-          ? Effect.succeed(null)
-          : projections.value.getThread(command.threadId).pipe(
-              Effect.map((thread) => thread.settledAt),
-              Effect.orElseSucceed(() => null),
-            );
-        // Unsettling matches sub-runs against the settledAt the parent had before.
-        const before = command.type === "thread.unsettle" ? yield* readSettledAt : null;
-        const result = yield* orchestrator.dispatch(command);
-        const settledAt = command.type === "thread.settle" ? yield* readSettledAt : before;
-        if (settledAt != null) yield* cascadeSettlement(command, settledAt);
-        return result;
-      }
       if (command.type === "message.dispatch") return yield* dispatchMessage(command);
       if (command.type !== "thread.create" && command.type !== "delegated_task.request") {
         return yield* orchestrator.dispatch(command);
@@ -935,6 +875,8 @@ const make = Effect.gen(function* () {
     waitForThread,
     interruptThread,
     getThreadEventSequence: orchestrator.getThreadEventSequence,
+    recoverDelegatedTask: orchestrator.recoverDelegatedTask,
+    delegatedTaskResultPending: orchestrator.delegatedTaskResultPending,
     streamStoredEvents: orchestrator.streamStoredEvents,
     streamStoredEventsFrom: orchestrator.streamStoredEventsFrom,
     streamDomainEvents: orchestrator.streamDomainEvents,
