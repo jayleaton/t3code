@@ -84,15 +84,209 @@ it.effect("links chats under a parent, rejects cycles and missing parents, and d
     assert.equal(yield* parentOf("deps"), "tests");
 
     const missing = yield* create("orphan", "nowhere").pipe(Effect.flip);
-    assert.include(String(missing.cause), "Parent thread nowhere does not exist");
+    assert.include(String(missing.cause), "Parent chat nowhere does not exist");
     const cycle = yield* setParent("coordinator", "deps").pipe(Effect.flip);
-    assert.include(String(cycle.cause), "cannot be its own ancestor");
+    assert.include(String(cycle.cause), "cannot move under one of its own sub-runs");
     assert.isNull(yield* parentOf("coordinator"));
 
     yield* setParent("deps", "coordinator");
     assert.equal(yield* parentOf("deps"), "coordinator");
     yield* setParent("deps", null);
     assert.isNull(yield* parentOf("deps"));
+  }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("set, re-parent, and clear are atomic and idempotent; rejected moves write nothing", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* OrchestratorV2;
+    const projections = yield* ProjectionStoreV2;
+    const sink = yield* EventSinkV2;
+    const create = (id: string) =>
+      orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`create:${id}`),
+        threadId: ThreadId.make(id),
+        projectId: ProjectId.make("project:parents"),
+        title: id,
+        modelSelection: { instanceId, model: "gpt-5.1-codex" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+    let attempt = 0;
+    const setParent = (id: string, parentThreadId: string | null) =>
+      orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make(`parent:${id}:${parentThreadId}:${(attempt += 1)}`),
+        threadId: ThreadId.make(id),
+        parentThreadId: parentThreadId === null ? null : ThreadId.make(parentThreadId),
+      });
+    const shell = (id: string) =>
+      projections.getThread(ThreadId.make(id)).pipe(
+        Effect.map((thread) => ({
+          parentThreadId: thread.parentThreadId ?? null,
+          parentEnvironmentId: thread.parentEnvironmentId ?? null,
+          updatedAt: thread.updatedAt,
+        })),
+      );
+    const sequenceOf = (id: string) => orchestrator.getThreadEventSequence(ThreadId.make(id));
+    // A rejected move persists no event and leaves the link as it was.
+    const rejects = (id: string, parentThreadId: string | null, message: string) =>
+      Effect.gen(function* () {
+        const before = yield* shell(id);
+        const sequence = yield* sequenceOf(id);
+        const error = yield* setParent(id, parentThreadId).pipe(Effect.flip);
+        assert.include(String(error.cause), message);
+        assert.deepEqual(yield* shell(id), before);
+        assert.equal(yield* sequenceOf(id), sequence);
+      });
+
+    yield* create("github-chat");
+    yield* create("other-chat");
+    yield* create("glm-chat");
+    const created = yield* shell("glm-chat");
+    yield* TestClock.adjust("1 minute");
+
+    // Set: one event carries the whole link; nesting is not chat activity.
+    yield* setParent("glm-chat", "github-chat");
+    assert.deepEqual(yield* shell("glm-chat"), {
+      ...created,
+      parentThreadId: ThreadId.make("github-chat"),
+    });
+    // Idempotent: repeating the move leaves the same state.
+    yield* setParent("glm-chat", "github-chat");
+    assert.deepEqual(yield* shell("glm-chat"), {
+      ...created,
+      parentThreadId: ThreadId.make("github-chat"),
+    });
+    // Re-parent, then clear, then clear again.
+    yield* setParent("glm-chat", "other-chat");
+    assert.equal((yield* shell("glm-chat")).parentThreadId, "other-chat");
+    yield* setParent("glm-chat", null);
+    yield* setParent("glm-chat", null);
+    assert.deepEqual(yield* shell("glm-chat"), created);
+
+    yield* setParent("glm-chat", "github-chat");
+    yield* rejects("glm-chat", "glm-chat", "A chat cannot be its own parent");
+    yield* rejects("github-chat", "glm-chat", "cannot move under one of its own sub-runs");
+    yield* rejects("glm-chat", "ghost", "Parent chat ghost does not exist");
+    yield* orchestrator.dispatch({
+      type: "thread.archive",
+      commandId: CommandId.make("archive:other-chat"),
+      threadId: ThreadId.make("other-chat"),
+    });
+    yield* rejects("glm-chat", "other-chat", "Parent chat other-chat is archived");
+
+    // A delegated subagent stays with the chat that delegated it.
+    const delegator = yield* projections.getThread(ThreadId.make("github-chat"));
+    const subagent = yield* projections.getThread(ThreadId.make("glm-chat"));
+    const now = yield* DateTime.now;
+    yield* create("subagent-chat");
+    yield* sink.write({
+      events: [
+        {
+          id: EventId.make("event:make-subagent"),
+          type: "thread.metadata-updated",
+          threadId: ThreadId.make("subagent-chat"),
+          providerInstanceId: instanceId,
+          occurredAt: now,
+          payload: {
+            ...(yield* projections.getThread(ThreadId.make("subagent-chat"))),
+            parentThreadId: delegator.id,
+            lineage: {
+              parentThreadId: delegator.id,
+              relationshipToParent: "subagent",
+              rootThreadId: delegator.id,
+            },
+          },
+        },
+      ],
+    });
+    assert.equal(subagent.lineage.relationshipToParent, null);
+    yield* rejects("subagent-chat", null, "stays with the chat that delegated it");
+    yield* rejects("subagent-chat", "glm-chat", "stays with the chat that delegated it");
+    // Re-stating its own parent is still a no-op success.
+    yield* setParent("subagent-chat", "github-chat");
+  }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("deleting a parent detaches its sub-runs, and startup repair heals broken links", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* OrchestratorV2;
+    const projections = yield* ProjectionStoreV2;
+    const sink = yield* EventSinkV2;
+    const create = (id: string, parentThreadId?: string) =>
+      orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`create:${id}`),
+        threadId: ThreadId.make(id),
+        projectId: ProjectId.make("project:parents"),
+        title: id,
+        modelSelection: { instanceId, model: "gpt-5.1-codex" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+        ...(parentThreadId === undefined ? {} : { parentThreadId: ThreadId.make(parentThreadId) }),
+      });
+    const parentOf = (id: string) =>
+      projections
+        .getThread(ThreadId.make(id))
+        .pipe(Effect.map((thread) => thread.parentThreadId ?? null));
+    // Writes a link directly, as data left behind by an older server would be.
+    const corrupt = (id: string, parentThreadId: string) =>
+      Effect.gen(function* () {
+        const thread = yield* projections.getThread(ThreadId.make(id));
+        yield* sink.write({
+          events: [
+            {
+              id: EventId.make(`event:corrupt:${id}`),
+              type: "thread.metadata-updated",
+              threadId: thread.id,
+              providerInstanceId: instanceId,
+              occurredAt: yield* DateTime.now,
+              payload: { ...thread, parentThreadId: ThreadId.make(parentThreadId) },
+            },
+          ],
+        });
+      });
+
+    yield* create("doomed");
+    yield* create("left-behind", "doomed");
+    yield* orchestrator.dispatch({
+      type: "thread.delete",
+      commandId: CommandId.make("delete:doomed"),
+      threadId: ThreadId.make("doomed"),
+    });
+    assert.isNull(yield* parentOf("left-behind"));
+
+    yield* create("healthy-parent");
+    yield* create("healthy-child", "healthy-parent");
+    yield* create("dangling");
+    yield* corrupt("dangling", "gone-thread");
+    yield* create("selfie");
+    yield* corrupt("selfie", "selfie");
+    yield* create("loop-a");
+    yield* create("loop-b", "loop-a");
+    yield* corrupt("loop-a", "loop-b");
+
+    assert.deepEqual(yield* orchestrator.repairThreadParents, [
+      ThreadId.make("dangling"),
+      ThreadId.make("loop-a"),
+      ThreadId.make("selfie"),
+    ]);
+    assert.isNull(yield* parentOf("dangling"));
+    assert.isNull(yield* parentOf("selfie"));
+    assert.isNull(yield* parentOf("loop-a"));
+    assert.equal(yield* parentOf("loop-b"), "loop-a");
+    assert.equal(yield* parentOf("healthy-child"), "healthy-parent");
+    // A second pass finds nothing left to heal.
+    assert.deepEqual(yield* orchestrator.repairThreadParents, []);
   }).pipe(Effect.provide(testLayer)),
 );
 

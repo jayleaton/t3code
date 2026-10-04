@@ -2,20 +2,20 @@ import { AgentRunDragArea, SortableAgentThreads } from "./SortableAgentThreads";
 import { sortActiveThreadsByOrderKey } from "@t3tools/client-runtime/state/thread-sort";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
-import { useThreadShells } from "../../state/entities";
 import { useUiStateStore } from "../../uiStateStore";
 import {
   isAgentChatInFocus,
   nestAgentRuns,
-  selectAgentChildLinks,
   selectAgentSidebarThreads,
   selectWorkingParentKeys,
+  withAgentRunAncestors,
 } from "./agents.logic";
+import { useAgentThreadShells } from "./useAgentRunParenting";
 import { ThreadCard } from "./ThreadCard";
 import { useAgentThreadContextMenu } from "./useAgentThreadContextMenu";
 
 export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
-  const allThreads = useThreadShells();
+  const allThreads = useAgentThreadShells();
   const threads = selectAgentSidebarThreads(allThreads);
   const visited = useUiStateStore((state) => state.threadLastVisitedAtById);
   const currentKey = scopedThreadKey(current);
@@ -26,12 +26,15 @@ export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
       return isAgentChatInFocus(thread, visited[key], key === currentKey);
     }),
   );
+  // A child in focus renders inside its parent's card, so the parent joins the rail.
   const { lists, childrenByKey } = nestAgentRuns({
-    lists: { pinned: [], active: inFocus, settled: [] },
+    lists: {
+      pinned: [],
+      active: sortActiveThreadsByOrderKey(withAgentRunAncestors(inFocus, threads)),
+      settled: [],
+    },
     all: threads,
-    subagentsOnly: true,
   });
-  const childLinksByKey = selectAgentChildLinks(threads, childrenByKey);
   const workingKeys = selectWorkingParentKeys(allThreads);
   const visible = lists.active;
   const runByKey = new Map(
@@ -51,9 +54,10 @@ export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
               <ThreadCard
                 thread={thread}
                 dragging={dragging}
-                childLinks={childLinksByKey.get(
+                childRuns={childrenByKey.get(
                   scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
                 )}
+                workingKeys={workingKeys}
                 childWorking={workingKeys.has(
                   scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
                 )}

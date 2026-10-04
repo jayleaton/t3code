@@ -3,7 +3,7 @@ import { formatRelativeTime } from "../../timestampFormat";
 import { PROVIDER_ICON_BY_PROVIDER } from "../chat/providerIconUtils";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
-import { CornerDownRightIcon, CornerLeftUpIcon, PinIcon } from "lucide-react";
+import { CornerLeftUpIcon, PinIcon } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import {
   memo,
@@ -204,7 +204,6 @@ export const ThreadCard = memo(function ThreadCard({
   profiles,
   childRuns,
   parentRun,
-  childLinks,
   childWorking = false,
   workingKeys,
   dragging = false,
@@ -217,8 +216,6 @@ export const ThreadCard = memo(function ThreadCard({
   childRuns?: AgentCardChildren<EnvironmentThreadShell> | undefined;
   /** The run that created this one, when this card stands on its own. */
   parentRun?: EnvironmentThreadShell | null | undefined;
-  /** Agent chats this run launched that stand as their own cards (see selectAgentChildLinks). */
-  childLinks?: readonly EnvironmentThreadShell[] | undefined;
   /** A run under this one is still working (see selectWorkingParentKeys). */
   childWorking?: boolean;
   /** Statuses of `childRuns` rows; only cards with sub-runs need it. */
@@ -426,24 +423,6 @@ export const ThreadCard = memo(function ThreadCard({
               {runAgentName(parentRun, profiles).name} · {parentRun.title}
             </span>
           </Link>
-        </div>
-      )}
-      {childLinks && childLinks.length > 0 && (
-        <div className="agent-thread-prs" aria-label="Launched chats">
-          {childLinks.map((child) => (
-            <Link
-              key={`${child.environmentId}:${child.id}`}
-              to="/agents/$environmentId/$threadId"
-              params={{ environmentId: child.environmentId, threadId: child.id }}
-              className="agent-thread-pr agent-thread-parent"
-              aria-label={`Launched ${runAgentName(child, profiles).name}: ${child.title}`}
-            >
-              <CornerDownRightIcon size={12} aria-hidden="true" />
-              <span className="agent-thread-pr-repository">
-                {runAgentName(child, profiles).name} · {child.title}
-              </span>
-            </Link>
-          ))}
         </div>
       )}
       {childRuns && childRuns.live.length + childRuns.settled.length > 0 && (

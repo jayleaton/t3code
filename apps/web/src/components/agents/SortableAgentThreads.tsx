@@ -16,18 +16,17 @@ import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environ
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { useThreadActions } from "../../hooks/useThreadActions";
-import {
-  readEnvironmentSupportsActiveReorder,
-  readThreadShell,
-  useThreadShells,
-} from "../../state/entities";
+import { readEnvironmentSupportsActiveReorder, readThreadShell } from "../../state/entities";
 import { planSidebarThreadDrop } from "../Sidebar.logic";
 import { SidebarDragLifecycle, SidebarPointerSensor } from "../Sidebar.pointer";
 import { SortableThreadRow } from "../SortableThreadRow";
 import { stackedThreadToast, toastManager } from "../ui/toast";
-import { threadEnvironment } from "../../state/threads";
-import { useAtomCommand } from "../../state/use-atom-command";
-import { agentRunDropZone, agentRunLinkTargets, agentRunReorderOver } from "./agents.logic";
+import {
+  agentRunDropZone,
+  agentRunLinkBlockedReason,
+  agentRunLinkTargets,
+  agentRunReorderOver,
+} from "./agents.logic";
 import {
   AGENT_CHILD_DRAG_PREFIX,
   AGENT_LINK_DRAG_PREFIX,
@@ -35,6 +34,7 @@ import {
   AgentNestTargetContext,
   AgentRunDragContext,
 } from "./agentRunDrag";
+import { useAgentThreadShells, useSetAgentRunParent } from "./useAgentRunParenting";
 
 const CHILD_PREFIX = AGENT_CHILD_DRAG_PREFIX;
 const LINK_PREFIX = AGENT_LINK_DRAG_PREFIX;
@@ -96,13 +96,14 @@ export function AgentRunDragArea({
   active: readonly EnvironmentThreadShell[];
   children: ReactNode;
 }) {
-  const all = useThreadShells();
+  const all = useAgentThreadShells();
   const { reorderActiveThread } = useThreadActions();
-  const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
-    reportFailure: false,
-  });
+  const linkRun = useSetAgentRunParent();
   const nestTarget = useRef<string | null>(null);
   const [nestTargetKey, setNestTargetKey] = useState<string | null>(null);
+  // A card under a link drag that the run cannot go under: itself or its own sub-run.
+  const blockedTarget = useRef<string | null>(null);
+  const [blockedTargetKey, setBlockedTargetKey] = useState<string | null>(null);
   const linkTargets = useRef<{ key: string; targets: ReadonlySet<string> } | null>(null);
   const lastSortOver = useRef<string | null>(null);
   const [draggedChild, setDraggedChild] = useState<{ key: string; anchorKey: string } | null>(null);
@@ -123,6 +124,8 @@ export function AgentRunDragArea({
   const clearDrop = useCallback(() => {
     nestTarget.current = null;
     setNestTargetKey(null);
+    blockedTarget.current = null;
+    setBlockedTargetKey(null);
     linkTargets.current = null;
     lastSortOver.current = null;
     setDraggedChild(null);
@@ -173,6 +176,8 @@ export function AgentRunDragArea({
           })
         : null;
     nestTarget.current = card && zone === "nest" ? card.key : null;
+    blockedTarget.current =
+      card && !reorders && !linkTargetsFor(key).has(card.key) ? card.key : null;
     if (activeId.startsWith(CHILD_PREFIX)) {
       // A sub-run row detaches once it leaves the card it is listed under.
       const anchorKey = (args.active.data.current as { anchorKey?: string } | undefined)?.anchorKey;
@@ -195,29 +200,6 @@ export function AgentRunDragArea({
     }
     // Between cards, or while linking, the arrangement holds still under the pointer.
     return lastSortOver.current === null ? [] : [{ id: lastSortOver.current }];
-  };
-
-  const linkRun = async (child: EnvironmentThreadShell, parent: EnvironmentThreadShell | null) => {
-    const result = await updateThreadMetadata({
-      environmentId: child.environmentId,
-      input: {
-        threadId: child.id,
-        parentThreadId: parent?.id ?? null,
-        ...(parent && parent.environmentId !== child.environmentId
-          ? { parentEnvironmentId: parent.environmentId }
-          : {}),
-      },
-    });
-    if (result._tag === "Failure") {
-      const error = squashAtomCommandFailure(result);
-      toastManager.add(
-        stackedThreadToast({
-          title: parent ? "Failed to link chat" : "Failed to detach chat",
-          description: error instanceof Error ? error.message : "Try again.",
-          type: "error",
-        }),
-      );
-    }
   };
 
   const onDragEnd = async ({ active: dragged, over }: DragEndEvent) => {
@@ -296,6 +278,7 @@ export function AgentRunDragArea({
   );
   const draggedChildRun = draggedChild ? runByKey.get(draggedChild.key) : undefined;
   const nestTargetRun = nestTargetKey ? runByKey.get(nestTargetKey) : undefined;
+  const blockedTargetRun = blockedTargetKey ? runByKey.get(blockedTargetKey) : undefined;
   return (
     <DndContext
       sensors={sensors}
@@ -314,6 +297,7 @@ export function AgentRunDragArea({
       // Both setters bail out when unchanged, so a move re-renders only on a change.
       onDragMove={() => {
         setNestTargetKey(nestTarget.current);
+        setBlockedTargetKey(blockedTarget.current);
         setChildDropHint(childDrop.current.kind);
       }}
       onDragEnd={(event) => void onDragEnd(event).finally(clearDrop)}
@@ -342,11 +326,13 @@ export function AgentRunDragArea({
             <span className="agent-child-drag-hint">
               {nestTargetRun
                 ? `Link under ${nestTargetRun.title}`
-                : draggedChild?.anchorKey === ""
-                  ? "Drop on a chat to link"
-                  : childDropHint === "detach"
-                    ? "Detach"
-                    : "Drag out to detach"}
+                : blockedTargetRun
+                  ? agentRunLinkBlockedReason(draggedChildRun, blockedTargetRun)
+                  : draggedChild?.anchorKey === ""
+                    ? "Drop on a chat to link"
+                    : childDropHint === "detach"
+                      ? "Detach"
+                      : "Drag out to detach"}
             </span>
           </div>
         </DragOverlay>

@@ -538,6 +538,17 @@ const make = (options?: StartupOptions) =>
         ).pipe(Effect.map((targets): AutoBootstrapWelcomeTargets => targets)),
       });
       yield* Effect.logInfo("V2 orchestration recovery completed", recovery);
+      // Heals chats left pointing at a missing, deleted, self, or cyclic board parent.
+      yield* runStartupPhase(
+        "orchestration-v2.thread-parents.repair",
+        orchestrator.repairThreadParents.pipe(
+          Effect.tap((detached) =>
+            detached.length === 0
+              ? Effect.void
+              : Effect.logInfo("Detached chats with a broken parent link", { detached }),
+          ),
+        ),
+      );
       yield* runStartupPhase(
         "projects.auto-pull",
         Effect.gen(function* () {
