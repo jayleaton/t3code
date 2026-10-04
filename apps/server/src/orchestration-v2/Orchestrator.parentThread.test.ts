@@ -742,6 +742,23 @@ it.effect("age settlement applies to one card without cascading to child chats o
     });
     assert.equal(receipt.storedEvents.length, 0);
     assert.isNull((yield* thread("later-child")).settledAt);
+    // Matching idle timestamps are not evidence of a manual cascade.
+    const idle = yield* thread("idle");
+    yield* orchestrator.dispatch({
+      type: "thread.auto-settle",
+      commandId: CommandId.make("auto-settle:idle"),
+      threadId: idle.id,
+      snapshotAt: idle.updatedAt,
+      settledAt,
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.unsettle",
+      commandId: CommandId.make("unsettle:aged-parent"),
+      threadId: parent.id,
+      reason: "user",
+    });
+    assert.isNull((yield* thread("merged")).settledAt);
+    assert.deepEqual((yield* thread("idle")).settledAt, settledAt);
   }).pipe(Effect.provide(testLayer)),
 );
 

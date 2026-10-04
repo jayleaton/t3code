@@ -21,7 +21,7 @@ const NOW = Date.parse("2026-10-04T00:00:00.000Z");
 const completedAt = "2026-10-03T10:00:00.000Z";
 const settledAt = "2026-10-03T10:00:30.000Z";
 
-function withMigratedDatabase<A>(run: (db: NodeSqlite.DatabaseSync) => A): Effect.Effect<A> {
+function withMigratedDatabase<A>(run: (db: NodeSqlite.DatabaseSync) => A) {
   const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-settlement-recovery-"));
   const dbPath = NodePath.join(tempDir, "statev2.sqlite");
   const threadVersions = new Map<string, number>();

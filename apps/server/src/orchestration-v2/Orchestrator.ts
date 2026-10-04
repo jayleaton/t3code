@@ -10080,6 +10080,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const childCommand: OrchestrationV2ServerCommand | null =
         command.type === "thread.unsettle"
           ? settled &&
+            child.settlementSource !== "inactivity" &&
             child.settledAt != null &&
             DateTime.toEpochMillis(child.settledAt) === settledAtMs
             ? { type: "thread.unsettle", commandId, threadId: child.id, reason: "user" }
@@ -10155,9 +10156,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }
         return result;
       }
-      // Un-settling matches sub-runs against the settledAt the parent had before.
+      // Only reverse a manual cascade; independently aged cards keep their clocks.
       const settledAt = yield* projectionStore.getThread(command.threadId).pipe(
-        Effect.map((thread) => (thread.settledOverride === "settled" ? thread.settledAt : null)),
+        Effect.map((thread) =>
+          thread.settledOverride === "settled" && thread.settlementSource !== "inactivity"
+            ? thread.settledAt
+            : null,
+        ),
         Effect.orElseSucceed(() => null),
       );
       const result = yield* dispatchLocked(command);
