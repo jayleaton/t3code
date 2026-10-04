@@ -1428,6 +1428,47 @@ export async function callGatewayTool(
         taskId: requiredString(input, "taskId"),
       });
     }
+    case "t3_list_todos": {
+      const environmentId = environmentWithScope(context, input, "read");
+      if (!context.port.todo) throw new Error("Todos are unavailable in this runtime. Update T3.");
+      return context.port.todo(environmentId, {
+        action: "list",
+        projectId: requiredString(input, "projectId"),
+      });
+    }
+    case "t3_add_todo": {
+      const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);
+      if (!context.port.todo) throw new Error("Todos are unavailable in this runtime. Update T3.");
+      return context.port.todo(environmentId, {
+        action: "add",
+        projectId: requiredString(input, "projectId"),
+        text: requiredString(input, "text"),
+      });
+    }
+    case "t3_update_todo": {
+      const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);
+      if (!context.port.todo) throw new Error("Todos are unavailable in this runtime. Update T3.");
+      return context.port.todo(environmentId, {
+        action: "update",
+        todoId: requiredString(input, "todoId"),
+        text: requiredString(input, "text"),
+      });
+    }
+    case "t3_settle_todo":
+    case "t3_unsettle_todo":
+    case "t3_remove_todo": {
+      const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);
+      if (!context.port.todo) throw new Error("Todos are unavailable in this runtime. Update T3.");
+      return context.port.todo(environmentId, {
+        action:
+          name === "t3_settle_todo"
+            ? "settle"
+            : name === "t3_unsettle_todo"
+              ? "unsettle"
+              : "remove",
+        todoId: requiredString(input, "todoId"),
+      });
+    }
     case "t3_open_thread": {
       const environmentId = environmentWithScope(context, input, "read");
       return context.port.openThread(environmentId, requiredString(input, "threadId"));

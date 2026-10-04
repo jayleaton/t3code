@@ -284,6 +284,41 @@ describe("gateway chat tools", () => {
     expect(focused).toHaveLength(3);
   });
 
+  it("routes todo tools to the runtime port, writes needing create access", async () => {
+    const requests: unknown[] = [];
+    const context = {
+      port: {
+        ...makePort(),
+        todo: async (_environmentId: string, request: unknown) => {
+          requests.push(request);
+          return { removed: "t1" };
+        },
+      },
+      grants: { remote: ["read", "create"] as const, readOnly: ["read"] as const },
+    };
+    await callGatewayTool(context, "t3_list_todos", { environmentId: "remote", projectId: "p" });
+    await callGatewayTool(context, "t3_add_todo", {
+      environmentId: "remote",
+      projectId: "p",
+      text: "Ship it",
+    });
+    await callGatewayTool(context, "t3_settle_todo", { environmentId: "remote", todoId: "t1" });
+    await callGatewayTool(context, "t3_unsettle_todo", { environmentId: "remote", todoId: "t1" });
+    await callGatewayTool(context, "t3_remove_todo", { environmentId: "remote", todoId: "t1" });
+    expect(requests).toEqual([
+      { action: "list", projectId: "p" },
+      { action: "add", projectId: "p", text: "Ship it" },
+      { action: "settle", todoId: "t1" },
+      { action: "unsettle", todoId: "t1" },
+      { action: "remove", todoId: "t1" },
+    ]);
+
+    await expect(
+      callGatewayTool(context, "t3_settle_todo", { environmentId: "readOnly", todoId: "t1" }),
+    ).rejects.toMatchObject({ code: "scope_required" });
+    expect(requests).toHaveLength(5);
+  });
+
   it("turns runAt or cron into a schedule for scheduled tasks", async () => {
     const requests: unknown[] = [];
     const context = {
