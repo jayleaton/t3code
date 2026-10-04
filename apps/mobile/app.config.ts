@@ -1,6 +1,5 @@
 import type { ExpoConfig } from "expo/config";
 
-import { BRAND_ASSET_PATHS } from "../../scripts/lib/brand-assets.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
 type AppVariant = "development" | "preview" | "production";
@@ -19,11 +18,6 @@ const runtimeVersionPolicy =
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
 
-const fromRepoRoot = (relativePath: string) => `../../${relativePath}`;
-// Android layers are rendered by scripts/export-android-icons.ts from the Icon Composer sources.
-// The wordmark sits inside the adaptive safe zone; the variant artwork is a full-bleed background.
-const androidAdaptiveForeground = "./assets/android-icon-foreground.png";
-
 if (
   isIosPersonalTeamBuild &&
   (!personalTeamBundleIdentifier ||
@@ -34,69 +28,49 @@ if (
   );
 }
 
-const DEVELOPMENT_ASSETS = {
-  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.developmentIosIconPng),
-  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.developmentIconComposerProject),
-  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.developmentIosIconPng),
-  androidAdaptiveForeground,
-  androidAdaptiveBackgroundColor: "#347FF8",
-  androidAdaptiveBackgroundImage: "./assets/android-icon-background-dev.png",
-  androidSplashIcon: "./assets/android-splash-icon-dev.png",
-  androidMonochromeIcon: "./assets/android-icon-mark.png",
-  androidNotificationIcon: "./assets/android-notification-icon.png",
-  androidNotificationColor: "#00639B",
-} as const;
-
-const PREVIEW_ASSETS = {
-  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.nightlyIosIconPng),
-  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.nightlyIconComposerProject),
-  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.nightlyIosIconPng),
-  androidAdaptiveForeground,
-  androidAdaptiveBackgroundColor: "#111533",
-  androidAdaptiveBackgroundImage: "./assets/android-icon-background-nightly.png",
-  androidSplashIcon: "./assets/android-splash-icon-nightly.png",
-  androidMonochromeIcon: "./assets/android-icon-mark.png",
-  androidNotificationIcon: "./assets/android-notification-icon.png",
-  androidNotificationColor: "#7565C7",
-} as const;
-
-const RELEASE_ASSETS = {
-  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIosIconPng),
-  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIconComposerProject),
-  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIosIconPng),
-  androidAdaptiveForeground,
-  androidAdaptiveBackgroundColor: "#000000",
+// This fork ships as T3 Agents: every variant uses the Agents mark from
+// assets/agents/source.png (the desktop icon), told apart by name only. iOS
+// gets a full-bleed square because it applies its own mask; Android gets the
+// mark alone over a navy adaptive background so the launcher mask never crops it.
+const AGENTS_NAVY = "#0A1442";
+const AGENTS_ASSETS = {
+  appIcon: "./assets/agents/ios-icon-1024.png",
+  iosIcon: "./assets/agents/ios-icon-1024.png",
+  // The mark alone on a full navy screen, so the splash never shows a boxed icon.
+  splashIcon: "./assets/agents/splash-mark.png",
+  androidAdaptiveForeground: "./assets/agents/android-icon-foreground.png",
+  androidAdaptiveBackgroundColor: AGENTS_NAVY,
   androidAdaptiveBackgroundImage: undefined,
-  androidSplashIcon: "./assets/android-splash-icon-prod.png",
-  androidMonochromeIcon: "./assets/android-icon-mark.png",
-  androidNotificationIcon: "./assets/android-notification-icon.png",
-  androidNotificationColor: "#FFFFFF",
+  androidSplashIcon: "./assets/agents/android-splash-icon.png",
+  androidMonochromeIcon: "./assets/agents/android-icon-monochrome.png",
+  androidNotificationIcon: "./assets/agents/android-notification-icon.png",
+  androidNotificationColor: AGENTS_NAVY,
 } as const;
 
 const VARIANT_CONFIG = {
   development: {
-    appName: "T3 Code Personal Dev",
+    appName: "T3 Agents Dev",
     scheme: "t3code-personal-dev",
     iosBundleIdentifier: "com.jayleaton.t3code.dev",
     androidPackage: "com.jayleaton.t3code.dev",
     relyingParty: "clerk.t3.codes",
-    assets: DEVELOPMENT_ASSETS,
+    assets: AGENTS_ASSETS,
   },
   preview: {
-    appName: "T3 Code Personal Preview",
+    appName: "T3 Agents Preview",
     scheme: "t3code-personal-preview",
     iosBundleIdentifier: "com.jayleaton.t3code.preview",
     androidPackage: "com.jayleaton.t3code.preview",
     relyingParty: "clerk.t3.codes",
-    assets: PREVIEW_ASSETS,
+    assets: AGENTS_ASSETS,
   },
   production: {
-    appName: "T3 Code Personal",
+    appName: "T3 Agents",
     scheme: "t3code-personal",
     iosBundleIdentifier: "com.jayleaton.t3code",
     androidPackage: "com.jayleaton.t3code",
     relyingParty: "clerk.t3.codes",
-    assets: RELEASE_ASSETS,
+    assets: AGENTS_ASSETS,
   },
 } as const;
 
@@ -187,7 +161,7 @@ const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
       {
         name: "AgentActivity",
         displayName: "Agent Activity",
-        description: "Shows the current state of active T3 Code agents.",
+        description: "Shows the current state of active agents.",
         // Live Activity companion; there is no Android presentation for it.
         android: null,
         ios: { supportedFamilies: ["systemSmall", "systemMedium", "accessoryRectangular"] },
@@ -264,8 +238,8 @@ const config: ExpoConfig = {
         NSAllowsArbitraryLoads: true,
       },
       NSLocalNetworkUsageDescription:
-        "Allow T3 Code to connect to T3 Code servers on your local network or tailnet.",
-      NSPhotoLibraryAddUsageDescription: "Allow T3 Code to save images to your photo library.",
+        "Allow T3 Agents to connect to T3 Code servers on your local network or tailnet.",
+      NSPhotoLibraryAddUsageDescription: "Allow T3 Agents to save images to your photo library.",
       ITSAppUsesNonExemptEncryption: false,
       // The App Store screenshot harness rotates the iPad interface from
       // inside the app (CI denies osascript the Accessibility access that
@@ -362,7 +336,7 @@ const config: ExpoConfig = {
     [
       "expo-audio",
       {
-        microphonePermission: "Allow T3 Code to use your microphone for voice input.",
+        microphonePermission: "Allow T3 Agents to use your microphone for voice input.",
         recordAudioAndroid: false,
         enableBackgroundPlayback: false,
         enableBackgroundRecording: false,
@@ -371,7 +345,7 @@ const config: ExpoConfig = {
     [
       "expo-camera",
       {
-        cameraPermission: "Allow T3 Code to access your camera so you can scan pairing QR codes.",
+        cameraPermission: "Allow T3 Agents to access your camera so you can scan pairing QR codes.",
         microphonePermission: false,
         barcodeScannerEnabled: true,
         recordAudioAndroid: false,
@@ -383,11 +357,11 @@ const config: ExpoConfig = {
       {
         image: variant.assets.splashIcon,
         resizeMode: "contain",
-        backgroundColor: "#ffffff",
-        imageWidth: 220,
+        backgroundColor: AGENTS_NAVY,
+        imageWidth: 160,
         dark: {
           image: variant.assets.splashIcon,
-          backgroundColor: "#0a0a0a",
+          backgroundColor: AGENTS_NAVY,
         },
         android: {
           // Android 12+ masks the splash icon to a circle over the central two thirds of

@@ -3,7 +3,11 @@ import type { MobileThemeVariables } from "../../lib/mobileTheme";
 
 export const THREAD_LIST_V2_MONO_FONT = "monospace";
 export const THREAD_LIST_V2_ROW_CONTENT_CLASS_NAME = "px-3 py-2.5";
-export const THREAD_LIST_V2_ROW_DIVIDERS = false;
+/** Thread rows are already bordered tiles (see the row style), so they need no frame. */
+export const THREAD_LIST_V2_ROW_FRAME_CLASS_NAME = undefined;
+/** Queued-task rows are not tiles, so they get the bordered frame. */
+export const THREAD_LIST_V2_PENDING_ROW_FRAME_CLASS_NAME =
+  "mx-2 my-0.5 overflow-hidden rounded-[20px] border border-border";
 
 export const selectedThreadRowColors = {
   foregroundClassName: "text-thread-selected-foreground",
@@ -26,6 +30,8 @@ export function getThreadListV2RowAppearance(
   const style: ViewStyle = {
     backgroundColor: selected ? selectedBackgroundColor : backgroundColor,
     borderRadius: 20,
+    borderWidth: 1,
+    borderColor: theme["--color-border"],
   };
   const swipeContainerStyle: ViewStyle = {
     borderRadius: 20,
