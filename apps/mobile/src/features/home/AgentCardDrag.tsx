@@ -62,7 +62,6 @@ export function AgentCardDragProvider(props: {
   const targets = useRef<ReadonlySet<string>>(new Set());
   const [drag, setDrag] = useState<DragState | null>(null);
   const dragRef = useRef<DragState | null>(null);
-  const x = useSharedValue(0);
   const y = useSharedValue(0);
   const latest = useRef(props);
   latest.current = props;
@@ -91,8 +90,7 @@ export function AgentCardDragProvider(props: {
         if (view) views.current.set(key, view);
         else views.current.delete(key);
       },
-      begin: (subject, pointerX, pointerY) => {
-        x.value = pointerX;
+      begin: (subject, _pointerX, pointerY) => {
         y.value = pointerY;
         targets.current = latest.current.linkTargetsFor(subject.key);
         cards.current = [];
@@ -105,8 +103,7 @@ export function AgentCardDragProvider(props: {
         void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         update({ subject, drop: { kind: "none" } });
       },
-      move: (pointerX, pointerY) => {
-        x.value = pointerX;
+      move: (_pointerX, pointerY) => {
         y.value = pointerY;
         const current = dragRef.current;
         if (!current) return;
@@ -122,12 +119,12 @@ export function AgentCardDragProvider(props: {
         latest.current.onDrop(current.subject, current.drop);
       },
     }),
-    [drag, resolve, update, x, y],
+    [drag, resolve, update, y],
   );
 
-  const chipStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: x.value - 24 }, { translateY: y.value - 72 }],
-  }));
+  // The chip tracks the finger vertically and stays inset horizontally, so it
+  // never runs off screen or hides the card under the finger.
+  const chipStyle = useAnimatedStyle(() => ({ transform: [{ translateY: y.value - 96 }] }));
 
   return (
     <AgentCardDragContext.Provider value={api}>
@@ -136,7 +133,7 @@ export function AgentCardDragProvider(props: {
         {drag ? (
           <Animated.View
             pointerEvents="none"
-            className="absolute left-0 top-0 max-w-[280px] flex-row items-center gap-2 rounded-full border border-border bg-card py-1.5 pe-4 ps-1.5 shadow-lg"
+            className="absolute left-6 right-6 top-0 flex-row items-center gap-2 rounded-full border border-border bg-card py-1.5 pe-4 ps-1.5 shadow-lg"
             style={chipStyle}
           >
             <AgentAvatar
