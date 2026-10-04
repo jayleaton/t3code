@@ -29,7 +29,7 @@ one until you pick another. Every other setting fans out to the selection.
 
 On mobile, open **Settings** and use the filter in its header to choose connected environments
 and a project. The filter stays available in server-setting pages. With **All projects** selected,
-the **Server settings** categories and auto-settle controls in **Thread behavior** edit the
+the **Server settings** categories and inactivity auto-settle control in **Thread behavior** edit the
 selected environments' defaults. Choosing a project edits its overrides on the selected
 environments. Use **Use defaults** in a page to remove that page's project overrides.
 Open **Settings → Projects & threads → Overview** to rename the project across its selected

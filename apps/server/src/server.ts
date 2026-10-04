@@ -466,7 +466,7 @@ const OrchestrationApplicationLayerLive = CheckpointDiffQuery.layer.pipe(
 );
 
 // Automatic thread settlement (#8600): a server-owned sweep evaluates
-// inactivity and merged pull requests, then settles through the orchestrator
+// idle age and active work, then settles through the orchestrator
 // so every client sees the same shelf.
 const ThreadSettlementWorkerLive = Layer.effectDiscard(
   ThreadSettlementService.make.pipe(Effect.flatMap((service) => service.start())),

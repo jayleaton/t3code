@@ -218,6 +218,7 @@ it.effect(
           getChildThreads: () => Effect.succeed([]),
           getThreadParentLinks: () => Effect.succeed([]),
           getSettlementCandidates: () => Effect.die("unused getSettlementCandidates"),
+          hasActiveDescendants: () => Effect.die("unused hasActiveDescendants"),
           getThreadsWithPullRequests: () => Effect.die("unused getThreadsWithPullRequests"),
           getThreadProjection: () => Effect.die("control effects must not load transcript"),
           getTurnStartContext: () => Effect.die("unused"),

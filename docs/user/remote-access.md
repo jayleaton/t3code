@@ -316,45 +316,48 @@ then `t3_send_message` to start work, or `t3_create_and_start_thread` to create 
 with lifecycle access to return a settled chat to the active list. `t3_open_agents` opens the
 board in the connected desktop window with read access.
 
-### Sub-agent runs
+### Child chats and subagents
 
-When an agent's chat creates chats through the MCP gateway (`t3_create_thread` or
-`t3_create_and_start_thread`) or its own T3 tools (`delegate_task`, `t3_thread_launch`, or
-`create_threads`), each new chat is recorded as a sub-run of the chat that created it. This
+An agent is a named profile. A child chat is a chat using an agent that belongs to a parent
+card. A delegated subagent is a task started inside one run through `delegate_task`; a child
+chat can delegate many such tasks. Child chats nest in parent cards, while delegated
+subagents appear only in **Lineage**.
+
+When an agent creates a child chat through `t3_create_thread`, `t3_create_and_start_thread`,
+`t3_thread_launch`, or `create_threads`, it is recorded under the chat that created it. This
 happens without the agent doing anything extra. This works across machines too. Pass `parentThreadId` (with
 `parentEnvironmentId` when that chat is on another machine) to attach a new chat to another
-chat, or `parentThreadId: null` for a standalone chat. `t3_list_threads` accepts `parentThreadId` to list a chat's sub-runs. To regroup existing
+chat, or `parentThreadId: null` for a standalone chat. `t3_list_threads` accepts `parentThreadId` to list a chat's child chats. To regroup existing
 chats, `t3_set_thread_parent` moves a chat under another chat on any machine, or detaches it
 with `parentThreadId: null`; it needs lifecycle access. On the board, drag a run onto a card
 from any connected machine.
 
-On the Agents board, sub-runs appear inside the card of the run that created them, including
+On the Agents board, child chats appear inside the card of the run that created them, including
 runs by other agents, on the full board and in the side list next to an open chat. Delegated
 subagents (`delegate_task`) are not cards: they appear only in their chat's **Lineage** panel. Each one shows its agent, title, and status; click it to open that chat.
-Right-click a sub-run for the same actions as a card. **Pin to top of parent** keeps it first in
+Right-click a child chat for the same actions as a card. **Pin to top of parent** keeps it first in
 its parent's list, **Move up** and **Move down** arrange it among its siblings, and settling moves
-it into its parent's collapsed **Settled** group. A live sub-run whose parent is settled keeps its
+it into its parent's collapsed **Settled** group. A live child chat whose parent is settled keeps its
 own card, which names its parent's agent and chat; click that name to open the parent.
 
-A run reads **In progress** while any sub-run below it is still working, even after its own turn
-finishes. A chat's **Lineage** panel shows its parent and the chats it launched.
+A card reads **In progress** while any child chat below it is still working, even after its own turn
+finishes. The **Lineage** panel shows delegated subagents within a chat's run.
 
-Settling a run also settles its sub-runs, at every depth, including when the run settles
-automatically. Settling never stops work: a sub-run that is still working or waiting on an approval
-stays active and settles with its parent when it finishes. Automatic settlement leaves alone a
-sub-run you un-settled or turned auto-settle off for. Un-settling the run brings back the sub-runs
-that settled with it; ones you settled earlier stay settled.
+Manually settling a parent card also settles its child chats through the existing cascade.
+Working child chats remain active and follow that manual choice when they finish. Un-settling
+the parent restores chats that settled with it; ones you settled earlier stay settled.
 
-A sub-run an agent created settles on its own when it finishes, unless it is waiting on a question
-or an approval. When its parent sends it more work it returns to the active list, and it settles
-again when that work finishes. Turn off auto-settle on a sub-run to keep it active.
+Completing a turn leaves a card unsettled. Automatic settlement applies to each card's own
+inactivity period, three days by default. Running child chats, delegated subagents, monitoring,
+and pending questions or approvals keep a parent active. New activity and un-settling reset
+the idle clock. Disable auto-settle on a card to keep it active indefinitely.
 
-To link runs yourself on web and desktop, drag a card onto the middle of another card to make it a
-sub-run, or drag a sub-run out of its card to make it independent. Dragging a sub-run onto
+To link chats yourself on web and desktop, drag a card onto the middle of another card to make it a
+child chat, or drag a child chat out of its card to make it independent. Dragging a child chat onto
 another card moves it there. The board shows the move at once and puts it back, with the reason,
-if it fails: a run cannot go under itself or its own sub-runs, or under an archived chat. To
-remove a run from its parent without dragging, right-click it (or focus it and press the context
-menu key) and choose **Remove from parent**. Deleting a chat leaves its sub-runs as their own
+if it fails: a chat cannot go under itself or its own child chats, or under an archived chat. To
+remove a chat from its parent without dragging, right-click it (or focus it and press the context
+menu key) and choose **Remove from parent**. Deleting a chat leaves its child chats as their own
 cards, and a chat left pointing at a missing parent is detached when the server starts.
 
 ### Schedule prompts for an agent

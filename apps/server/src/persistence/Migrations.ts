@@ -16,6 +16,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import Migration0059 from "./Migrations/059_ForkOrchestrationV2.ts";
 import Migration0060 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
 import Migration0061 from "./Migrations/061_ProjectionTodos.ts";
+import Migration0062 from "./Migrations/062_ThreadSettlementActivityIndexes.ts";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -149,6 +150,7 @@ export const migrationEntries = [
   [59, "OrchestrationV2", Migration0059],
   [60, "RemoveRedundantProjectionIndexes", Migration0060],
   [61, "ProjectionTodos", Migration0061],
+  [62, "ThreadSettlementActivityIndexes", Migration0062],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

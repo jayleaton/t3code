@@ -749,6 +749,12 @@ describe("ServerSettings thread settlement", () => {
     expect(settings.sidebarAutoSettleOnMerge).toBe(true);
   });
 
+  it("allows zero to disable age settlement", () => {
+    expect(decodeServerSettings({ sidebarAutoSettleAfterDays: 0 }).sidebarAutoSettleAfterDays).toBe(
+      0,
+    );
+  });
+
   it("allows both automatic rules to be disabled", () => {
     expect(
       decodeServerSettings({
@@ -764,7 +770,7 @@ describe("ServerSettings thread settlement", () => {
     ).toMatchObject({ sidebarAutoSettleAfterDays: null, sidebarAutoSettleOnMerge: false });
   });
 
-  it.each([-1, 0, 91])("rejects an auto-settle threshold outside 1..90: %s", (value) => {
+  it.each([-1, 91])("rejects an auto-settle threshold outside 0..90: %s", (value) => {
     expect(() => decodeServerSettings({ sidebarAutoSettleAfterDays: value })).toThrow();
     expect(() => decodeServerSettingsPatch({ sidebarAutoSettleAfterDays: value })).toThrow();
   });

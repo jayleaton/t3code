@@ -318,7 +318,7 @@ export function agentRunParentKey(
   return threadKey({ environmentId, id: run.parentThreadId });
 }
 
-const WORKING_STATUSES = new Set(["running", "queued", "attention"]);
+const WORKING_STATUSES = new Set(["running", "queued", "attention", "monitoring"]);
 
 /**
  * Keys of runs with work still going on below them, at any depth, so a parent

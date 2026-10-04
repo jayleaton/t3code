@@ -23,7 +23,7 @@ import * as Statement from "effect/unstable/sql/Statement";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
-import { isAutoSettlementCandidate, resolveAutoSettlementAt } from "./ThreadSettlementService.ts";
+import { isAutoSettlementCandidate, resolveAutoSettlementAt } from "./autoSettlement.ts";
 
 const SqlLayer = ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory));
 const now = DateTime.makeUnsafe("2026-09-04T12:00:00Z");
@@ -149,13 +149,16 @@ it.effect.each([
     Effect.gen(function* () {
       const store = yield* ProjectionStore.ProjectionStoreV2;
       const idle = yield* createThread("idle");
+      const unsettled = yield* createThread("unsettled", {
+        settledOverride: "active",
+        unsettledAt: old,
+      });
       const completed = yield* createThread("completed");
       yield* createRun(completed);
       for (const [name, overrides] of [
         ["archived", { archivedAt: old }],
         ["deleted", { deletedAt: old }],
         ["settled", { settledOverride: "settled" }],
-        ["unsettled", { settledOverride: "active" }],
         ["pinned", { pinnedAt: old }],
         ["auto-settle-disabled", { autoSettleDisabledAt: old }],
       ] satisfies ReadonlyArray<readonly [string, Partial<OrchestrationV2AppThread>]>) {
@@ -164,8 +167,7 @@ it.effect.each([
       for (const status of ["preparing", "starting", "running", "waiting"] as const) {
         yield* createRun(yield* createThread(status), status);
       }
-      const queued = yield* createThread("queued");
-      yield* createRun(queued, "queued");
+      yield* createRun(yield* createThread("queued"), "queued");
       const blocked = yield* createThread("blocked");
       yield* store.apply({
         id: EventId.make("event:settlement:request"),
@@ -257,7 +259,7 @@ it.effect.each([
       );
       assert.deepEqual(
         new Set(eligible.map((thread) => thread.id)),
-        new Set([idle, completed, queued, woke, background, persistent, rolledBack]),
+        new Set([idle, unsettled, completed, woke, background, persistent, rolledBack]),
       );
       assert.deepEqual(
         new Set(eligible.map((thread) => thread.id)),
@@ -271,10 +273,8 @@ it.effect.each([
         const expected = shell.threads.find((thread) => thread.id === candidate.id)!;
         assert.deepEqual(candidate.pendingBackgroundTasks, expected.pendingBackgroundTasks);
         const settings = {
-          pullRequest: null,
           nowMs: DateTime.toEpochMillis(now),
           autoSettleAfterDays: 7,
-          autoSettleOnMerge: false,
         };
         assert.deepEqual(
           resolveAutoSettlementAt({ ...settings, thread: candidate }),
@@ -450,8 +450,28 @@ it.effect(
         [threadId],
       );
       assert.isTrue(queries.every(([query]) => !query.includes("COUNT(")));
-      const pendingQuery = queries.find(([query]) =>
-        query.includes("FROM orchestration_v2_projection_turn_items"),
+      const activityQuery = queries.find(([query]) =>
+        query.includes("AS latest_background_activity_at"),
+      )!;
+      const activityPlan = yield* sql.unsafe<{ readonly detail: string }>(
+        `EXPLAIN QUERY PLAN ${activityQuery[0]}`,
+        activityQuery[1],
+      );
+      assert.isTrue(
+        activityPlan.some((row) =>
+          row.detail.includes("COVERING INDEX orchestration_v2_turn_items_activity_idx"),
+        ),
+      );
+      assert.isTrue(
+        activityPlan.some((row) =>
+          row.detail.includes("COVERING INDEX orchestration_v2_provider_threads_activity_idx"),
+        ),
+      );
+      const pendingQuery = queries.find(
+        ([query]) =>
+          query.includes("FROM orchestration_v2_projection_turn_items") &&
+          query.includes("i.status NOT IN") &&
+          !query.includes("AS latest_background_activity_at"),
       );
       assert.isDefined(pendingQuery);
       const metadata = yield* store.getThread(threadId);
@@ -514,4 +534,34 @@ it.effect("shell failure lookups stay on the thread's own turn items", () =>
     assert.lengthOf(itemLookups, 2);
     assert.isTrue(itemLookups.every((row) => row.detail.includes("turn_items_thread_run_idx")));
   }).pipe(Effect.provide(SqlLayer)),
+);
+
+it.effect.each([
+  ["sql", SqlLayer],
+  ["memory", ProjectionStore.layerMemory],
+] as const)(
+  "%s: descendant activity includes child chats, delegated subagents and monitoring",
+  ([, testLayer]) =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const parent = yield* createThread("parent");
+      const child = yield* createThread("child", { parentThreadId: parent });
+      const subagent = yield* createThread("delegated", {
+        parentThreadId: null,
+        lineage: { rootThreadId: parent, parentThreadId: child, relationshipToParent: "subagent" },
+      });
+      yield* createRun(parent);
+      yield* createRun(child);
+      yield* createRun(subagent, "queued");
+      assert.isTrue(yield* store.hasActiveDescendants(parent));
+      yield* createRun(subagent, "completed");
+      assert.isFalse(yield* store.hasActiveDescendants(parent));
+      yield* createItem(subagent, yield* createRun(subagent, "completed", 2), "running");
+      assert.isTrue(yield* store.hasActiveDescendants(parent));
+      yield* createItem(subagent, RunId.make(`run:${subagent}:2`), "completed");
+      assert.isFalse(yield* store.hasActiveDescendants(parent));
+      const candidates = yield* store.getSettlementCandidates();
+      const own = candidates.find((thread) => thread.id === subagent)!;
+      assert.deepEqual(own.latestBackgroundActivityAt, old);
+    }).pipe(Effect.provide(testLayer)),
 );

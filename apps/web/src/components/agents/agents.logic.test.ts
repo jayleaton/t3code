@@ -491,6 +491,12 @@ describe("rolled-up status", () => {
     expect(selectWorkingParentKeys([github, glmDone, review])).toEqual(
       new Set(["local:glm-chat", "local:github-chat"]),
     );
+    const monitoring = {
+      ...glmDone,
+      pendingBackgroundTasks: [{ taskId: "watch", kind: "monitor" as const }],
+    };
+    expect(agentThreadStatus(monitoring)).toBe("monitoring");
+    expect(selectWorkingParentKeys([github, monitoring])).toEqual(new Set(["local:github-chat"]));
     expect(selectWorkingParentKeys([github, glmDone])).toEqual(new Set());
     expect(
       selectWorkingParentKeys([github, { ...glm, archivedAt: "2026-10-04T06:00:00Z" }]),
