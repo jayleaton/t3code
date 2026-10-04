@@ -314,12 +314,13 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   settled: Schema.Boolean,
   settledAt: Schema.NullOr(IsoDateTime),
   /**
-   * The chat this one works under, such as the agent that launched it. A null
-   * `relationshipToParent` with a parent means it was launched or nested, not
-   * forked or delegated.
+   * The chat this one belongs to. `relationshipToParent` says how: `"child"` is
+   * a separate agent chat with its own context that a parent launched or nested
+   * (it shows inside the parent's card), `"subagent"` is a helper inside the
+   * parent's own run, and `"fork"` is a copy of another thread's conversation.
    */
   parentThreadId: Schema.NullOr(ThreadId),
-  relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
+  relationshipToParent: Schema.NullOr(Schema.Literals(["child", "subagent", "fork"])),
   itemCount: NonNegativeInt,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -365,12 +366,13 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   /**
-   * The chat this one works under, such as the agent that launched it. A null
-   * `relationshipToParent` with a parent means it was launched or nested, not
-   * forked or delegated.
+   * The chat this one belongs to. `relationshipToParent` says how: `"child"` is
+   * a separate agent chat with its own context that a parent launched or nested
+   * (it shows inside the parent's card), `"subagent"` is a helper inside the
+   * parent's own run, and `"fork"` is a copy of another thread's conversation.
    */
   parentThreadId: Schema.NullOr(ThreadId),
-  relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
+  relationshipToParent: Schema.NullOr(Schema.Literals(["child", "subagent", "fork"])),
   runCount: NonNegativeInt,
   itemCount: NonNegativeInt,
   pendingRequestCount: NonNegativeInt,

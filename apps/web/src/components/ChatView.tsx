@@ -55,6 +55,7 @@ import {
   CommandId,
   DEFAULT_MODEL,
   isProviderNativeSubagentThread,
+  threadParentRelationship,
   type ChatAttachment as ContractChatAttachment,
   type EnvironmentId,
   type MessageId,
@@ -2090,10 +2091,15 @@ export default function ChatView(props: ChatViewProps) {
       ? run.id
       : null;
   }, [isServerThread, serverProjection, serverRuntime?.lastErrorClass]);
+  // A subagent links back to its owner, a child chat to its parent chat. A
+  // child's parent on another machine is not openable from here.
+  const parentRelationship = activeThread ? threadParentRelationship(activeThread) : null;
   const parentSubagentThreadId =
-    activeThread?.lineage.relationshipToParent === "subagent"
-      ? activeThread.lineage.parentThreadId
-      : null;
+    parentRelationship === "subagent"
+      ? (activeThread?.lineage.parentThreadId ?? null)
+      : parentRelationship === "child" && activeThread?.parentEnvironmentId == null
+        ? (activeThread?.parentThreadId ?? null)
+        : null;
   const parentSubagentEnvironmentId = activeThread?.environmentId ?? null;
   const parentSubagentThreadRef = useMemo(() => {
     if (parentSubagentEnvironmentId === null || parentSubagentThreadId === null) {
@@ -2109,8 +2115,10 @@ export default function ChatView(props: ChatViewProps) {
         : {
             threadId: parentSubagentThreadRef.threadId,
             title: parentSubagentThread?.title ?? "Parent thread",
+            relationship:
+              parentRelationship === "child" ? ("child" as const) : ("subagent" as const),
           },
-    [parentSubagentThread?.title, parentSubagentThreadRef],
+    [parentRelationship, parentSubagentThread?.title, parentSubagentThreadRef],
   );
   const threadError = isServerThread
     ? (localServerError ?? serverRuntime?.lastError ?? null)

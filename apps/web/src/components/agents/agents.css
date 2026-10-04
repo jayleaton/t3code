@@ -1398,7 +1398,7 @@
 /* Floats over the border: growing the card mid-drag would shift every card
    below it away from the positions the drag measured. */
 [data-nest-target="true"] > .agent-thread-container::after {
-  content: "Link as sub-run";
+  content: "Make child";
   position: absolute;
   top: -8px;
   right: 12px;

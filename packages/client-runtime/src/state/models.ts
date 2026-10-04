@@ -15,6 +15,7 @@ import type {
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
+import { isSubagentThread } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
 import { formatSubagentDisplayTitle } from "./subagentDisplay.ts";
@@ -87,10 +88,12 @@ function threadRunStatusIsActive(status: ThreadRuntimeSummary["status"]): boolea
 
 export interface EnvironmentThreadShell {
   readonly profileSnapshot?: OrchestrationV2ThreadShell["profileSnapshot"];
-  /** Chat this one nests under on the Agents board; null when it stands alone. */
+  /** The thread that owns this one (see `parentRelationship`); null when it stands alone. */
   readonly parentThreadId: ThreadId | null;
   /** Environment of `parentThreadId` when it is another machine's chat. */
   readonly parentEnvironmentId: EnvironmentId | null;
+  /** Child chat or subagent of `parentThreadId`; read it through `threadParentRelationship`. */
+  readonly parentRelationship?: OrchestrationV2ThreadShell["parentRelationship"];
   readonly environmentId: EnvironmentId;
   readonly id: ThreadId;
   readonly projectId: ProjectId;
@@ -233,10 +236,7 @@ export function presentThreadShell(
     environmentId,
     id: thread.id,
     projectId: thread.projectId,
-    title:
-      thread.lineage.relationshipToParent === "subagent"
-        ? formatSubagentDisplayTitle(thread.title)
-        : thread.title,
+    title: isSubagentThread(thread) ? formatSubagentDisplayTitle(thread.title) : thread.title,
     providerInstanceId: thread.providerInstanceId,
     modelSelection: thread.modelSelection,
     runtimeMode: thread.runtimeMode,
@@ -289,6 +289,9 @@ export function presentThreadShell(
     ...(thread.profileSnapshot === undefined ? {} : { profileSnapshot: thread.profileSnapshot }),
     parentThreadId: thread.parentThreadId ?? null,
     parentEnvironmentId: thread.parentEnvironmentId ?? null,
+    ...(thread.parentRelationship === undefined
+      ? {}
+      : { parentRelationship: thread.parentRelationship }),
     source: thread,
   };
 }

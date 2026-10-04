@@ -206,8 +206,8 @@ it.effect("set, re-parent, and clear are atomic and idempotent; rejected moves w
       ],
     });
     assert.equal(subagent.lineage.relationshipToParent, null);
-    yield* rejects("subagent-chat", null, "stays with the chat that delegated it");
-    yield* rejects("subagent-chat", "glm-chat", "stays with the chat that delegated it");
+    yield* rejects("subagent-chat", null, "only child chats can move");
+    yield* rejects("subagent-chat", "glm-chat", "only child chats can move");
     // Re-stating its own parent is still a no-op success.
     yield* setParent("subagent-chat", "github-chat");
   }).pipe(Effect.provide(testLayer)),

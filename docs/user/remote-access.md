@@ -316,28 +316,40 @@ then `t3_send_message` to start work, or `t3_create_and_start_thread` to create 
 with lifecycle access to return a settled chat to the active list. `t3_open_agents` opens the
 board in the connected desktop window with read access.
 
-### Sub-agent runs
+### Child chats and subagents
+
+An agent can hand work to two different kinds of helper:
+
+- A **child chat** is a full agent chat with its own context, launched to do a separate part of a
+  larger task. A lead agent can run several children at once, for example two Doug chats and a
+  Cody chat on different pieces of one feature. Each child keeps its own status, can be settled
+  on its own, and has subagents of its own.
+- A **subagent** is a helper inside one agent's own run, used to save that agent's context:
+  native subagents such as Claude's Agent tool, or a `delegate_task` without an agent. Subagents
+  never appear on the board or in the sidebar.
 
 When an agent's chat creates chats through the MCP gateway (`t3_create_thread` or
-`t3_create_and_start_thread`) or its own T3 tools (`delegate_task`, `t3_thread_launch`, or
-`create_threads`), each new chat is recorded as a sub-run of the chat that created it. This
+`t3_create_and_start_thread`), its own `t3_thread_launch` or `create_threads`, or a
+`delegate_task` run as a named agent, each new chat is a child of the chat that created it. This
 happens without the agent doing anything extra. This works across machines too. Pass `parentThreadId` (with
 `parentEnvironmentId` when that chat is on another machine) to attach a new chat to another
-chat, or `parentThreadId: null` for a standalone chat. `t3_list_threads` accepts `parentThreadId` to list a chat's sub-runs. To regroup existing
+chat, or `parentThreadId: null` for a standalone chat. `t3_list_threads` accepts `parentThreadId` to list a chat's children. To regroup existing
 chats, `t3_set_thread_parent` moves a chat under another chat on any machine, or detaches it
 with `parentThreadId: null`; it needs lifecycle access. On the board, drag a run onto a card
 from any connected machine.
 
-On the Agents board, sub-runs appear inside the card of the run that created them, including
-runs by other agents, on the full board and in the side list next to an open chat. Delegated
-subagents (`delegate_task`) are not cards: they appear only in their chat's **Lineage** panel. Each one shows its agent, title, and status; click it to open that chat.
-Right-click a sub-run for the same actions as a card. **Pin to top of parent** keeps it first in
+On the Agents board, children appear inside the card of the chat that created them, including
+chats by other agents, on the full board and in the side list next to an open chat. Subagents are
+not cards: they appear only in the **Lineage** panel of the chat that owns them. Each one shows its
+agent, title, and status; click it to open that chat.
+Right-click a child for the same actions as a card. **Pin to top of parent** keeps it first in
 its parent's list, **Move up** and **Move down** arrange it among its siblings, and settling moves
 it into its parent's collapsed **Settled** group. A live sub-run whose parent is settled keeps its
 own card, which names its parent's agent and chat; click that name to open the parent.
 
 A run reads **In progress** while any sub-run below it is still working, even after its own turn
-finishes. A chat's **Lineage** panel shows its parent and the chats it launched.
+finishes. A child chat starts with a **Child of** link to its parent, and a parent's details list
+its **Children** with their status.
 
 Settling a run also settles its sub-runs, at every depth, including when the run settles
 automatically. Settling never stops work: a sub-run that is still working or waiting on an approval
@@ -349,8 +361,8 @@ A sub-run an agent created settles on its own when it finishes, unless it is wai
 or an approval. When its parent sends it more work it returns to the active list, and it settles
 again when that work finishes. Turn off auto-settle on a sub-run to keep it active.
 
-To link runs yourself on web and desktop, drag a card onto the middle of another card to make it a
-sub-run, or drag a sub-run out of its card to make it independent. Dragging a sub-run onto
+To link chats yourself on web and desktop, drag a card onto the middle of another card to make it a
+child, or drag a child out of its card to make it independent. Dragging a child onto
 another card moves it there. The board shows the move at once and puts it back, with the reason,
 if it fails: a run cannot go under itself or its own sub-runs, or under an archived chat. To
 remove a run from its parent without dragging, right-click it (or focus it and press the context

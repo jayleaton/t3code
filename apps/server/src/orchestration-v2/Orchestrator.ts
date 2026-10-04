@@ -16,6 +16,7 @@ import {
   type ChatAttachment,
   CommandId,
   isProviderNativeSubagentThread,
+  isSubagentThread,
   MessageId,
   type ModelSelection,
   OrchestrationV2Command,
@@ -73,7 +74,7 @@ import {
   SHARED_WORKSPACE_RESTORE_MESSAGE,
 } from "./CheckpointRestoreSafety.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
-import { findBrokenThreadParentLinks } from "./threadParentLinks.ts";
+import { planThreadParentRepairs } from "./threadParentLinks.ts";
 import { CommandPolicyV2, resolveMessageDispatchIntent } from "./CommandPolicy.ts";
 import { CommandReceiptStoreV2 } from "./CommandReceiptStore.ts";
 import { ContextHandoffServiceV2 } from "./ContextHandoffService.ts";
@@ -422,6 +423,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "checkpoint.rollback.fail":
     case "thread.background-work.settle":
     case "thread.sub-run.settle":
+    case "thread.parent-link.repair":
     case "provider.switch":
       return command.threadId;
     case "delegated_task.request":
@@ -2207,7 +2209,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(command.profileSnapshot === undefined
         ? {}
         : { profileSnapshot: command.profileSnapshot }),
-      ...(command.parentThreadId === undefined ? {} : { parentThreadId: command.parentThreadId }),
+      // A chat created under a parent (launched by an agent, or created from a
+      // parent's card) is always a child; subagents are created by their run.
+      ...(command.parentThreadId === undefined
+        ? {}
+        : { parentThreadId: command.parentThreadId, parentRelationship: "child" as const }),
       ...(command.parentThreadId === undefined || command.parentEnvironmentId === undefined
         ? {}
         : { parentEnvironmentId: command.parentEnvironmentId }),
@@ -2441,16 +2447,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     if (
       command.type === "thread.metadata.update" &&
       command.parentThreadId !== undefined &&
-      thread.lineage.relationshipToParent === "subagent" &&
+      isSubagentThread(thread) &&
       (command.parentThreadId !== thread.lineage.parentThreadId ||
         command.parentEnvironmentId != null)
     ) {
-      // A delegated subagent belongs to the chat that delegated it and is
-      // shown only in that chat's Lineage panel, never as a board card.
+      // A subagent is a helper inside its owner's run and is shown only in
+      // that thread's Lineage panel, never as a card. Children can move.
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
         commandType: command.type,
-        cause: "A delegated subagent stays with the chat that delegated it.",
+        cause: "A subagent stays with the thread whose run spawned it; only child chats can move.",
       });
     }
     if (
@@ -2921,12 +2927,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...(command.branch === undefined ? {} : { branch: command.branch }),
             ...(command.worktreePath === undefined ? {} : { worktreePath: command.worktreePath }),
             // Relinking or detaching also replaces the parent's environment.
+            // Nesting a chat under a parent makes it a child; detaching it
+            // makes it top-level. A subagent only ever relinks to its owner.
             ...(command.parentThreadId === undefined
               ? {}
               : {
                   parentThreadId: command.parentThreadId,
                   parentEnvironmentId:
                     command.parentThreadId === null ? null : (command.parentEnvironmentId ?? null),
+                  parentRelationship:
+                    command.parentThreadId === null
+                      ? null
+                      : isSubagentThread(thread)
+                        ? ("subagent" as const)
+                        : ("child" as const),
                 }),
             ...(command.linkedPullRequest === undefined
               ? {}
@@ -6510,6 +6524,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           now,
           createdBy: command.createdBy,
           creationSource: command.creationSource,
+          // The server resolves profileSnapshot only from an explicit agent
+          // profileId, so its presence means a named agent was asked to run.
+          parentRelationship: command.profileSnapshot === undefined ? "subagent" : "child",
         }),
         ...(command.profileSnapshot === undefined
           ? {}
@@ -8053,6 +8070,48 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
     });
+
+  /** See the `thread.parent-link.repair` contract. Arranging, not thread activity. */
+  const dispatchParentLinkRepair = Effect.fn("orchestrationV2.dispatch.parentLinkRepair")(
+    function* (
+      command: Extract<
+        OrchestrationV2ServerCommand,
+        { readonly type: "thread.parent-link.repair" }
+      >,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    ) {
+      const thread = yield* projectionStore
+        .getThread(command.threadId)
+        .pipe(mapDispatchError(command));
+      const parentEnvironmentId =
+        command.parentThreadId === null || command.parentRelationship === "subagent"
+          ? null
+          : (thread.parentEnvironmentId ?? null);
+      if (
+        thread.deletedAt !== null ||
+        ((thread.parentThreadId ?? null) === command.parentThreadId &&
+          (thread.parentEnvironmentId ?? null) === parentEnvironmentId &&
+          thread.parentRelationship === command.parentRelationship)
+      ) {
+        return;
+      }
+      const now = yield* DateTime.now;
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.metadata-updated",
+        threadId: command.threadId,
+        occurredAt: now,
+        payload: {
+          ...thread,
+          parentThreadId: command.parentThreadId,
+          parentEnvironmentId,
+          parentRelationship: command.parentRelationship,
+        },
+      });
+    },
+  );
 
   /**
    * Settles an agent-spawned sub-run once its run completes, so finished child
@@ -9812,6 +9871,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.sub-run.settle":
         yield* dispatchSubRunSettle(command, events, effects);
         break;
+      case "thread.parent-link.repair":
+        yield* dispatchParentLinkRepair(command, events);
+        break;
       case "thread.fork":
         yield* dispatchThreadFork(command, events);
         break;
@@ -10101,11 +10163,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       .pipe(Effect.orElseSucceed(() => []));
     for (const child of children) {
       if (child.parentEnvironmentId != null) continue;
+      // Subagents too: with their owner gone they have no Lineage to show in.
       yield* dispatchWithReceipt({
-        type: "thread.metadata.update",
+        type: "thread.parent-link.repair",
         commandId: CommandId.make(`${command.commandId}:detach:${child.id}`),
         threadId: child.id,
         parentThreadId: null,
+        parentRelationship: null,
       }).pipe(
         Effect.catch((cause) =>
           Effect.logWarning("Could not detach a deleted chat's sub-run", {
@@ -10121,7 +10185,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     command: OrchestrationV2ServerCommand,
   ): Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error> =>
     Effect.gen(function* () {
-      if (command.type === "thread.metadata.update" && command.parentThreadId !== undefined) {
+      if (
+        (command.type === "thread.metadata.update" && command.parentThreadId !== undefined) ||
+        command.type === "thread.parent-link.repair"
+      ) {
         return yield* parentLinkLock.withPermits(1)(dispatchLocked(command));
       }
       if (command.type === "thread.delete") {
@@ -10358,18 +10425,34 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
     );
 
+  /**
+   * Runs on every server start (see planThreadParentRepairs): clears broken
+   * parent links and records the kind of task-spawned threads stored before it
+   * was explicit. Each repair is its own command, so a failed one only keeps
+   * that thread as it was.
+   */
   const repairThreadParents = Effect.gen(function* () {
     const links = yield* projectionStore.getThreadParentLinks();
-    const broken = findBrokenThreadParentLinks(links);
-    for (const threadId of broken) {
-      yield* dispatchWithReceipt({
-        type: "thread.metadata.update",
-        commandId: CommandId.make(`server:thread-parent-repair:${threadId}`),
-        threadId,
-        parentThreadId: null,
-      });
+    // Per start, so a thread that breaks the same way again is not deduped.
+    const startedAt = DateTime.toEpochMillis(yield* DateTime.now);
+    const repaired: ThreadId[] = [];
+    for (const repair of planThreadParentRepairs(links)) {
+      const result = yield* dispatchWithReceipt({
+        type: "thread.parent-link.repair",
+        commandId: CommandId.make(`server:thread-parent-repair:${startedAt}:${repair.threadId}`),
+        ...repair,
+      }).pipe(
+        Effect.map(() => true),
+        Effect.catch((cause) =>
+          Effect.logWarning("Thread parent repair failed", {
+            threadId: repair.threadId,
+            cause,
+          }).pipe(Effect.as(false)),
+        ),
+      );
+      if (result) repaired.push(repair.threadId);
     }
-    return broken;
+    return repaired;
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.logWarning("Thread parent repair failed", { cause }).pipe(

@@ -6,6 +6,7 @@ import type {
   OrchestrationV2Actor,
   OrchestrationV2ConversationMessage,
   OrchestrationV2CreationSource,
+  OrchestrationV2ParentRelationship,
   OrchestrationV2ProviderRef,
   OrchestrationV2Run,
   OrchestrationV2ThreadProjection,
@@ -50,6 +51,12 @@ export function makeSubagentChildThread(input: {
   readonly now: DateTime.Utc;
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
+  /**
+   * Provider-native subagents and profile-less delegate_task helpers are
+   * subagents (the default). A delegate_task run as a named agent is a full
+   * agent chat with its own context, so it is a child.
+   */
+  readonly parentRelationship?: OrchestrationV2ParentRelationship;
 }): OrchestrationV2AppThread {
   return {
     ...input.parentThread,
@@ -61,9 +68,11 @@ export function makeSubagentChildThread(input: {
     providerInstanceId: input.providerInstanceId,
     modelSelection: input.modelSelection,
     activeProviderThreadId: input.activeProviderThreadId,
-    // The spread copies the parent's own parent; a sub-run always nests under its spawner.
+    // The spread copies the parent's own parent; a spawned thread always
+    // starts under the thread whose run spawned it.
     parentThreadId: input.parentThread.id,
     parentEnvironmentId: null,
+    parentRelationship: input.parentRelationship ?? "subagent",
     lineage: {
       parentThreadId: input.parentThread.id,
       relationshipToParent: "subagent",
