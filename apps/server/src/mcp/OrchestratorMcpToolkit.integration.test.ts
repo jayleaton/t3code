@@ -702,8 +702,8 @@ describe("orchestrator MCP toolkit", () => {
             yield* invoke("t3_thread_organize", { action: "unpin" });
             expect((yield* orchestrator.getThreadShell(parentThreadId))?.pinnedAt).toBeNull();
 
-            // A chat launched under this one reports it as its parent, though
-            // it is neither a fork nor a delegated subagent.
+            // A chat launched under this one is its child: a separate chat,
+            // neither a fork nor a subagent.
             const launchedThreadId = ThreadId.make("thread:mcp-launched-child");
             yield* orchestrator.dispatch({
               type: "thread.create",
@@ -725,7 +725,7 @@ describe("orchestrator MCP toolkit", () => {
                 .structuredContent,
             ).pipe(Effect.orDie);
             expect(launchedRead.thread.parentThreadId).toBe(parentThreadId);
-            expect(launchedRead.thread.relationshipToParent).toBeNull();
+            expect(launchedRead.thread.relationshipToParent).toBe("child");
 
             if (parentRun === undefined || parentRun.rootNodeId === null) {
               return yield* Effect.die(new Error("Parent run missing."));

@@ -7,6 +7,7 @@ import {
   type ModelSelection,
   type Project,
   ProjectId,
+  isSubagentThread,
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -280,8 +281,7 @@ const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
     });
     const shell = yield* threads.getShellSnapshot();
     const existingThread = shell.threads.find(
-      (thread) =>
-        thread.projectId === project.id && thread.lineage.relationshipToParent !== "subagent",
+      (thread) => thread.projectId === project.id && !isSubagentThread(thread),
     );
     if (existingThread === undefined) {
       const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -538,14 +538,14 @@ const make = (options?: StartupOptions) =>
         ).pipe(Effect.map((targets): AutoBootstrapWelcomeTargets => targets)),
       });
       yield* Effect.logInfo("V2 orchestration recovery completed", recovery);
-      // Heals chats left pointing at a missing, deleted, self, or cyclic board parent.
+      // Heals broken parent links and records child/subagent kinds of older rows.
       yield* runStartupPhase(
         "orchestration-v2.thread-parents.repair",
         orchestrator.repairThreadParents.pipe(
-          Effect.tap((detached) =>
-            detached.length === 0
+          Effect.tap((repaired) =>
+            repaired.length === 0
               ? Effect.void
-              : Effect.logInfo("Detached chats with a broken parent link", { detached }),
+              : Effect.logInfo("Repaired thread parent links", { repaired }),
           ),
         ),
       );

@@ -125,7 +125,7 @@ export function useAgentThreadContextMenu(
             const shell = readThreadShell(scopeThreadRef(item.environmentId, item.id));
             return shell ? [shell] : [];
           });
-        // A sub-run moves among its parent's sub-runs; a card moves on the board.
+        // A child moves among its parent's children; a card moves on the board.
         const plan = planAgentThreadMove(
           refresh(siblings ?? visible),
           refresh(threads),
@@ -263,7 +263,7 @@ export function useAgentThreadContextMenu(
           markThreadUnread(scopedThreadKey(ref), current.latestRun?.completedAt);
           return;
         case "detach-parent":
-          // Same path as dragging a sub-run out: optimistic, rolled back on failure.
+          // Same path as dragging a child out: optimistic, rolled back on failure.
           await setParent(thread, null);
           return;
         case "copy-path":

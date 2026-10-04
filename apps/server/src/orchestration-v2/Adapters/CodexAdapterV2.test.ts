@@ -484,7 +484,7 @@ describe("CodexAdapterV2 runtime policy", () => {
       assert.equal(params.collaborationMode?.mode, "default");
       assert.include(
         params.additionalContext?.t3_code_orchestration?.value ?? "",
-        "Use `delegate_task`",
+        "`delegate_task` without a `profileId`",
       );
       assert.include(
         params.additionalContext?.t3_code_orchestration?.value ?? "",

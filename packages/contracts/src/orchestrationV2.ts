@@ -102,6 +102,12 @@ export const OrchestrationV2ProviderRef = Schema.Struct({
 });
 export type OrchestrationV2ProviderRef = typeof OrchestrationV2ProviderRef.Type;
 
+/**
+ * Where a thread's context came from. Immutable. `"subagent"` here means a
+ * task spawned it (a provider-native subagent or a delegate_task), which drives
+ * task-result delivery back to `parentThreadId`; it does not decide how the
+ * thread is shown. That is `OrchestrationV2ParentRelationship`.
+ */
 export const OrchestrationV2AppThreadLineage = Schema.Struct({
   parentThreadId: Schema.NullOr(ThreadId),
   relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
@@ -356,15 +362,34 @@ export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
 );
 export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
 
+/**
+ * What a thread is to the thread that owns it (`parentThreadId`). The two are
+ * mutually exclusive:
+ * - `"child"`: a full agent chat with its own context, launched by a parent
+ *   agent to do a separate part of a larger task (t3_thread_launch,
+ *   create_threads, a delegate_task run as a named agent, or nesting it under a
+ *   parent by hand). It nests inside the parent's card, keeps its own status,
+ *   settles on its own, and has subagents of its own.
+ * - `"subagent"`: a helper inside one agent's own run, used to save that
+ *   agent's context (provider-native subagents, profile-less delegate_task
+ *   helpers). Never a card; shown only in its owner's Lineage panel.
+ * Read it through `threadParentRelationship`, which also covers rows stored
+ * before the kind was recorded.
+ */
+export const OrchestrationV2ParentRelationship = Schema.Literals(["child", "subagent"]);
+export type OrchestrationV2ParentRelationship = typeof OrchestrationV2ParentRelationship.Type;
+
 export const OrchestrationV2AppThread = Schema.Struct({
   profileSnapshot: Schema.optional(ThreadProfileSnapshot),
   /**
-   * Chat that owns this one's work on the Agents board, such as the chat whose agent created it.
-   * Organizational only; unlike `lineage` it can be changed or cleared.
+   * The thread that owns this one: a child's parent chat or a subagent's owner
+   * (see `parentRelationship`). A child's parent can be changed or cleared; a
+   * subagent always stays with the thread whose run spawned it.
    */
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   /** Environment of `parentThreadId` when it lives on another machine; absent means this one. */
   parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
+  parentRelationship: Schema.optional(Schema.NullOr(OrchestrationV2ParentRelationship)),
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
@@ -449,6 +474,35 @@ export type OrchestrationV2AppThread = typeof OrchestrationV2AppThread.Type;
  * Cursor native subagents). The provider owns its conversation, so it cannot
  * take messages; T3 delegate_task children (`creationSource: "mcp"`) can.
  */
+type ParentRelationshipFields = Pick<OrchestrationV2AppThread, "lineage"> & {
+  readonly parentThreadId?: ThreadId | null | undefined;
+  readonly parentRelationship?: OrchestrationV2ParentRelationship | null | undefined;
+};
+
+/**
+ * Whether `thread` is a child chat or a subagent of the thread that owns it,
+ * or null for a top-level thread. Rows stored before the kind was recorded
+ * fall back to their lineage until the server normalizes them on start.
+ */
+export function threadParentRelationship(
+  thread: ParentRelationshipFields,
+): OrchestrationV2ParentRelationship | null {
+  // Absent means not recorded yet; an explicit null means top-level.
+  if (thread.parentRelationship !== undefined) {
+    return thread.parentRelationship === "subagent" || thread.parentThreadId != null
+      ? thread.parentRelationship
+      : null;
+  }
+  if (thread.lineage.relationshipToParent === "subagent" && thread.lineage.parentThreadId !== null)
+    return "subagent";
+  return thread.parentThreadId != null ? "child" : null;
+}
+
+/** A helper inside another thread's run: never a card, only in its owner's Lineage. */
+export function isSubagentThread(thread: ParentRelationshipFields): boolean {
+  return threadParentRelationship(thread) === "subagent";
+}
+
 export function isProviderNativeSubagentThread(
   thread: Pick<OrchestrationV2AppThread, "lineage" | "creationSource">,
 ): boolean {
@@ -1725,6 +1779,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   ),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
+  parentRelationship: Schema.optional(Schema.NullOr(OrchestrationV2ParentRelationship)),
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
@@ -2623,7 +2678,7 @@ export const OrchestrationV2Command = Schema.Union([
     limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecoveryUpdate)),
     /** Link (object) or unlink (null) a pull request (#8160); absent leaves it unchanged. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
-    /** Nest under another chat on the Agents board, or detach with null. */
+    /** Make this a child of another chat, or detach it with null. Subagents cannot move. */
     parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
     /** With `parentThreadId`, the parent's environment when it is another machine. */
     parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
@@ -2985,6 +3040,20 @@ const OrchestrationV2InternalCommand = Schema.Union([
     type: Schema.Literal("thread.sub-run.settle"),
     commandId: CommandId,
     threadId: ThreadId,
+  }),
+  /**
+   * Sets a thread's owner and parent relationship outright: records the kind
+   * of a row stored before it was explicit, gives a subagent its owner back,
+   * and makes a thread whose parent or owner is gone top-level (both null) so
+   * it stays visible. Server-only, so it skips the client re-parenting rules.
+   * Records nothing when the thread already matches.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.parent-link.repair"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    parentThreadId: Schema.NullOr(ThreadId),
+    parentRelationship: Schema.NullOr(OrchestrationV2ParentRelationship),
   }),
 ]);
 export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalCommand.Type;

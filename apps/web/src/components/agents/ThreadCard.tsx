@@ -111,7 +111,7 @@ function AgentChildRunLink({
   );
 }
 
-/** A sub-run row that can be dragged onto another card or out of this one. */
+/** A child row that can be dragged onto another card or out of this one. */
 function DraggableAgentChildRun(props: ChildRunRowProps & { anchorKey: string }) {
   const key = `${props.child.thread.environmentId}:${props.child.thread.id}`;
   const { setNodeRef, listeners, isDragging } = useDraggable({
@@ -133,8 +133,9 @@ function DraggableAgentChildRun(props: ChildRunRowProps & { anchorKey: string })
 }
 
 /**
- * Runs this card's run created, each linking to its own chat with live status
- * and the same menu as a card. Settled sub-runs collapse at the bottom.
+ * This card's child chats, each linking to its own chat with its own live
+ * status and the same menu as a card. Settled children collapse at the bottom.
+ * Subagents never appear here; they live in their owner's Lineage panel.
  */
 function AgentChildRuns({
   runs,
@@ -175,7 +176,7 @@ function AgentChildRuns({
   };
   const settledCount = runs.settled.filter((child) => child.depth === 0).length;
   return (
-    <ul className="agent-thread-children" aria-label="Sub-agent runs">
+    <ul className="agent-thread-children" aria-label="Child chats">
       {runs.live.map(row)}
       {runs.settled.length > 0 && (
         <li>
@@ -185,7 +186,7 @@ function AgentChildRuns({
             aria-expanded={settledOpen}
             onClick={() => setSettledOpen((open) => !open)}
           >
-            Settled · {settledCount}
+            Settled children · {settledCount}
           </button>
         </li>
       )}
@@ -218,7 +219,7 @@ export const ThreadCard = memo(function ThreadCard({
   parentRun?: EnvironmentThreadShell | null | undefined;
   /** A run under this one is still working (see selectWorkingParentKeys). */
   childWorking?: boolean;
-  /** Statuses of `childRuns` rows; only cards with sub-runs need it. */
+  /** Statuses of `childRuns` rows; only cards with children need it. */
   workingKeys?: ReadonlySet<string> | undefined;
   dragging?: boolean;
   thread: EnvironmentThreadShell;

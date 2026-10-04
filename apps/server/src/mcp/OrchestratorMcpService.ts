@@ -51,6 +51,7 @@ import {
   type ScheduledTaskUpsertInput,
   type ServerProvider,
   ThreadId,
+  threadParentRelationship,
 } from "@t3tools/contracts";
 import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import * as Context from "effect/Context";
@@ -590,17 +591,28 @@ function threadSettlement(
 }
 
 /**
- * The chat this one works under: its owner on the Agents board (set by
- * t3_thread_launch, create_threads, delegate_task, or t3_set_thread_parent),
- * else its fork or subagent lineage. A parent on another machine is not
- * readable from this environment, so lineage answers for it.
+ * The chat this one belongs to and how: a subagent's owner, a child's parent
+ * chat (set by t3_thread_launch, create_threads, a named-agent delegate_task,
+ * or t3_set_thread_parent), else the thread it was forked from. A parent on
+ * another machine is not readable from this environment, so it is left out.
  */
-function threadParentId(
-  thread: Pick<OrchestrationV2ThreadShell, "parentThreadId" | "parentEnvironmentId" | "lineage">,
-): ThreadId | null {
-  return thread.parentEnvironmentId == null
-    ? (thread.parentThreadId ?? thread.lineage.parentThreadId)
-    : thread.lineage.parentThreadId;
+function threadParent(
+  thread: Pick<
+    OrchestrationV2ThreadShell,
+    "parentThreadId" | "parentEnvironmentId" | "parentRelationship" | "lineage"
+  >,
+): Pick<OrchestratorMcpThreadListItem, "parentThreadId" | "relationshipToParent"> {
+  const kind = threadParentRelationship(thread);
+  if (kind === "subagent" && thread.lineage.parentThreadId !== null) {
+    return { parentThreadId: thread.lineage.parentThreadId, relationshipToParent: "subagent" };
+  }
+  if (kind === "child" && thread.parentThreadId != null && thread.parentEnvironmentId == null) {
+    return { parentThreadId: thread.parentThreadId, relationshipToParent: "child" };
+  }
+  if (thread.lineage.relationshipToParent === "fork") {
+    return { parentThreadId: thread.lineage.parentThreadId, relationshipToParent: "fork" };
+  }
+  return { parentThreadId: null, relationshipToParent: null };
 }
 
 function listItemFromShell(shell: OrchestrationV2ThreadShell): OrchestratorMcpThreadListItem {
@@ -617,8 +629,7 @@ function listItemFromShell(shell: OrchestrationV2ThreadShell): OrchestratorMcpTh
     interactionMode: shell.interactionMode,
     linkedPullRequest: shell.linkedPullRequest ?? null,
     ...threadSettlement(shell),
-    parentThreadId: threadParentId(shell),
-    relationshipToParent: shell.lineage.relationshipToParent,
+    ...threadParent(shell),
     itemCount: shell.visibleItemCount,
     createdAt: DateTime.formatIso(shell.createdAt),
     updatedAt: DateTime.formatIso(shell.updatedAt),
@@ -655,8 +666,7 @@ function threadDetail(
           },
     branch: projection.thread.branch,
     worktreePath: projection.thread.worktreePath,
-    parentThreadId: threadParentId(projection.thread),
-    relationshipToParent: projection.thread.lineage.relationshipToParent,
+    ...threadParent(projection.thread),
     runCount: projection.runs.length,
     itemCount,
     pendingRequestCount: projection.runtimeRequests.filter(

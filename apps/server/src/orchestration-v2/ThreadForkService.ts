@@ -92,6 +92,9 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
           id: input.targetThreadId,
           title: input.title ?? `${input.sourceProjection.thread.title} fork`,
           activeProviderThreadId: null,
+          // A fork is a full chat of the user's own, never a subagent, even
+          // when forked from one: it stays with the source's parent as a child.
+          parentRelationship: input.sourceProjection.thread.parentThreadId == null ? null : "child",
           lineage: {
             parentThreadId: input.sourceProjection.thread.id,
             relationshipToParent: "fork",

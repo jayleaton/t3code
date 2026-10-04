@@ -384,7 +384,7 @@ export interface ProjectionStoreV2Shape {
   readonly hasActiveDescendants: (
     threadId: ThreadId,
   ) => Effect.Effect<boolean, ProjectionStoreV2Error>;
-  /** Agents-board parent link of every live (not deleted) thread, archived ones included. */
+  /** Owner link and kind of every live (not deleted) thread, archived ones included. */
   readonly getThreadParentLinks: () => Effect.Effect<
     ReadonlyArray<ThreadParentLink>,
     ProjectionStoreV2Error
@@ -1413,6 +1413,10 @@ export function threadShellFromProjection(
     ...(projection.thread.parentEnvironmentId == null
       ? {}
       : { parentEnvironmentId: projection.thread.parentEnvironmentId }),
+    // Absent (not recorded yet) and null (top-level) differ.
+    ...(projection.thread.parentRelationship === undefined
+      ? {}
+      : { parentRelationship: projection.thread.parentRelationship }),
     title: projection.thread.title,
     providerInstanceId: projection.thread.providerInstanceId,
     modelSelection: projection.thread.modelSelection,
@@ -1680,6 +1684,10 @@ function shellFromState(input: {
     ...(input.state.thread.parentEnvironmentId == null
       ? {}
       : { parentEnvironmentId: input.state.thread.parentEnvironmentId }),
+    // Absent (not recorded yet) and null (top-level) differ.
+    ...(input.state.thread.parentRelationship === undefined
+      ? {}
+      : { parentRelationship: input.state.thread.parentRelationship }),
     title: input.state.thread.title,
     providerInstanceId: input.state.thread.providerInstanceId,
     modelSelection: input.state.thread.modelSelection,
@@ -4176,10 +4184,21 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         readonly thread_id: string;
         readonly parent_thread_id: string | null;
         readonly parent_environment_id: string | null;
+        readonly parent_relationship_type: string | null;
+        readonly parent_relationship: string | null;
+        readonly spawned_by_thread_id: string | null;
+        readonly creation_source: string | null;
+        readonly profile_id: string | null;
       }>`
         SELECT thread_id,
           json_extract(payload_json, '$.parentThreadId') AS parent_thread_id,
-          json_extract(payload_json, '$.parentEnvironmentId') AS parent_environment_id
+          json_extract(payload_json, '$.parentEnvironmentId') AS parent_environment_id,
+          json_type(payload_json, '$.parentRelationship') AS parent_relationship_type,
+          json_extract(payload_json, '$.parentRelationship') AS parent_relationship,
+          CASE WHEN json_extract(payload_json, '$.lineage.relationshipToParent') = 'subagent'
+            THEN json_extract(payload_json, '$.lineage.parentThreadId') END AS spawned_by_thread_id,
+          json_extract(payload_json, '$.creationSource') AS creation_source,
+          json_extract(payload_json, '$.profileSnapshot.profileId') AS profile_id
         FROM orchestration_v2_projection_threads
         WHERE deleted_at IS NULL
       `.pipe(
@@ -4189,6 +4208,18 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             parentThreadId:
               row.parent_thread_id === null ? null : ThreadId.make(row.parent_thread_id),
             parentEnvironmentId: row.parent_environment_id,
+            parentRelationship:
+              row.parent_relationship_type === null
+                ? undefined
+                : row.parent_relationship === "child"
+                  ? ("child" as const)
+                  : row.parent_relationship === "subagent"
+                    ? ("subagent" as const)
+                    : null,
+            spawnedByThreadId:
+              row.spawned_by_thread_id === null ? null : ThreadId.make(row.spawned_by_thread_id),
+            ...(row.creation_source === null ? {} : { creationSource: row.creation_source }),
+            profileId: row.profile_id,
           })),
         ),
         Effect.mapError(
@@ -5825,6 +5856,13 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 threadId: thread.id,
                 parentThreadId: thread.parentThreadId ?? null,
                 parentEnvironmentId: thread.parentEnvironmentId ?? null,
+                parentRelationship: thread.parentRelationship,
+                spawnedByThreadId:
+                  thread.lineage.relationshipToParent === "subagent"
+                    ? thread.lineage.parentThreadId
+                    : null,
+                creationSource: thread.creationSource,
+                profileId: thread.profileSnapshot?.profileId ?? null,
               })),
           ),
         ),

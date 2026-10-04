@@ -119,6 +119,7 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   ChevronUpIcon,
+  CornerLeftUpIcon,
   CircleAlertIcon,
   DownloadIcon,
   EyeIcon,
@@ -438,9 +439,11 @@ interface MessagesTimelineProps {
   displayThreadKey?: string;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
+  /** The chat this one belongs to: a child's parent chat or a subagent's owner. */
   parentThreadLink?: {
     readonly threadId: ThreadId;
     readonly title: string;
+    readonly relationship: "child" | "subagent";
   } | null;
   onForkFromRun: (input: {
     readonly sourceThreadId: ThreadId;
@@ -1257,10 +1260,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         <div className="messages-timeline-row-frame">
           <div className="chat-content-lane pt-1 sm:pt-2">
             <TimelineSystemDivider
-              label="Subagent of"
+              label={parentThreadLink.relationship === "child" ? "Child of" : "Subagent of"}
               detail={parentThreadLink.title}
-              icon={BotIcon}
-              actionLabel="Open parent thread"
+              icon={parentThreadLink.relationship === "child" ? CornerLeftUpIcon : BotIcon}
+              actionLabel={
+                parentThreadLink.relationship === "child"
+                  ? "Open parent chat"
+                  : "Open parent thread"
+              }
               onAction={() => onOpenThread(parentThreadLink.threadId)}
             />
           </div>

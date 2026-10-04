@@ -117,7 +117,7 @@ it("shows the matching child agent details and refreshes them when the agent set
   };
   await act(async () => renderer.update(cloneElement(panel)));
   expect(renderer.root.findByType("h3").children).toEqual(["Lineage"]);
-  expect(text()).toContain("Previous agents (1)");
+  expect(text()).toContain("Previous subagents (1)");
   expect(text()).not.toContain("Checker");
   await act(async () =>
     renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),
@@ -132,7 +132,7 @@ it("shows the matching child agent details and refreshes them when the agent set
     renderer.root.findByProps({ type: "button", "aria-expanded": true }).props.onClick(),
   );
   expect(text()).not.toContain("Checker");
-  expect(text()).toContain("Previous agents (1)");
+  expect(text()).toContain("Previous subagents (1)");
   await act(async () =>
     renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),
   );
@@ -496,7 +496,7 @@ it.each(["source", "target"])(
   },
 );
 
-it("keeps named-Agent delegations in Lineage with live statuses and collapsed previous work", async () => {
+it("lists subagents in Lineage with live statuses and collapsed previous work, never children", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const environmentId = EnvironmentId.make("test");
   const parent = {
@@ -529,6 +529,19 @@ it("keeps named-Agent delegations in Lineage with live statuses and collapsed pr
       ...delegated("Top-level Cody", "completed"),
       lineage: { parentThreadId: null, relationshipToParent: null },
     },
+    // Children belong in Captain's card and Children section, not Lineage:
+    // a named-agent delegate_task and a launched chat.
+    {
+      ...delegated("Randy review", "running"),
+      parentThreadId: parent.id,
+      parentRelationship: "child",
+    },
+    {
+      ...delegated("Doug launched", "running"),
+      parentThreadId: parent.id,
+      parentRelationship: "child",
+      lineage: { parentThreadId: null, relationshipToParent: null },
+    },
   ].map((source) => ({ environmentId, source }));
   state.projection = {
     thread: parent,
@@ -558,7 +571,9 @@ it("keeps named-Agent delegations in Lineage with live statuses and collapsed pr
   expect(text()).toContain("Waiting");
   expect(text()).toContain("Cody fork");
   expect(text()).not.toContain("Top-level Cody");
-  expect(text()).toContain("Previous agents (26)");
+  expect(text()).not.toContain("Randy review");
+  expect(text()).not.toContain("Doug launched");
+  expect(text()).toContain("Previous subagents (26)");
   expect(text()).not.toContain("Previous Cody");
   await act(async () =>
     renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),

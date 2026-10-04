@@ -1398,7 +1398,7 @@
 /* Floats over the border: growing the card mid-drag would shift every card
    below it away from the positions the drag measured. */
 [data-nest-target="true"] > .agent-thread-container::after {
-  content: "Link as sub-run";
+  content: "Make child";
   position: absolute;
   top: -8px;
   right: 12px;
@@ -1428,14 +1428,20 @@
   cursor: grabbing;
 }
 .agent-child-drag-title {
-  min-width: 0;
+  /* Hints name other chats, so both truncate and the title keeps its share. */
+  flex: 0 1 auto;
+  min-width: 6em;
+  max-width: 50%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
 }
 .agent-child-drag-hint {
-  flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted-foreground);
 }
 .agent-thread-child-pin {

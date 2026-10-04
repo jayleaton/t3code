@@ -17,6 +17,7 @@ import {
   threadRelationshipRowStatus,
   orderWebThreadLineageRows,
   resolveMergeBackTargetThreadId,
+  threadChildChats,
   type ThreadRelationshipEdge,
   type ThreadRelationshipWalkRow,
 } from "@t3tools/client-runtime/state/thread-relationships";
@@ -31,6 +32,7 @@ import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowRightIcon,
   BotIcon,
+  CornerDownRightIcon,
   CornerLeftUpIcon,
   GitForkIcon,
   LoaderCircleIcon,
@@ -155,9 +157,6 @@ function relationshipLabel(edge: ThreadRelationshipEdge, currentThreadId: Thread
   if (edge.kind === "subagent") {
     return edge.sourceThreadId === currentThreadId ? "Subagent" : "Parent agent";
   }
-  if (edge.kind === "parent") {
-    return edge.sourceThreadId === currentThreadId ? "Launched chat" : "Parent chat";
-  }
   return edge.sourceThreadId === currentThreadId ? "Fork" : "Parent thread";
 }
 
@@ -191,6 +190,81 @@ function liveSubagent<Agent extends RuntimeSubagent>(
     result: null,
     error: null,
   };
+}
+
+/**
+ * The child chats this chat launched or had nested under it: separate agent
+ * chats with their own context and status. They are not lineage; subagents
+ * inside this chat's own runs are listed under Lineage instead.
+ */
+export function ThreadChildChatsPanel(props: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+}) {
+  const navigate = useNavigate();
+  const threadShells = useThreadShells();
+  const [visibleCount, setVisibleCount] = useState(THREAD_LINEAGE_INITIAL_COUNT);
+  const children = useMemo(
+    () =>
+      threadChildChats(
+        threadShells
+          .filter((thread) => thread.environmentId === props.environmentId)
+          .map((thread) => thread.source),
+        props.threadId,
+      ),
+    [props.environmentId, props.threadId, threadShells],
+  );
+  if (children.length === 0) return null;
+  const { visibleRows, hiddenCount } = resolveThreadLineageWindow(children, visibleCount);
+  const working = children.filter((child) =>
+    ["preparing", "starting", "running", "waiting"].includes(
+      child.activityRunStatus ?? child.status,
+    ),
+  ).length;
+  return (
+    <ThreadDetailsSection
+      headingId="thread-details-children-heading"
+      title={working > 0 ? `Children · ${working} working` : `Children · ${children.length}`}
+      data-thread-children-panel
+    >
+      <ThreadLineageRowList
+        hiddenCount={hiddenCount}
+        onShowMore={() => setVisibleCount((count) => count + THREAD_LINEAGE_PAGE_COUNT)}
+      >
+        {visibleRows.map((child) => {
+          const status = child.settledAt != null ? null : (child.activityRunStatus ?? child.status);
+          const statusLabel =
+            child.settledAt != null ? "Settled" : threadRelationshipStatusLabel(status);
+          return (
+            <li key={child.id} className="group flex h-8 items-center rounded-lg">
+              <ThreadDetailsControl
+                size="sm"
+                variant="ghost"
+                part="row"
+                aria-label={`${child.title} ${statusLabel}`}
+                onClick={() =>
+                  void navigate({
+                    to: "/$environmentId/$threadId",
+                    params: buildThreadRouteParams(scopeThreadRef(props.environmentId, child.id)),
+                  })
+                }
+              >
+                <ThreadRelationshipIcon fallbackIcon={CornerDownRightIcon} status={status} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-left text-sm font-medium leading-4 text-foreground/85">
+                    {child.profileSnapshot?.profileName
+                      ? `${child.profileSnapshot.profileName} · ${child.title}`
+                      : child.title}
+                  </span>
+                </span>
+                <span className="shrink-0 text-2xs text-muted-foreground">{statusLabel}</span>
+              </ThreadDetailsControl>
+            </li>
+          );
+        })}
+      </ThreadLineageRowList>
+    </ThreadDetailsSection>
+  );
 }
 
 export function ThreadRelationshipsPanel(props: {
@@ -268,7 +342,7 @@ export function ThreadRelationshipsPanel(props: {
   const groups = [
     { id: "related", label: null, rows: related, expanded: true },
     { id: "active", label: null, rows: active, expanded: true },
-    { id: "previous", label: "Previous agents", rows: previous, expanded: false },
+    { id: "previous", label: "Previous subagents", rows: previous, expanded: false },
   ];
   // Subagents without a child thread yet have no row, so count them separately.
   const runningCount =

@@ -8,54 +8,95 @@ import {
   orderWebThreadLineageRows,
   relatedThreadIds,
   resolveMergeBackTargetThreadId,
+  threadChildChats,
   walkThreadRelationships,
   threadRelationshipRowStatus,
 } from "./threadRelationships.ts";
 
 describe("thread relationships", () => {
-  describe("board parents", () => {
+  describe("children versus subagents", () => {
     const captain = ThreadId.make("captain");
     const doug = ThreadId.make("doug");
     const cody = ThreadId.make("cody");
+    const randy = ThreadId.make("randy");
+    const helper = ThreadId.make("helper");
     const shell = (
       id: ThreadId,
-      fields: { parentThreadId?: ThreadId | null; parentEnvironmentId?: string } = {},
+      fields: {
+        parentThreadId?: ThreadId | null;
+        parentEnvironmentId?: string;
+        parentRelationship?: "child" | "subagent" | null;
+        spawnedBy?: ThreadId;
+        createdAt?: string;
+      } = {},
     ) => ({
       id,
       status: "running",
-      lineage: { parentThreadId: null, relationshipToParent: null },
+      createdAt: DateTime.makeUnsafe(fields.createdAt ?? "2026-10-01T00:00:00.000Z"),
+      lineage: {
+        parentThreadId: fields.spawnedBy ?? null,
+        relationshipToParent: fields.spawnedBy ? "subagent" : null,
+      },
       forkedFrom: null,
-      ...fields,
+      ...(fields.parentThreadId === undefined ? {} : { parentThreadId: fields.parentThreadId }),
+      ...(fields.parentEnvironmentId === undefined
+        ? {}
+        : { parentEnvironmentId: fields.parentEnvironmentId }),
+      ...(fields.parentRelationship === undefined
+        ? {}
+        : { parentRelationship: fields.parentRelationship }),
     });
-    const graphOf = (threads: ReadonlyArray<object>) =>
-      deriveThreadRelationshipGraph({ threads: threads as never, projection: null });
+    const graphOf = (threads: ReadonlyArray<object>, projection: object | null = null) =>
+      deriveThreadRelationshipGraph({ threads: threads as never, projection: projection as never });
+    // The Captain screenshot: launched children plus a named-agent delegate and a helper.
+    const fleet = [
+      shell(captain),
+      shell(doug, { parentThreadId: captain, parentRelationship: "child" }),
+      shell(cody, { parentThreadId: captain, createdAt: "2026-09-30T00:00:00.000Z" }),
+      shell(randy, { parentThreadId: captain, parentRelationship: "child", spawnedBy: captain }),
+      shell(helper, {
+        parentThreadId: captain,
+        parentRelationship: "subagent",
+        spawnedBy: captain,
+      }),
+    ];
 
-    it("shows a launched chat and its parent to each other", () => {
-      const graph = graphOf([shell(captain), shell(doug, { parentThreadId: captain })]);
-      expect(graph.edges).toEqual([
-        { sourceThreadId: captain, targetThreadId: doug, kind: "parent", status: "running" },
+    it("puts only a thread's own subagents in its Lineage, never its children", () => {
+      const graph = graphOf(fleet, {
+        thread: { id: captain },
+        subagents: [
+          { childThreadId: randy, status: "completed" },
+          { childThreadId: helper, status: "completed" },
+        ],
+        contextTransfers: [
+          { sourceThreadId: captain, targetThreadId: randy, type: "subagent_spawn", status: "x" },
+          { sourceThreadId: randy, targetThreadId: captain, type: "subagent_result", status: "x" },
+        ],
+      });
+      expect(relatedThreadIds(graph, captain)).toEqual([helper]);
+      expect(graph.edges.map((edge) => edge.kind)).toEqual(["subagent"]);
+      expect(relatedThreadIds(graph, doug)).toEqual([]);
+      expect(relatedThreadIds(graph, randy)).toEqual([]);
+    });
+
+    it("lists a parent's children, oldest first, and follows re-parenting", () => {
+      expect(threadChildChats(fleet as never, captain).map((thread) => thread.id)).toEqual([
+        cody,
+        doug,
+        randy,
       ]);
-      expect(relatedThreadIds(graph, captain)).toEqual([doug]);
-      expect(relatedThreadIds(graph, doug)).toEqual([captain]);
-    });
-
-    it("follows unlinking and re-parenting", () => {
-      expect(graphOf([shell(captain), shell(doug, { parentThreadId: null })]).edges).toEqual([]);
-      const moved = graphOf([shell(captain), shell(cody), shell(doug, { parentThreadId: cody })]);
-      expect(relatedThreadIds(moved, captain)).toEqual([]);
-      expect(relatedThreadIds(moved, cody)).toEqual([doug]);
-    });
-
-    it("adds no second edge for a delegated child, and skips parents on other machines", () => {
-      const delegated = {
-        ...shell(doug, { parentThreadId: captain }),
-        lineage: { parentThreadId: captain, relationshipToParent: "subagent" },
-      };
-      expect(graphOf([shell(captain), delegated]).edges.map((edge) => edge.kind)).toEqual([
-        "subagent",
-      ]);
+      const moved = [
+        ...fleet.filter((thread) => thread.id !== doug),
+        shell(doug, { parentThreadId: cody, parentRelationship: "child" }),
+      ];
+      expect(threadChildChats(moved as never, cody).map((thread) => thread.id)).toEqual([doug]);
+      const detached = [
+        shell(captain),
+        shell(doug, { parentThreadId: null, parentRelationship: null }),
+      ];
+      expect(threadChildChats(detached as never, captain)).toEqual([]);
       const remote = shell(doug, { parentThreadId: captain, parentEnvironmentId: "remote" });
-      expect(graphOf([remote]).edges).toEqual([]);
+      expect(threadChildChats([shell(captain), remote] as never, captain)).toEqual([]);
     });
   });
 

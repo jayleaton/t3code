@@ -8,10 +8,10 @@ import {
 } from "./T3OrchestrationInstructions.ts";
 
 describe("T3 orchestration provider instructions", () => {
-  it("distinguishes delegated subagents from ordinary top-level threads", () => {
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "Use `delegate_task`");
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "ordinary top-level T3 conversations");
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "Never use them merely");
+  it("teaches children (separate chats) apart from subagents (helpers in a run)", () => {
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "Children and subagents are different");
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "Launch a child for separate work");
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "`delegate_task` without a `profileId`");
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "cross-provider");
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "call `delegate_task` again");
     assert.include(

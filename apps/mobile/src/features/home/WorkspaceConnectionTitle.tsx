@@ -103,10 +103,47 @@ export function WorkspaceConnectionTitle(props: {
   readonly statusOffset?: number;
   /** Space available beside the native header actions. */
   readonly maxWidth?: number;
+  /**
+   * Keep the brand and show the status as a compact icon beside it. For
+   * controls such as the Agents/Threads switch, which must stay usable while
+   * an environment reconnects.
+   */
+  readonly inlineStatus?: boolean;
 }) {
   const status = useDelayedConnectionStatus();
   const size = props.size ?? "navbar";
   const { scale } = useAndroidControlSizing();
+
+  if (props.inlineStatus) {
+    return (
+      <View className="flex-row items-center gap-2">
+        {status === null ? null : (
+          <StatusFadeIn>
+            <Pressable
+              accessibilityHint="Opens environment settings"
+              accessibilityLabel={status.label}
+              accessibilityRole="button"
+              disabled={props.onPress === undefined}
+              hitSlop={8}
+              onPress={props.onPress}
+            >
+              {status.showsProgress ? (
+                <ActivityIndicator colorClassName={"accent-icon-muted"} size="small" />
+              ) : (
+                <SymbolView
+                  name="wifi.slash"
+                  size={16}
+                  tintColorClassName={"accent-icon-muted"}
+                  type="monochrome"
+                />
+              )}
+            </Pressable>
+          </StatusFadeIn>
+        )}
+        {props.brand}
+      </View>
+    );
+  }
 
   if (status === null) {
     return props.grow ? (
@@ -168,6 +205,8 @@ export function getConnectionAwareBrandHeaderOptions(opts: {
   readonly trailingItemCount?: number;
   readonly onOpenEnvironments: () => void;
   readonly fallbackTitleStyle?: NativeStackNavigationOptions["headerTitleStyle"];
+  /** Replaces the brand lockup; the connection status then shows inline beside it. */
+  readonly brand?: ReactNode;
 }): NativeStackNavigationOptions {
   // Leave room for bar margins, title spacing and the 44-point native actions.
   // Long status labels must not push Settings into UIKit's overflow menu.
@@ -177,7 +216,8 @@ export function getConnectionAwareBrandHeaderOptions(opts: {
     ...getCompactBrandHeaderOptions(opts.fallbackTitleStyle),
     headerTitle: () => (
       <WorkspaceConnectionTitle
-        brand={<CompactBrandTitle />}
+        brand={opts.brand ?? <CompactBrandTitle />}
+        inlineStatus={opts.brand !== undefined}
         maxWidth={maxWidth}
         onPress={opts.onOpenEnvironments}
         statusOffset={brandTitleOffset()}

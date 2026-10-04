@@ -2,7 +2,8 @@ import type { ThreadRowProviderInstance } from "./thread-provider-instance";
 import {
   THREAD_LIST_V2_MONO_FONT as MONO_FONT,
   THREAD_LIST_V2_ROW_CONTENT_CLASS_NAME,
-  THREAD_LIST_V2_ROW_DIVIDERS,
+  THREAD_LIST_V2_PENDING_ROW_FRAME_CLASS_NAME,
+  THREAD_LIST_V2_ROW_FRAME_CLASS_NAME,
   selectedThreadRowColors,
   getThreadListV2NewBranchMenuTitle,
   getThreadListV2RowAppearance,
@@ -17,7 +18,7 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
-import type { EnvironmentMachineKind } from "@t3tools/contracts";
+import { threadParentRelationship, type EnvironmentMachineKind } from "@t3tools/contracts";
 import { canSnooze, resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
@@ -438,11 +439,8 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
           {sidebarPane ? (
             rowContent
           ) : (
-            <View>
-              <View className="px-5 py-2.5">{rowContent}</View>
-              {props.showTrailingDivider !== false ? (
-                <View className="ml-5 h-px bg-border-subtle" />
-              ) : null}
+            <View className={THREAD_LIST_V2_PENDING_ROW_FRAME_CLASS_NAME}>
+              <View className="px-4 py-2.5">{rowContent}</View>
             </View>
           )}
         </RowPressable>
@@ -995,7 +993,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             ? selectedThreadRowColors.foregroundClassName
             : rowAppearance.foregroundClassName,
         )}
-        numberOfLines={2}
+        numberOfLines={1}
+        ellipsizeMode="tail"
       >
         {thread.title}
       </Text>
@@ -1154,15 +1153,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         {sidebarPane ? (
           cardContent
         ) : (
-          /* Flat native list rows: no tonal containers — colored status
-             labels and text hierarchy carry state, an inset hairline
-             separates rows. The opaque screen background stays so swipe
-             actions reveal behind the row. */
-          <View>
+          /* Bordered card rows. The opaque screen background behind the
+             frame stays so swipe actions reveal behind the row. */
+          <View className={THREAD_LIST_V2_ROW_FRAME_CLASS_NAME}>
             <View className={THREAD_LIST_V2_ROW_CONTENT_CLASS_NAME}>{cardContent}</View>
-            {THREAD_LIST_V2_ROW_DIVIDERS && props.showTrailingDivider !== false ? (
-              <View className="ml-5 h-px bg-border-subtle" />
-            ) : null}
           </View>
         )}
       </RowPressable>
@@ -1188,7 +1182,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         <View
           className={cn(
             "min-h-[44px] flex-row items-center gap-2.5 py-2",
-            sidebarPane ? "px-3" : "px-5",
+            sidebarPane ? "px-3" : cn(THREAD_LIST_V2_ROW_FRAME_CLASS_NAME, "px-4"),
           )}
         >
           {props.project ? (
@@ -1281,9 +1275,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                     },
                   ]
                 : []),
-              ...(onRemoveThreadFromParent &&
-              thread.parentThreadId != null &&
-              thread.lineage.relationshipToParent !== "subagent"
+              ...(onRemoveThreadFromParent && threadParentRelationship(thread) === "child"
                 ? [
                     {
                       id: "remove-parent",

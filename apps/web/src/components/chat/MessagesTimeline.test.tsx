@@ -1269,6 +1269,7 @@ describe("MessagesTimeline", () => {
         parentThreadLink={{
           threadId: ThreadId.make("thread-parent"),
           title: "Architecture audit",
+          relationship: "subagent",
         }}
       />,
     );

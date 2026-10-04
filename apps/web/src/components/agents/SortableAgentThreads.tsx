@@ -75,7 +75,7 @@ const isReorderable = (thread: EnvironmentThreadShell) =>
 /**
  * One drag surface for a list of agent chats: active cards reorder (the
  * sidebar's pointer lifecycle and persisted drop planner), and any card or
- * sub-run row can be linked under another run or detached from its parent.
+ * child row can be linked under another run or detached from its parent.
  * `active` is the reorderable list rendered by SortableAgentThreads inside.
  *
  * Both gestures follow the pointer over the card beneath it: the middle of a
@@ -101,7 +101,7 @@ export function AgentRunDragArea({
   const linkRun = useSetAgentRunParent();
   const nestTarget = useRef<string | null>(null);
   const [nestTargetKey, setNestTargetKey] = useState<string | null>(null);
-  // A card under a link drag that the run cannot go under: itself or its own sub-run.
+  // A card under a link drag that the run cannot go under: itself or its own child.
   const blockedTarget = useRef<string | null>(null);
   const [blockedTargetKey, setBlockedTargetKey] = useState<string | null>(null);
   const linkTargets = useRef<{ key: string; targets: ReadonlySet<string> } | null>(null);
@@ -179,7 +179,7 @@ export function AgentRunDragArea({
     blockedTarget.current =
       card && !reorders && !linkTargetsFor(key).has(card.key) ? card.key : null;
     if (activeId.startsWith(CHILD_PREFIX)) {
-      // A sub-run row detaches once it leaves the card it is listed under.
+      // A child row detaches once it leaves the card it is listed under.
       const anchorKey = (args.active.data.current as { anchorKey?: string } | undefined)?.anchorKey;
       const rect = anchorKey ? nestWrapperOf(anchorKey)?.getBoundingClientRect() : undefined;
       const outside =

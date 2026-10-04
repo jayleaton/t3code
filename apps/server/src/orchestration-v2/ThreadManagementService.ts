@@ -26,6 +26,7 @@ import {
   type ScheduledTaskId,
   ThreadId,
   type WorktreeSetupSnapshot,
+  isSubagentThread,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -646,10 +647,7 @@ const make = Effect.gen(function* () {
       Effect.map((snapshot) =>
         snapshot.threads
           .filter((thread) => thread.projectId === input.projectId)
-          .filter(
-            (thread) =>
-              input.includeSubagents || thread.lineage.relationshipToParent !== "subagent",
-          )
+          .filter((thread) => input.includeSubagents || !isSubagentThread(thread))
           .toSorted(
             (left, right) =>
               DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt) ||

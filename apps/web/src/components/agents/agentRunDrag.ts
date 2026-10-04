@@ -6,9 +6,9 @@ export const AGENT_LINK_DRAG_PREFIX = "link:";
 /** Marks a card's wrapper so a pointer hit test can find the run under it. */
 export const AGENT_NEST_KEY_ATTRIBUTE = "data-agent-nest-key";
 
-/** Lets cards and their sub-run rows join the surrounding SortableAgentThreads drag. */
+/** Lets cards and their child rows join the surrounding SortableAgentThreads drag. */
 export const AgentRunDragContext = createContext<{
-  /** Sub-run rows are draggable only inside a SortableAgentThreads list. */
+  /** Child rows are draggable only inside a SortableAgentThreads list. */
   readonly childDragEnabled: boolean;
   readonly dragging: boolean;
   /** A reorder is being saved; drags pause until it lands. */

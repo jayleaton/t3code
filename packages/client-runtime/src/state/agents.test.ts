@@ -456,6 +456,52 @@ describe("subagents and Agent chats on the board", () => {
     expect(childIds(pinnedBoard, "local:captain-chat")).toEqual([linkedCody.id]);
   });
 
+  it("nests a named-agent delegate as a child; only a recorded subagent stays off the board", () => {
+    // Randy reviewing for Captain through delegate_task: a child chat despite its task lineage.
+    const randyReview = {
+      ...delegated,
+      id: ThreadId.make("randy-review"),
+      parentRelationship: "child" as const,
+    };
+    const helper = {
+      ...delegated,
+      id: ThreadId.make("helper"),
+      parentRelationship: "subagent" as const,
+    };
+    const sidebarThreads = selectAgentSidebarThreads([captain, randyReview, helper]);
+    expect(sidebarThreads.map((run) => run.id)).toEqual([captain.id, randyReview.id]);
+    const board = nestAgentRuns({
+      lists: { pinned: [], active: sidebarThreads, settled: [] },
+      all: sidebarThreads,
+    });
+    expect(board.lists.active.map((run) => run.id)).toEqual([captain.id]);
+    expect(childIds(board, "local:captain-chat")).toEqual([randyReview.id]);
+  });
+
+  it("shows a just-launched child in its parent's card at once, before any run or profile", () => {
+    // t3_thread_launch commits thread.created (with its parent) before the
+    // worktree is prepared, so the card must not wait for a run.
+    const launching = {
+      ...thread("launching", "doug"),
+      parentThreadId: captain.id,
+      parentRelationship: "child" as const,
+      runtime: { ...thread("x", null).runtime, status: "preparing" },
+    } as ReturnType<typeof thread>;
+    const bare = {
+      ...thread("bare", null),
+      parentThreadId: captain.id,
+      parentRelationship: "child" as const,
+    };
+    const sidebarThreads = selectAgentSidebarThreads([captain, launching, bare]);
+    const board = nestAgentRuns({
+      lists: { pinned: [], ...selectAgentWorkspaceThreads(sidebarThreads, null, "") },
+      all: sidebarThreads,
+    });
+    expect(childIds(board, "local:captain-chat")).toEqual([bare.id, launching.id].toSorted());
+    expect(agentThreadStatus(launching)).toBe("queued");
+    expect(isAgentChatInFocus(launching, undefined, false)).toBe(true);
+  });
+
   it("keeps a child's parent card in the open-chat rail", () => {
     const sidebarThreads = selectAgentSidebarThreads(all);
     expect(withAgentRunAncestors([linkedCody], sidebarThreads).map((run) => run.id)).toEqual([
@@ -501,10 +547,30 @@ describe("rolled-up status", () => {
     expect(agentThreadStatus(monitoring)).toBe("monitoring");
     expect(selectWorkingParentKeys([github, monitoring])).toEqual(new Set(["local:github-chat"]));
     expect(selectWorkingParentKeys([github, glmDone])).toEqual(new Set());
+    // Its turn ended but a command it started runs on in the background.
+    const glmMonitoring = {
+      ...glmDone,
+      pendingBackgroundTasks: [
+        { taskId: "sleep", description: "sleep 90", kind: "command" as const },
+      ],
+    };
+    expect(agentThreadStatus(glmMonitoring)).toBe("monitoring");
+    expect(selectWorkingParentKeys([github, glmMonitoring])).toEqual(
+      new Set(["local:github-chat"]),
+    );
     expect(
       selectWorkingParentKeys([github, { ...glm, archivedAt: "2026-10-04T06:00:00Z" }]),
     ).toEqual(new Set());
     expect(agentThreadStatus({ ...github, settledAt: "2026-10-04T06:00:00Z" }, true)).toBe("done");
+  });
+
+  it("keeps an owner in progress while its own subagent works", () => {
+    const helper = {
+      ...withRun(thread("helper", "doug"), "running"),
+      parentThreadId: github.id,
+      parentRelationship: "subagent" as const,
+    };
+    expect(selectWorkingParentKeys([github, helper])).toEqual(new Set(["local:github-chat"]));
   });
 });
 
@@ -547,7 +613,7 @@ describe("parent changes on the board", () => {
   it("explains why a card cannot take the run", () => {
     const nested = { ...glm, parentThreadId: github.id };
     expect(agentRunLinkBlockedReason(nested, github)).toBe("Already under github-chat");
-    expect(agentRunLinkBlockedReason(github, nested)).toBe("Can't move under its own sub-run");
+    expect(agentRunLinkBlockedReason(github, nested)).toBe("Can't move under its own child");
     expect(agentRunLinkBlockedReason(glm, glm)).toBe("A chat cannot be its own parent");
   });
 });

@@ -3,6 +3,8 @@ import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 
 import {
+  isSubagentThread,
+  threadParentRelationship,
   CheckpointId,
   CheckpointRef,
   CheckpointScopeId,
@@ -1246,5 +1248,64 @@ describe("limit recovery choice updates", () => {
     { autoResume: true, snooze: false },
   ])("accepts an explicit independent choice %j", (choice) => {
     expect(decode({ ...identity, ...choice })).toEqual({ ...identity, ...choice });
+  });
+});
+
+describe("threadParentRelationship", () => {
+  const thread = (fields: {
+    readonly parentThreadId?: string | null;
+    readonly parentRelationship?: "child" | "subagent" | null;
+    readonly lineage?: "fork" | "subagent" | null;
+  }) => ({
+    ...(fields.parentThreadId === undefined
+      ? {}
+      : {
+          parentThreadId:
+            fields.parentThreadId === null ? null : ThreadId.make(fields.parentThreadId),
+        }),
+    ...(fields.parentRelationship === undefined
+      ? {}
+      : { parentRelationship: fields.parentRelationship }),
+    lineage: {
+      parentThreadId: fields.lineage ? ThreadId.make("owner") : null,
+      relationshipToParent: fields.lineage ?? null,
+      rootThreadId: ThreadId.make("owner"),
+    },
+  });
+
+  it("reads the stored kind, so a named-agent delegate is a child despite its task lineage", () => {
+    expect(
+      threadParentRelationship(
+        thread({ parentThreadId: "owner", parentRelationship: "child", lineage: "subagent" }),
+      ),
+    ).toBe("child");
+    expect(
+      threadParentRelationship(
+        thread({ parentThreadId: "owner", parentRelationship: "subagent", lineage: "subagent" }),
+      ),
+    ).toBe("subagent");
+    expect(isSubagentThread(thread({ parentRelationship: "subagent", lineage: "subagent" }))).toBe(
+      true,
+    );
+  });
+
+  it("treats an explicit null as top-level, even for a task-spawned thread", () => {
+    expect(
+      threadParentRelationship(
+        thread({ parentThreadId: null, parentRelationship: null, lineage: "subagent" }),
+      ),
+    ).toBeNull();
+    // A child kind without a parent left is top-level too.
+    expect(threadParentRelationship(thread({ parentRelationship: "child" }))).toBeNull();
+  });
+
+  it("falls back to lineage and the owner link for rows stored before the kind", () => {
+    expect(threadParentRelationship(thread({ lineage: "subagent" }))).toBe("subagent");
+    expect(threadParentRelationship(thread({ parentThreadId: "owner" }))).toBe("child");
+    expect(threadParentRelationship(thread({ parentThreadId: "owner", lineage: "fork" }))).toBe(
+      "child",
+    );
+    expect(threadParentRelationship(thread({ lineage: "fork" }))).toBeNull();
+    expect(threadParentRelationship(thread({}))).toBeNull();
   });
 });
