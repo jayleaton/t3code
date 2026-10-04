@@ -401,8 +401,15 @@ export function createBridgeRuntimePort(input: {
       settleThread: (environmentId, threadId) => invoke("settleThread", [environmentId, threadId]),
       unsettleThread: (environmentId, threadId) =>
         invoke("unsettleThread", [environmentId, threadId]),
-      setThreadParent: (environmentId, threadId, parentThreadId) =>
-        invoke("setThreadParent", [environmentId, threadId, parentThreadId]),
+      // The parent's environment must cross the bridge, or a cross-machine link
+      // is checked, and rejected, as a local one.
+      setThreadParent: (environmentId, threadId, parentThreadId, parentEnvironmentId) =>
+        invoke(
+          "setThreadParent",
+          parentEnvironmentId === undefined
+            ? [environmentId, threadId, parentThreadId]
+            : [environmentId, threadId, parentThreadId, parentEnvironmentId],
+        ),
       listSkills: (environmentId) => invoke("listSkills", [environmentId]),
       createSkill: (environmentId, input) => invoke("createSkill", [environmentId, input]),
       updateSkill: (environmentId, skillId, patch) =>

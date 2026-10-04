@@ -75,17 +75,26 @@ export function deriveThreadRelationshipGraph(input: {
   };
 
   for (const thread of threads) {
+    const status = thread.activityRunStatus ?? thread.status;
     const parentThreadId =
       thread.forkedFrom?.type === "run"
         ? thread.forkedFrom.threadId
         : thread.lineage.parentThreadId;
-    if (parentThreadId === null) continue;
-    addEdge({
-      sourceThreadId: parentThreadId,
-      targetThreadId: thread.id,
-      kind: thread.lineage.relationshipToParent === "subagent" ? "subagent" : "fork",
-      status: thread.activityRunStatus ?? thread.status,
-    });
+    if (parentThreadId !== null) {
+      addEdge({
+        sourceThreadId: parentThreadId,
+        targetThreadId: thread.id,
+        kind: thread.lineage.relationshipToParent === "subagent" ? "subagent" : "fork",
+        status,
+      });
+    }
+    // The chat that owns this one on the Agents board, such as the agent that
+    // launched it. Unlike lineage it can be re-parented or cleared, so the
+    // edge follows the shell. A parent on another machine has no node here.
+    const ownerThreadId = thread.parentEnvironmentId == null ? thread.parentThreadId : null;
+    if (ownerThreadId != null && ownerThreadId !== parentThreadId && ownerThreadId !== thread.id) {
+      addEdge({ sourceThreadId: ownerThreadId, targetThreadId: thread.id, kind: "parent", status });
+    }
   }
 
   if (input.projection !== null) {

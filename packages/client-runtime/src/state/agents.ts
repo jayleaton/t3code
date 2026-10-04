@@ -1,7 +1,7 @@
 import { planPinnedMove, sortActiveThreadsByOrderKey } from "./threadSort.ts";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import type { EnvironmentThreadShell } from "./shell.ts";
-import type { McpGatewayProfile } from "@t3tools/contracts";
+import type { EnvironmentId, McpGatewayProfile, ThreadId } from "@t3tools/contracts";
 
 export function groupAgentThreads(
   profiles: ReadonlyArray<McpGatewayProfile>,
@@ -25,7 +25,8 @@ export function groupAgentThreads(
   return { groups, orphaned };
 }
 
-export function agentThreadStatus(thread: EnvironmentThreadShell) {
+/** `childWorking`: a run under this one (see selectWorkingParentKeys) is still doing its work. */
+export function agentThreadStatus(thread: EnvironmentThreadShell, childWorking = false) {
   if (thread.settledAt !== null) return "done";
   // Questions and approvals arrive mid-turn, so they outrank the running turn.
   if (thread.hasPendingApprovals || thread.hasPendingUserInput) return "attention";
@@ -36,7 +37,9 @@ export function agentThreadStatus(thread: EnvironmentThreadShell) {
   if (thread.runtime?.status === "failed" || thread.latestRun?.status === "failed") return "error";
   // A turn can settle while native background work runs on: sub-agents are
   // still doing the work, while commands, monitors, and other tasks watch or wait.
-  if (thread.pendingBackgroundTasks.some((task) => task.kind === "subagent")) return "running";
+  // Chats this one launched or delegated to are its work too.
+  if (childWorking || thread.pendingBackgroundTasks.some((task) => task.kind === "subagent"))
+    return "running";
   if (thread.pendingBackgroundTasks.length > 0) return "monitoring";
   if (thread.latestRun?.status === "completed") return "done";
   return "idle";
@@ -233,16 +236,16 @@ function sortSiblingRuns<T extends AgentRun>(runs: readonly T[]): T[] {
 
 /**
  * Folds runs that another run created into the card of their nearest ancestor
- * on the board. Children come from every run, so a parent's card also shows
- * sub-runs of other agents and ones hidden by the current filter. A live card
- * holds children in any state; a settled card holds only settled children, so
- * live work never disappears into the collapsed settled shelf.
+ * on the board, on the full board and in the open-chat rail alike. Children
+ * come from every run, so a parent's card also shows sub-runs of other agents
+ * and ones hidden by the current filter. A live card holds children in any
+ * state; a settled card holds only settled children, so live work never
+ * disappears into the collapsed settled shelf. Callers pass Agent chats only
+ * (see selectAgentSidebarThreads): delegated subagents are never cards.
  */
 export function nestAgentRuns<T extends AgentRun>(input: {
   readonly lists: Readonly<Record<AgentRunList, readonly T[]>>;
   readonly all: readonly T[];
-  /** Only delegated relationships collapse in the sidebar; Agent chats stay first-class. */
-  readonly subagentsOnly?: boolean;
 }): {
   readonly lists: Readonly<Record<AgentRunList, readonly T[]>>;
   readonly childrenByKey: ReadonlyMap<string, AgentCardChildren<T>>;
@@ -255,12 +258,7 @@ export function nestAgentRuns<T extends AgentRun>(input: {
   for (const run of [...input.all, ...input.lists.pinned, ...input.lists.active]) {
     if (run.archivedAt === null) runByKey.set(threadKey(run), run);
   }
-  const parentKeyOf = (run: T) =>
-    input.subagentsOnly
-      ? isAgentSubagentThread(run)
-        ? threadKey({ environmentId: run.environmentId, id: run.lineage.parentThreadId! })
-        : null
-      : agentRunParentKey(run);
+  const parentKeyOf = agentRunParentKey;
   const anchorByKey = new Map<string, string | null>();
   const resolveAnchor = (run: T, visiting: Set<string>): string | null => {
     const key = threadKey(run);
@@ -276,7 +274,7 @@ export function nestAgentRuns<T extends AgentRun>(input: {
       visiting.delete(key);
       if (
         candidate !== null &&
-        (input.subagentsOnly || listByKey.get(candidate) !== "settled" || run.settledAt !== null)
+        (listByKey.get(candidate) !== "settled" || run.settledAt !== null)
       ) {
         anchor = candidate;
       }
@@ -311,9 +309,7 @@ export function nestAgentRuns<T extends AgentRun>(input: {
     childrenByKey.set(anchor, { live, settled });
   }
   const keep = (runs: readonly T[]) =>
-    runs.filter((run) =>
-      input.subagentsOnly ? !isAgentSubagentThread(run) : anchorByKey.get(threadKey(run)) == null,
-    );
+    runs.filter((run) => anchorByKey.get(threadKey(run)) == null);
   return {
     lists: {
       pinned: keep(input.lists.pinned),
@@ -337,6 +333,95 @@ export function agentRunParentKey(
   const environmentId = run.parentEnvironmentId ?? run.environmentId;
   if (environmentId === run.environmentId && run.parentThreadId === run.id) return null;
   return threadKey({ environmentId, id: run.parentThreadId });
+}
+
+const WORKING_STATUSES = new Set(["running", "queued", "attention"]);
+
+/**
+ * Keys of runs with work still going on below them, at any depth, so a parent
+ * whose own turn finished does not read Done while its sub-runs work on.
+ */
+export function selectWorkingParentKeys(
+  threads: readonly EnvironmentThreadShell[],
+): ReadonlySet<string> {
+  const parentKeyByKey = new Map<string, string | null>();
+  for (const thread of threads) {
+    if (thread.archivedAt === null)
+      parentKeyByKey.set(threadKey(thread), agentRunParentKey(thread));
+  }
+  const working = new Set<string>();
+  for (const thread of threads) {
+    if (thread.archivedAt !== null || !WORKING_STATUSES.has(agentThreadStatus(thread))) continue;
+    let parentKey = parentKeyByKey.get(threadKey(thread)) ?? null;
+    while (parentKey !== null && !working.has(parentKey)) {
+      working.add(parentKey);
+      parentKey = parentKeyByKey.get(parentKey) ?? null;
+    }
+  }
+  return working;
+}
+
+/** A parent change the board shows before the server confirms it. */
+export interface AgentParentOverride {
+  readonly parentThreadId: ThreadId | null;
+  readonly parentEnvironmentId: EnvironmentId | null;
+}
+
+/**
+ * Applies pending parent changes, keyed by the child's key, so a drag or
+ * "Remove from parent" lands at once. Removing an entry rolls the run back to
+ * the server's link, which is the only state a failed change can leave.
+ */
+export function applyAgentParentOverrides<T extends EnvironmentThreadShell>(
+  threads: readonly T[],
+  overrides: ReadonlyMap<string, AgentParentOverride>,
+): readonly T[] {
+  if (overrides.size === 0) return threads;
+  return threads.map((thread) => {
+    const override = overrides.get(threadKey(thread));
+    if (!override || agentParentOverrideApplied(thread, override)) return thread;
+    return {
+      ...thread,
+      parentThreadId: override.parentThreadId,
+      parentEnvironmentId: override.parentEnvironmentId,
+    };
+  });
+}
+
+/** True when the shell already shows the parent an override asked for. */
+export function agentParentOverrideApplied(
+  thread: Pick<AgentRun, "parentThreadId" | "parentEnvironmentId">,
+  override: AgentParentOverride,
+): boolean {
+  return (
+    (thread.parentThreadId ?? null) === override.parentThreadId &&
+    (override.parentThreadId === null ||
+      (thread.parentEnvironmentId ?? null) === override.parentEnvironmentId)
+  );
+}
+
+/**
+ * The open-chat rail lists chats in focus. Their ancestors join it so a child
+ * in focus still renders inside its parent's card instead of on its own.
+ */
+export function withAgentRunAncestors<T extends AgentRun>(
+  inFocus: readonly T[],
+  all: readonly T[],
+): readonly T[] {
+  const byKey = new Map(all.map((run) => [threadKey(run), run]));
+  const included = new Set(inFocus.map(threadKey));
+  const ancestors: T[] = [];
+  for (const run of inFocus) {
+    let parentKey = agentRunParentKey(run);
+    while (parentKey !== null && !included.has(parentKey)) {
+      const parent = byKey.get(parentKey);
+      if (!parent || parent.archivedAt !== null || parent.settledAt !== null) break;
+      included.add(parentKey);
+      ancestors.push(parent);
+      parentKey = agentRunParentKey(parent);
+    }
+  }
+  return ancestors.length === 0 ? inFocus : [...inFocus, ...ancestors];
 }
 
 /**
@@ -367,6 +452,16 @@ export function agentRunLinkTargets(
   }
   const currentParent = agentRunParentKey(child);
   return new Set(all.map(threadKey).filter((key) => !ownRuns.has(key) && key !== currentParent));
+}
+
+/** Why `child` cannot link under `target`, a card agentRunLinkTargets left out. */
+export function agentRunLinkBlockedReason(
+  child: AgentRunLink & { readonly title?: string },
+  target: AgentRunLink & { readonly title: string },
+): string {
+  if (threadKey(child) === threadKey(target)) return "A chat cannot be its own parent";
+  if (agentRunParentKey(child) === threadKey(target)) return `Already under ${target.title}`;
+  return "Can't move under its own sub-run";
 }
 
 export type AgentRunDropZone = "before" | "nest" | "after";

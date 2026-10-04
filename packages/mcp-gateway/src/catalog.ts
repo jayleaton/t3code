@@ -202,7 +202,7 @@ export const TOOL_SPECS = {
     { environmentId, threadId },
   ],
   t3_set_thread_parent: [
-    "Make a chat a sub-run of another chat, on this or another environment (pass parentEnvironmentId), or pass parentThreadId null to detach it. Sub-runs show inside their parent's card on the Agents board. Requires lifecycle scope. A chat cannot move under itself or one of its own sub-runs. Does not start or stop a turn.",
+    "Nest a chat under another chat, move it to a different parent, or pass parentThreadId null to remove it from its parent. The parent may be on another environment (pass parentEnvironmentId). Sub-runs show inside their parent's card on the Agents board; list a chat's sub-runs with t3_list_threads parentThreadId. The change is all or nothing and safe to repeat. It fails with a reason, leaving the link unchanged, when the chat would go under itself or one of its own sub-runs, when the parent is missing, deleted, or archived, or when the chat is a delegated subagent, which stays with the chat that delegated it. Requires lifecycle scope. Does not start or stop a turn.",
     {
       environmentId,
       threadId,

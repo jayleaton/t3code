@@ -32,7 +32,8 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import { useAgentLibrary } from "../../hooks/useAgentLibrary";
 import { useScheduledTasks, useScheduledTasksSupported } from "../../state/scheduledTasks";
 import { useEnvironments } from "../../state/environments";
-import { useThreadShells, useAllEnvironmentShellsBootstrapped } from "../../state/entities";
+import { useAllEnvironmentShellsBootstrapped } from "../../state/entities";
+import { useAgentThreadShells } from "./useAgentRunParenting";
 import { AgentSkillsEditor } from "./AgentSkillsEditor";
 import { AgentEditor } from "./AgentEditor";
 import { AgentTaskDialog } from "./AgentTaskDialog";
@@ -45,6 +46,7 @@ import {
   selectAgentSidebarThreads,
   selectAgentWorkspaceThreads,
   selectPinnedAgentThreads,
+  selectWorkingParentKeys,
   type AgentCardChildren,
   type AgentRunContextMenu,
 } from "./agents.logic";
@@ -64,33 +66,43 @@ function AgentThreadList({
   onContextMenu,
   profiles,
   childrenByKey,
+  workingKeys,
   runByKey,
 }: {
   profiles: readonly McpGatewayProfile[];
   threads: readonly EnvironmentThreadShell[];
   pinned: readonly EnvironmentThreadShell[];
   childrenByKey: ReadonlyMap<string, AgentCardChildren<EnvironmentThreadShell>>;
+  workingKeys: ReadonlySet<string>;
   runByKey: ReadonlyMap<string, EnvironmentThreadShell>;
   onContextMenu: AgentRunContextMenu;
 }) {
   const [settledOpen, setSettledOpen] = useState(false);
   const active = threads.filter((thread) => thread.settledAt === null);
   const settled = threads.filter((thread) => thread.settledAt !== null);
-  const renderCard = (thread: EnvironmentThreadShell, dragging = false) => (
-    <ThreadCard
-      key={`${thread.environmentId}:${thread.id}`}
-      thread={thread}
-      dragging={dragging}
-      profile={profiles.find((profile) => profile.profileId === thread.profileSnapshot?.profileId)}
-      profiles={profiles}
-      childRuns={childrenByKey.get(`${thread.environmentId}:${thread.id}`)}
-      parentRun={(() => {
-        const parentKey = agentRunParentKey(thread);
-        return parentKey === null ? null : runByKey.get(parentKey);
-      })()}
-      onContextMenu={onContextMenu}
-    />
-  );
+  const renderCard = (thread: EnvironmentThreadShell, dragging = false) => {
+    const key = `${thread.environmentId}:${thread.id}`;
+    const childRuns = childrenByKey.get(key);
+    return (
+      <ThreadCard
+        key={key}
+        thread={thread}
+        dragging={dragging}
+        profile={profiles.find(
+          (profile) => profile.profileId === thread.profileSnapshot?.profileId,
+        )}
+        profiles={profiles}
+        childRuns={childRuns}
+        childWorking={workingKeys.has(key)}
+        workingKeys={childRuns ? workingKeys : undefined}
+        parentRun={(() => {
+          const parentKey = agentRunParentKey(thread);
+          return parentKey === null ? null : runByKey.get(parentKey);
+        })()}
+        onContextMenu={onContextMenu}
+      />
+    );
+  };
   const linkableCard = (thread: EnvironmentThreadShell) => (
     <LinkableAgentCard key={`${thread.environmentId}:${thread.id}`} thread={thread}>
       {renderCard(thread)}
@@ -167,7 +179,8 @@ export function AgentsBoard() {
   const scheduledSupported = useScheduledTasksSupported();
   const scheduledTasks = useScheduledTasks();
   const modelPreferences = useClientSettings((settings) => settings.providerModelPreferences);
-  const threads = useThreadShells();
+  // Pending parent changes show at once (see useSetAgentRunParent).
+  const threads = useAgentThreadShells();
   // Delegated tasks live in the thread details' Lineage section, never this roster.
   const sidebarThreads = useMemo(() => selectAgentSidebarThreads(threads), [threads]);
   const ready = useAllEnvironmentShellsBootstrapped();
@@ -201,9 +214,10 @@ export function AgentsBoard() {
         settled: excludePinnedAgentThreads(settled, allPinned),
       },
       all: sidebarThreads,
-      subagentsOnly: selected,
     });
-  }, [sidebarThreads, filter, query, allPinned, selected]);
+  }, [sidebarThreads, filter, query, allPinned]);
+  // Every chat, delegated subagents included: their work keeps a parent busy.
+  const workingKeys = useMemo(() => selectWorkingParentKeys(threads), [threads]);
   const pinned = nestedLists.pinned;
   const visible = useMemo(
     () => [...nestedLists.active, ...nestedLists.settled],
@@ -505,6 +519,7 @@ export function AgentsBoard() {
             pinned={pinned}
             profiles={profiles}
             childrenByKey={childrenByKey}
+            workingKeys={workingKeys}
             runByKey={runByKey}
             onContextMenu={onThreadContextMenu}
           />

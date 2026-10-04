@@ -131,6 +131,51 @@ describe("ThreadPullRequestServiceV2 project guard", () => {
   });
 });
 
+describe("ThreadPullRequestServiceV2 branch discovery", () => {
+  const createdAt = DateTime.makeUnsafe("2026-10-04T05:58:31.000Z");
+  const pullRequest = (
+    state: "open" | "merged" | "closed",
+    times: { mergedAt?: string; closedAt?: string; updatedAt?: string | null } = {},
+  ) => ({ state, updatedAt: times.updatedAt ?? null, ...times });
+
+  it("does not adopt a pull request that merged or closed before the chat existed", () => {
+    expect(
+      ThreadPullRequestService.branchPullRequestPredatesThread(
+        pullRequest("merged", { mergedAt: "2026-10-04T05:23:37Z" }),
+        createdAt,
+      ),
+    ).toBe(true);
+    expect(
+      ThreadPullRequestService.branchPullRequestPredatesThread(
+        pullRequest("closed", { updatedAt: "2026-10-04T05:00:00Z" }),
+        createdAt,
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps open, later, and undated pull requests", () => {
+    expect(
+      ThreadPullRequestService.branchPullRequestPredatesThread(
+        pullRequest("open", { updatedAt: "2026-10-04T05:00:00Z" }),
+        createdAt,
+      ),
+    ).toBe(false);
+    // Merged while the chat was working: that chat's own work.
+    expect(
+      ThreadPullRequestService.branchPullRequestPredatesThread(
+        pullRequest("merged", {
+          mergedAt: "2026-10-04T06:30:00Z",
+          updatedAt: "2026-10-04T05:00:00Z",
+        }),
+        createdAt,
+      ),
+    ).toBe(false);
+    expect(
+      ThreadPullRequestService.branchPullRequestPredatesThread(pullRequest("merged"), createdAt),
+    ).toBe(false);
+  });
+});
+
 describe("ThreadPullRequestServiceV2 reads", () => {
   const NOW = DateTime.makeUnsafe("2026-09-20T00:00:00.000Z");
   const threadShell = (id: string): OrchestrationV2ThreadShell => {
