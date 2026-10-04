@@ -221,7 +221,9 @@ the snooze. Enable **Snooze limited threads** in thread behavior settings to
 snooze limit stops by default. Providers without a reset time offer manual
 retry and the normal snooze choices.
 
-On web and desktop, use **Agents** to follow work delegated to subagents.
+On web and desktop, use **Agents** to follow the child chats an agent launches;
+each one nests inside its parent's card. Subagents, the helpers inside one
+agent's own run, appear only in that chat's **Lineage** panel.
 
 Subagent threads started by the agent can't take messages; message the parent
 thread instead. When such a subagent needs an approval or an answer, the parent

@@ -28,7 +28,7 @@ import { ThreadDetailsCard } from "./ThreadDetailsCard";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
-import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
+import { ThreadChildChatsPanel, ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 import { ThreadTodosPanel } from "./ThreadTodosPanel";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 
@@ -240,6 +240,10 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
 
           {density === "full" && !props.draftId ? (
             <ThreadAutomationsPanel environmentId={props.environmentId} threadId={props.threadId} />
+          ) : null}
+
+          {density === "full" && !props.draftId ? (
+            <ThreadChildChatsPanel environmentId={props.environmentId} threadId={props.threadId} />
           ) : null}
 
           {density === "full" && !props.draftId ? (

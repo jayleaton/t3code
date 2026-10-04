@@ -99,6 +99,35 @@ environments route to a connected app over `mcpGateway.connect`; the app only an
 environments its user granted, and the server applies those grants' scopes. Keep tools that
 need the gateway's event store in `GATEWAY_ONLY_TOOLS`.
 
-Sub-run links (`parentThreadId`) may point at a chat on another machine through
-`parentEnvironmentId`. A server cannot check a parent it does not host, so it validates
-existence and cycles only for local parents; clients resolve parents by both IDs.
+### Children and subagents
+
+A thread hangs off another in one of two mutually exclusive ways, recorded in
+`parentRelationship` and read through `threadParentRelationship`
+(`packages/contracts/src/orchestrationV2.ts`):
+
+- A **child** is a full agent chat with its own context doing a separate part of a larger task.
+  It is a card nested in its parent's card and a sidebar row, settles on its own, can be
+  re-parented, and owns its own subagents.
+- A **subagent** is a helper inside one agent's run that saves that agent's context. It is never
+  a card or a sidebar row; it appears only in its owner's Lineage panel and cannot move.
+
+`parentThreadId` is the single owner pointer for both, so the settle cascade and the
+in-progress rollup cover children and subagents without knowing the kind. Everything that
+decides _visibility_ must ask for the kind instead.
+
+`lineage.relationshipToParent: "subagent"` does not mean "subagent" in this sense. It records
+that a task spawned the thread and drives task-result delivery back to the delegator. A
+`delegate_task` run as a named agent keeps that lineage, so its result still returns through
+`task_status`, but it is a child: a named agent doing separate work has its own context. Only
+profile-less `delegate_task` helpers and provider-native subagents are subagents. The profile
+cannot stand in for the kind, because a spawned thread inherits its owner's profile snapshot.
+
+Rows written before the kind was stored fall back to their lineage on clients. On every start
+`repairThreadParents` (`threadParentLinks.ts`) records the kind for task-spawned rows, treating a
+named agent other than the owner's, or a row the user moved, as a child. It also makes any thread
+whose parent or owner is gone top-level, so nothing ends up hidden from both the board and
+Lineage.
+
+Parent links may point at a chat on another machine through `parentEnvironmentId`. A server
+cannot check a parent it does not host, so it validates existence and cycles only for local
+parents; clients resolve parents by both IDs.

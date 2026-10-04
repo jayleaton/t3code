@@ -3,9 +3,15 @@ import type {
   OrchestrationV2ThreadShell,
   ThreadId,
 } from "@t3tools/contracts";
+import { isSubagentThread, threadParentRelationship } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-export type ThreadRelationshipKind = "parent" | "fork" | "subagent" | "transfer";
+/**
+ * Edges of a thread's Lineage: where its context came from (forks, context
+ * transfers) and the subagents inside its own runs. Child chats are not
+ * lineage; they nest in their parent's card (see threadChildChats).
+ */
+export type ThreadRelationshipKind = "fork" | "subagent" | "transfer";
 
 export interface ThreadRelationshipNode {
   readonly threadId: ThreadId;
@@ -76,24 +82,24 @@ export function deriveThreadRelationshipGraph(input: {
 
   for (const thread of threads) {
     const status = thread.activityRunStatus ?? thread.status;
+    if (isSubagentThread(thread) && thread.lineage.parentThreadId !== null) {
+      addEdge({
+        sourceThreadId: thread.lineage.parentThreadId,
+        targetThreadId: thread.id,
+        kind: "subagent",
+        status,
+      });
+      continue;
+    }
+    // A child chat spawned by a named-agent delegate_task keeps a task
+    // lineage, but it is a chat of its own, not lineage of its parent.
+    if (thread.lineage.relationshipToParent !== "fork") continue;
     const parentThreadId =
       thread.forkedFrom?.type === "run"
         ? thread.forkedFrom.threadId
         : thread.lineage.parentThreadId;
     if (parentThreadId !== null) {
-      addEdge({
-        sourceThreadId: parentThreadId,
-        targetThreadId: thread.id,
-        kind: thread.lineage.relationshipToParent === "subagent" ? "subagent" : "fork",
-        status,
-      });
-    }
-    // The chat that owns this one on the Agents board, such as the agent that
-    // launched it. Unlike lineage it can be re-parented or cleared, so the
-    // edge follows the shell. A parent on another machine has no node here.
-    const ownerThreadId = thread.parentEnvironmentId == null ? thread.parentThreadId : null;
-    if (ownerThreadId != null && ownerThreadId !== parentThreadId && ownerThreadId !== thread.id) {
-      addEdge({ sourceThreadId: ownerThreadId, targetThreadId: thread.id, kind: "parent", status });
+      addEdge({ sourceThreadId: parentThreadId, targetThreadId: thread.id, kind: "fork", status });
     }
   }
 
@@ -101,6 +107,9 @@ export function deriveThreadRelationshipGraph(input: {
     const ownerThreadId = input.projection.thread.id;
     for (const subagent of input.projection.subagents) {
       if (subagent.childThreadId === null) continue;
+      // A delegate_task run as a named agent is a child chat, not a subagent.
+      const childThread = threadsById.get(subagent.childThreadId);
+      if (childThread !== undefined && !isSubagentThread(childThread)) continue;
       // The subagent record settles with the delegated task's first run, but the
       // parent can keep sending the child follow-ups. A live run on the child
       // thread outranks that settled status.
@@ -113,6 +122,8 @@ export function deriveThreadRelationshipGraph(input: {
     }
     for (const transfer of input.projection.contextTransfers) {
       if (transfer.sourceThreadId === transfer.targetThreadId) continue;
+      // Task spawns and results are the subagent edge itself, or a child's.
+      if (transfer.type === "subagent_spawn" || transfer.type === "subagent_result") continue;
       addEdge({
         sourceThreadId: transfer.sourceThreadId,
         targetThreadId: transfer.targetThreadId,
@@ -190,12 +201,37 @@ export function immediateThreadRelationships(
   return rows;
 }
 
-/** True when `edge` reaches `currentThreadId` from its parent or owning agent. */
+/** True when `edge` reaches `currentThreadId` from the thread it was forked from or its owner. */
 export function isParentThreadRelationship(
   edge: ThreadRelationshipEdge,
   currentThreadId: ThreadId,
 ): boolean {
   return edge.kind !== "transfer" && edge.targetThreadId === currentThreadId;
+}
+
+type ChildChatShell = Pick<
+  OrchestrationV2ThreadShell,
+  "id" | "parentThreadId" | "parentEnvironmentId" | "parentRelationship" | "lineage" | "createdAt"
+>;
+
+/** Child chats directly under `threadId` on the same environment, oldest first. */
+export function threadChildChats<T extends ChildChatShell>(
+  threads: ReadonlyArray<T>,
+  threadId: ThreadId,
+): ReadonlyArray<T> {
+  return threads
+    .filter(
+      (thread) =>
+        thread.parentThreadId === threadId &&
+        thread.parentEnvironmentId == null &&
+        thread.id !== threadId &&
+        threadParentRelationship(thread) === "child",
+    )
+    .sort(
+      (left, right) =>
+        (createdAtMillis(left.createdAt) ?? 0) - (createdAtMillis(right.createdAt) ?? 0) ||
+        (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
+    );
 }
 
 /** An incoming parent row shows its own activity, not the child's edge status. */
@@ -211,9 +247,12 @@ export function threadRelationshipRowStatus(
 }
 
 function threadCreatedAtMillis(node: ThreadRelationshipNode | undefined): number | null {
+  return createdAtMillis(node?.thread?.createdAt);
+}
+
+function createdAtMillis(createdAt: unknown): number | null {
   // `createdAt` is typed as a DateTime, but the value reaches here from a
   // decoded shell that may be missing (a related thread we have no shell for).
-  const createdAt: unknown = node?.thread?.createdAt;
   if (!DateTime.isDateTime(createdAt)) return null;
   const millis = DateTime.toEpochMillis(createdAt);
   return Number.isFinite(millis) ? millis : null;

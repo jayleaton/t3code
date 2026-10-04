@@ -217,7 +217,7 @@ export function AgentsBoard() {
       all: sidebarThreads,
     });
   }, [sidebarThreads, filter, query, allPinned]);
-  // Every chat, delegated subagents included: their work keeps a parent busy.
+  // Every chat, subagents included: children and subagents both keep a parent busy.
   const workingKeys = useMemo(() => selectWorkingParentKeys(threads), [threads]);
   const pinned = nestedLists.pinned;
   const visible = useMemo(

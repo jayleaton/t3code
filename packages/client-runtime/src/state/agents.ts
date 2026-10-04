@@ -1,6 +1,7 @@
 import { planPinnedMove, sortActiveThreadsByOrderKey } from "./threadSort.ts";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import type { EnvironmentThreadShell } from "./shell.ts";
+import { isSubagentThread } from "@t3tools/contracts";
 import type { EnvironmentId, McpGatewayProfile, ThreadId } from "@t3tools/contracts";
 
 /** Palette an agent without its own color cycles through, matching the agent editor's swatches. */
@@ -196,6 +197,7 @@ type AgentRun = Pick<
   | "environmentId"
   | "id"
   | "parentThreadId"
+  | "parentRelationship"
   | "lineage"
   | "createdAt"
   | "settledAt"
@@ -206,18 +208,19 @@ type AgentRun = Pick<
 > &
   Partial<Pick<EnvironmentThreadShell, "parentEnvironmentId">>;
 
+/** A child chat inside a card. Subagents are never here (see selectAgentSidebarThreads). */
 export interface AgentChildRun<T> {
   readonly thread: T;
-  /** 0 for runs the card's own run created, 1 for theirs, and so on. */
+  /** 0 for the card's own children, 1 for their children, and so on. */
   readonly depth: number;
-  /** Runs sharing this run's parent, for Move up/down within that parent. */
+  /** Children sharing this one's parent, for Move up/down within that parent. */
   readonly siblings: readonly T[];
 }
 
 export interface AgentCardChildren<T> {
-  /** Pinned first, then active in their arranged order, each with its own sub-runs. */
+  /** Pinned first, then active in their arranged order, each with its own children. */
   readonly live: readonly AgentChildRun<T>[];
-  /** Settled direct sub-runs (and theirs), shown last like the board's Settled shelf. */
+  /** Settled direct children (and theirs), shown last like the board's Settled shelf. */
   readonly settled: readonly AgentChildRun<T>[];
 }
 
@@ -235,17 +238,23 @@ export function agentChildRunsSummary(runs: AgentCardChildren<EnvironmentThreadS
     }
   }
   return [
-    `${total} subagent${total === 1 ? "" : "s"}`,
+    `${total} child${total === 1 ? "" : "ren"}`,
     ...(running > 0 ? [`${running} running`] : []),
     ...(attention > 0 ? [`${attention} need${attention === 1 ? "s" : ""} attention`] : []),
   ].join(" · ");
 }
 
-/** Delegation is a lineage relationship, independent of the Agent profile used to run it. */
-export function isAgentSubagentThread(run: Pick<AgentRun, "lineage">) {
-  return run.lineage.relationshipToParent === "subagent" && run.lineage.parentThreadId !== null;
+/**
+ * A helper inside another agent's run. Subagents are never cards: they show
+ * only in their owner's Lineage panel. Child chats are cards of their own.
+ */
+export function isAgentSubagentThread(
+  run: Pick<AgentRun, "lineage" | "parentThreadId" | "parentRelationship">,
+) {
+  return isSubagentThread(run);
 }
 
+/** Every chat that is a card on the board or a row in the sidebar: everything but subagents. */
 export function selectAgentSidebarThreads(threads: readonly EnvironmentThreadShell[]) {
   return threads.filter((thread) => !isAgentSubagentThread(thread));
 }
@@ -267,13 +276,12 @@ function sortSiblingRuns<T extends AgentRun>(runs: readonly T[]): T[] {
 }
 
 /**
- * Folds runs that another run created into the card of their nearest ancestor
- * on the board, on the full board and in the open-chat rail alike. Children
- * come from every run, so a parent's card also shows sub-runs of other agents
+ * Folds child chats into the card of their nearest ancestor on the board, on
+ * the full board and in the open-chat rail alike. Children come from every run, so a parent's card also shows children of other agents
  * and ones hidden by the current filter. A live card holds children in any
  * state; a settled card holds only settled children, so live work never
  * disappears into the collapsed settled shelf. Callers pass Agent chats only
- * (see selectAgentSidebarThreads): delegated subagents are never cards.
+ * (see selectAgentSidebarThreads): subagents are never cards.
  */
 export function nestAgentRuns<T extends AgentRun>(input: {
   readonly lists: Readonly<Record<AgentRunList, readonly T[]>>;
@@ -371,7 +379,7 @@ const WORKING_STATUSES = new Set(["running", "queued", "attention"]);
 
 /**
  * Keys of runs with work still going on below them, at any depth, so a parent
- * whose own turn finished does not read Done while its sub-runs work on.
+ * whose own turn finished does not read Done while its children or subagents work on.
  */
 export function selectWorkingParentKeys(
   threads: readonly EnvironmentThreadShell[],
@@ -457,8 +465,8 @@ export function withAgentRunAncestors<T extends AgentRun>(
 }
 
 /**
- * Keys of the runs `child` may become a sub-run of, on any environment. A run cannot move
- * under itself, its current parent, or one of its own sub-runs. Computed once per drag, not
+ * Keys of the runs `child` may become a child of, on any environment. A run cannot move
+ * under itself, its current parent, or one of its own children. Computed once per drag, not
  * per pointer move.
  */
 export function agentRunLinkTargets(
@@ -493,7 +501,7 @@ export function agentRunLinkBlockedReason(
 ): string {
   if (threadKey(child) === threadKey(target)) return "A chat cannot be its own parent";
   if (agentRunParentKey(child) === threadKey(target)) return `Already under ${target.title}`;
-  return "Can't move under its own sub-run";
+  return "Can't move under its own child";
 }
 
 export type AgentRunDropZone = "before" | "nest" | "after";
