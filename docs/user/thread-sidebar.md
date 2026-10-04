@@ -157,6 +157,23 @@ rules to connected environments that support shared settings. Offline environmen
 and older servers keep their previous values. Changing a rule does not reopen
 already settled threads.
 
+## Keep a TODO list
+
+The thread details panel (the **Workspace** popover in the thread header) has a **TODO** list
+for the thread's project. Type in its field and press `Enter` to add a todo. Check one off to
+settle it: it leaves the active list but is kept, and **Show settled** brings it back into view.
+Uncheck a settled todo to make it active again. Removing a todo deletes it; **Undo** on the
+notice adds it back.
+
+Every checkout and worktree of the same repository on an environment shares one list, so
+todos follow the repository rather than the thread. A project without a git remote has its
+own list. Lists stay on their environment and are not shared between machines.
+
+On web and desktop, choose **Add TODO** in the command palette to jump to the field, or bind
+`todo.add` in **Settings → Keybindings**. Assistants connected through MCP can manage the same
+list with `t3_list_todos`, `t3_add_todo`, `t3_update_todo`, `t3_settle_todo`,
+`t3_unsettle_todo`, and `t3_remove_todo`. The mobile app does not show todos yet.
+
 ## Link a pull request
 
 The server finds the PR for each unsettled thread's saved branch, even when your

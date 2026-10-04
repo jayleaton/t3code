@@ -11,6 +11,8 @@ import {
   ProjectId,
   ProjectIconOverride,
   ThreadId,
+  TodoEvent,
+  TodoId,
   type OrchestrationV2DomainEvent,
 } from "@t3tools/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -40,6 +42,14 @@ const ProjectEventType = Schema.Literals([
   "project.meta-updated",
   "project.deleted",
 ]);
+const decodeTodoEvent = Schema.decodeUnknownEffect(TodoEvent);
+const TodoEventType = Schema.Literals([
+  "todo.created",
+  "todo.updated",
+  "todo.settled",
+  "todo.unsettled",
+  "todo.deleted",
+]);
 const ActorKind = Schema.Literals(["client", "server", "provider"]);
 
 const AppendProjectEventRequestSchema = Schema.Struct({
@@ -67,6 +77,19 @@ const ProjectEventPersistedRowSchema = Schema.Struct({
   correlationId: Schema.NullOr(CommandId),
   payload: UnknownFromJsonString,
   metadata: EventMetadataFromJsonString,
+});
+
+const AppendTodoEventRequestSchema = Schema.Struct({
+  ...AppendProjectEventRequestSchema.fields,
+  streamId: TodoId,
+  type: TodoEventType,
+});
+
+const TodoEventPersistedRowSchema = Schema.Struct({
+  ...ProjectEventPersistedRowSchema.fields,
+  type: TodoEventType,
+  aggregateKind: Schema.Literal("todo"),
+  aggregateId: TodoId,
 });
 
 const READ_PAGE_SIZE = 500;
@@ -157,7 +180,9 @@ function rowToApplicationStoredEvent(
 }
 
 function inferActorKind(
-  event: OrchestrationEventStore.UnsequencedProjectEvent,
+  event:
+    | OrchestrationEventStore.UnsequencedProjectEvent
+    | OrchestrationEventStore.UnsequencedTodoEvent,
 ): typeof ActorKind.Type {
   if (event.commandId !== null && event.commandId.startsWith("provider:")) {
     return "provider";
@@ -274,6 +299,90 @@ const makeEventStore = Effect.gen(function* () {
           ),
         ),
       );
+
+  const appendTodoEventRow = SqlSchema.findOne({
+    Request: AppendTodoEventRequestSchema,
+    Result: TodoEventPersistedRowSchema,
+    execute: (request) =>
+      sql`
+        INSERT INTO orchestration_events (
+          event_id,
+          aggregate_kind,
+          stream_id,
+          stream_version,
+          event_type,
+          occurred_at,
+          command_id,
+          causation_event_id,
+          correlation_id,
+          actor_kind,
+          payload_json,
+          metadata_json,
+          application_event_version
+        )
+        VALUES (
+          ${request.eventId},
+          'todo',
+          ${request.streamId},
+          COALESCE(
+            (
+              SELECT stream_version + 1
+              FROM orchestration_events
+              WHERE aggregate_kind = 'todo'
+                AND stream_id = ${request.streamId}
+              ORDER BY stream_version DESC
+              LIMIT 1
+            ),
+            0
+          ),
+          ${request.type},
+          ${request.occurredAt},
+          ${request.commandId},
+          ${request.causationEventId},
+          ${request.correlationId},
+          ${request.actorKind},
+          ${request.payloadJson},
+          ${request.metadataJson},
+          2
+        )
+        RETURNING
+          sequence,
+          event_id AS "eventId",
+          event_type AS "type",
+          aggregate_kind AS "aggregateKind",
+          stream_id AS "aggregateId",
+          occurred_at AS "occurredAt",
+          command_id AS "commandId",
+          causation_event_id AS "causationEventId",
+          correlation_id AS "correlationId",
+          payload_json AS "payload",
+          metadata_json AS "metadata"
+      `,
+  });
+
+  const appendTodoEvent: OrchestrationEventStore.OrchestrationEventStoreShape["appendTodoEvent"] = (
+    event,
+  ) =>
+    appendTodoEventRow({
+      eventId: event.eventId,
+      streamId: event.aggregateId,
+      type: event.type,
+      causationEventId: event.causationEventId,
+      correlationId: event.correlationId,
+      actorKind: inferActorKind(event),
+      occurredAt: event.occurredAt,
+      commandId: event.commandId,
+      payloadJson: event.payload,
+      metadataJson: event.metadata,
+    }).pipe(
+      Effect.flatMap((row) => decodeTodoEvent(row)),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "OrchestrationEventStore.appendTodoEvent:insert",
+          "OrchestrationEventStore.appendTodoEvent:decode",
+        ),
+      ),
+    );
 
   const readApplicationRows = (input: {
     readonly afterSequence: number;
@@ -593,6 +702,7 @@ const makeEventStore = Effect.gen(function* () {
 
   return {
     appendProjectEvent,
+    appendTodoEvent,
     appendAgentEvents,
     readAgentEvents,
     getAgentReplayStats,

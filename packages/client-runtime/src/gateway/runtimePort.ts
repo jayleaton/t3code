@@ -13,6 +13,7 @@ import {
   ScheduledTaskId,
   ProviderInstanceId,
   ThreadId,
+  TodoId,
   WS_METHODS,
   McpGatewayProfile,
   type OrchestrationV2ShellSnapshot,
@@ -836,6 +837,45 @@ export function createGatewayRuntimePort(
               );
               return task;
             }
+          }
+        }),
+      ),
+    todo: (environmentId, todo) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          const call = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+            registry.run(EnvironmentId.make(environmentId), effect);
+          switch (todo.action) {
+            case "list":
+              return yield* call(
+                request(WS_METHODS.todosList, { projectId: ProjectId.make(todo.projectId) }),
+              );
+            case "add":
+              return (yield* call(
+                request(WS_METHODS.todosCreate, {
+                  projectId: ProjectId.make(todo.projectId),
+                  text: todo.text,
+                }),
+              )).todo;
+            case "update":
+              return (yield* call(
+                request(WS_METHODS.todosUpdate, {
+                  todoId: TodoId.make(todo.todoId),
+                  text: todo.text,
+                }),
+              )).todo;
+            case "settle":
+            case "unsettle":
+              return (yield* call(
+                request(
+                  todo.action === "settle" ? WS_METHODS.todosSettle : WS_METHODS.todosUnsettle,
+                  { todoId: TodoId.make(todo.todoId) },
+                ),
+              )).todo;
+            case "remove":
+              yield* call(request(WS_METHODS.todosRemove, { todoId: TodoId.make(todo.todoId) }));
+              return { removed: todo.todoId };
           }
         }),
       ),

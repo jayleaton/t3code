@@ -1,12 +1,19 @@
 import * as Schema from "effect/Schema";
 
-import { CommandId, IsoDateTime, NonNegativeInt, ProjectId, ThreadId } from "./baseSchemas.ts";
+import {
+  CommandId,
+  IsoDateTime,
+  NonNegativeInt,
+  ProjectId,
+  ThreadId,
+  TodoId,
+} from "./baseSchemas.ts";
 
 /** Outcome of one dispatched command, read back by the MCP gateway to confirm delivery. */
 export const OrchestrationCommandReceiptRecord = Schema.Struct({
   commandId: CommandId,
-  aggregateKind: Schema.Literals(["project", "thread"]),
-  aggregateId: Schema.Union([ProjectId, ThreadId]),
+  aggregateKind: Schema.Literals(["project", "thread", "todo"]),
+  aggregateId: Schema.Union([ProjectId, ThreadId, TodoId]),
   acceptedAt: IsoDateTime,
   resultSequence: NonNegativeInt,
   status: Schema.Literals(["accepted", "rejected"]),

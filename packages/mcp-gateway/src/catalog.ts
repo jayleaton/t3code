@@ -352,6 +352,30 @@ export const TOOL_SPECS = {
     "Run a scheduled task's prompt now, in its thread, without changing its schedule. Requires send access.",
     { environmentId, taskId: z.string().trim().min(1) },
   ],
+  t3_list_todos: [
+    "List a project's todos. A project with a git remote shares one list with every checkout and worktree of that repository on the environment; a folder without one has its own. Active todos come first, oldest first, then up to 50 recently settled ones; settledCount counts every settled todo.",
+    { environmentId, projectId: z.string().trim().min(1) },
+  ],
+  t3_add_todo: [
+    "Add a todo to a project's list, shared across worktrees of the same repository. Returns the todo with its id. Requires create access.",
+    { environmentId, projectId: z.string().trim().min(1), text: z.string().trim().min(1).max(500) },
+  ],
+  t3_update_todo: [
+    "Change a todo's text. Requires create access.",
+    { environmentId, todoId: z.string().trim().min(1), text: z.string().trim().min(1).max(500) },
+  ],
+  t3_settle_todo: [
+    "Settle a todo: it is done and leaves the active list. Undo with t3_unsettle_todo; settling a settled todo changes nothing. Requires create access.",
+    { environmentId, todoId: z.string().trim().min(1) },
+  ],
+  t3_unsettle_todo: [
+    "Return a settled todo to the active list. Requires create access.",
+    { environmentId, todoId: z.string().trim().min(1) },
+  ],
+  t3_remove_todo: [
+    "Delete a todo permanently. To mark finished work, settle it instead; removal cannot be undone. Requires create access.",
+    { environmentId, todoId: z.string().trim().min(1) },
+  ],
   t3_get_thread: [
     "Read one T3 chat and its messages, including the full profileSnapshot with its systemPrompt.",
     { environmentId, threadId, ...optionalRequestContext },

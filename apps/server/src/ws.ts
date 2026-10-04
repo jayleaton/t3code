@@ -96,6 +96,7 @@ import {
   type TerminalEvent,
   type TerminalMetadataStreamEvent,
   type PullRequestRef,
+  TodoError,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -119,6 +120,7 @@ import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts"
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
 import * as IdAllocator from "./orchestration-v2/IdAllocator.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
+import * as TodoService from "./todo/TodoService.ts";
 import {
   archivedShellStreamItemFromThreadShell,
   buildActiveShellSnapshot,
@@ -1217,6 +1219,17 @@ const makeWsRpcLayer = (
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
+      const todos = yield* TodoService.TodoService;
+      const toTodoError = (cause: TodoService.TodoServiceError) =>
+        new TodoError({
+          message: cause.message,
+          reason:
+            cause._tag === "TodoNotFoundError" || cause._tag === "TodoProjectNotFoundError"
+              ? "not-found"
+              : "failed",
+          ...(cause._tag === "TodoNotFoundError" ? { todoId: cause.todoId } : {}),
+          cause,
+        });
       const pullRequests = yield* PullRequestService.PullRequestService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
       const deviceService = yield* DeviceService.DeviceService;
@@ -2090,6 +2103,62 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "scheduledTasks",
             "scheduled_task.id": input.id,
           }),
+        [WS_METHODS.todosList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.todosList,
+            todos.list(input).pipe(Effect.mapError(toTodoError)),
+            {
+              "rpc.aggregate": "todos",
+            },
+          ),
+        [WS_METHODS.todosSubscribe]: (input) =>
+          observeRpcStream(
+            WS_METHODS.todosSubscribe,
+            todos.subscribe(input).pipe(Stream.mapError(toTodoError)),
+            { "rpc.aggregate": "todos" },
+          ),
+        [WS_METHODS.todosCreate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.todosCreate,
+            todos.create(input).pipe(
+              Effect.map((todo) => ({ todo })),
+              Effect.mapError(toTodoError),
+            ),
+            { "rpc.aggregate": "todos" },
+          ),
+        [WS_METHODS.todosUpdate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.todosUpdate,
+            todos.update(input).pipe(
+              Effect.map((todo) => ({ todo })),
+              Effect.mapError(toTodoError),
+            ),
+            { "rpc.aggregate": "todos" },
+          ),
+        [WS_METHODS.todosSettle]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.todosSettle,
+            todos.settle(input).pipe(
+              Effect.map((todo) => ({ todo })),
+              Effect.mapError(toTodoError),
+            ),
+            { "rpc.aggregate": "todos" },
+          ),
+        [WS_METHODS.todosUnsettle]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.todosUnsettle,
+            todos.unsettle(input).pipe(
+              Effect.map((todo) => ({ todo })),
+              Effect.mapError(toTodoError),
+            ),
+            { "rpc.aggregate": "todos" },
+          ),
+        [WS_METHODS.todosRemove]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.todosRemove,
+            todos.remove(input).pipe(Effect.mapError(toTodoError)),
+            { "rpc.aggregate": "todos" },
+          ),
         [WS_METHODS.serverProbe]: (_input) =>
           observeRpcEffect(WS_METHODS.serverProbe, Effect.succeed({}), {
             "rpc.aggregate": "server",

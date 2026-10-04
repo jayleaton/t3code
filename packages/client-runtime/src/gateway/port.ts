@@ -1,4 +1,10 @@
-import type { AgentSkill, ScheduledTask, ScheduledTaskSchedule } from "@t3tools/contracts";
+import type {
+  AgentSkill,
+  ScheduledTask,
+  ScheduledTaskSchedule,
+  Todo,
+  TodoListResult,
+} from "@t3tools/contracts";
 import type { AgentHandoffInput, AgentHandoffResult } from "./handoff.ts";
 export const GATEWAY_SCOPE_VALUES = [
   "read",
@@ -169,6 +175,12 @@ export interface GatewayScheduledTaskCreate {
   readonly enabled?: boolean;
 }
 export type GatewayScheduledTaskPatch = Partial<GatewayScheduledTaskCreate>;
+
+export type GatewayTodoRequest =
+  | { readonly action: "list"; readonly projectId: string }
+  | { readonly action: "add"; readonly projectId: string; readonly text: string }
+  | { readonly action: "update"; readonly todoId: string; readonly text: string }
+  | { readonly action: "remove" | "settle" | "unsettle"; readonly todoId: string };
 
 export interface GatewayPage<T> {
   readonly items: ReadonlyArray<T>;
@@ -425,6 +437,11 @@ export interface GatewayRuntimePort {
   ): Promise<
     { readonly tasks: ReadonlyArray<ScheduledTask> } | ScheduledTask | { readonly deleted: string }
   >;
+  /** List, add, update, remove, settle, or unsettle a project's todos. */
+  todo?(
+    environmentId: string,
+    request: GatewayTodoRequest,
+  ): Promise<TodoListResult | Todo | { readonly removed: string }>;
   getEnvironmentStatus(environmentId: string): Promise<Record<string, unknown>>;
   listProfiles?(environmentId: string): Promise<ReadonlyArray<GatewayProfile>>;
   /** Resolve readable profile labels against the environment's live provider catalog. */

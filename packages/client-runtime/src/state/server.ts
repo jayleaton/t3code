@@ -1081,6 +1081,12 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:scheduled-tasks:live",
       tag: WS_METHODS.scheduledTasksSubscribe,
     }),
+    /** One project's todo list, live. Dropped as soon as nothing renders it. */
+    todosLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:todos:live",
+      tag: WS_METHODS.todosSubscribe,
+      idleTtlMs: 0,
+    }),
     // A cold transcript scan is measured in seconds, so keep the result around
     // long enough that switching windows or re-rendering does not rescan.
     usageSummary: createEnvironmentRpcQueryAtomFamily(runtime, {
@@ -1284,6 +1290,26 @@ export function createServerEnvironmentAtoms<R, E>(
     runScheduledTaskNow: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:scheduled-task:run-now",
       tag: WS_METHODS.scheduledTasksRunNow,
+    }),
+    createTodo: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:todos:create",
+      tag: WS_METHODS.todosCreate,
+    }),
+    updateTodo: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:todos:update",
+      tag: WS_METHODS.todosUpdate,
+    }),
+    settleTodo: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:todos:settle",
+      tag: WS_METHODS.todosSettle,
+    }),
+    unsettleTodo: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:todos:unsettle",
+      tag: WS_METHODS.todosUnsettle,
+    }),
+    removeTodo: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:todos:remove",
+      tag: WS_METHODS.todosRemove,
     }),
     refreshUsageRates: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-usage-rates",

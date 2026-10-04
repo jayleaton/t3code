@@ -196,6 +196,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   projectCloneTracking: Schema.optionalKey(Schema.Boolean),
   /** Server runs scheduled tasks (`scheduledTasks.*`). */
   scheduledTasks: Schema.optionalKey(Schema.Boolean),
+  /** Server keeps per-repository todo lists (`todos.*`). Missing on older servers. */
+  workspaceTodos: Schema.optionalKey(Schema.Boolean),
   /** Server persists a user-chosen machine name. */
   environmentLabel: Schema.optionalKey(Schema.Boolean),
   /** Server detects `platform.machine` and persists the `environmentIcon`
