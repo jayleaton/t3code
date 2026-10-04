@@ -10,6 +10,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  TurnItemId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -45,6 +46,29 @@ const testLayer = Layer.mergeAll(
     { databaseLayer: database, runEffectWorker: false },
   ),
 );
+
+/**
+ * The turn items a finished run leaves open. The effect worker is off in these
+ * tests, so workspace preparation never completes on its own; a real run
+ * cannot complete before it does.
+ */
+const finishOpenTurnItems = (threadId: ThreadId) =>
+  Effect.gen(function* () {
+    const projections = yield* ProjectionStoreV2;
+    const now = yield* DateTime.now;
+    const { turnItems } = yield* projections.getThreadRecords(threadId, ["turnItems"]);
+    return turnItems
+      .filter((item) => item.status === "running" || item.status === "pending")
+      .map((item) => ({
+        id: EventId.make(`event:finish:${item.id}`),
+        type: "turn-item.updated" as const,
+        threadId,
+        ...(item.runId === null ? {} : { runId: item.runId }),
+        providerInstanceId: instanceId,
+        occurredAt: now,
+        payload: { ...item, status: "completed" as const, completedAt: now, updatedAt: now },
+      }));
+  });
 
 it.effect("links chats under a parent, rejects cycles and missing parents, and detaches", () =>
   Effect.gen(function* () {
@@ -484,6 +508,7 @@ it.effect("an agent sub-run settles when its run completes and again after each 
         const now = yield* DateTime.now;
         yield* sink.write({
           events: [
+            ...(yield* finishOpenTurnItems(threadId)),
             {
               id: EventId.make(`event:complete:${run.id}`),
               type: "run.updated",
@@ -527,6 +552,104 @@ it.effect("an agent sub-run settles when its run completes and again after each 
     yield* completeLatestRun("sub-run");
     yield* waitForSettled("sub-run", before);
     assert.equal(yield* settledOverride("sub-run"), "settled");
+  }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("a sub-run whose turn ended with background work still open stays active", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* OrchestratorV2;
+    const projections = yield* ProjectionStoreV2;
+    const sink = yield* EventSinkV2;
+    const create = (id: string, parentThreadId?: string) =>
+      orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`create:${id}`),
+        threadId: ThreadId.make(id),
+        projectId: ProjectId.make("project:parents"),
+        title: id,
+        modelSelection: { instanceId, model: "gpt-5.1-codex" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "agent",
+        creationSource: "mcp",
+        ...(parentThreadId === undefined ? {} : { parentThreadId: ThreadId.make(parentThreadId) }),
+      });
+    yield* create("lead");
+    yield* create("sleeper", "lead");
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("send:sleeper"),
+      threadId: ThreadId.make("sleeper"),
+      messageId: MessageId.make("message:sleeper"),
+      text: "Run sleep 90 in the background",
+      attachments: [],
+      dispatchMode: { type: "defer_start" },
+      createdBy: "agent",
+      creationSource: "mcp",
+    });
+    const threadId = ThreadId.make("sleeper");
+    const run = (yield* projections.getThreadRecords(threadId, ["runs"])).runs.at(-1)!;
+    const now = yield* DateTime.now;
+    const command = (status: "running" | "completed") => ({
+      id: EventId.make(`event:sleep:${status}`),
+      type: "turn-item.updated" as const,
+      threadId,
+      runId: run.id,
+      providerInstanceId: instanceId,
+      occurredAt: now,
+      payload: {
+        id: TurnItemId.make("item:sleep"),
+        threadId,
+        runId: run.id,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 0,
+        status,
+        title: "sleep 90",
+        startedAt: now,
+        completedAt: status === "completed" ? now : null,
+        updatedAt: now,
+        type: "command_execution" as const,
+        input: "sleep 90",
+      },
+    });
+    // The turn ends while the command it started keeps running.
+    yield* sink.write({
+      events: [
+        ...(yield* finishOpenTurnItems(threadId)),
+        command("running"),
+        {
+          id: EventId.make(`event:complete:${run.id}`),
+          type: "run.updated",
+          threadId,
+          runId: run.id,
+          ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
+          providerInstanceId: instanceId,
+          occurredAt: now,
+          payload: { ...run, status: "completed", completedAt: now },
+        },
+      ],
+    });
+    const settle = (attempt: string) =>
+      orchestrator.dispatch({
+        type: "thread.sub-run.settle",
+        commandId: CommandId.make(`settle:sleeper:${attempt}`),
+        threadId,
+      });
+    const settledOverride = () =>
+      projections.getThread(threadId).pipe(Effect.map((thread) => thread.settledOverride));
+    assert.equal((yield* projections.getThreadShell(threadId))?.pendingBackgroundTasks?.length, 1);
+    yield* settle("open");
+    assert.isNull(yield* settledOverride());
+    // Once the background work ends, the finished sub-run settles as before.
+    yield* sink.write({ events: [command("completed")] });
+    yield* settle("done");
+    assert.equal(yield* settledOverride(), "settled");
   }).pipe(Effect.provide(testLayer)),
 );
 
@@ -598,6 +721,7 @@ it.effect(
       const now = yield* DateTime.now;
       yield* sink.write({
         events: [
+          ...(yield* finishOpenTurnItems(ThreadId.make("busy"))),
           {
             id: EventId.make(`event:complete:${run.id}`),
             type: "run.updated",

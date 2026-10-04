@@ -541,6 +541,17 @@ describe("rolled-up status", () => {
       new Set(["local:glm-chat", "local:github-chat"]),
     );
     expect(selectWorkingParentKeys([github, glmDone])).toEqual(new Set());
+    // Its turn ended but a command it started runs on in the background.
+    const glmMonitoring = {
+      ...glmDone,
+      pendingBackgroundTasks: [
+        { taskId: "sleep", description: "sleep 90", kind: "command" as const },
+      ],
+    };
+    expect(agentThreadStatus(glmMonitoring)).toBe("monitoring");
+    expect(selectWorkingParentKeys([github, glmMonitoring])).toEqual(
+      new Set(["local:github-chat"]),
+    );
     expect(
       selectWorkingParentKeys([github, { ...glm, archivedAt: "2026-10-04T06:00:00Z" }]),
     ).toEqual(new Set());

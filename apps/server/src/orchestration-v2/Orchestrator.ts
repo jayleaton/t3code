@@ -8153,6 +8153,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     ) {
       return;
     }
+    // A turn can end while work it started runs on in the background (a long
+    // command, a monitor, a native sub-agent). That work is the sub-run's, so
+    // it stays active, and its parent stays in progress, until the user or the
+    // parent settles it.
+    const shell = yield* projectionStore
+      .getThreadShell(command.threadId)
+      .pipe(mapDispatchError(command));
+    if ((shell?.pendingBackgroundTasks?.length ?? 0) > 0) return;
     yield* dispatchThreadMutation(
       {
         type: "thread.settle",
