@@ -2790,14 +2790,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           };
         }
         case "thread.unsettle": {
-          const alreadyPinnedActive = thread.settledOverride === "active";
           return {
             ...thread,
             settledOverride: "active",
             settlementSource: null,
             settledAt: null,
-            unsettledAt: alreadyPinnedActive ? (thread.unsettledAt ?? null) : now,
-            updatedAt: alreadyPinnedActive ? thread.updatedAt : now,
+            // Each new explicit unsettle restarts the full idle period.
+            unsettledAt: now,
+            updatedAt: now,
           };
         }
         case "thread.snooze": {

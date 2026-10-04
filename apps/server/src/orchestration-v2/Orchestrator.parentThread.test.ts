@@ -759,6 +759,15 @@ it.effect("age settlement applies to one card without cascading to child chats o
     });
     assert.isNull((yield* thread("merged")).settledAt);
     assert.deepEqual((yield* thread("idle")).settledAt, settledAt);
+    yield* TestClock.adjust("1 day");
+    const refreshedAt = yield* DateTime.now;
+    yield* orchestrator.dispatch({
+      type: "thread.unsettle",
+      commandId: CommandId.make("unsettle:already-active"),
+      threadId: parent.id,
+      reason: "user",
+    });
+    assert.deepEqual((yield* thread("merged")).unsettledAt, refreshedAt);
   }).pipe(Effect.provide(testLayer)),
 );
 
