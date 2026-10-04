@@ -188,6 +188,26 @@ export interface AgentCardChildren<T> {
   readonly settled: readonly AgentChildRun<T>[];
 }
 
+/** Sidebar cards summarize the whole fleet without mounting individual run rows. */
+export function agentChildRunsSummary(runs: AgentCardChildren<EnvironmentThreadShell>) {
+  let total = 0;
+  let running = 0;
+  let attention = 0;
+  for (const group of [runs.live, runs.settled]) {
+    for (const { thread } of group) {
+      total += 1;
+      const status = agentThreadStatus(thread);
+      if (status === "running" || status === "queued" || status === "monitoring") running += 1;
+      if (status === "attention" || status === "error") attention += 1;
+    }
+  }
+  return [
+    `${total} subagent${total === 1 ? "" : "s"}`,
+    ...(running > 0 ? [`${running} running`] : []),
+    ...(attention > 0 ? [`${attention} need${attention === 1 ? "s" : ""} attention`] : []),
+  ].join(" · ");
+}
+
 type AgentRunList = "pinned" | "active" | "settled";
 
 /** Pinned first (latest pin on top), then active by arranged order, then settled. */
