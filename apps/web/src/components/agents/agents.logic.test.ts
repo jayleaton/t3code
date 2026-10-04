@@ -303,6 +303,11 @@ describe("nestAgentRuns", () => {
     environmentId: EnvironmentId.make("local"),
     id: ThreadId.make(id),
     parentThreadId: parentThreadId === null ? null : ThreadId.make(parentThreadId),
+    lineage: {
+      rootThreadId: ThreadId.make(parentThreadId ?? id),
+      parentThreadId: parentThreadId === null ? null : ThreadId.make(parentThreadId),
+      relationshipToParent: parentThreadId === null ? null : ("subagent" as const),
+    },
     createdAt: `2026-09-25T00:${String(options.minute ?? 0).padStart(2, "0")}:00.000Z`,
     settledAt: options.settled ? "2026-09-25T01:00:00.000Z" : null,
     pinnedAt: options.pinned ? "2026-09-25T01:00:00.000Z" : null,
@@ -370,6 +375,82 @@ describe("nestAgentRuns", () => {
     });
     expect(ids(nested.lists.active)).toEqual(["tests"]);
     expect(nested.childrenByKey.size).toBe(0);
+  });
+});
+
+describe("sidebar delegated relationships", () => {
+  const captain = thread("captain-chat", "captain");
+  const cody = thread("cody-chat", "cody");
+  const delegated = {
+    ...thread("cody-delegation", "cody"),
+    parentThreadId: captain.id,
+    lineage: {
+      rootThreadId: captain.id,
+      parentThreadId: captain.id,
+      relationshipToParent: "subagent" as const,
+    },
+  };
+  const linkedCody = { ...thread("linked-cody-chat", "cody"), parentThreadId: captain.id };
+  const fork = {
+    ...thread("cody-fork", "cody"),
+    parentThreadId: captain.id,
+    lineage: { ...delegated.lineage, relationshipToParent: "fork" as const },
+  };
+  const all = [captain, cody, delegated, linkedCody, fork];
+  const lists = { pinned: [], active: all, settled: [] };
+
+  it("summarizes delegation to a named Agent while retaining its top-level and linked chats", () => {
+    const sidebar = nestAgentRuns({ lists, all, subagentsOnly: true });
+    expect(sidebar.lists.active.map((run) => run.id)).toEqual([
+      captain.id,
+      cody.id,
+      linkedCody.id,
+      fork.id,
+    ]);
+    expect(
+      sidebar.childrenByKey.get("local:captain-chat")?.live.map(({ thread }) => thread.id),
+    ).toEqual([delegated.id]);
+    // Profile grouping is independent of sidebar delegation folding.
+    expect(
+      groupAgentThreads([{ ...profile, profileId: "cody", name: "Cody" }], all).groups.get("cody"),
+    ).toHaveLength(4);
+    const workspace = nestAgentRuns({ lists, all });
+    expect(
+      workspace.childrenByKey
+        .get("local:captain-chat")
+        ?.live.map(({ thread }) => thread.id)
+        .toSorted(),
+    ).toEqual([delegated.id, linkedCody.id, fork.id].toSorted());
+    expect(workspace.lists.active.map((run) => run.id)).toEqual([captain.id, cody.id]);
+  });
+
+  it("uses native lineage even when a manual parent link differs, and requires a parent ID", () => {
+    const moved = { ...delegated, parentThreadId: cody.id };
+    const noParent = {
+      ...delegated,
+      id: ThreadId.make("no-parent"),
+      lineage: { ...delegated.lineage, parentThreadId: null },
+    };
+    const sidebar = nestAgentRuns({
+      lists: { ...lists, active: [captain, cody, moved, noParent] },
+      all: [captain, cody, moved, noParent],
+      subagentsOnly: true,
+    });
+    expect(
+      sidebar.childrenByKey.get("local:captain-chat")?.live.map(({ thread }) => thread.id),
+    ).toEqual([moved.id]);
+    expect(sidebar.lists.active.map((run) => run.id)).toEqual([captain.id, cody.id, noParent.id]);
+  });
+
+  it("keeps delegated rows out of the sidebar when the parent is filtered out", () => {
+    const sidebar = nestAgentRuns({
+      lists: { ...lists, active: [cody, delegated] },
+      all,
+      subagentsOnly: true,
+    });
+    expect(sidebar.lists.active).toEqual([cody]);
+    const workspace = nestAgentRuns({ lists: { ...lists, active: [cody, delegated] }, all });
+    expect(workspace.lists.active).toEqual([cody, delegated]);
   });
 });
 

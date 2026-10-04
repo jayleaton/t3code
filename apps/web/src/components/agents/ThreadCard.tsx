@@ -29,6 +29,7 @@ import { isInsideComposerFloatingLayer } from "../chat/composerEventScope";
 import {
   agentThreadStatus,
   agentThreadStatusLabel,
+  agentChildRunsSummary,
   type AgentCardChildren,
   type AgentChildRun,
   type AgentRunContextMenu,
@@ -190,6 +191,7 @@ export const ThreadCard = memo(function ThreadCard({
   profiles,
   childRuns,
   parentRun,
+  compactChildren = false,
   dragging = false,
   onContextMenu,
 }: {
@@ -198,6 +200,8 @@ export const ThreadCard = memo(function ThreadCard({
   profiles?: readonly McpGatewayProfile[] | undefined;
   /** Runs folded into this card by nestAgentRuns. */
   childRuns?: AgentCardChildren<EnvironmentThreadShell> | undefined;
+  /** The sidebar keeps the full roster in the workspace and thread details. */
+  compactChildren?: boolean | undefined;
   /** The run that created this one, when this card stands on its own. */
   parentRun?: EnvironmentThreadShell | null | undefined;
   dragging?: boolean;
@@ -249,6 +253,7 @@ export const ThreadCard = memo(function ThreadCard({
   // render on every keystroke typed into the chat pane.
   const showPreview = !dragging && !contextMenuOpen && !isCurrent && previewOpen;
   const status = agentThreadStatus(thread);
+  const childSummary = compactChildren && childRuns ? agentChildRunsSummary(childRuns) : null;
   const popupRef = useRef<HTMLDivElement>(null);
   const editing = useRef(false);
   const closePreview = () => {
@@ -404,14 +409,27 @@ export const ThreadCard = memo(function ThreadCard({
           </Link>
         </div>
       )}
-      {childRuns && childRuns.live.length + childRuns.settled.length > 0 && (
-        <AgentChildRuns
-          runs={childRuns}
-          anchorKey={`${thread.environmentId}:${thread.id}`}
-          profiles={profiles}
-          onContextMenu={onContextMenu}
-        />
-      )}
+      {childRuns &&
+        childRuns.live.length + childRuns.settled.length > 0 &&
+        (compactChildren ? (
+          <div className="border-t border-border px-1.5 py-1.5">
+            <Link
+              to="/agents"
+              className="block rounded-md px-1.5 py-1 text-2xs leading-snug text-muted-foreground hover:bg-accent hover:text-foreground"
+              aria-label={`View subagents in workspace: ${childSummary}`}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              {childSummary}
+            </Link>
+          </div>
+        ) : (
+          <AgentChildRuns
+            runs={childRuns}
+            anchorKey={`${thread.environmentId}:${thread.id}`}
+            profiles={profiles}
+            onContextMenu={onContextMenu}
+          />
+        ))}
       {badges.length > 0 && (
         <div className="agent-thread-prs" aria-label="Pull requests">
           {badges.map(({ reference, status }) => (

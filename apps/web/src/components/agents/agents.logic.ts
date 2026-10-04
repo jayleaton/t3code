@@ -164,6 +164,7 @@ type AgentRun = Pick<
   | "environmentId"
   | "id"
   | "parentThreadId"
+  | "lineage"
   | "createdAt"
   | "settledAt"
   | "pinnedAt"
@@ -186,6 +187,26 @@ export interface AgentCardChildren<T> {
   readonly live: readonly AgentChildRun<T>[];
   /** Settled direct sub-runs (and theirs), shown last like the board's Settled shelf. */
   readonly settled: readonly AgentChildRun<T>[];
+}
+
+/** Sidebar cards summarize the whole fleet without mounting individual run rows. */
+export function agentChildRunsSummary(runs: AgentCardChildren<EnvironmentThreadShell>) {
+  let total = 0;
+  let running = 0;
+  let attention = 0;
+  for (const group of [runs.live, runs.settled]) {
+    for (const { thread } of group) {
+      total += 1;
+      const status = agentThreadStatus(thread);
+      if (status === "running" || status === "queued" || status === "monitoring") running += 1;
+      if (status === "attention" || status === "error") attention += 1;
+    }
+  }
+  return [
+    `${total} subagent${total === 1 ? "" : "s"}`,
+    ...(running > 0 ? [`${running} running`] : []),
+    ...(attention > 0 ? [`${attention} need${attention === 1 ? "s" : ""} attention`] : []),
+  ].join(" · ");
 }
 
 type AgentRunList = "pinned" | "active" | "settled";
@@ -214,6 +235,8 @@ function sortSiblingRuns<T extends AgentRun>(runs: readonly T[]): T[] {
 export function nestAgentRuns<T extends AgentRun>(input: {
   readonly lists: Readonly<Record<AgentRunList, readonly T[]>>;
   readonly all: readonly T[];
+  /** Only delegated relationships collapse in the sidebar; Agent chats stay first-class. */
+  readonly subagentsOnly?: boolean;
 }): {
   readonly lists: Readonly<Record<AgentRunList, readonly T[]>>;
   readonly childrenByKey: ReadonlyMap<string, AgentCardChildren<T>>;
@@ -226,7 +249,14 @@ export function nestAgentRuns<T extends AgentRun>(input: {
   for (const run of [...input.all, ...input.lists.pinned, ...input.lists.active]) {
     if (run.archivedAt === null) runByKey.set(threadKey(run), run);
   }
-  const parentKeyOf = (run: T) => agentRunParentKey(run);
+  const isSubagent = (run: T) =>
+    run.lineage.relationshipToParent === "subagent" && run.lineage.parentThreadId !== null;
+  const parentKeyOf = (run: T) =>
+    input.subagentsOnly
+      ? isSubagent(run)
+        ? threadKey({ environmentId: run.environmentId, id: run.lineage.parentThreadId! })
+        : null
+      : agentRunParentKey(run);
   const anchorByKey = new Map<string, string | null>();
   const resolveAnchor = (run: T, visiting: Set<string>): string | null => {
     const key = threadKey(run);
@@ -242,7 +272,7 @@ export function nestAgentRuns<T extends AgentRun>(input: {
       visiting.delete(key);
       if (
         candidate !== null &&
-        (listByKey.get(candidate) !== "settled" || run.settledAt !== null)
+        (input.subagentsOnly || listByKey.get(candidate) !== "settled" || run.settledAt !== null)
       ) {
         anchor = candidate;
       }
@@ -277,7 +307,9 @@ export function nestAgentRuns<T extends AgentRun>(input: {
     childrenByKey.set(anchor, { live, settled });
   }
   const keep = (runs: readonly T[]) =>
-    runs.filter((run) => anchorByKey.get(threadKey(run)) == null);
+    runs.filter((run) =>
+      input.subagentsOnly ? !isSubagent(run) : anchorByKey.get(threadKey(run)) == null,
+    );
   return {
     lists: {
       pinned: keep(input.lists.pinned),

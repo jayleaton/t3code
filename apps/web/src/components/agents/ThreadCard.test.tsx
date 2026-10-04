@@ -4,7 +4,7 @@ import { v2ThreadShell } from "./agents.testFixtures";
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ThreadId, RunId } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 const openPrLink = vi.hoisted(() => vi.fn((event: MouseEvent) => event.preventDefault()));
 vi.mock("../../state/environments", () => ({
@@ -19,7 +19,11 @@ vi.mock("../ThreadStatusIndicators", () => ({
 }));
 vi.mock("@tanstack/react-router", () => ({
   useLocation: () => "/agents",
-  Link: ({ children }: { children: ReactNode }) => <a>{children}</a>,
+  Link: ({ children, to, ...props }: { children: ReactNode; to: string }) => (
+    <a href={to} {...props}>
+      {children}
+    </a>
+  ),
 }));
 vi.mock("../ui/preview-card", () => ({
   PreviewCard: ({ children }: { children: ReactNode }) => children,
@@ -28,6 +32,7 @@ vi.mock("../ui/preview-card", () => ({
 }));
 vi.mock("./AgentChatPreview", () => ({ AgentChatPreview: () => null }));
 import { ThreadCard } from "./ThreadCard";
+import type { AgentCardChildren } from "./agents.logic";
 const container = document.createElement("div");
 document.body.append(container);
 const root = createRoot(container);
@@ -86,4 +91,108 @@ describe("agent card PR navigation", () => {
       );
     },
   );
+});
+
+describe("agent card subagents", () => {
+  const parent = presentThreadShell(EnvironmentId.make("remote"), v2ThreadShell);
+  const child = (id: string, overrides: Partial<EnvironmentThreadShell> = {}) => ({
+    thread: {
+      ...parent,
+      id: ThreadId.make(id),
+      title: id,
+      profileSnapshot: {
+        profileId: "cody",
+        profileName: "Cody",
+        revision: 1,
+        effectiveSource: {
+          modelSelection: "profile",
+          runtimeMode: "profile",
+          interactionMode: "profile",
+          reasoningEffort: "profile",
+        },
+      } satisfies EnvironmentThreadShell["profileSnapshot"],
+      parentThreadId: parent.id,
+      lineage: {
+        rootThreadId: parent.id,
+        parentThreadId: parent.id,
+        relationshipToParent: "subagent" as const,
+      },
+      ...overrides,
+    },
+    depth: 0,
+    siblings: [],
+  });
+  const done = {
+    latestRun: {
+      runId: RunId.make("run"),
+      status: "completed",
+      requestedAt: "2026-09-10T00:00:00Z",
+      startedAt: "2026-09-10T00:00:00Z",
+      completedAt: "2026-09-10T00:01:00Z",
+      assistantMessageId: null,
+    },
+  } satisfies Partial<EnvironmentThreadShell>;
+  const runs: AgentCardChildren<EnvironmentThreadShell> = {
+    live: [
+      ...Array.from({ length: 20 }, (_, index) => child(`Finished worker ${index}`, done)),
+      child("Running worker", {
+        latestRun: { ...done.latestRun, status: "running", completedAt: null },
+      }),
+      child("Waiting worker", { hasPendingUserInput: true }),
+    ],
+    settled: [child("Settled worker", { settledAt: "2026-09-10T00:00:00Z" })],
+  };
+
+  it("bounds a busy sidebar fleet to a summary linking to the full workspace", async () => {
+    await act(async () =>
+      root.render(
+        <ThreadCard thread={parent} childRuns={runs} compactChildren onContextMenu={vi.fn()} />,
+      ),
+    );
+    const summary = container.querySelector<HTMLAnchorElement>('a[aria-label^="View subagents"]');
+    expect(summary?.textContent).toBe("23 subagents · 1 running · 1 needs attention");
+    expect(summary?.getAttribute("href")).toBe("/agents");
+    expect(container.textContent).not.toContain("worker");
+    expect(container.querySelectorAll(".agent-thread-child")).toHaveLength(0);
+    expect(container.querySelector('[aria-label="Sub-agent runs"]')).toBeNull();
+    await act(async () =>
+      root.render(
+        <ThreadCard
+          thread={parent}
+          childRuns={{
+            live: runs.live.map(({ thread, ...row }) => ({
+              ...row,
+              thread: { ...thread, ...done, hasPendingUserInput: false },
+            })),
+            settled: runs.settled,
+          }}
+          compactChildren
+          onContextMenu={vi.fn()}
+        />,
+      ),
+    );
+    expect(container.querySelector('a[aria-label^="View subagents"]')?.textContent).toBe(
+      "23 subagents",
+    );
+  });
+
+  it("keeps the workspace roster and supports expanding and collapsing settled workers", async () => {
+    await act(async () =>
+      root.render(<ThreadCard thread={parent} childRuns={runs} onContextMenu={vi.fn()} />),
+    );
+    expect(container.textContent).toContain("Finished worker 19");
+    expect(container.textContent).toContain("Cody");
+    expect(container.textContent).not.toContain("Settled worker");
+    const toggle = container.querySelector<HTMLButtonElement>(".agent-thread-children-settled")!;
+    await act(async () => toggle.click());
+    expect(container.textContent).toContain("Settled worker");
+    await act(async () => toggle.click());
+    expect(container.textContent).not.toContain("Settled worker");
+    await act(async () =>
+      root.render(
+        <ThreadCard thread={parent} childRuns={runs} compactChildren onContextMenu={vi.fn()} />,
+      ),
+    );
+    expect(container.textContent).not.toContain("worker");
+  });
 });
