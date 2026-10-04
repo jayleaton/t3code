@@ -41,7 +41,10 @@ vi.mock("../LegacySidebar", () => ({ default: () => <div>Legacy navigation</div>
 vi.mock("../settings/SettingsSidebarNav", () => ({
   SettingsSidebarNav: () => <div>Settings navigation</div>,
 }));
-vi.mock("../sidebar/SidebarChrome", () => ({ SidebarChromeHeader: () => null }));
+vi.mock("../sidebar/SidebarChrome", () => ({
+  SidebarBrandWidthProbe: () => null,
+  SidebarChromeHeader: () => null,
+}));
 vi.mock("../ChatView", () => ({
   default: ({ showBackToAgents }: { showBackToAgents?: boolean }) => {
     const sidebar = useSidebar();
