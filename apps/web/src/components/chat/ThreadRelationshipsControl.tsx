@@ -155,6 +155,9 @@ function relationshipLabel(edge: ThreadRelationshipEdge, currentThreadId: Thread
   if (edge.kind === "subagent") {
     return edge.sourceThreadId === currentThreadId ? "Subagent" : "Parent agent";
   }
+  if (edge.kind === "parent") {
+    return edge.sourceThreadId === currentThreadId ? "Launched chat" : "Parent chat";
+  }
   return edge.sourceThreadId === currentThreadId ? "Fork" : "Parent thread";
 }
 

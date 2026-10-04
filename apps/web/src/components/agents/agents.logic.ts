@@ -28,7 +28,8 @@ export function groupAgentThreads(
   return { groups, orphaned };
 }
 
-export function agentThreadStatus(thread: EnvironmentThreadShell) {
+/** `childWorking`: a run under this one (see selectWorkingParentKeys) is still doing its work. */
+export function agentThreadStatus(thread: EnvironmentThreadShell, childWorking = false) {
   if (thread.settledAt !== null) return "done";
   // Questions and approvals arrive mid-turn, so they outrank the running turn.
   if (thread.hasPendingApprovals || thread.hasPendingUserInput) return "attention";
@@ -39,7 +40,9 @@ export function agentThreadStatus(thread: EnvironmentThreadShell) {
   if (thread.runtime?.status === "failed" || thread.latestRun?.status === "failed") return "error";
   // A turn can settle while native background work runs on: sub-agents are
   // still doing the work, while commands, monitors, and other tasks watch or wait.
-  if (thread.pendingBackgroundTasks.some((task) => task.kind === "subagent")) return "running";
+  // Chats this one launched or delegated to are its work too.
+  if (childWorking || thread.pendingBackgroundTasks.some((task) => task.kind === "subagent"))
+    return "running";
   if (thread.pendingBackgroundTasks.length > 0) return "monitoring";
   if (thread.latestRun?.status === "completed") return "done";
   return "idle";
@@ -320,6 +323,58 @@ export function agentRunParentKey(
   const environmentId = run.parentEnvironmentId ?? run.environmentId;
   if (environmentId === run.environmentId && run.parentThreadId === run.id) return null;
   return threadKey({ environmentId, id: run.parentThreadId });
+}
+
+const WORKING_STATUSES = new Set(["running", "queued", "attention"]);
+
+/**
+ * Keys of runs with work still going on below them, at any depth, so a parent
+ * whose own turn finished does not read Done while its sub-runs work on.
+ */
+export function selectWorkingParentKeys(
+  threads: readonly EnvironmentThreadShell[],
+): ReadonlySet<string> {
+  const parentKeyByKey = new Map<string, string | null>();
+  for (const thread of threads) {
+    if (thread.archivedAt === null)
+      parentKeyByKey.set(threadKey(thread), agentRunParentKey(thread));
+  }
+  const working = new Set<string>();
+  for (const thread of threads) {
+    if (thread.archivedAt !== null || !WORKING_STATUSES.has(agentThreadStatus(thread))) continue;
+    let parentKey = parentKeyByKey.get(threadKey(thread)) ?? null;
+    while (parentKey !== null && !working.has(parentKey)) {
+      working.add(parentKey);
+      parentKey = parentKeyByKey.get(parentKey) ?? null;
+    }
+  }
+  return working;
+}
+
+/**
+ * Unsettled Agent chats launched under each run, by the parent's key. Where
+ * Agent chats stay first-class cards instead of nesting, the parent lists them
+ * so the relationship reads in both directions. Delegated subagents are
+ * excluded: they live in the thread's Lineage panel.
+ */
+export function selectAgentChildLinks<T extends AgentRun>(
+  threads: readonly T[],
+  /** Runs already folded into a card by nestAgentRuns need no link. */
+  childrenByKey: ReadonlyMap<string, AgentCardChildren<T>>,
+): ReadonlyMap<string, readonly T[]> {
+  const nested = new Set<string>();
+  for (const { live, settled } of childrenByKey.values()) {
+    for (const child of [...live, ...settled]) nested.add(threadKey(child.thread));
+  }
+  const childrenByParent = new Map<string, T[]>();
+  for (const thread of threads) {
+    if (thread.archivedAt !== null || thread.settledAt !== null) continue;
+    if (isAgentSubagentThread(thread) || nested.has(threadKey(thread))) continue;
+    const parentKey = agentRunParentKey(thread);
+    if (parentKey === null) continue;
+    childrenByParent.set(parentKey, [...(childrenByParent.get(parentKey) ?? []), thread]);
+  }
+  return childrenByParent;
 }
 
 /**

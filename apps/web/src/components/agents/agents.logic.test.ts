@@ -18,6 +18,8 @@ import {
   agentRunParentKey,
   agentRunDropZone,
   agentRunReorderOver,
+  selectAgentChildLinks,
+  selectWorkingParentKeys,
 } from "./agents.logic";
 const profile: McpGatewayProfile = {
   profileId: "write",
@@ -485,6 +487,87 @@ describe("sidebar delegated relationships", () => {
     expect(sidebar.lists.active).toEqual([cody]);
     const workspace = nestAgentRuns({ lists: { ...lists, active: [cody, delegated] }, all });
     expect(workspace.lists.active).toEqual([cody, delegated]);
+  });
+});
+
+describe("launched Agent chats", () => {
+  const withRun = <T extends ReturnType<typeof thread>>(
+    chat: T,
+    status: "running" | "completed",
+  ) => ({
+    ...chat,
+    latestRun: {
+      runId: RunId.make(`${chat.id}-run`),
+      status,
+      requestedAt: "2026-10-04T05:58:00.000Z",
+      startedAt: "2026-10-04T05:58:00.000Z",
+      completedAt: status === "completed" ? "2026-10-04T05:59:00.000Z" : null,
+      assistantMessageId: null,
+    },
+  });
+  // Captain finished its own turn after launching Doug, who is still working.
+  const captain = withRun(thread("captain-chat", "captain"), "completed");
+  const doug = { ...withRun(thread("doug-chat", "doug"), "running"), parentThreadId: captain.id };
+  const nested = (all: readonly ReturnType<typeof thread>[]) =>
+    nestAgentRuns({ lists: { pinned: [], active: all, settled: [] }, all, subagentsOnly: true });
+
+  it("keeps a parent in progress while a chat under it works, at any depth", () => {
+    expect(agentThreadStatus(captain)).toBe("done");
+    expect(selectWorkingParentKeys([captain, doug])).toEqual(new Set(["local:captain-chat"]));
+    expect(agentThreadStatus(captain, true)).toBe("running");
+    const dougIdle = { ...doug, latestRun: { ...doug.latestRun, status: "completed" as const } };
+    const review = { ...withRun(thread("review", "cody"), "running"), parentThreadId: doug.id };
+    expect(selectWorkingParentKeys([captain, dougIdle, review])).toEqual(
+      new Set(["local:doug-chat", "local:captain-chat"]),
+    );
+    // Finished, settled, or archived children leave the parent done.
+    expect(selectWorkingParentKeys([captain, dougIdle])).toEqual(new Set());
+    expect(
+      selectWorkingParentKeys([captain, { ...doug, archivedAt: "2026-10-04T06:00:00Z" }]),
+    ).toEqual(new Set());
+    // A settled parent stays done; settlement wins over its children's work.
+    expect(agentThreadStatus({ ...captain, settledAt: "2026-10-04T06:00:00Z" }, true)).toBe("done");
+  });
+
+  it("links a parent card to Agent chats that stand on their own, and follows re-parenting", () => {
+    const sidebar = nested([captain, doug]);
+    expect(sidebar.lists.active.map((run) => run.id)).toEqual([captain.id, doug.id]);
+    expect(
+      selectAgentChildLinks([captain, doug], sidebar.childrenByKey).get("local:captain-chat"),
+    ).toEqual([doug]);
+    // Unlinked: no parent, no link.
+    const detached = { ...doug, parentThreadId: null };
+    expect(
+      selectAgentChildLinks([captain, detached], nested([captain, detached]).childrenByKey).size,
+    ).toBe(0);
+    // Re-parented: the link moves with it.
+    const cody = thread("cody-chat", "cody");
+    const moved = { ...doug, parentThreadId: cody.id };
+    const links = selectAgentChildLinks(
+      [captain, cody, moved],
+      nested([captain, cody, moved]).childrenByKey,
+    );
+    expect(links.get("local:captain-chat")).toBeUndefined();
+    expect(links.get("local:cody-chat")).toEqual([moved]);
+  });
+
+  it("does not link chats already nested in the card, settled, or delegated", () => {
+    const board = nestAgentRuns({
+      lists: { pinned: [], active: [captain, doug], settled: [] },
+      all: [captain, doug],
+    });
+    expect(selectAgentChildLinks([captain, doug], board.childrenByKey).size).toBe(0);
+    const settled = { ...doug, settledAt: "2026-10-04T06:00:00Z" };
+    expect(selectAgentChildLinks([captain, settled], new Map()).size).toBe(0);
+    const delegated = {
+      ...doug,
+      lineage: {
+        rootThreadId: captain.id,
+        parentThreadId: captain.id,
+        relationshipToParent: "subagent" as const,
+      },
+    };
+    expect(selectAgentChildLinks([captain, delegated], new Map()).size).toBe(0);
   });
 });
 

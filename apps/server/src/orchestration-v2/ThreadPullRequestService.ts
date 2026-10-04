@@ -14,6 +14,7 @@ import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -60,6 +61,26 @@ function pullRequestMatchesProject(
     canonicalRepositoryKey(pullRequest.repositoryKey) ===
       canonicalRepositoryKey(project.repositoryIdentity.canonicalKey)
   );
+}
+
+/**
+ * A chat started on a branch whose pull request had already merged or closed,
+ * often a shared root checkout left on the last PR's branch, did not produce
+ * that pull request. Last activity is at or after the merge or close, so it
+ * stands in when those times are unknown.
+ */
+export function branchPullRequestPredatesThread(
+  pullRequest: Pick<
+    GitManager.GitBranchPullRequest,
+    "state" | "updatedAt" | "mergedAt" | "closedAt"
+  >,
+  threadCreatedAt: DateTime.Utc,
+): boolean {
+  if (pullRequest.state === "open") return false;
+  const terminalAt = Date.parse(
+    pullRequest.mergedAt ?? pullRequest.closedAt ?? pullRequest.updatedAt ?? "",
+  );
+  return terminalAt < DateTime.toEpochMillis(threadCreatedAt);
 }
 
 export const resolveProjectForPullRequestDiscovery = Effect.fn(
@@ -219,8 +240,11 @@ export const make = Effect.gen(function* () {
 
           const plans = yield* Effect.forEach(group, (thread) =>
             Effect.gen(function* () {
-              let branchPullRequest = detectedReference;
+              const predatesThread =
+                detected !== null && branchPullRequestPredatesThread(detected, thread.createdAt);
+              let branchPullRequest = predatesThread ? null : detectedReference;
               if (
+                !predatesThread &&
                 branchPullRequest === null &&
                 thread.branch !== null &&
                 thread.worktreePath === null &&

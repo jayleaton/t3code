@@ -42,9 +42,11 @@ import {
   excludePinnedAgentThreads,
   groupAgentThreads,
   nestAgentRuns,
+  selectAgentChildLinks,
   selectAgentSidebarThreads,
   selectAgentWorkspaceThreads,
   selectPinnedAgentThreads,
+  selectWorkingParentKeys,
   type AgentCardChildren,
   type AgentRunContextMenu,
 } from "./agents.logic";
@@ -64,33 +66,46 @@ function AgentThreadList({
   onContextMenu,
   profiles,
   childrenByKey,
+  childLinksByKey,
+  workingKeys,
   runByKey,
 }: {
   profiles: readonly McpGatewayProfile[];
   threads: readonly EnvironmentThreadShell[];
   pinned: readonly EnvironmentThreadShell[];
   childrenByKey: ReadonlyMap<string, AgentCardChildren<EnvironmentThreadShell>>;
+  childLinksByKey: ReadonlyMap<string, readonly EnvironmentThreadShell[]>;
+  workingKeys: ReadonlySet<string>;
   runByKey: ReadonlyMap<string, EnvironmentThreadShell>;
   onContextMenu: AgentRunContextMenu;
 }) {
   const [settledOpen, setSettledOpen] = useState(false);
   const active = threads.filter((thread) => thread.settledAt === null);
   const settled = threads.filter((thread) => thread.settledAt !== null);
-  const renderCard = (thread: EnvironmentThreadShell, dragging = false) => (
-    <ThreadCard
-      key={`${thread.environmentId}:${thread.id}`}
-      thread={thread}
-      dragging={dragging}
-      profile={profiles.find((profile) => profile.profileId === thread.profileSnapshot?.profileId)}
-      profiles={profiles}
-      childRuns={childrenByKey.get(`${thread.environmentId}:${thread.id}`)}
-      parentRun={(() => {
-        const parentKey = agentRunParentKey(thread);
-        return parentKey === null ? null : runByKey.get(parentKey);
-      })()}
-      onContextMenu={onContextMenu}
-    />
-  );
+  const renderCard = (thread: EnvironmentThreadShell, dragging = false) => {
+    const key = `${thread.environmentId}:${thread.id}`;
+    const childRuns = childrenByKey.get(key);
+    return (
+      <ThreadCard
+        key={key}
+        thread={thread}
+        dragging={dragging}
+        profile={profiles.find(
+          (profile) => profile.profileId === thread.profileSnapshot?.profileId,
+        )}
+        profiles={profiles}
+        childRuns={childRuns}
+        childLinks={childLinksByKey.get(key)}
+        childWorking={workingKeys.has(key)}
+        workingKeys={childRuns ? workingKeys : undefined}
+        parentRun={(() => {
+          const parentKey = agentRunParentKey(thread);
+          return parentKey === null ? null : runByKey.get(parentKey);
+        })()}
+        onContextMenu={onContextMenu}
+      />
+    );
+  };
   const linkableCard = (thread: EnvironmentThreadShell) => (
     <LinkableAgentCard key={`${thread.environmentId}:${thread.id}`} thread={thread}>
       {renderCard(thread)}
@@ -204,6 +219,12 @@ export function AgentsBoard() {
       subagentsOnly: selected,
     });
   }, [sidebarThreads, filter, query, allPinned, selected]);
+  const childLinksByKey = useMemo(
+    () => selectAgentChildLinks(sidebarThreads, childrenByKey),
+    [sidebarThreads, childrenByKey],
+  );
+  // Every chat, delegated subagents included: their work keeps a parent busy.
+  const workingKeys = useMemo(() => selectWorkingParentKeys(threads), [threads]);
   const pinned = nestedLists.pinned;
   const visible = useMemo(
     () => [...nestedLists.active, ...nestedLists.settled],
@@ -505,6 +526,8 @@ export function AgentsBoard() {
             pinned={pinned}
             profiles={profiles}
             childrenByKey={childrenByKey}
+            childLinksByKey={childLinksByKey}
+            workingKeys={workingKeys}
             runByKey={runByKey}
             onContextMenu={onThreadContextMenu}
           />

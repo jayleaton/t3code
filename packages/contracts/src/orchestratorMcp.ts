@@ -313,6 +313,11 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   linkedPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
   settled: Schema.Boolean,
   settledAt: Schema.NullOr(IsoDateTime),
+  /**
+   * The chat this one works under, such as the agent that launched it. A null
+   * `relationshipToParent` with a parent means it was launched or nested, not
+   * forked or delegated.
+   */
   parentThreadId: Schema.NullOr(ThreadId),
   relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
   itemCount: NonNegativeInt,
@@ -359,6 +364,11 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   titleRegeneration: Schema.NullOr(ThreadTitleRegeneration),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
+  /**
+   * The chat this one works under, such as the agent that launched it. A null
+   * `relationshipToParent` with a parent means it was launched or nested, not
+   * forked or delegated.
+   */
   parentThreadId: Schema.NullOr(ThreadId),
   relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
   runCount: NonNegativeInt,

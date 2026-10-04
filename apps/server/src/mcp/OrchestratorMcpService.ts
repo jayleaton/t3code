@@ -589,6 +589,20 @@ function threadSettlement(
   };
 }
 
+/**
+ * The chat this one works under: its owner on the Agents board (set by
+ * t3_thread_launch, create_threads, delegate_task, or t3_set_thread_parent),
+ * else its fork or subagent lineage. A parent on another machine is not
+ * readable from this environment, so lineage answers for it.
+ */
+function threadParentId(
+  thread: Pick<OrchestrationV2ThreadShell, "parentThreadId" | "parentEnvironmentId" | "lineage">,
+): ThreadId | null {
+  return thread.parentEnvironmentId == null
+    ? (thread.parentThreadId ?? thread.lineage.parentThreadId)
+    : thread.lineage.parentThreadId;
+}
+
 function listItemFromShell(shell: OrchestrationV2ThreadShell): OrchestratorMcpThreadListItem {
   return {
     threadId: shell.id,
@@ -603,7 +617,7 @@ function listItemFromShell(shell: OrchestrationV2ThreadShell): OrchestratorMcpTh
     interactionMode: shell.interactionMode,
     linkedPullRequest: shell.linkedPullRequest ?? null,
     ...threadSettlement(shell),
-    parentThreadId: shell.lineage.parentThreadId,
+    parentThreadId: threadParentId(shell),
     relationshipToParent: shell.lineage.relationshipToParent,
     itemCount: shell.visibleItemCount,
     createdAt: DateTime.formatIso(shell.createdAt),
@@ -641,7 +655,7 @@ function threadDetail(
           },
     branch: projection.thread.branch,
     worktreePath: projection.thread.worktreePath,
-    parentThreadId: projection.thread.lineage.parentThreadId,
+    parentThreadId: threadParentId(projection.thread),
     relationshipToParent: projection.thread.lineage.relationshipToParent,
     runCount: projection.runs.length,
     itemCount,
