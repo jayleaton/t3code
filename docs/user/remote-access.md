@@ -335,6 +335,10 @@ its parent's list, **Move up** and **Move down** arrange it among its siblings, 
 it into its parent's collapsed **Settled** group. A live sub-run whose parent is settled keeps its
 own card, which names its parent's agent and chat; click that name to open the parent.
 
+A run reads **In progress** while any sub-run below it is still working, even after its own turn
+finishes. With a chat open, another agent's chat keeps its own card in the side list, and its
+parent's card links to it. A chat's **Lineage** panel shows its parent and the chats it launched.
+
 Settling a run also settles its sub-runs, at every depth, including when the run settles
 automatically. Settling never stops work: a sub-run that is still working or waiting on an approval
 stays active and settles with its parent when it finishes. Automatic settlement leaves alone a

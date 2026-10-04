@@ -12,10 +12,13 @@ import { agentThreadStatus, agentThreadStatusLabel } from "./agents.logic";
 export function AgentChatPreview({
   thread,
   project,
+  childWorking = false,
   onClose,
 }: {
   thread: EnvironmentThreadShell;
   project: string;
+  /** A run under this one is still working, so the chat is not done. */
+  childWorking?: boolean;
   onClose: () => void;
 }) {
   const ref = scopeThreadRef(thread.environmentId, thread.id);
@@ -51,7 +54,7 @@ export function AgentChatPreview({
           </button>
         </div>
         <span>
-          {project} · {agentThreadStatusLabel(agentThreadStatus(thread))}
+          {project} · {agentThreadStatusLabel(agentThreadStatus(thread, childWorking))}
         </span>
       </header>
       <div

@@ -4,12 +4,19 @@ import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environ
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useThreadShells } from "../../state/entities";
 import { useUiStateStore } from "../../uiStateStore";
-import { isAgentChatInFocus, selectAgentSidebarThreads, nestAgentRuns } from "./agents.logic";
+import {
+  isAgentChatInFocus,
+  nestAgentRuns,
+  selectAgentChildLinks,
+  selectAgentSidebarThreads,
+  selectWorkingParentKeys,
+} from "./agents.logic";
 import { ThreadCard } from "./ThreadCard";
 import { useAgentThreadContextMenu } from "./useAgentThreadContextMenu";
 
 export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
-  const threads = selectAgentSidebarThreads(useThreadShells());
+  const allThreads = useThreadShells();
+  const threads = selectAgentSidebarThreads(allThreads);
   const visited = useUiStateStore((state) => state.threadLastVisitedAtById);
   const currentKey = scopedThreadKey(current);
   const inFocus = sortActiveThreadsByOrderKey(
@@ -19,11 +26,13 @@ export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
       return isAgentChatInFocus(thread, visited[key], key === currentKey);
     }),
   );
-  const { lists } = nestAgentRuns({
+  const { lists, childrenByKey } = nestAgentRuns({
     lists: { pinned: [], active: inFocus, settled: [] },
     all: threads,
     subagentsOnly: true,
   });
+  const childLinksByKey = selectAgentChildLinks(threads, childrenByKey);
+  const workingKeys = selectWorkingParentKeys(allThreads);
   const visible = lists.active;
   const runByKey = new Map(
     threads.map((thread) => [
@@ -42,6 +51,12 @@ export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
               <ThreadCard
                 thread={thread}
                 dragging={dragging}
+                childLinks={childLinksByKey.get(
+                  scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                )}
+                childWorking={workingKeys.has(
+                  scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                )}
                 parentRun={
                   thread.parentThreadId == null
                     ? null

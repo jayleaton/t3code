@@ -3,7 +3,7 @@ import { formatRelativeTime } from "../../timestampFormat";
 import { PROVIDER_ICON_BY_PROVIDER } from "../chat/providerIconUtils";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
-import { CornerLeftUpIcon, PinIcon } from "lucide-react";
+import { CornerDownRightIcon, CornerLeftUpIcon, PinIcon } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import {
   memo,
@@ -57,12 +57,15 @@ function runAgentName(
 interface ChildRunRowProps {
   child: AgentChildRun<EnvironmentThreadShell>;
   profiles: readonly McpGatewayProfile[] | undefined;
+  /** Runs with work still going on below them (see selectWorkingParentKeys). */
+  workingKeys: ReadonlySet<string> | undefined;
   onContextMenu: AgentRunContextMenu;
 }
 
 function AgentChildRunLink({
   child: { thread: run, depth, siblings },
   profiles,
+  workingKeys,
   onContextMenu,
   onPointerDown,
 }: ChildRunRowProps & {
@@ -71,7 +74,10 @@ function AgentChildRunLink({
   const isCurrent = useLocation({
     select: (location) => location.pathname === `/agents/${run.environmentId}/${run.id}`,
   });
-  const status = agentThreadStatus(run);
+  const status = agentThreadStatus(
+    run,
+    workingKeys?.has(`${run.environmentId}:${run.id}`) ?? false,
+  );
   const agent = runAgentName(run, profiles);
   return (
     <Link
@@ -134,11 +140,13 @@ function AgentChildRuns({
   runs,
   anchorKey,
   profiles,
+  workingKeys,
   onContextMenu,
 }: {
   runs: AgentCardChildren<EnvironmentThreadShell>;
   anchorKey: string;
   profiles: readonly McpGatewayProfile[] | undefined;
+  workingKeys: ReadonlySet<string> | undefined;
   onContextMenu: AgentRunContextMenu;
 }) {
   const { childDragEnabled } = useContext(AgentRunDragContext);
@@ -151,11 +159,17 @@ function AgentChildRuns({
         child={child}
         anchorKey={anchorKey}
         profiles={profiles}
+        workingKeys={workingKeys}
         onContextMenu={onContextMenu}
       />
     ) : (
       <li key={key}>
-        <AgentChildRunLink child={child} profiles={profiles} onContextMenu={onContextMenu} />
+        <AgentChildRunLink
+          child={child}
+          profiles={profiles}
+          workingKeys={workingKeys}
+          onContextMenu={onContextMenu}
+        />
       </li>
     );
   };
@@ -190,6 +204,9 @@ export const ThreadCard = memo(function ThreadCard({
   profiles,
   childRuns,
   parentRun,
+  childLinks,
+  childWorking = false,
+  workingKeys,
   dragging = false,
   onContextMenu,
 }: {
@@ -200,6 +217,12 @@ export const ThreadCard = memo(function ThreadCard({
   childRuns?: AgentCardChildren<EnvironmentThreadShell> | undefined;
   /** The run that created this one, when this card stands on its own. */
   parentRun?: EnvironmentThreadShell | null | undefined;
+  /** Agent chats this run launched that stand as their own cards (see selectAgentChildLinks). */
+  childLinks?: readonly EnvironmentThreadShell[] | undefined;
+  /** A run under this one is still working (see selectWorkingParentKeys). */
+  childWorking?: boolean;
+  /** Statuses of `childRuns` rows; only cards with sub-runs need it. */
+  workingKeys?: ReadonlySet<string> | undefined;
   dragging?: boolean;
   thread: EnvironmentThreadShell;
   onContextMenu: AgentRunContextMenu;
@@ -248,7 +271,7 @@ export const ThreadCard = memo(function ThreadCard({
   // The open chat needs no preview, and a second composer on its draft would
   // render on every keystroke typed into the chat pane.
   const showPreview = !dragging && !contextMenuOpen && !isCurrent && previewOpen;
-  const status = agentThreadStatus(thread);
+  const status = agentThreadStatus(thread, childWorking);
   const popupRef = useRef<HTMLDivElement>(null);
   const editing = useRef(false);
   const closePreview = () => {
@@ -384,6 +407,7 @@ export const ThreadCard = memo(function ThreadCard({
             <AgentChatPreview
               thread={thread}
               project={project?.title ?? "Project unavailable"}
+              childWorking={childWorking}
               onClose={closePreview}
             />
           )}
@@ -404,11 +428,30 @@ export const ThreadCard = memo(function ThreadCard({
           </Link>
         </div>
       )}
+      {childLinks && childLinks.length > 0 && (
+        <div className="agent-thread-prs" aria-label="Launched chats">
+          {childLinks.map((child) => (
+            <Link
+              key={`${child.environmentId}:${child.id}`}
+              to="/agents/$environmentId/$threadId"
+              params={{ environmentId: child.environmentId, threadId: child.id }}
+              className="agent-thread-pr agent-thread-parent"
+              aria-label={`Launched ${runAgentName(child, profiles).name}: ${child.title}`}
+            >
+              <CornerDownRightIcon size={12} aria-hidden="true" />
+              <span className="agent-thread-pr-repository">
+                {runAgentName(child, profiles).name} · {child.title}
+              </span>
+            </Link>
+          ))}
+        </div>
+      )}
       {childRuns && childRuns.live.length + childRuns.settled.length > 0 && (
         <AgentChildRuns
           runs={childRuns}
           anchorKey={`${thread.environmentId}:${thread.id}`}
           profiles={profiles}
+          workingKeys={workingKeys}
           onContextMenu={onContextMenu}
         />
       )}

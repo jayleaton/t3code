@@ -13,6 +13,52 @@ import {
 } from "./threadRelationships.ts";
 
 describe("thread relationships", () => {
+  describe("board parents", () => {
+    const captain = ThreadId.make("captain");
+    const doug = ThreadId.make("doug");
+    const cody = ThreadId.make("cody");
+    const shell = (
+      id: ThreadId,
+      fields: { parentThreadId?: ThreadId | null; parentEnvironmentId?: string } = {},
+    ) => ({
+      id,
+      status: "running",
+      lineage: { parentThreadId: null, relationshipToParent: null },
+      forkedFrom: null,
+      ...fields,
+    });
+    const graphOf = (threads: ReadonlyArray<object>) =>
+      deriveThreadRelationshipGraph({ threads: threads as never, projection: null });
+
+    it("shows a launched chat and its parent to each other", () => {
+      const graph = graphOf([shell(captain), shell(doug, { parentThreadId: captain })]);
+      expect(graph.edges).toEqual([
+        { sourceThreadId: captain, targetThreadId: doug, kind: "parent", status: "running" },
+      ]);
+      expect(relatedThreadIds(graph, captain)).toEqual([doug]);
+      expect(relatedThreadIds(graph, doug)).toEqual([captain]);
+    });
+
+    it("follows unlinking and re-parenting", () => {
+      expect(graphOf([shell(captain), shell(doug, { parentThreadId: null })]).edges).toEqual([]);
+      const moved = graphOf([shell(captain), shell(cody), shell(doug, { parentThreadId: cody })]);
+      expect(relatedThreadIds(moved, captain)).toEqual([]);
+      expect(relatedThreadIds(moved, cody)).toEqual([doug]);
+    });
+
+    it("adds no second edge for a delegated child, and skips parents on other machines", () => {
+      const delegated = {
+        ...shell(doug, { parentThreadId: captain }),
+        lineage: { parentThreadId: captain, relationshipToParent: "subagent" },
+      };
+      expect(graphOf([shell(captain), delegated]).edges.map((edge) => edge.kind)).toEqual([
+        "subagent",
+      ]);
+      const remote = shell(doug, { parentThreadId: captain, parentEnvironmentId: "remote" });
+      expect(graphOf([remote]).edges).toEqual([]);
+    });
+  });
+
   it.each([
     ["running", "completed"],
     ["completed", "running"],
