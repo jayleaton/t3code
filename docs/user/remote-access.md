@@ -335,9 +335,11 @@ its parent's list, **Move up** and **Move down** arrange it among its siblings, 
 it into its parent's collapsed **Settled** group. A live sub-run whose parent is settled keeps its
 own card, which names its parent's agent and chat; click that name to open the parent.
 
-Settling a run also settles its sub-runs, at every depth, except ones that are still working or
-waiting on an approval. Un-settling the run brings back the sub-runs that settled with it; ones you
-settled earlier stay settled.
+Settling a run also settles its sub-runs, at every depth, including when the run settles
+automatically. Settling never stops work: a sub-run that is still working or waiting on an approval
+stays active and settles with its parent when it finishes. Automatic settlement leaves alone a
+sub-run you un-settled or turned auto-settle off for. Un-settling the run brings back the sub-runs
+that settled with it; ones you settled earlier stay settled.
 
 A sub-run an agent created settles on its own when it finishes, unless it is waiting on a question
 or an approval. When its parent sends it more work it returns to the active list, and it settles
