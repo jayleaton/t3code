@@ -84,7 +84,11 @@
       }
     },
     "personal-testflight": {
-      "extends": "production"
+      "extends": "production",
+      "ios": {
+        "ascAppId": "6818946774",
+        "appleTeamId": "4RVGYA25L8"
+      }
     }
   }
 }
