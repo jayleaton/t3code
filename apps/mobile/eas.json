@@ -12,6 +12,7 @@
         "NODE_OPTIONS": "--max-old-space-size=4096"
       },
       "channel": "development",
+      "environment": "development",
       "developmentClient": true,
       "distribution": "internal"
     },
@@ -57,6 +58,16 @@
       "channel": "production",
       "environment": "production",
       "autoIncrement": true
+    },
+    "personal-testflight": {
+      "extends": "production",
+      "distribution": "store",
+      "developmentClient": false,
+      "autoIncrement": true,
+      "channel": "personal-testflight",
+      "env": {
+        "T3CODE_MOBILE_UPDATES_ENABLED": "0"
+      }
     }
   },
   "submit": {
@@ -68,11 +79,15 @@
       }
     },
     "production": {
-      "ios": {
-        "ascAppId": "6787819824"
-      },
       "android": {
         "track": "internal"
+      }
+    },
+    "personal-testflight": {
+      "extends": "production",
+      "ios": {
+        "ascAppId": "6818946774",
+        "appleTeamId": "4RVGYA25L8"
       }
     }
   }

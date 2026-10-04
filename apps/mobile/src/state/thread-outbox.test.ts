@@ -1414,6 +1414,11 @@ describe("thread outbox", () => {
         model: "gpt-5.4",
       },
       creation: {
+        profileSelection: {
+          profileId: "reviewer",
+          revision: 3,
+          overrideFields: ["modelSelection"],
+        },
         projectId: ProjectId.make("project-1"),
         workspaceMode: "worktree",
         branch: "main",

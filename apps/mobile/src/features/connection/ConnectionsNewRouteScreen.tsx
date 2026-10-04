@@ -16,7 +16,12 @@ import { AppText as Text } from "../../components/AppText";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { ConnectionFormField } from "./ConnectionFormField";
 import { ConnectionSheetButton } from "./ConnectionSheetButton";
-import { buildPairingUrl, extractPairingUrlFromQrPayload, parsePairingUrl } from "./pairing";
+import {
+  buildPairingUrl,
+  extractPairingUrlFromQrPayload,
+  parsePairingUrl,
+  validateMobilePairingUrl,
+} from "./pairing";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
 
 type ConnectionsNewRouteParams = {
@@ -37,9 +42,8 @@ export function ConnectionsNewRouteScreen({
   const navigation = useNavigation();
   const routeName = useRoute().name;
   const params = route.params ?? {};
-  // Deep-link prefill exists for development automation only. A production
-  // link must not arrive with attacker-chosen host and token already filled.
-  const routePairingUrl = __DEV__ ? (params.pairingUrl?.trim() ?? "") : "";
+  // Release links only prefill; the owner explicitly confirms the server before pairing.
+  const routePairingUrl = params.pairingUrl?.trim() ?? "";
   const shouldAutoConnect =
     __DEV__ &&
     routePairingUrl.length > 0 &&
@@ -134,6 +138,7 @@ export function ConnectionsNewRouteScreen({
 
       try {
         const pairingUrl = extractPairingUrlFromQrPayload(data);
+        validateMobilePairingUrl(pairingUrl);
         const { host, code } = parsePairingUrl(pairingUrl);
         setHostInput(host);
         setCodeInput(code);
@@ -243,12 +248,17 @@ export function ConnectionsNewRouteScreen({
             )
           ) : (
             <View collapsable={false} className="gap-4 rounded-[24px] bg-grouped-card p-4">
+              <Text className="text-sm leading-normal text-foreground-muted">
+                Connect without an account. Use your Mac's Tailscale address, or its LAN IP on the
+                same Wi-Fi. Paste a full pairing link here, or enter the host and pairing code
+                separately. Keep the T3 server running on your Mac.
+              </Text>
               <ConnectionFormField
                 label="Host"
                 autoCapitalize="none"
                 autoCorrect={false}
                 keyboardType="url"
-                placeholder="192.168.1.100:8080"
+                placeholder="https://your-mac.your-tailnet.ts.net"
                 value={hostInput}
                 onChangeText={handleHostChange}
               />

@@ -981,6 +981,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       setComposerDraftContext(draftKey, message.context);
       replaceComposerDraftAttachments(draftKey, message.attachments);
       updateComposerDraftSettings(draftKey, {
+        profileSelection: message.creation.profileSelection,
         modelSelection: message.modelSelection,
         runtimeMode: message.runtimeMode,
         interactionMode: message.interactionMode,
@@ -1061,6 +1062,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         }),
         creation: {
           projectId: selectedProject.id,
+          profileSelection: draft.profileSelection,
           ...(projectTitle !== undefined ? { projectTitle } : {}),
           ...(projectCwd !== undefined ? { projectCwd } : {}),
           workspaceMode: mode,

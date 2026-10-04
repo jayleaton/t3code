@@ -71,6 +71,7 @@ import { useMaterialFabScroll } from "./MaterialFabScrollContext";
 /* ─── Types ──────────────────────────────────────────────────────────── */
 
 interface HomeScreenProps {
+  readonly boardHeader?: import("react").ReactNode;
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
@@ -113,6 +114,7 @@ interface HomeScreenProps {
   ) => Promise<boolean>;
   readonly onRenameThread: (thread: EnvironmentThreadShell) => void;
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
+  readonly onRemoveThreadFromParent?: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onSelectPendingTask: (pendingTask: PendingNewTask) => void;
   readonly onDeletePendingTask: (pendingTask: PendingNewTask) => void;
   readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
@@ -443,6 +445,12 @@ export function HomeScreen(props: HomeScreenProps) {
     },
     [props.onRegenerateThreadTitle],
   );
+  const handleRemoveThreadFromParent = useCallback(
+    (thread: EnvironmentThreadShell) => {
+      void props.onRemoveThreadFromParent?.(thread);
+    },
+    [props.onRemoveThreadFromParent],
+  );
   const handleRenameThread = useCallback(
     (thread: EnvironmentThreadShell) => props.onRenameThread(thread),
     [props.onRenameThread],
@@ -751,6 +759,7 @@ export function HomeScreen(props: HomeScreenProps) {
           onArchiveThread={props.onArchiveThread}
           onRenameThread={handleRenameThread}
           onRegenerateThreadTitle={handleRegenerateThreadTitle}
+          onRemoveThreadFromParent={handleRemoveThreadFromParent}
           titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
           settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
           onSettleThread={handleSettleThread}
@@ -783,6 +792,7 @@ export function HomeScreen(props: HomeScreenProps) {
       handleMoveThread,
       handlePinThread,
       handleRegenerateThreadTitle,
+      handleRemoveThreadFromParent,
       handleRenameThread,
       handleSettleThread,
       handleSnoozeThread,
@@ -880,6 +890,7 @@ export function HomeScreen(props: HomeScreenProps) {
           }}
         >
           <View className="w-full max-w-[430px]">
+            {props.boardHeader}
             <EmptyState
               title={emptyState.title}
               detail={emptyState.detail}
@@ -913,7 +924,12 @@ export function HomeScreen(props: HomeScreenProps) {
 
   // Project scoping lives in the header filter menu (no inline chip row on
   // mobile — the menu is the one filter surface).
-  const v2ListHeader = listHeader;
+  const v2ListHeader = (
+    <>
+      {listHeader}
+      {props.boardHeader}
+    </>
+  );
 
   // Use the v2 project scope for its empty state. Snoozed threads need no
   // special empty state: their shelf header is a list row even while collapsed.
@@ -951,6 +967,7 @@ export function HomeScreen(props: HomeScreenProps) {
           className="flex-1 items-center justify-center overflow-hidden rounded-t-[28px] bg-screen px-4"
           style={{ paddingBottom: insets.bottom }}
         >
+          {props.boardHeader}
           {v2ListEmpty}
         </View>
       </View>
