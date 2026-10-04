@@ -36,7 +36,8 @@ const AGENTS_NAVY = "#0A1442";
 const AGENTS_ASSETS = {
   appIcon: "./assets/agents/ios-icon-1024.png",
   iosIcon: "./assets/agents/ios-icon-1024.png",
-  splashIcon: "./assets/agents/ios-icon-1024.png",
+  // The mark alone on a full navy screen, so the splash never shows a boxed icon.
+  splashIcon: "./assets/agents/splash-mark.png",
   androidAdaptiveForeground: "./assets/agents/android-icon-foreground.png",
   androidAdaptiveBackgroundColor: AGENTS_NAVY,
   androidAdaptiveBackgroundImage: undefined,
@@ -356,11 +357,11 @@ const config: ExpoConfig = {
       {
         image: variant.assets.splashIcon,
         resizeMode: "contain",
-        backgroundColor: "#ffffff",
-        imageWidth: 220,
+        backgroundColor: AGENTS_NAVY,
+        imageWidth: 160,
         dark: {
           image: variant.assets.splashIcon,
-          backgroundColor: "#0a0a0a",
+          backgroundColor: AGENTS_NAVY,
         },
         android: {
           // Android 12+ masks the splash icon to a circle over the central two thirds of
