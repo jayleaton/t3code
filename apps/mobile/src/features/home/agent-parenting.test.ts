@@ -1,12 +1,7 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  applyPendingParents,
-  parentRejection,
-  pendingParentSettled,
-  resolveParentDrop,
-} from "./agent-parenting";
+import { parentRejection, resolveParentDrop } from "./agent-parenting";
 
 const run = (id: string, parentThreadId: string | null = null) => ({
   environmentId: EnvironmentId.make("env"),
@@ -80,35 +75,18 @@ describe("resolveParentDrop", () => {
 });
 
 describe("parentRejection", () => {
-  const all = [run("a"), run("b", "a"), run("c", "b"), run("d")];
+  const all = [run("a"), run("b", "a"), run("c", "b"), run("d")].map((thread) => ({
+    ...thread,
+    title: `chat ${thread.id}`,
+  }));
 
   it("allows a valid move", () => {
     expect(parentRejection(all[3]!, all[0]!, all)).toBeNull();
   });
 
-  it("rejects self-parenting, the current parent, and cycles", () => {
-    expect(parentRejection(all[0]!, all[0]!, all)).toBe("A chat can't be its own parent.");
-    expect(parentRejection(all[2]!, all[1]!, all)).toBe("It's already a child of that chat.");
-    expect(parentRejection(all[0]!, all[2]!, all)).toBe(
-      "A chat can't move under one of its own child chats.",
-    );
-  });
-});
-
-describe("pending parents", () => {
-  it("shows the optimistic parent until the shell confirms it", () => {
-    const pending = new Map([
-      ["env:d", { parentThreadId: ThreadId.make("a"), parentEnvironmentId: null }],
-    ]);
-    const [, , , d] = applyPendingParents([run("a"), run("b"), run("c"), run("d")], pending);
-    expect(d?.parentThreadId).toBe("a");
-    expect(pendingParentSettled(run("d"), pending.get("env:d")!)).toBe(false);
-    expect(pendingParentSettled(run("d", "a"), pending.get("env:d")!)).toBe(true);
-  });
-
-  it("treats a cleared parent as settled once the shell has none", () => {
-    const clear = { parentThreadId: null, parentEnvironmentId: null };
-    expect(pendingParentSettled(run("d", "a"), clear)).toBe(false);
-    expect(pendingParentSettled(run("d"), clear)).toBe(true);
+  it("rejects self-parenting, the current parent, and cycles with the shared wording", () => {
+    expect(parentRejection(all[0]!, all[0]!, all)).toBe("A chat cannot be its own parent");
+    expect(parentRejection(all[2]!, all[1]!, all)).toBe("Already under chat b");
+    expect(parentRejection(all[0]!, all[2]!, all)).toBe("Can't move under its own sub-run");
   });
 });

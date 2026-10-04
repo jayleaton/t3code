@@ -1,7 +1,7 @@
 import { planPinnedMove, sortActiveThreadsByOrderKey } from "./threadSort.ts";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import type { EnvironmentThreadShell } from "./shell.ts";
-import type { McpGatewayProfile } from "@t3tools/contracts";
+import type { EnvironmentId, McpGatewayProfile, ThreadId } from "@t3tools/contracts";
 
 /** Palette an agent without its own color cycles through, matching the agent editor's swatches. */
 export const agentColors = ["#f5b775", "#7bb5ff", "#b797ff", "#71d8bc", "#f293b7"];
@@ -399,6 +399,55 @@ export function agentRunLinkTargets(
   }
   const currentParent = agentRunParentKey(child);
   return new Set(all.map(threadKey).filter((key) => !ownRuns.has(key) && key !== currentParent));
+}
+
+/** Why `child` cannot link under `target`, a card agentRunLinkTargets left out. */
+export function agentRunLinkBlockedReason(
+  child: AgentRunLink & { readonly title?: string },
+  target: AgentRunLink & { readonly title: string },
+): string {
+  if (threadKey(child) === threadKey(target)) return "A chat cannot be its own parent";
+  if (agentRunParentKey(child) === threadKey(target)) return `Already under ${target.title}`;
+  return "Can't move under its own sub-run";
+}
+
+/** A parent change the board shows before the server confirms it. */
+export interface AgentParentOverride {
+  readonly parentThreadId: ThreadId | null;
+  readonly parentEnvironmentId: EnvironmentId | null;
+}
+
+/**
+ * Applies pending parent changes, keyed by the child's key, so a drag or
+ * "Remove from parent" lands at once. Removing an entry rolls the run back to
+ * the server's link, which is the only state a failed change can leave.
+ */
+export function applyAgentParentOverrides<T extends EnvironmentThreadShell>(
+  threads: readonly T[],
+  overrides: ReadonlyMap<string, AgentParentOverride>,
+): readonly T[] {
+  if (overrides.size === 0) return threads;
+  return threads.map((thread) => {
+    const override = overrides.get(threadKey(thread));
+    if (!override || agentParentOverrideApplied(thread, override)) return thread;
+    return {
+      ...thread,
+      parentThreadId: override.parentThreadId,
+      parentEnvironmentId: override.parentEnvironmentId,
+    };
+  });
+}
+
+/** True when the shell already shows the parent an override asked for. */
+export function agentParentOverrideApplied(
+  thread: Pick<AgentRun, "parentThreadId" | "parentEnvironmentId">,
+  override: AgentParentOverride,
+): boolean {
+  return (
+    (thread.parentThreadId ?? null) === override.parentThreadId &&
+    (override.parentThreadId === null ||
+      (thread.parentEnvironmentId ?? null) === override.parentEnvironmentId)
+  );
 }
 
 export type AgentRunDropZone = "before" | "nest" | "after";

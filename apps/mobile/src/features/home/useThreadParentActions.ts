@@ -1,46 +1,55 @@
+import {
+  agentParentOverrideApplied,
+  applyAgentParentOverrides,
+  type AgentParentOverride,
+} from "@t3tools/client-runtime/state/agents";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert } from "react-native";
 
 import { useAtomCommand } from "../../state/use-atom-command";
 import { threadEnvironment } from "../../state/threads";
-import {
-  applyPendingParents,
-  parentLinkKey,
-  parentRejection,
-  pendingParentSettled,
-  type PendingParent,
-} from "./agent-parenting";
+import { parentLinkKey, parentRejection } from "./agent-parenting";
+
+interface PendingParent extends AgentParentOverride {
+  /** The server accepted the change; the entry stays until the shell shows it. */
+  readonly confirmed: boolean;
+  /** Settles only its own entry, so a slow failure cannot undo a newer move. */
+  readonly request: number;
+}
 
 /**
- * Set, change, or clear a chat's parent. The board shows the move at once and
- * falls back to the server's state if the command fails, so a rejected move
- * never leaves a half-linked card behind.
+ * Set, change, or clear a chat's parent through the same metadata command web
+ * and t3_set_thread_parent use. The board shows the move at once and falls
+ * back to the server's link if the command fails, so a rejected move never
+ * leaves a half-linked card behind.
  */
 export function useThreadParentActions(threads: readonly EnvironmentThreadShell[]) {
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
   const [pending, setPending] = useState<ReadonlyMap<string, PendingParent>>(new Map());
-  const withoutPending = useCallback((key: string) => {
+  const requests = useRef(0);
+  const change = useCallback((edit: (next: Map<string, PendingParent>) => void) => {
     setPending((current) => {
-      if (!current.has(key)) return current;
       const next = new Map(current);
-      next.delete(key);
+      edit(next);
       return next;
     });
   }, []);
 
-  // Overrides retire once the synced shells carry the same parent.
+  // Confirmed overrides retire once the synced shells carry the same parent.
   useEffect(() => {
-    if (pending.size === 0) return;
-    for (const thread of threads) {
+    const landed = threads.filter((thread) => {
       const override = pending.get(parentLinkKey(thread));
-      if (override && pendingParentSettled(thread, override)) withoutPending(parentLinkKey(thread));
+      return override?.confirmed && agentParentOverrideApplied(thread, override);
+    });
+    if (landed.length > 0) {
+      change((next) => landed.forEach((thread) => next.delete(parentLinkKey(thread))));
     }
-  }, [threads, pending, withoutPending]);
+  }, [threads, pending, change]);
 
   const setParent = useCallback(
     async (child: EnvironmentThreadShell, parent: EnvironmentThreadShell | null) => {
@@ -55,10 +64,13 @@ export function useThreadParentActions(threads: readonly EnvironmentThreadShell[
       const key = parentLinkKey(child);
       const parentEnvironmentId =
         parent && parent.environmentId !== child.environmentId ? parent.environmentId : null;
-      setPending((current) =>
-        new Map(current).set(key, {
+      const request = (requests.current += 1);
+      change((next) =>
+        next.set(key, {
           parentThreadId: parent?.id ?? null,
           parentEnvironmentId,
+          confirmed: false,
+          request,
         }),
       );
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -67,25 +79,31 @@ export function useThreadParentActions(threads: readonly EnvironmentThreadShell[
         input: {
           threadId: child.id,
           parentThreadId: parent?.id ?? null,
-          ...(parentEnvironmentId ? { parentEnvironmentId } : {}),
+          ...(parentEnvironmentId === null ? {} : { parentEnvironmentId }),
         },
       });
       if (result._tag === "Failure") {
-        withoutPending(key);
+        change((next) => {
+          if (next.get(key)?.request === request) next.delete(key);
+        });
         const error = Cause.squash(result.cause);
         Alert.alert(
-          parent ? "Could not move chat" : "Could not remove from parent",
+          parent ? `Couldn't move under ${parent.title}` : "Couldn't remove from parent",
           error instanceof Error && error.message.trim().length > 0
             ? error.message
             : "The chat was left where it was.",
         );
         return false;
       }
+      change((next) => {
+        const entry = next.get(key);
+        if (entry?.request === request) next.set(key, { ...entry, confirmed: true });
+      });
       return true;
     },
-    [threads, updateThreadMetadata, withoutPending],
+    [threads, updateThreadMetadata, change],
   );
 
-  const displayed = useMemo(() => applyPendingParents(threads, pending), [threads, pending]);
+  const displayed = useMemo(() => applyAgentParentOverrides(threads, pending), [threads, pending]);
   return { threads: displayed, setParent };
 }
