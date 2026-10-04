@@ -59,6 +59,41 @@ const BOARD_TABS = [
   { value: "threads", label: "Threads" },
 ] as const;
 
+/**
+ * The Agents/Threads switch sized for the iOS navigation bar's title slot,
+ * where it replaces the brand. Plain views only: native header subviews blank
+ * native-driver and layout animations, so the selection simply swaps.
+ */
+export function BoardTabSwitch() {
+  const [selection, setSelection] = useAtom(agentsBoardSelectionAtom);
+  return (
+    <View accessibilityRole="tablist" className="flex-row rounded-full bg-card p-0.5">
+      {BOARD_TABS.map((tab) => {
+        const selected = selection.tab === tab.value;
+        return (
+          <Pressable
+            key={tab.value}
+            accessibilityRole="tab"
+            accessibilityState={{ selected }}
+            onPress={() => setSelection({ ...selection, tab: tab.value })}
+            hitSlop={{ top: 6, bottom: 6 }}
+            className={cn("rounded-full px-4 py-1.5", selected && "bg-secondary")}
+          >
+            <Text
+              className={cn(
+                "text-[15px]",
+                selected ? "font-t3-bold text-foreground" : "font-t3-medium text-foreground-muted",
+              )}
+            >
+              {tab.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 export function WorkspaceBoardTabs() {
   const [selection, setSelection] = useAtom(agentsBoardSelectionAtom);
   return (
@@ -136,6 +171,8 @@ export function AgentsBoard(props: {
   readonly environmentId: EnvironmentId | null;
   readonly projectRefs?: readonly { environmentId: EnvironmentId; projectId: string }[] | null;
   readonly topInset?: number;
+  /** False where the switch already lives in the navigation bar. */
+  readonly showTabs?: boolean;
 }) {
   const syncedThreads = useThreadShells();
   // Parent moves show at once and roll back if the server rejects them.
@@ -452,7 +489,7 @@ export function AgentsBoard(props: {
         }}
         ListHeaderComponent={
           <View>
-            <WorkspaceBoardTabs />
+            {props.showTabs === false ? null : <WorkspaceBoardTabs />}
             {boardEmpty ?? (
               <>
                 <AgentStrip

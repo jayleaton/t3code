@@ -4,7 +4,7 @@ import { useNavigation } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { agentsBoardSelectionAtom } from "./agents-board-state";
-import { AgentsBoard, WorkspaceBoardTabs } from "./AgentsBoard";
+import { AgentsBoard, BoardTabSwitch, WorkspaceBoardTabs } from "./AgentsBoard";
 import { Platform, useWindowDimensions } from "react-native";
 
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -178,6 +178,8 @@ export function HomeRouteScreen() {
           options={{
             ...getConnectionAwareBrandHeaderOptions({
               headerWidth: windowWidth,
+              // The Agents/Threads switch takes the brand's place in the bar.
+              brand: <BoardTabSwitch />,
               onOpenEnvironments: () =>
                 navigation.navigate("SettingsSheet", {
                   screen: "SettingsContent",
@@ -221,6 +223,7 @@ export function HomeRouteScreen() {
               })
             }
             onSelectPendingTask={openPendingTask}
+            showTabs={Platform.OS !== "ios"}
             searchQuery={searchQuery}
             environmentId={selectedEnvironmentId}
             projectRefs={
@@ -235,7 +238,7 @@ export function HomeRouteScreen() {
           />
         ) : (
           <HomeScreen
-            boardHeader={<WorkspaceBoardTabs />}
+            boardHeader={Platform.OS === "ios" ? undefined : <WorkspaceBoardTabs />}
             catalogState={catalogState}
             environments={environments}
             onAddConnection={() =>
