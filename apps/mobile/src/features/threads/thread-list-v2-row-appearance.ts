@@ -2,8 +2,11 @@ import type { ViewStyle } from "react-native";
 import type { MobileThemeVariables } from "../../lib/mobileTheme";
 
 export const THREAD_LIST_V2_MONO_FONT = "Menlo";
-export const THREAD_LIST_V2_ROW_CONTENT_CLASS_NAME = "px-5 py-2.5";
-export const THREAD_LIST_V2_ROW_DIVIDERS = true;
+export const THREAD_LIST_V2_ROW_CONTENT_CLASS_NAME = "px-4 py-2.5";
+/** Each Home row is its own bordered card, so it is clear where one ends. */
+export const THREAD_LIST_V2_ROW_FRAME_CLASS_NAME =
+  "mx-3 my-1 overflow-hidden rounded-2xl border border-border bg-card";
+export const THREAD_LIST_V2_PENDING_ROW_FRAME_CLASS_NAME = THREAD_LIST_V2_ROW_FRAME_CLASS_NAME;
 
 export const selectedThreadRowColors = {
   foregroundClassName: "text-thread-selected-foreground",
@@ -26,6 +29,8 @@ export function getThreadListV2RowAppearance(
     ? {
         backgroundColor: selected ? selectedBackgroundColor : theme["--color-drawer"],
         borderRadius: 12,
+        borderWidth: 1,
+        borderColor: theme["--color-border"],
       }
     : undefined;
   const swipeContainerStyle: ViewStyle | undefined = sidebarPane
