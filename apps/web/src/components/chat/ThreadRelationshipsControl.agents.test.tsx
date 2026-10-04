@@ -495,3 +495,88 @@ it.each(["source", "target"])(
     }
   },
 );
+
+it("keeps named-Agent delegations in Lineage with live statuses and collapsed previous work", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const environmentId = EnvironmentId.make("test");
+  const parent = {
+    id: "captain-chat",
+    title: "Captain",
+    status: "completed",
+    activeProviderThreadId: null,
+    lineage: { parentThreadId: null, relationshipToParent: null },
+  };
+  const delegated = (id: string, status: string) => ({
+    id,
+    title: id,
+    status,
+    profileSnapshot: { profileId: "cody", profileName: "Cody" },
+    lineage: { parentThreadId: parent.id, relationshipToParent: "subagent" },
+  });
+  const previous = Array.from({ length: 26 }, (_, index) =>
+    delegated(`Previous Cody ${index}`, "completed"),
+  );
+  state.shells = [
+    parent,
+    delegated("Running Cody", "running"),
+    delegated("Waiting Cody", "waiting"),
+    ...previous,
+    {
+      ...delegated("Cody fork", "completed"),
+      lineage: { parentThreadId: parent.id, relationshipToParent: "fork" },
+    },
+    {
+      ...delegated("Top-level Cody", "completed"),
+      lineage: { parentThreadId: null, relationshipToParent: null },
+    },
+  ].map((source) => ({ environmentId, source }));
+  state.projection = {
+    thread: parent,
+    runs: [],
+    providerThreads: [],
+    providerSessions: [],
+    contextTransfers: [],
+    subagents: [],
+  };
+  await act(async () => {
+    renderer = create(
+      <ThreadRelationshipsPanel
+        environmentId={environmentId}
+        threadId={ThreadId.make(parent.id)}
+      />,
+    );
+  });
+  const text = () =>
+    renderer.root
+      .findAll((node) => typeof node.type === "string")
+      .flatMap((node) => node.children.filter((child) => typeof child === "string"))
+      .join(" ")
+      .replace(/\s+/g, " ");
+  expect(text()).toContain("Running Cody");
+  expect(text()).toContain("Running");
+  expect(text()).toContain("Waiting Cody");
+  expect(text()).toContain("Waiting");
+  expect(text()).toContain("Cody fork");
+  expect(text()).not.toContain("Top-level Cody");
+  expect(text()).toContain("Previous agents (26)");
+  expect(text()).not.toContain("Previous Cody");
+  await act(async () =>
+    renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),
+  );
+  expect(text()).toContain("Previous Cody");
+  expect(text()).toContain("Done");
+  for (let page = 0; page < 2; page += 1) {
+    await act(async () =>
+      renderer.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Show "))!
+        .props.onClick(),
+    );
+  }
+  for (const agent of previous) expect(text()).toContain(agent.title);
+  await act(async () =>
+    renderer.root.findByProps({ type: "button", "aria-expanded": true }).props.onClick(),
+  );
+  expect(text()).not.toContain("Previous Cody");
+  expect(text()).toContain("Waiting Cody");
+});

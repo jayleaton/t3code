@@ -42,6 +42,7 @@ import {
   excludePinnedAgentThreads,
   groupAgentThreads,
   nestAgentRuns,
+  selectAgentSidebarThreads,
   selectAgentWorkspaceThreads,
   selectPinnedAgentThreads,
   type AgentCardChildren,
@@ -64,7 +65,6 @@ function AgentThreadList({
   profiles,
   childrenByKey,
   runByKey,
-  compactChildren,
 }: {
   profiles: readonly McpGatewayProfile[];
   threads: readonly EnvironmentThreadShell[];
@@ -72,7 +72,6 @@ function AgentThreadList({
   childrenByKey: ReadonlyMap<string, AgentCardChildren<EnvironmentThreadShell>>;
   runByKey: ReadonlyMap<string, EnvironmentThreadShell>;
   onContextMenu: AgentRunContextMenu;
-  compactChildren: boolean;
 }) {
   const [settledOpen, setSettledOpen] = useState(false);
   const active = threads.filter((thread) => thread.settledAt === null);
@@ -85,7 +84,6 @@ function AgentThreadList({
       profile={profiles.find((profile) => profile.profileId === thread.profileSnapshot?.profileId)}
       profiles={profiles}
       childRuns={childrenByKey.get(`${thread.environmentId}:${thread.id}`)}
-      compactChildren={compactChildren}
       parentRun={(() => {
         const parentKey = agentRunParentKey(thread);
         return parentKey === null ? null : runByKey.get(parentKey);
@@ -170,6 +168,8 @@ export function AgentsBoard() {
   const scheduledTasks = useScheduledTasks();
   const modelPreferences = useClientSettings((settings) => settings.providerModelPreferences);
   const threads = useThreadShells();
+  // Delegated tasks live in the thread details' Lineage section, never this roster.
+  const sidebarThreads = useMemo(() => selectAgentSidebarThreads(threads), [threads]);
   const ready = useAllEnvironmentShellsBootstrapped();
   const [editor, setEditor] = useState<McpGatewayProfile | "new" | null>(null);
   const [task, setTask] = useState<McpGatewayProfile | null>(null);
@@ -184,8 +184,8 @@ export function AgentsBoard() {
   const [busy, setBusy] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const { groups, orphaned } = useMemo(
-    () => groupAgentThreads(profiles, threads),
-    [profiles, threads],
+    () => groupAgentThreads(profiles, sidebarThreads),
+    [profiles, sidebarThreads],
   );
   const allThreads = useMemo(() => [...groups.values(), orphaned].flat(), [groups, orphaned]);
   // Pinned chats stay at the top of the list no matter which agent filter or
@@ -193,17 +193,17 @@ export function AgentsBoard() {
   const allPinned = useMemo(() => selectPinnedAgentThreads(allThreads), [allThreads]);
   // Runs another run created fold into that run's card (see nestAgentRuns).
   const { lists: nestedLists, childrenByKey } = useMemo(() => {
-    const { active, settled } = selectAgentWorkspaceThreads(threads, filter, query);
+    const { active, settled } = selectAgentWorkspaceThreads(sidebarThreads, filter, query);
     return nestAgentRuns({
       lists: {
         pinned: allPinned,
         active: excludePinnedAgentThreads(active, allPinned),
         settled: excludePinnedAgentThreads(settled, allPinned),
       },
-      all: threads,
+      all: sidebarThreads,
       subagentsOnly: selected,
     });
-  }, [threads, filter, query, allPinned, selected]);
+  }, [sidebarThreads, filter, query, allPinned, selected]);
   const pinned = nestedLists.pinned;
   const visible = useMemo(
     () => [...nestedLists.active, ...nestedLists.settled],
@@ -506,7 +506,6 @@ export function AgentsBoard() {
             profiles={profiles}
             childrenByKey={childrenByKey}
             runByKey={runByKey}
-            compactChildren={selected}
             onContextMenu={onThreadContextMenu}
           />
         </section>

@@ -206,6 +206,15 @@ export function agentChildRunsSummary(runs: AgentCardChildren<EnvironmentThreadS
   ].join(" · ");
 }
 
+/** Delegation is a lineage relationship, independent of the Agent profile used to run it. */
+export function isAgentSubagentThread(run: Pick<AgentRun, "lineage">) {
+  return run.lineage.relationshipToParent === "subagent" && run.lineage.parentThreadId !== null;
+}
+
+export function selectAgentSidebarThreads(threads: readonly EnvironmentThreadShell[]) {
+  return threads.filter((thread) => !isAgentSubagentThread(thread));
+}
+
 type AgentRunList = "pinned" | "active" | "settled";
 
 /** Pinned first (latest pin on top), then active by arranged order, then settled. */
@@ -246,11 +255,9 @@ export function nestAgentRuns<T extends AgentRun>(input: {
   for (const run of [...input.all, ...input.lists.pinned, ...input.lists.active]) {
     if (run.archivedAt === null) runByKey.set(threadKey(run), run);
   }
-  const isSubagent = (run: T) =>
-    run.lineage.relationshipToParent === "subagent" && run.lineage.parentThreadId !== null;
   const parentKeyOf = (run: T) =>
     input.subagentsOnly
-      ? isSubagent(run)
+      ? isAgentSubagentThread(run)
         ? threadKey({ environmentId: run.environmentId, id: run.lineage.parentThreadId! })
         : null
       : agentRunParentKey(run);
@@ -305,7 +312,7 @@ export function nestAgentRuns<T extends AgentRun>(input: {
   }
   const keep = (runs: readonly T[]) =>
     runs.filter((run) =>
-      input.subagentsOnly ? !isSubagent(run) : anchorByKey.get(threadKey(run)) == null,
+      input.subagentsOnly ? !isAgentSubagentThread(run) : anchorByKey.get(threadKey(run)) == null,
     );
   return {
     lists: {
