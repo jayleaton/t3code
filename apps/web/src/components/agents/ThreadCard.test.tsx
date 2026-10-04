@@ -93,7 +93,7 @@ describe("agent card PR navigation", () => {
   );
 });
 
-describe("agent card subagents", () => {
+describe("agent card linked chats", () => {
   const parent = presentThreadShell(EnvironmentId.make("remote"), v2ThreadShell);
   const child = (id: string, overrides: Partial<EnvironmentThreadShell> = {}) => ({
     thread: {
@@ -115,7 +115,7 @@ describe("agent card subagents", () => {
       lineage: {
         rootThreadId: parent.id,
         parentThreadId: parent.id,
-        relationshipToParent: "subagent" as const,
+        relationshipToParent: null,
       },
       ...overrides,
     },
@@ -143,40 +143,7 @@ describe("agent card subagents", () => {
     settled: [child("Settled worker", { settledAt: "2026-09-10T00:00:00Z" })],
   };
 
-  it("bounds a busy sidebar fleet to a summary linking to the full workspace", async () => {
-    await act(async () =>
-      root.render(
-        <ThreadCard thread={parent} childRuns={runs} compactChildren onContextMenu={vi.fn()} />,
-      ),
-    );
-    const summary = container.querySelector<HTMLAnchorElement>('a[aria-label^="View subagents"]');
-    expect(summary?.textContent).toBe("23 subagents · 1 running · 1 needs attention");
-    expect(summary?.getAttribute("href")).toBe("/agents");
-    expect(container.textContent).not.toContain("worker");
-    expect(container.querySelectorAll(".agent-thread-child")).toHaveLength(0);
-    expect(container.querySelector('[aria-label="Sub-agent runs"]')).toBeNull();
-    await act(async () =>
-      root.render(
-        <ThreadCard
-          thread={parent}
-          childRuns={{
-            live: runs.live.map(({ thread, ...row }) => ({
-              ...row,
-              thread: { ...thread, ...done, hasPendingUserInput: false },
-            })),
-            settled: runs.settled,
-          }}
-          compactChildren
-          onContextMenu={vi.fn()}
-        />,
-      ),
-    );
-    expect(container.querySelector('a[aria-label^="View subagents"]')?.textContent).toBe(
-      "23 subagents",
-    );
-  });
-
-  it("keeps the workspace roster and supports expanding and collapsing settled workers", async () => {
+  it("keeps linked Agent chats and supports expanding and collapsing settled chats", async () => {
     await act(async () =>
       root.render(<ThreadCard thread={parent} childRuns={runs} onContextMenu={vi.fn()} />),
     );
@@ -188,11 +155,5 @@ describe("agent card subagents", () => {
     expect(container.textContent).toContain("Settled worker");
     await act(async () => toggle.click());
     expect(container.textContent).not.toContain("Settled worker");
-    await act(async () =>
-      root.render(
-        <ThreadCard thread={parent} childRuns={runs} compactChildren onContextMenu={vi.fn()} />,
-      ),
-    );
-    expect(container.textContent).not.toContain("worker");
   });
 });

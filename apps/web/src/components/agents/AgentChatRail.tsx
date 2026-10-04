@@ -4,12 +4,12 @@ import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environ
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useThreadShells } from "../../state/entities";
 import { useUiStateStore } from "../../uiStateStore";
-import { isAgentChatInFocus, nestAgentRuns } from "./agents.logic";
+import { isAgentChatInFocus, selectAgentSidebarThreads, nestAgentRuns } from "./agents.logic";
 import { ThreadCard } from "./ThreadCard";
 import { useAgentThreadContextMenu } from "./useAgentThreadContextMenu";
 
 export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
-  const threads = useThreadShells();
+  const threads = selectAgentSidebarThreads(useThreadShells());
   const visited = useUiStateStore((state) => state.threadLastVisitedAtById);
   const currentKey = scopedThreadKey(current);
   const inFocus = sortActiveThreadsByOrderKey(
@@ -19,7 +19,7 @@ export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
       return isAgentChatInFocus(thread, visited[key], key === currentKey);
     }),
   );
-  const { lists, childrenByKey } = nestAgentRuns({
+  const { lists } = nestAgentRuns({
     lists: { pinned: [], active: inFocus, settled: [] },
     all: threads,
     subagentsOnly: true,
@@ -42,8 +42,6 @@ export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
               <ThreadCard
                 thread={thread}
                 dragging={dragging}
-                childRuns={childrenByKey.get(`${thread.environmentId}:${thread.id}`)}
-                compactChildren
                 parentRun={
                   thread.parentThreadId == null
                     ? null
