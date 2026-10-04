@@ -1,8 +1,9 @@
 /**
  * Historical name for the shared application event store.
  *
- * Owns durable append/replay access for project events and V2 agent-thread
- * events under one global sequence. It does not reduce events into read models
+ * Owns durable append/replay access for project, todo, and V2 agent-thread
+ * events under one global sequence. Application replay reads skip todo events;
+ * the todo service reads its own projection. It does not reduce events into read models
  * or apply command validation rules.
  *
  * Uses Effect `Context.Service` for dependency injection and exposes typed
@@ -17,6 +18,7 @@ import type {
   OrchestrationV2DomainEvent,
   OrchestrationV2StoredEvent,
   ThreadId,
+  TodoEvent,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -31,6 +33,13 @@ export type UnsequencedProjectEvent = ApplicationProjectEvent extends infer Even
     : never
   : never;
 
+/** A todo event before the store assigns its sequence. */
+export type UnsequencedTodoEvent = TodoEvent extends infer Event
+  ? Event extends TodoEvent
+    ? Omit<Event, "sequence">
+    : never
+  : never;
+
 /**
  * OrchestrationEventStoreShape - Service API for orchestration event persistence.
  */
@@ -39,6 +48,11 @@ export interface OrchestrationEventStoreShape {
   readonly appendProjectEvent: (
     event: UnsequencedProjectEvent,
   ) => Effect.Effect<ApplicationProjectEvent, OrchestrationEventStoreError>;
+
+  /** Append one todo event to the shared application log. */
+  readonly appendTodoEvent: (
+    event: UnsequencedTodoEvent,
+  ) => Effect.Effect<TodoEvent, OrchestrationEventStoreError>;
 
   /** Append V2 agent events to the same globally ordered application log. */
   readonly appendAgentEvents: (input: {

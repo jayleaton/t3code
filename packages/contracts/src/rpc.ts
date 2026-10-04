@@ -335,6 +335,16 @@ import {
   ScheduledTaskMutationResult,
 } from "./scheduledTask.ts";
 import {
+  TodoCreateInput,
+  TodoError,
+  TodoListInput,
+  TodoListResult,
+  TodoMutationResult,
+  TodoRemoveResult,
+  TodoTargetInput,
+  TodoUpdateInput,
+} from "./todo.ts";
+import {
   ProjectCloneActionInput,
   ProjectCloneActionResult,
   ProjectCloneListEvent,
@@ -499,6 +509,15 @@ export const WS_METHODS = {
   scheduledTasksSetEnabled: "scheduledTasks.setEnabled",
   scheduledTasksDelete: "scheduledTasks.delete",
   scheduledTasksRunNow: "scheduledTasks.runNow",
+
+  // Workspace todos
+  todosList: "todos.list",
+  todosSubscribe: "todos.subscribe",
+  todosCreate: "todos.create",
+  todosUpdate: "todos.update",
+  todosSettle: "todos.settle",
+  todosUnsettle: "todos.unsettle",
+  todosRemove: "todos.remove",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -1732,6 +1751,50 @@ const WsScheduledTasksRunNowRpc = Rpc.make(WS_METHODS.scheduledTasksRunNow, {
   error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
 });
 
+const WsTodosListRpc = Rpc.make(WS_METHODS.todosList, {
+  payload: TodoListInput,
+  success: TodoListResult,
+  error: Schema.Union([TodoError, EnvironmentAuthorizationError]),
+});
+
+/** Streams one project's todo list: a snapshot on subscribe, then a fresh list after every change. */
+const WsTodosSubscribeRpc = Rpc.make(WS_METHODS.todosSubscribe, {
+  payload: TodoListInput,
+  success: TodoListResult,
+  error: Schema.Union([TodoError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+const WsTodosCreateRpc = Rpc.make(WS_METHODS.todosCreate, {
+  payload: TodoCreateInput,
+  success: TodoMutationResult,
+  error: Schema.Union([TodoError, EnvironmentAuthorizationError]),
+});
+
+const WsTodosUpdateRpc = Rpc.make(WS_METHODS.todosUpdate, {
+  payload: TodoUpdateInput,
+  success: TodoMutationResult,
+  error: Schema.Union([TodoError, EnvironmentAuthorizationError]),
+});
+
+const WsTodosSettleRpc = Rpc.make(WS_METHODS.todosSettle, {
+  payload: TodoTargetInput,
+  success: TodoMutationResult,
+  error: Schema.Union([TodoError, EnvironmentAuthorizationError]),
+});
+
+const WsTodosUnsettleRpc = Rpc.make(WS_METHODS.todosUnsettle, {
+  payload: TodoTargetInput,
+  success: TodoMutationResult,
+  error: Schema.Union([TodoError, EnvironmentAuthorizationError]),
+});
+
+const WsTodosRemoveRpc = Rpc.make(WS_METHODS.todosRemove, {
+  payload: TodoTargetInput,
+  success: TodoRemoveResult,
+  error: Schema.Union([TodoError, EnvironmentAuthorizationError]),
+});
+
 const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
   payload: Schema.Struct({}),
   success: AuthAccessStreamEvent,
@@ -1807,6 +1870,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksSetEnabledRpc,
   WsScheduledTasksDeleteRpc,
   WsScheduledTasksRunNowRpc,
+  WsTodosListRpc,
+  WsTodosSubscribeRpc,
+  WsTodosCreateRpc,
+  WsTodosUpdateRpc,
+  WsTodosSettleRpc,
+  WsTodosUnsettleRpc,
+  WsTodosRemoveRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,
