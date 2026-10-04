@@ -1,0 +1,100 @@
+import { useAtomValue } from "@effect/atom-react";
+import {
+  agentColorFor,
+  agentIconKey,
+  type AgentIconKey,
+} from "@t3tools/client-runtime/state/agents";
+import {
+  mergeAgentLibraries,
+  type McpGatewayProfile,
+  type ThreadProfileSnapshot,
+} from "@t3tools/contracts";
+import { Atom } from "effect/unstable/reactivity";
+import { useMemo } from "react";
+
+import { environmentServerConfigsAtom } from "./server";
+
+/** Every connected environment's agents, merged into one library as web does. */
+export const agentProfilesAtom = Atom.make(
+  (get) =>
+    mergeAgentLibraries(
+      [...get(environmentServerConfigsAtom).values()].map((config) => config.settings),
+    ).mcpGatewayProfiles,
+).pipe(Atom.keepAlive);
+
+export function useAgentProfiles(): ReadonlyArray<McpGatewayProfile> {
+  return useAtomValue(agentProfilesAtom);
+}
+
+export interface AgentAppearance {
+  readonly profileId: string;
+  readonly name: string;
+  readonly icon: AgentIconKey;
+  /** Null for an agent that no longer exists in any connected library. */
+  readonly color: string | null;
+}
+
+export function agentAppearance(
+  profile: McpGatewayProfile,
+  profiles: ReadonlyArray<McpGatewayProfile>,
+): AgentAppearance {
+  return {
+    profileId: profile.profileId,
+    name: profile.name,
+    icon: agentIconKey(profile.icon),
+    color: agentColorFor(profile, profiles),
+  };
+}
+
+/**
+ * The agent a thread runs as. The live profile wins so renames and recolors
+ * show everywhere; a deleted agent keeps the name frozen onto the thread.
+ */
+export function threadAgentAppearance(
+  snapshot: Pick<ThreadProfileSnapshot, "profileId" | "profileName"> | null | undefined,
+  profiles: ReadonlyArray<McpGatewayProfile>,
+): AgentAppearance | null {
+  if (!snapshot?.profileId) return null;
+  const profile = profiles.find((candidate) => candidate.profileId === snapshot.profileId);
+  if (profile) return agentAppearance(profile, profiles);
+  return {
+    profileId: snapshot.profileId,
+    name: snapshot.profileName ?? "Agent",
+    icon: "orb",
+    color: null,
+  };
+}
+
+export function useThreadAgent(
+  snapshot: Pick<ThreadProfileSnapshot, "profileId" | "profileName"> | null | undefined,
+): AgentAppearance | null {
+  const profiles = useAgentProfiles();
+  const profileId = snapshot?.profileId;
+  const profileName = snapshot?.profileName;
+  return useMemo(
+    () =>
+      threadAgentAppearance(
+        profileId ? { profileId, profileName: profileName ?? null } : null,
+        profiles,
+      ),
+    [profileId, profileName, profiles],
+  );
+}
+
+/** "Claude · Opus 4.6", from the readable labels the agent editor saves. */
+export function agentModelLabel(profile: McpGatewayProfile): string | null {
+  const label = [profile.providerLabel, profile.modelLabel ?? profile.modelSelection?.model]
+    .filter(Boolean)
+    .join(" · ");
+  return label.length > 0 ? label : null;
+}
+
+export function useAgentAppearance(profileId: string | null | undefined): AgentAppearance | null {
+  const profiles = useAgentProfiles();
+  return useMemo(() => {
+    const profile = profileId
+      ? profiles.find((candidate) => candidate.profileId === profileId)
+      : undefined;
+    return profile ? agentAppearance(profile, profiles) : null;
+  }, [profileId, profiles]);
+}

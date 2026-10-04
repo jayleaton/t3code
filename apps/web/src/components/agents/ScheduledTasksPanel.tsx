@@ -12,7 +12,8 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { formatDayAwareTimestamp, formatUpcomingTimestamp } from "../../timestampFormat";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
-import { AgentIcon, agentColorFor } from "./AgentIcon";
+import { agentColorFor } from "./agents.logic";
+import { AgentIcon } from "./AgentIcon";
 import { ScheduledTaskEditor } from "./ScheduledTaskEditor";
 import { describeSchedule } from "./scheduledTasks.logic";
 

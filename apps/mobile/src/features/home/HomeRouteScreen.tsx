@@ -74,6 +74,7 @@ export function HomeRouteScreen() {
     renameThread,
     regenerateThreadTitle,
     unsettleThread,
+    removeThreadFromParent,
   } = useThreadListActions();
   const pendingTasks = usePendingNewTasks();
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
@@ -255,6 +256,7 @@ export function HomeRouteScreen() {
             onMoveThread={moveThread}
             onRenameThread={renameThread}
             onRegenerateThreadTitle={regenerateThreadTitle}
+            onRemoveThreadFromParent={removeThreadFromParent}
             onEnvironmentChange={setSelectedEnvironmentId}
             onProjectChange={setSelectedProjectKey}
             onOpenSettings={() =>

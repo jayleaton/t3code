@@ -184,6 +184,7 @@ function ThreadNavigationSidebarPane(
     moveThread,
     renameThread,
     regenerateThreadTitle,
+    removeThreadFromParent,
   } = useThreadListActions();
   const pendingTasks = usePendingNewTasks();
   const queuedThreadKeys = useQueuedThreadKeys();
@@ -755,6 +756,7 @@ function ThreadNavigationSidebarPane(
               onArchiveThread={archiveThread}
               onRenameThread={renameThread}
               onRegenerateThreadTitle={regenerateThreadTitle}
+              onRemoveThreadFromParent={removeThreadFromParent}
               titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
               settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
               onSettleThread={settleThread}
@@ -841,6 +843,7 @@ function ThreadNavigationSidebarPane(
       projectByKey,
       projectTitleByProjectKey,
       regenerateThreadTitle,
+      removeThreadFromParent,
       renameThread,
       props.onNewThreadOnBranch,
       props.searchQuery,

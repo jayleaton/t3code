@@ -4,6 +4,8 @@ import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { v2ThreadShell } from "./agents.testFixtures.ts";
 import * as DateTime from "effect/DateTime";
 import {
+  agentRunLinkBlockedReason,
+  applyAgentParentOverrides,
   planAgentThreadMove,
   agentThreadStatus,
   groupAgentThreads,
@@ -18,6 +20,9 @@ import {
   agentRunParentKey,
   agentRunDropZone,
   agentRunReorderOver,
+  agentColorFor,
+  agentColors,
+  agentIconKey,
 } from "./agents.ts";
 const profile: McpGatewayProfile = {
   profileId: "write",
@@ -587,5 +592,65 @@ describe("agentRunReorderOver", () => {
 
   it("ignores cards outside the list", () => {
     expect(agentRunReorderOver(ids, "a", "pinned", "before")).toBeNull();
+  });
+});
+
+describe("agent appearance", () => {
+  it("prefers the agent's own color, then cycles the palette by library position", () => {
+    const second = { ...profile, profileId: "review" };
+    expect(agentColorFor({ ...profile, color: "#123456" }, [profile])).toBe("#123456");
+    expect(agentColorFor(second, [profile, second])).toBe(agentColors[1]);
+    expect(agentColorFor(second, [])).toBe(agentColors[0]);
+  });
+
+  it("falls back to the orb for missing or unrecognized icons", () => {
+    expect(agentIconKey("shield")).toBe("shield");
+    expect(agentIconKey(undefined)).toBe("orb");
+    expect(agentIconKey("rocket")).toBe("orb");
+    expect(agentIconKey("toString")).toBe("orb");
+  });
+});
+
+describe("parent changes on the board", () => {
+  const github = thread("github-chat", "doug");
+  const other = thread("other-chat", "doug");
+  const glm = { ...thread("glm-chat", "doug") };
+  const board = (threads: readonly (typeof glm)[]) =>
+    nestAgentRuns({ lists: { pinned: [], active: threads, settled: [] }, all: threads });
+
+  it("shows a pending move at once and rolls back to the server's link", () => {
+    const pending = new Map([
+      ["local:glm-chat", { parentThreadId: github.id, parentEnvironmentId: null }],
+    ]);
+    const moved = applyAgentParentOverrides([github, other, glm], pending);
+    expect(board(moved).childrenByKey.get("local:github-chat")?.live[0]?.thread.id).toBe(glm.id);
+    // Rolling back is dropping the entry: the server's state is all that is left.
+    const rolledBack = applyAgentParentOverrides([github, other, glm], new Map());
+    expect(board(rolledBack).lists.active.map((run) => run.id)).toEqual([
+      github.id,
+      other.id,
+      glm.id,
+    ]);
+    // Re-parenting and removing work the same way.
+    const nested = { ...glm, parentThreadId: github.id };
+    const reparented = applyAgentParentOverrides(
+      [github, other, nested],
+      new Map([["local:glm-chat", { parentThreadId: other.id, parentEnvironmentId: null }]]),
+    );
+    expect(board(reparented).childrenByKey.get("local:other-chat")?.live[0]?.thread.id).toBe(
+      glm.id,
+    );
+    const removed = applyAgentParentOverrides(
+      [github, other, nested],
+      new Map([["local:glm-chat", { parentThreadId: null, parentEnvironmentId: null }]]),
+    );
+    expect(board(removed).childrenByKey.size).toBe(0);
+  });
+
+  it("explains why a card cannot take the run", () => {
+    const nested = { ...glm, parentThreadId: github.id };
+    expect(agentRunLinkBlockedReason(nested, github)).toBe("Already under github-chat");
+    expect(agentRunLinkBlockedReason(github, nested)).toBe("Can't move under its own sub-run");
+    expect(agentRunLinkBlockedReason(glm, glm)).toBe("A chat cannot be its own parent");
   });
 });

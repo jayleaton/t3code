@@ -29,12 +29,14 @@ import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
+import { AgentAvatar } from "../../components/AgentAvatar";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
 import { ProviderIcon, ProviderInstanceIcon } from "../../components/ProviderIcon";
 import { cn } from "../../lib/cn";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
+import { useThreadAgent } from "../../state/agents";
 import { useThreadPr } from "../../state/use-thread-pr";
 import { useSwipeRowDormant } from "../home/swipe-row-activation";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
@@ -502,6 +504,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
   readonly onRenameThread: (thread: EnvironmentThreadShell) => void;
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => void;
+  /** Offered on named child agent chats; delegated subagents never reach this list. */
+  readonly onRemoveThreadFromParent?: (thread: EnvironmentThreadShell) => void;
   readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onSnoozeThread: (thread: EnvironmentThreadShell, snoozedUntil: string) => void;
   readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => void;
@@ -547,6 +551,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onDeleteThread,
     onRenameThread,
     onRegenerateThreadTitle,
+    onRemoveThreadFromParent,
     onNewThreadOnBranch,
     onSettleThread,
     onSnoozeThread,
@@ -816,6 +821,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "archive") handleArchive();
       if (nativeEvent.event === "rename") handleRename();
       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
+      if (nativeEvent.event === "remove-parent") onRemoveThreadFromParent?.(thread);
       if (nativeEvent.event === "copy-thread-id") {
         copyTextWithHaptic(thread.id, { target: "thread-id" });
       }
@@ -837,6 +843,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     },
     [
       onNewThreadOnBranch,
+      onRemoveThreadFromParent,
       thread,
       handleArchive,
       handleDelete,
@@ -918,6 +925,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       ? `Opens the thread. Swipe left to ${primaryAction.label.toLowerCase()}.`
       : `Opens the thread. Swipe left for ${primaryAction.label.toLowerCase()} and snooze actions.`;
 
+  const agent = useThreadAgent(thread.profileSnapshot);
   // Sidebar rows use navigation foregrounds on their active and idle surfaces.
   const cardContent = (
     <>
@@ -943,6 +951,22 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         >
           {props.projectTitle ?? props.project?.title ?? ""}
         </Text>
+        {agent ? (
+          <View className="max-w-[45%] shrink-0 flex-row items-center gap-1">
+            <AgentAvatar icon={agent.icon} color={agent.color} size={15} />
+            <Text
+              className={cn(
+                "shrink text-xs font-t3-medium",
+                selected
+                  ? selectedThreadRowColors.mutedForegroundClassName
+                  : rowAppearance.mutedForegroundClassName,
+              )}
+              numberOfLines={1}
+            >
+              {agent.name}
+            </Text>
+          </View>
+        ) : null}
         {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
         {pinnedRow ? (
           <SymbolView
@@ -1254,6 +1278,17 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                       id: "new-thread-on-branch",
                       title: getThreadListV2NewBranchMenuTitle(thread.branch),
                       image: "square.and.pencil",
+                    },
+                  ]
+                : []),
+              ...(onRemoveThreadFromParent &&
+              thread.parentThreadId != null &&
+              thread.lineage.relationshipToParent !== "subagent"
+                ? [
+                    {
+                      id: "remove-parent",
+                      title: "Remove from parent",
+                      image: "arrow.uturn.backward",
                     },
                   ]
                 : []),
