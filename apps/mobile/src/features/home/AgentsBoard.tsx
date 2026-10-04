@@ -111,7 +111,7 @@ export function WorkspaceBoardTabs() {
 type AgentChatStatus = ReturnType<typeof agentThreadStatus>;
 
 const STATUS_DOT_CLASS: Record<AgentChatStatus, string> = {
-  attention: "bg-warning",
+  attention: "bg-warning-foreground",
   error: "bg-danger",
   running: "bg-primary",
   monitoring: "bg-primary",
@@ -463,11 +463,18 @@ export function AgentsBoard(props: {
       title="No environments connected"
       detail="Connect an environment to see its agents and chats."
     />
+  ) : profiles.length === 0 && !catalogState.hasReadyEnvironment ? (
+    // Agents come from connected environments, so offline is not "none yet".
+    <EmptyState
+      variant="plain"
+      title="Environments offline"
+      detail="Agents appear once an environment reconnects."
+    />
   ) : profiles.length === 0 ? (
     <EmptyState
       variant="plain"
       title="No agents yet"
-      detail="Create agents in T3 Code on web or desktop. They show up here once saved."
+      detail="Create agents on web or desktop. They show up here once saved."
     />
   ) : null;
 
@@ -678,7 +685,7 @@ function AgentStrip(props: {
               <View
                 className={cn(
                   "h-2 w-2 rounded-full",
-                  activity.attention > 0 ? "bg-warning" : "bg-primary",
+                  activity.attention > 0 ? "bg-warning-foreground" : "bg-primary",
                 )}
               />
             ) : null}
@@ -997,12 +1004,16 @@ const AgentChatCard = memo(function AgentChatCard(props: AgentChatCardProps) {
     >
       <View
         className={cn(
-          "flex-row items-center rounded-[18px] border bg-card",
+          "flex-row items-center rounded-[18px] border",
+          // Child chats sit on a recessed tint with a softer edge, so they read
+          // as part of the parent above rather than as more top-level cards.
           dragState === "target"
             ? "border-primary bg-secondary"
             : dragState === "rejected"
-              ? "border-danger-border"
-              : "border-transparent",
+              ? "border-danger-border bg-card"
+              : nested
+                ? "border-border-subtle bg-card-alt"
+                : "border-border bg-card",
           dragState === "lifted" && "opacity-40",
         )}
         style={{ marginStart: 16 + Math.min(props.depth, 4) * 16 }}
@@ -1021,7 +1032,8 @@ const AgentChatCard = memo(function AgentChatCard(props: AgentChatCardProps) {
                 nested ? "text-sm" : "text-base",
                 thread.settledAt !== null && "text-foreground-muted",
               )}
-              numberOfLines={2}
+              numberOfLines={1}
+              ellipsizeMode="tail"
             >
               {thread.title}
             </Text>
