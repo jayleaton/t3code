@@ -22,6 +22,8 @@ import { RowPressable } from "../../components/RowPressable";
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
 import { cn } from "../../lib/cn";
+import { appAtomRegistry } from "../../state/atom-registry";
+import { agentsBoardSelectionAtom } from "../home/agents-board-state";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { T3KeyboardCommands } from "../../native/T3KeyboardCommands";
 import { useProjects, useThreadShell, useThreadShells } from "../../state/entities";
@@ -260,6 +262,19 @@ export function CommandPalette(props: {
           }),
       },
     ];
+    for (const tab of ["agents", "threads"] as const) {
+      actions.push({
+        key: tab,
+        kind: "action",
+        title: tab === "agents" ? "Open Agents board" : "Open Threads board",
+        searchTerms: ["home", "workspace", "board"],
+        run: () => {
+          const selection = appAtomRegistry.get(agentsBoardSelectionAtom);
+          appAtomRegistry.set(agentsBoardSelectionAtom, { ...selection, tab });
+          navigation.navigate("Home");
+        },
+      });
+    }
     const projectByKey = new Map(
       projects.map((project) => [scopedProjectKey(project.environmentId, project.id), project]),
     );

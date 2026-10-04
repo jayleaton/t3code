@@ -8,7 +8,12 @@ import {
   type HardwareKeyboardCommand,
 } from "./hardwareKeyboardCommands";
 
-type ThreadShortcutListItem = ThreadListV2ListItem | { readonly type: "v2-show-more" };
+const NO_JUMP_COMMANDS: readonly HardwareKeyboardCommand[] = [];
+
+type ThreadShortcutListItem =
+  | ThreadListV2ListItem
+  | { readonly type: "v2-show-more" }
+  | { readonly type: "agent-thread"; readonly thread: EnvironmentThreadShell };
 
 export function threadJumpIndex(command: HardwareKeyboardCommand) {
   return THREAD_JUMP_KEYBINDING_COMMANDS.findIndex((candidate) => candidate === command);
@@ -22,7 +27,12 @@ export function threadJumpTarget(
   let index = threadJumpIndex(command);
   if (index < 0) return null;
   for (const item of items) {
-    const thread = item.type === "v2-thread" ? item.item.thread : null;
+    const thread =
+      item.type === "v2-thread"
+        ? item.item.thread
+        : item.type === "agent-thread"
+          ? item.thread
+          : null;
     if (thread !== null && index-- === 0) return thread;
   }
   return null;
@@ -31,6 +41,7 @@ export function threadJumpTarget(
 export function useThreadJumpShortcuts(
   items: ReadonlyArray<ThreadShortcutListItem>,
   onSelectThread: (thread: EnvironmentThreadShell) => void,
+  enabled = true,
 ) {
   const jumpToThread = useCallback(
     (command: HardwareKeyboardCommand) => {
@@ -40,5 +51,8 @@ export function useThreadJumpShortcuts(
     },
     [items, onSelectThread],
   );
-  useHardwareKeyboardCommand(THREAD_JUMP_KEYBINDING_COMMANDS, jumpToThread);
+  useHardwareKeyboardCommand(
+    enabled ? THREAD_JUMP_KEYBINDING_COMMANDS : NO_JUMP_COMMANDS,
+    jumpToThread,
+  );
 }

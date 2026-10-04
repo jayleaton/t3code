@@ -21,6 +21,9 @@ import { MaterialButton } from "../../components/MaterialButton";
 import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
 import { AppText as Text } from "../../components/AppText";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
+import { AgentAvatar } from "../../components/AgentAvatar";
+import { agentAppearance, agentModelLabel, useAgentProfiles } from "../../state/agents";
+import { resolveGatewayProfileModelSelection } from "@t3tools/client-runtime/gateway";
 import { useProjects, useServerConfigs, waitForProject } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -34,6 +37,8 @@ import { filterProjectScopes, getProjectScopeSelectionTarget } from "./new-task-
 
 type NewTaskRouteParams = {
   readonly incomingShareId?: string | string[];
+  readonly profileId?: string;
+  readonly environmentId?: string;
 };
 
 function deriveProjectEmptyState(catalogState: WorkspaceState): {
@@ -163,7 +168,34 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
         isScratchProject(project, serverConfigs.get(project.environmentId)?.scratchWorkspaceRoot),
       ),
   );
-  const visibleScopes = filterProjectScopes(listScopes, searchText);
+  const configs = serverConfigs;
+  const agentProfiles = useAgentProfiles();
+  const currentProfile = agentProfiles.find(
+    (profile) => profile.profileId === route.params?.profileId,
+  );
+  const currentAgent = currentProfile ? agentAppearance(currentProfile, agentProfiles) : null;
+  const visibleScopes = filterProjectScopes(listScopes, searchText).flatMap((scope) => {
+    if (!route.params?.profileId) return [scope];
+    const eligible = scope.projects.filter((project) => {
+      if (route.params?.environmentId && project.environmentId !== route.params.environmentId)
+        return false;
+      const config = configs.get(project.environmentId);
+      const profile = config?.settings.mcpGatewayProfiles.find(
+        (candidate) => candidate.profileId === route.params?.profileId,
+      );
+      return (
+        profile &&
+        currentProfile &&
+        profile.revision === currentProfile.revision &&
+        config &&
+        profile.runtimeMode !== "read-only" &&
+        (!profile.environmentIds?.length ||
+          profile.environmentIds.includes(project.environmentId)) &&
+        resolveGatewayProfileModelSelection(profile, config.providers)
+      );
+    });
+    return eligible.length ? [{ ...scope, projects: eligible, representative: eligible[0]! }] : [];
+  });
   const resumedDestinationKeyRef = useRef<string | null>(null);
   const reservedDestinationProject = incomingShare?.destination
     ? (projects.find(
@@ -221,6 +253,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
         projectId: project.id,
         title: project.title,
         incomingShareId: incomingShare?.id,
+        profileId: route.params?.profileId,
       }),
     );
   }
@@ -312,6 +345,25 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
               : {}),
           }}
         >
+          {currentProfile && currentAgent ? (
+            <View
+              accessible
+              accessibilityLabel={`New chat with ${currentProfile.name}. Only projects where it can run are listed.`}
+              className="flex-row items-center gap-3 rounded-[24px] bg-grouped-card px-4 py-3.5"
+            >
+              <AgentAvatar icon={currentAgent.icon} color={currentAgent.color} size={40} />
+              <View className="min-w-0 flex-1 gap-0.5">
+                <Text className="text-base font-t3-bold text-foreground" numberOfLines={1}>
+                  New chat with {currentProfile.name}
+                </Text>
+                <Text className="text-sm text-foreground-muted" numberOfLines={2}>
+                  {[agentModelLabel(currentProfile), "Showing projects where it can run"]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </Text>
+              </View>
+            </View>
+          ) : null}
           {canStartScratch && listScopes.length > 0 ? (
             Platform.OS === "android" ? (
               <View collapsable={false} className="overflow-hidden rounded-[28px] bg-grouped-card">

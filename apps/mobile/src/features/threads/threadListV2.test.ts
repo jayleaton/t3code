@@ -1134,6 +1134,14 @@ describe("buildThreadListV2ListItems", () => {
     expect(threadJumpTarget(items, "thread.jump.1")?.id).toBe("active");
     expect(threadJumpTarget(items, "thread.jump.2")?.id).toBe("settled");
     expect(threadJumpTarget(items, "thread.jump.3")).toBeNull();
+    const agentItems = items.flatMap((item) =>
+      item.type === "v2-thread"
+        ? [{ type: "agent-thread" as const, thread: item.item.thread }]
+        : [],
+    );
+    expect(threadJumpTarget(agentItems, "thread.jump.1")?.id).toBe("active");
+    expect(threadJumpTarget(agentItems, "thread.jump.2")?.id).toBe("settled");
+    expect(threadJumpTarget(agentItems, "thread.jump.3")).toBeNull();
   });
 });
 

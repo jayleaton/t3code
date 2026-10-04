@@ -254,6 +254,8 @@ export function useThreadListActions(): {
   ) => Promise<boolean>;
   readonly renameThread: (thread: EnvironmentThreadShell) => void;
   readonly regenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
+  /** Makes a child agent chat top-level again; same command the Agents board uses. */
+  readonly removeThreadFromParent: (thread: EnvironmentThreadShell) => Promise<boolean>;
 } {
   const executeAction = useThreadActionExecutor();
   const snoozeMutation = useAtomCommand(threadEnvironment.snooze, { reportFailure: false });
@@ -563,6 +565,28 @@ export function useThreadListActions(): {
     [updateThreadMetadata],
   );
 
+  const removeThreadFromParent = useCallback(
+    async (thread: EnvironmentThreadShell) => {
+      selectionHaptic();
+      const result = await updateThreadMetadata({
+        environmentId: thread.environmentId,
+        input: { threadId: thread.id, parentThreadId: null },
+      });
+      if (result._tag === "Failure") {
+        const error = Cause.squash(result.cause);
+        Alert.alert(
+          "Could not remove from parent",
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message
+            : "The chat was left where it was.",
+        );
+        return false;
+      }
+      return true;
+    },
+    [updateThreadMetadata],
+  );
+
   // Plan against the complete section so filtering does not change a move.
   const reorderPinnedMutation = useAtomCommand(threadEnvironment.reorderPin, {
     reportFailure: false,
@@ -744,6 +768,7 @@ export function useThreadListActions(): {
     moveThread,
     renameThread,
     regenerateThreadTitle,
+    removeThreadFromParent,
   };
 }
 

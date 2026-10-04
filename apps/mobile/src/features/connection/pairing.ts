@@ -1,4 +1,5 @@
-import { readHostedPairingRequest } from "@t3tools/shared/remote";
+import { isLocalLoopbackHost, normalizeHostname } from "@t3tools/shared/hostClassification";
+import { resolveRemotePairingTarget, readHostedPairingRequest } from "@t3tools/shared/remote";
 import * as Schema from "effect/Schema";
 
 const MOBILE_PAIRING_URL_PARAM = "pairingUrl";
@@ -78,7 +79,11 @@ export function extractPairingUrlFromQrPayload(payload: string): string {
 
   try {
     const url = new URL(trimmed);
-    if (url.protocol === "t3code:") {
+    if (
+      ["t3code:", "t3code-personal:", "t3code-personal-dev:", "t3code-personal-preview:"].includes(
+        url.protocol,
+      )
+    ) {
       const pairingUrl = url.searchParams.get(MOBILE_PAIRING_URL_PARAM)?.trim() ?? "";
       if (pairingUrl.length > 0) {
         return pairingUrl;
@@ -89,4 +94,20 @@ export function extractPairingUrlFromQrPayload(payload: string): string {
   }
 
   return trimmed;
+}
+
+/** Validate the server address, including hosted links whose outer URL is public. */
+export function validateMobilePairingUrl(pairingUrl: string): void {
+  const target = resolveRemotePairingTarget({ pairingUrl });
+  const hostname = normalizeHostname(new URL(target.httpBaseUrl).hostname);
+  if (
+    isLocalLoopbackHost(hostname) ||
+    hostname.endsWith(".localhost") ||
+    hostname === "0.0.0.0" ||
+    hostname === "::"
+  ) {
+    throw new Error(
+      "Localhost points to this phone, not your Mac. Generate a new pairing link with t3 pair --tailscale, or use your Mac's LAN IP and a fresh pairing token.",
+    );
+  }
 }
