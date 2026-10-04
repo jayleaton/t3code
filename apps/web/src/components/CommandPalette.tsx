@@ -1,10 +1,15 @@
 "use client";
 
 import { isAgentsPage, useToggleWorkspaceView } from "./sidebar/mainAppLocation";
+import { useTodoFocusStore } from "./chat/todoFocusStore";
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 
-import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import {
+  scopedThreadKey,
+  scopeProjectRef,
+  scopeThreadRef,
+} from "@t3tools/client-runtime/environment";
 import {
   canCreateProjectInEnvironment,
   getCloneDestinationBrowsePath,
@@ -56,6 +61,7 @@ import {
   FolderPlusIcon,
   MessageSquareDashedIcon,
   LinkIcon,
+  ListTodoIcon,
   MessageSquareIcon,
   MonitorIcon,
   MoonIcon,
@@ -1928,6 +1934,25 @@ function OpenCommandPaletteDialog(props: {
       icon: <LinkIcon className={ITEM_ICON_CLASS} />,
       shortcutCommand: "thread.copyReference",
       run: copyActiveThreadReference,
+    });
+  }
+
+  if (
+    activeThread !== null &&
+    activeThread.projectId !== null &&
+    activeThreadServerConfig?.environment.capabilities.workspaceTodos === true
+  ) {
+    const threadKey = scopedThreadKey(scopeThreadRef(activeThread.environmentId, activeThread.id));
+    actionItems.push({
+      kind: "action",
+      value: "action:add-todo",
+      searchTerms: ["todo", "task", "checklist", "add", "workspace"],
+      title: "Add TODO",
+      icon: <ListTodoIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "todo.add",
+      run: async () => {
+        useTodoFocusStore.getState().request(threadKey);
+      },
     });
   }
 

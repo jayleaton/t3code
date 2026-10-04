@@ -365,6 +365,11 @@ run. MCP assistants can manage tasks with `t3_list_scheduled_tasks`, `t3_create_
 immediately with `t3_run_scheduled_task` (send access). Pass `runAt` for a single run, or `cron`
 with an optional IANA `timezone` for a repeating one.
 
+MCP assistants can keep a project's [TODO list](./thread-sidebar.md#keep-a-todo-list) with
+`t3_list_todos` (read access) and `t3_add_todo`, `t3_update_todo`, `t3_settle_todo`,
+`t3_unsettle_todo`, and `t3_remove_todo` (create or admin access). Settling marks a todo done
+and is reversible; removing deletes it.
+
 Ask an assistant connected to the **T3 Agents MCP** to create a shared skill and assign it to
 an agent. For example: “Create a shared skill for reviewing pull requests and assign it to Randy.”
 The MCP can list skills with read access and create, update, or delete them with create or admin

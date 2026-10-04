@@ -429,6 +429,7 @@ import {
 } from "./chat/PanelLayoutControls";
 import { expandedImageKey, type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { ThreadDetailsPanel, type ThreadDetailsPanelProps } from "./chat/ThreadDetailsPanel";
+import { useTodoFocusStore } from "./chat/todoFocusStore";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
   type EnvironmentOption,
@@ -5566,6 +5567,25 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().toggleThreadPanel(activeThreadRef, threadPanelPresentation);
   }, [activeThreadRef, threadPanelPresentation]);
+  const todoProjectId =
+    serverConfig?.environment.capabilities.workspaceTodos === true && activeProject
+      ? activeProject.id
+      : null;
+  const requestTodoInput = useCallback(() => {
+    if (activeThreadKey === null || todoProjectId === null) return;
+    useTodoFocusStore.getState().request(activeThreadKey);
+  }, [activeThreadKey, todoProjectId]);
+  // The palette and the `todo.add` shortcut ask for the todo input; open the
+  // details panel in its current presentation so the section can take focus.
+  const todoFocusRequested = useTodoFocusStore(
+    (state) => activeThreadKey !== null && state.threadKey === activeThreadKey,
+  );
+  useEffect(() => {
+    if (!todoFocusRequested || !activeThreadRef) return;
+    useRightPanelStore
+      .getState()
+      .setThreadPanelOpen(activeThreadRef, threadPanelPresentation, true);
+  }, [todoFocusRequested, activeThreadRef, threadPanelPresentation]);
   const toggleRightPanelMaximized = useCallback(() => {
     if (!canMaximizeRightPanel) return;
     setMaximizedRightPanelThreadKey((threadKey) =>
@@ -7456,6 +7476,13 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
 
+      if (command === "todo.add") {
+        event.preventDefault();
+        event.stopPropagation();
+        requestTodoInput();
+        return;
+      }
+
       if (command === "rightPanel.close") {
         // Nothing open: leave the event alone so the shortcut keeps its
         // native meaning (close window on desktop, close tab in a browser).
@@ -7635,6 +7662,7 @@ export default function ChatView(props: ChatViewProps) {
     getShortcutContext,
     toggleRightPanel,
     toggleThreadPanel,
+    requestTodoInput,
     toggleTerminalVisibility,
     composerRef,
   ]);
@@ -10668,6 +10696,7 @@ export default function ChatView(props: ChatViewProps) {
     threadId: activeThread.id,
     ...(draftId ? { draftId } : {}),
     activeProjectName: activeProject?.title,
+    todoProjectId,
     activeProjectScripts: activeProject ? activeProjectScripts : undefined,
     preferredScriptId: activeProject
       ? (lastInvokedScriptByProjectId[activeProject.id] ?? null)

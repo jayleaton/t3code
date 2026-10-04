@@ -1,6 +1,7 @@
 import type {
   EditorId,
   EnvironmentId,
+  ProjectId,
   ProjectScript,
   ResolvedKeybindingsConfig,
   ThreadId,
@@ -28,6 +29,8 @@ import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
+import { ThreadTodosPanel } from "./ThreadTodosPanel";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 
 interface VersionMismatchIssue {
   readonly clientVersion: string;
@@ -44,6 +47,8 @@ export interface ThreadDetailsPanelProps extends Pick<
   threadId: ThreadId;
   draftId?: DraftId;
   activeProjectName: string | undefined;
+  /** The project whose todo list to show; null when the environment has no todos. */
+  todoProjectId: ProjectId | null;
   activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
   preferredScriptId: string | null;
   keybindings: ResolvedKeybindingsConfig;
@@ -220,6 +225,17 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 ) : null}
               </div>
             </ThreadDetailsSection>
+          ) : null}
+
+          {density !== "essential" && props.todoProjectId !== null ? (
+            <ThreadTodosPanel
+              environmentId={props.environmentId}
+              projectId={props.todoProjectId}
+              threadKey={scopedThreadKey({
+                environmentId: props.environmentId,
+                threadId: props.threadId,
+              })}
+            />
           ) : null}
 
           {density === "full" && !props.draftId ? (
