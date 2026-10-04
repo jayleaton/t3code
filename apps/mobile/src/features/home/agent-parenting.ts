@@ -1,11 +1,7 @@
 import { agentRunLinkTargets, agentRunParentKey } from "@t3tools/client-runtime/state/agents";
 
-type ParentLink = {
-  readonly environmentId: string;
-  readonly id: string;
-  readonly parentThreadId?: string | null | undefined;
-  readonly parentEnvironmentId?: string | null | undefined;
-};
+/** The fields the shared link rules read from a thread shell. */
+type ParentLink = Parameters<typeof agentRunLinkTargets>[0];
 
 export const parentLinkKey = (thread: { environmentId: string; id: string }) =>
   `${thread.environmentId}:${thread.id}`;
@@ -20,12 +16,15 @@ export interface DropCard {
 export type ParentDrop =
   | { readonly kind: "nest"; readonly parentKey: string }
   | { readonly kind: "detach" }
+  /** Over a card it can never move under, such as one of its own child chats. */
+  | { readonly kind: "rejected"; readonly targetKey: string }
   | { readonly kind: "none" };
 
 /**
  * What releasing a dragged chat at `pointerY` does. Over a card it may move
- * under, it nests; over its own card or current parent nothing changes; and a
- * child released anywhere else leaves its parent, like dragging it out on web.
+ * under, it nests; over its own card or current parent nothing changes; over
+ * any other card it is rejected; and a child released between cards leaves
+ * its parent, like dragging it out on web.
  */
 export function resolveParentDrop(input: {
   readonly draggedKey: string;
@@ -41,6 +40,7 @@ export function resolveParentDrop(input: {
   if (card && (card.key === input.draggedKey || card.key === input.currentParentKey)) {
     return { kind: "none" };
   }
+  if (card) return { kind: "rejected", targetKey: card.key };
   return input.currentParentKey === null ? { kind: "none" } : { kind: "detach" };
 }
 
@@ -62,8 +62,8 @@ export function parentRejection(
 
 /** A parent change the board shows before the server confirms it. */
 export interface PendingParent {
-  readonly parentThreadId: string | null;
-  readonly parentEnvironmentId: string | null;
+  readonly parentThreadId: ParentLink["parentThreadId"];
+  readonly parentEnvironmentId: NonNullable<ParentLink["parentEnvironmentId"]> | null;
 }
 
 /**
@@ -78,13 +78,15 @@ export function applyPendingParents<T extends ParentLink>(
   if (pending.size === 0) return threads;
   return threads.map((thread) => {
     const override = pending.get(parentLinkKey(thread));
-    return override
-      ? {
-          ...thread,
-          parentThreadId: override.parentThreadId,
-          parentEnvironmentId: override.parentEnvironmentId,
-        }
-      : thread;
+    if (!override) return thread;
+    const { parentEnvironmentId: _previous, ...rest } = thread;
+    return {
+      ...rest,
+      parentThreadId: override.parentThreadId,
+      ...(override.parentEnvironmentId
+        ? { parentEnvironmentId: override.parentEnvironmentId }
+        : {}),
+    } as T;
   });
 }
 

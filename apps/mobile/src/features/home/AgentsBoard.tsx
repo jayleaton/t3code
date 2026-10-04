@@ -12,6 +12,8 @@ import {
   agentThreadStatus,
   agentThreadStatusLabel,
   excludePinnedAgentThreads,
+  agentRunLinkTargets,
+  agentRunParentKey,
   nestAgentRuns,
   selectAgentSidebarThreads,
   selectAgentWorkspaceThreads,
@@ -43,6 +45,14 @@ import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
 import { agentsBoardSelectionAtom } from "./agents-board-state";
+import {
+  AgentCardDragProvider,
+  AgentCardDragSource,
+  useAgentCardDragState,
+  type AgentCardDragSubject,
+} from "./AgentCardDrag";
+import type { ParentDrop } from "./agent-parenting";
+import { useThreadParentActions } from "./useThreadParentActions";
 
 const BOARD_TABS = [
   { value: "agents", label: "Agents" },
@@ -82,13 +92,30 @@ interface AgentActivity {
 }
 
 type BoardRow =
-  | { readonly thread: EnvironmentThreadShell; readonly depth: number }
+  | {
+      readonly thread: EnvironmentThreadShell;
+      readonly depth: number;
+      readonly rollup: ChildRollup | null;
+    }
   | {
       readonly kind: "settled" | "card-settled";
       readonly key: string;
       readonly count: number;
       readonly open: boolean;
     };
+
+function childRollup(
+  children: readonly { readonly thread: EnvironmentThreadShell }[],
+): ChildRollup {
+  let working = 0;
+  let attention = 0;
+  for (const { thread } of children) {
+    const status = agentThreadStatus(thread);
+    if (status === "running" || status === "queued" || status === "monitoring") working += 1;
+    if (status === "attention" || status === "error") attention += 1;
+  }
+  return { total: children.length, working, attention };
+}
 
 const NO_ACTIVITY: AgentActivity = { active: 0, working: 0, attention: 0 };
 
@@ -110,7 +137,9 @@ export function AgentsBoard(props: {
   readonly projectRefs?: readonly { environmentId: EnvironmentId; projectId: string }[] | null;
   readonly topInset?: number;
 }) {
-  const threads = useThreadShells();
+  const syncedThreads = useThreadShells();
+  // Parent moves show at once and roll back if the server rejects them.
+  const { threads, setParent } = useThreadParentActions(syncedThreads);
   const configs = useAtomValue(environmentServerConfigsAtom);
   const { environments } = useEnvironments();
   const { state: catalogState } = useWorkspaceState();
@@ -189,13 +218,20 @@ export function AgentsBoard(props: {
         const children = board.childrenByKey.get(key);
         const settledChildren = children?.settled ?? [];
         const open = expandedCards.has(key);
+        const live = children?.live ?? [];
         return [
-          { thread, depth: 0 },
-          ...(children?.live ?? []).map((child) => ({ ...child, depth: child.depth + 1 })),
+          { thread, depth: 0, rollup: live.length > 0 ? childRollup(live) : null },
+          ...live.map((child) => ({ thread: child.thread, depth: child.depth + 1, rollup: null })),
           ...(settledChildren.length > 0
             ? [{ kind: "card-settled" as const, key, count: settledChildren.length, open }]
             : []),
-          ...(open ? settledChildren.map((child) => ({ ...child, depth: child.depth + 1 })) : []),
+          ...(open
+            ? settledChildren.map((child) => ({
+                thread: child.thread,
+                depth: child.depth + 1,
+                rollup: null,
+              }))
+            : []),
         ];
       });
     const settledCount = board.lists.settled.length;
@@ -265,6 +301,55 @@ export function AgentsBoard(props: {
       : "Model unavailable";
   };
   const startChat = (id: string) => props.onStartAgentChat(id, props.environmentId);
+  // Cycle checks see every live run, including ones this filter hides.
+  const linkable = useMemo(() => threads.filter((thread) => thread.archivedAt === null), [threads]);
+  const runByKey = useMemo(
+    () => new Map(linkable.map((thread) => [`${thread.environmentId}:${thread.id}`, thread])),
+    [linkable],
+  );
+  const linkTargetsFor = useCallback(
+    (key: string) => {
+      const run = runByKey.get(key);
+      return run ? agentRunLinkTargets(run, linkable) : new Set<string>();
+    },
+    [runByKey, linkable],
+  );
+  const moveUnder = useCallback(
+    (thread: EnvironmentThreadShell, parentKey: string) => {
+      const parent = runByKey.get(parentKey);
+      if (parent) void setParent(thread, parent);
+    },
+    [runByKey, setParent],
+  );
+  const removeFromParent = useCallback(
+    (thread: EnvironmentThreadShell) => void setParent(thread, null),
+    [setParent],
+  );
+  const onDrop = useCallback(
+    (subject: AgentCardDragSubject, drop: ParentDrop) => {
+      const thread = runByKey.get(subject.key);
+      if (!thread) return;
+      if (drop.kind === "nest") moveUnder(thread, drop.parentKey);
+      else if (drop.kind === "rejected") moveUnder(thread, drop.targetKey);
+      else if (drop.kind === "detach") removeFromParent(thread);
+    },
+    [runByKey, moveUnder, removeFromParent],
+  );
+  // The menu offers the open top-level chats, the same cards a drag can reach.
+  const topLevel = useMemo(
+    () => [...board.lists.pinned, ...board.lists.active],
+    [board.lists.pinned, board.lists.active],
+  );
+  const moveTargetsFor = useCallback(
+    (thread: EnvironmentThreadShell) => {
+      const targets = linkTargetsFor(`${thread.environmentId}:${thread.id}`);
+      return topLevel.flatMap((candidate) => {
+        const key = `${candidate.environmentId}:${candidate.id}`;
+        return targets.has(key) ? [{ key, title: candidate.title }] : [];
+      });
+    },
+    [linkTargetsFor, topLevel],
+  );
   const selectedProfile = profiles.find((profile) => profile.profileId === profileId);
   const renderRow = useCallback(
     ({ item }: { item: (typeof rows)[number] }) => {
@@ -299,7 +384,10 @@ export function AgentsBoard(props: {
           environmentLabel={environments.length > 1 ? environment?.label : undefined}
           canSettle={connected && capabilities?.threadSettlement === true}
           canPin={connected && capabilities?.threadPinning === true}
+          moveTargets={moveTargetsFor(item.thread)}
           onSelectThread={props.onSelectThread}
+          onMoveUnder={moveUnder}
+          onRemoveFromParent={removeFromParent}
           settleThread={settleThread}
           unsettleThread={unsettleThread}
           pinThread={pinThread}
@@ -309,6 +397,9 @@ export function AgentsBoard(props: {
     },
     [
       toggleCard,
+      moveTargetsFor,
+      moveUnder,
+      removeFromParent,
       environments,
       configs,
       profiles,
@@ -344,7 +435,7 @@ export function AgentsBoard(props: {
   ) : null;
 
   return (
-    <View className="flex-1">
+    <AgentCardDragProvider linkTargetsFor={linkTargetsFor} onDrop={onDrop}>
       <LegendList
         style={{ flex: 1 }}
         data={boardEmpty ? [] : rows}
@@ -445,7 +536,7 @@ export function AgentsBoard(props: {
           <Text className="text-sm font-t3-medium text-foreground">Hide settled chats</Text>
         </Pressable>
       ) : null}
-    </View>
+    </AgentCardDragProvider>
   );
 }
 
@@ -763,6 +854,13 @@ function PendingAgentTaskRow(props: {
   );
 }
 
+/** Live child agents folded into a parent card, so its status reflects their work. */
+export interface ChildRollup {
+  readonly total: number;
+  readonly working: number;
+  readonly attention: number;
+}
+
 type AgentChatCardProps = Pick<
   ReturnType<typeof useThreadListActions>,
   "settleThread" | "unsettleThread" | "pinThread" | "unpinThread"
@@ -770,19 +868,40 @@ type AgentChatCardProps = Pick<
   readonly thread: EnvironmentThreadShell;
   readonly agent: AgentAppearance | null;
   readonly depth: number;
+  readonly rollup: ChildRollup | null;
   readonly connected: boolean;
   readonly environmentLabel: string | undefined;
   readonly canSettle: boolean;
   readonly canPin: boolean;
+  /** Open top-level chats this one may move under, for the non-drag menu path. */
+  readonly moveTargets: readonly { readonly key: string; readonly title: string }[];
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
+  readonly onMoveUnder: (thread: EnvironmentThreadShell, parentKey: string) => void;
+  readonly onRemoveFromParent: (thread: EnvironmentThreadShell) => void;
 };
 
+const MOVE_UNDER_PREFIX = "move-under:";
+
 const AgentChatCard = memo(function AgentChatCard(props: AgentChatCardProps) {
-  const { thread, agent } = props;
-  const status = agentThreadStatus(thread);
+  const { thread, agent, rollup } = props;
+  const key = `${thread.environmentId}:${thread.id}`;
+  const parentKey = agentRunParentKey(thread);
+  const dragState = useAgentCardDragState(key);
+  const ownStatus = agentThreadStatus(thread);
+  // A parent is not "Done" while one of its child agents is still working.
+  const status: AgentChatStatus =
+    rollup && rollup.attention > 0 && ownStatus !== "running"
+      ? "attention"
+      : rollup && rollup.working > 0 && (ownStatus === "done" || ownStatus === "idle")
+        ? "running"
+        : ownStatus;
   const nested = props.depth > 0;
   const onMenuAction = (action: string) => {
-    if (action === "pin" || action === "unpin") {
+    if (action.startsWith(MOVE_UNDER_PREFIX)) {
+      props.onMoveUnder(thread, action.slice(MOVE_UNDER_PREFIX.length));
+    } else if (action === "remove-parent") {
+      props.onRemoveFromParent(thread);
+    } else if (action === "pin" || action === "unpin") {
       void (action === "unpin" ? props.unpinThread(thread) : props.pinThread(thread)).catch(
         (error) => Alert.alert("Could not pin chat", String(error)),
       );
@@ -794,78 +913,127 @@ const AgentChatCard = memo(function AgentChatCard(props: AgentChatCardProps) {
         .catch((error) => Alert.alert("Could not settle chat", String(error)));
     }
   };
-  return (
-    <View
-      className="my-1 me-4 flex-row items-center rounded-[18px] bg-card"
-      style={{ marginStart: 16 + Math.min(props.depth, 4) * 16 }}
-    >
-      <Pressable
-        accessibilityRole="button"
-        onPress={() => props.onSelectThread(thread)}
-        className="min-w-0 flex-1 flex-row items-center gap-3 py-3 ps-3.5 active:opacity-70"
-      >
-        <AgentAvatar icon={agent?.icon} color={agent?.color ?? null} size={nested ? 26 : 34} />
-        <View className="min-w-0 flex-1">
-          <Text
-            className={cn(
-              "font-t3-medium text-foreground",
-              nested ? "text-sm" : "text-base",
-              thread.settledAt !== null && "text-foreground-muted",
-            )}
-            numberOfLines={2}
-          >
-            {thread.title}
-          </Text>
-          <View className="mt-1 flex-row items-center gap-1.5">
-            <View className={cn("h-1.5 w-1.5 rounded-full", STATUS_DOT_CLASS[status])} />
-            <Text className="min-w-0 shrink text-xs text-foreground-muted" numberOfLines={1}>
-              {[
-                agentThreadStatusLabel(status),
-                agent?.name,
-                props.environmentLabel,
-                props.connected ? null : "Offline",
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-            </Text>
-            {thread.pinnedAt ? (
-              <SymbolView
-                name="pin"
-                size={11}
-                tintColorClassName="accent-icon-muted"
-                type="monochrome"
-              />
-            ) : null}
-          </View>
-        </View>
-      </Pressable>
-      <ControlPillMenu
-        accessibilityLabel={`Actions for ${thread.title}`}
-        actions={[
-          thread.pinnedAt
-            ? { id: "unpin", title: "Unpin", image: "pin.slash" }
-            : { id: "pin", title: "Pin", image: "pin" },
-          thread.settledAt
-            ? { id: "restore", title: "Restore", image: "arrow.uturn.backward" }
-            : { id: "settle", title: "Settle", image: "checkmark" },
-        ].map((action) => ({
-          ...action,
-          attributes: {
-            disabled:
-              action.id === "pin" || action.id === "unpin" ? !props.canPin : !props.canSettle,
+  const lifecycleActions = [
+    thread.pinnedAt
+      ? { id: "unpin", title: "Unpin", image: "pin.slash" }
+      : { id: "pin", title: "Pin", image: "pin" },
+    thread.settledAt
+      ? { id: "restore", title: "Restore", image: "arrow.uturn.backward" }
+      : { id: "settle", title: "Settle", image: "checkmark" },
+  ].map((action) => ({
+    ...action,
+    attributes: {
+      disabled: action.id === "pin" || action.id === "unpin" ? !props.canPin : !props.canSettle,
+    },
+  }));
+  const parentActions = [
+    ...(props.moveTargets.length > 0
+      ? [
+          {
+            id: "move-under",
+            title: parentKey ? "Move to another parent" : "Make child of…",
+            image: "arrow.triangle.merge",
+            attributes: { disabled: !props.connected },
+            subactions: props.moveTargets.map((target) => ({
+              id: `${MOVE_UNDER_PREFIX}${target.key}`,
+              title: target.title,
+            })),
           },
-        }))}
-        onPressAction={({ nativeEvent }) => onMenuAction(nativeEvent.event)}
+        ]
+      : []),
+    ...(parentKey
+      ? [
+          {
+            id: "remove-parent",
+            title: "Remove from parent",
+            image: "arrow.uturn.backward",
+            attributes: { disabled: !props.connected },
+          },
+        ]
+      : []),
+  ];
+  return (
+    <AgentCardDragSource
+      enabled={props.connected}
+      subject={{ key, title: thread.title, agent, currentParentKey: parentKey }}
+      className="my-1 me-4"
+    >
+      <View
+        className={cn(
+          "flex-row items-center rounded-[18px] border bg-card",
+          dragState === "target"
+            ? "border-primary bg-secondary"
+            : dragState === "rejected"
+              ? "border-danger-border"
+              : "border-transparent",
+          dragState === "lifted" && "opacity-40",
+        )}
+        style={{ marginStart: 16 + Math.min(props.depth, 4) * 16 }}
+        accessibilityHint="Long press and drag onto another chat to make it a child."
       >
-        <View className="h-11 w-11 items-center justify-center">
-          <SymbolView
-            name="ellipsis"
-            size={16}
-            tintColorClassName="accent-icon-muted"
-            type="monochrome"
-          />
-        </View>
-      </ControlPillMenu>
-    </View>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => props.onSelectThread(thread)}
+          className="min-w-0 flex-1 flex-row items-center gap-3 py-3 ps-3.5 active:opacity-70"
+        >
+          <AgentAvatar icon={agent?.icon} color={agent?.color ?? null} size={nested ? 26 : 34} />
+          <View className="min-w-0 flex-1">
+            <Text
+              className={cn(
+                "font-t3-medium text-foreground",
+                nested ? "text-sm" : "text-base",
+                thread.settledAt !== null && "text-foreground-muted",
+              )}
+              numberOfLines={2}
+            >
+              {thread.title}
+            </Text>
+            <View className="mt-1 flex-row items-center gap-1.5">
+              <View className={cn("h-1.5 w-1.5 rounded-full", STATUS_DOT_CLASS[status])} />
+              <Text className="min-w-0 shrink text-xs text-foreground-muted" numberOfLines={1}>
+                {[
+                  agentThreadStatusLabel(status),
+                  agent?.name,
+                  rollup ? childRollupLabel(rollup) : null,
+                  props.environmentLabel,
+                  props.connected ? null : "Offline",
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </Text>
+              {thread.pinnedAt ? (
+                <SymbolView
+                  name="pin"
+                  size={11}
+                  tintColorClassName="accent-icon-muted"
+                  type="monochrome"
+                />
+              ) : null}
+            </View>
+          </View>
+        </Pressable>
+        <ControlPillMenu
+          accessibilityLabel={`Actions for ${thread.title}`}
+          actions={[...parentActions, ...lifecycleActions]}
+          onPressAction={({ nativeEvent }) => onMenuAction(nativeEvent.event)}
+        >
+          <View className="h-11 w-11 items-center justify-center">
+            <SymbolView
+              name="ellipsis"
+              size={16}
+              tintColorClassName="accent-icon-muted"
+              type="monochrome"
+            />
+          </View>
+        </ControlPillMenu>
+      </View>
+    </AgentCardDragSource>
   );
 });
+
+function childRollupLabel(rollup: ChildRollup) {
+  const parts = [`${rollup.total} child${rollup.total === 1 ? "" : "ren"}`];
+  if (rollup.working > 0) parts.push(`${rollup.working} working`);
+  if (rollup.attention > 0) parts.push(`${rollup.attention} need input`);
+  return parts.join(", ");
+}

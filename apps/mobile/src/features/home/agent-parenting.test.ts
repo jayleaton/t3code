@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   applyPendingParents,
@@ -7,10 +8,10 @@ import {
   resolveParentDrop,
 } from "./agent-parenting";
 
-const run = (id: string, parentThreadId: string | null = null, environmentId = "env") => ({
-  environmentId,
-  id,
-  parentThreadId,
+const run = (id: string, parentThreadId: string | null = null) => ({
+  environmentId: EnvironmentId.make("env"),
+  id: ThreadId.make(id),
+  parentThreadId: parentThreadId === null ? null : ThreadId.make(parentThreadId),
 });
 
 const cards = [
@@ -64,6 +65,18 @@ describe("resolveParentDrop", () => {
       }),
     ).toEqual({ kind: "nest", parentKey: "env:a" });
   });
+
+  it("rejects a card the chat can never move under instead of detaching", () => {
+    expect(
+      resolveParentDrop({
+        draggedKey: "env:a",
+        currentParentKey: "env:c",
+        pointerY: 150,
+        cards,
+        linkTargets: new Set<string>(),
+      }),
+    ).toEqual({ kind: "rejected", targetKey: "env:b" });
+  });
 });
 
 describe("parentRejection", () => {
@@ -84,7 +97,9 @@ describe("parentRejection", () => {
 
 describe("pending parents", () => {
   it("shows the optimistic parent until the shell confirms it", () => {
-    const pending = new Map([["env:d", { parentThreadId: "a", parentEnvironmentId: null }]]);
+    const pending = new Map([
+      ["env:d", { parentThreadId: ThreadId.make("a"), parentEnvironmentId: null }],
+    ]);
     const [, , , d] = applyPendingParents([run("a"), run("b"), run("c"), run("d")], pending);
     expect(d?.parentThreadId).toBe("a");
     expect(pendingParentSettled(run("d"), pending.get("env:d")!)).toBe(false);
