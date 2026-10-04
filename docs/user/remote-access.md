@@ -220,7 +220,7 @@ for controlling work, handling approvals, retrieving artifacts, managing reviews
 
 The assistant can use agents from the shared library for new chats, inspect work and approvals, control thread
 lifecycle, and subscribe to events or webhook delivery when permitted. Agents are managed on the
-Agents board; changing an agent does not change existing chats. Use `t3_list_environments`
+Agents board; changing an agent does not change existing chats. Mobile Home opens to **Agents**: choose an agent to start a chat in an existing environment, or switch to **Threads** for all threads. Configure agents on web or desktop. Use `t3_list_environments`
 to check the environment IDs and effective grants seen by the assistant. Permission errors also
 report the granted and missing scopes.
 
@@ -261,7 +261,7 @@ mobile apps connected to an environment, and shows which one you are looking at.
 then opens a chat on one of them by device ID or name. It can also open a file from that chat's
 workspace beside the chat, such as a screenshot, video, PDF, or source file, or open the Agents board.
 Desktop apps come to the front. Browser tabs switch to the chat but stay behind other windows. Phones
-must have T3 Code open. Mobile has no Agents board, so that request does nothing on a phone.
+must have T3 Code open. On mobile, that request opens Home’s Agents tab.
 
 A device appears once it connects to the environment directly, over your network, Tailscale, or T3
 Connect. Desktop apps use the computer's name; browsers show as the browser and OS, such as "Chrome

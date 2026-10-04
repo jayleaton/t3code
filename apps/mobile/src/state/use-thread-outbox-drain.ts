@@ -404,6 +404,9 @@ export async function recoverEditedCreationAfterDelivery(
     // Only settings the queued message actually carries: spreading explicit
     // undefined would clear choices the user already made on the draft.
     updateComposerDraftSettings(draftKey, {
+      ...(kept.creation?.profileSelection
+        ? { profileSelection: kept.creation.profileSelection }
+        : {}),
       ...(kept.modelSelection !== undefined ? { modelSelection: kept.modelSelection } : {}),
       ...(kept.runtimeMode !== undefined ? { runtimeMode: kept.runtimeMode } : {}),
       ...(kept.interactionMode !== undefined ? { interactionMode: kept.interactionMode } : {}),
@@ -585,6 +588,7 @@ function stampRecoveryDraftProject(queuedMessage: QueuedThreadMessage, draftKey:
     return;
   }
   updateComposerDraftSettings(draftKey, {
+    profileSelection: queuedMessage.creation.profileSelection,
     project: {
       environmentId: queuedMessage.environmentId,
       projectId: queuedMessage.creation.projectId,
@@ -1017,6 +1021,7 @@ export function useThreadOutboxDrain(): void {
         environmentId: queuedMessage.environmentId,
         input: buildProjectThreadStartTurnInput({
           projectId: creation.projectId,
+          profileSelection: creation.profileSelection,
           projectCwd,
           threadId: queuedMessage.threadId,
           commandId: queuedMessage.commandId,

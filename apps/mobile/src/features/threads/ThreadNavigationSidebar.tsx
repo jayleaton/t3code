@@ -1,3 +1,7 @@
+import { AgentsBoard, WorkspaceBoardTabs } from "../home/AgentsBoard";
+import { agentsBoardSelectionAtom } from "../home/agents-board-state";
+import { useNavigation } from "@react-navigation/native";
+import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { computeThreadMoveAvailability } from "./threadOrder";
 import type {
@@ -80,6 +84,8 @@ type SidebarListItem =
   | ThreadListV2ListItem
   | { readonly type: "v2-show-more"; readonly key: string; readonly hiddenCount: number };
 
+const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
+
 const SIDEBAR_STICKY_HEADER_HEIGHT = 106;
 
 interface ThreadNavigationSidebarProps {
@@ -96,6 +102,11 @@ interface ThreadNavigationSidebarProps {
   readonly searchQuery: string;
 }
 
+interface SidebarAgentsNavigation {
+  readonly onStartAgentChat: (profileId: string, environmentId: EnvironmentId | null) => void;
+  readonly onSelectPendingTask: (task: PendingNewTask) => void;
+}
+
 /**
  * iPad/large-width sidebar column.
  *
@@ -106,13 +117,25 @@ interface ThreadNavigationSidebarProps {
  * column gets. Other platforms keep the custom header chrome.
  */
 export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
+  const navigation = useNavigation();
+  const { openPendingTask } = usePendingTaskListActions();
+  const onStartAgentChat = useCallback(
+    (profileId: string, environmentId: EnvironmentId | null) =>
+      navigation.navigate("NewTaskSheet", {
+        screen: "NewTask",
+        params: { profileId, environmentId: environmentId ?? undefined },
+      }),
+    [navigation],
+  );
+  // Capture root navigation before entering the sidebar's independent header stack.
+  const agentNavigation = { onStartAgentChat, onSelectPendingTask: openPendingTask };
   if (Platform.OS !== "ios") {
-    return <ThreadNavigationSidebarPane {...props} nativeChrome={false} />;
+    return <ThreadNavigationSidebarPane {...props} {...agentNavigation} nativeChrome={false} />;
   }
-  return <NativeSidebarContainer {...props} />;
+  return <NativeSidebarContainer {...props} {...agentNavigation} />;
 }
 
-function NativeSidebarContainer(props: ThreadNavigationSidebarProps) {
+function NativeSidebarContainer(props: ThreadNavigationSidebarProps & SidebarAgentsNavigation) {
   return (
     <View
       testID="thread-navigation-sidebar"
@@ -127,14 +150,17 @@ function NativeSidebarContainer(props: ThreadNavigationSidebarProps) {
 }
 
 function ThreadNavigationSidebarPane(
-  props: ThreadNavigationSidebarProps & { readonly nativeChrome: boolean },
+  props: ThreadNavigationSidebarProps &
+    SidebarAgentsNavigation & { readonly nativeChrome: boolean },
 ) {
   const { themeVariables: materialTheme } = useAppearancePreferences();
   const drawerColor = materialTheme["--color-drawer"];
 
   const insets = useSafeAreaInsets();
+  const boardSelection = useAtomValue(agentsBoardSelectionAtom);
   const projects = useProjects();
-  const threads = useThreadShells();
+  const allThreads = useThreadShells();
+  const threads = boardSelection.tab === "threads" ? allThreads : EMPTY_THREADS;
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const searchInputRef = useRef<TextInput>(null);
@@ -157,7 +183,8 @@ function ThreadNavigationSidebarPane(
   } = useThreadListActions();
   const pendingTasks = usePendingNewTasks();
   const queuedThreadKeys = useQueuedThreadKeys();
-  const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
+  const { confirmDeletePendingTask } = usePendingTaskListActions();
+  const openPendingTask = props.onSelectPendingTask;
   const environments = useMemo(
     () =>
       Object.values(savedConnectionsById)
@@ -300,11 +327,12 @@ function ThreadNavigationSidebarPane(
   // thread reappears immediately instead of on the next minute tick.
   const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
   useEffect(() => {
+    if (boardSelection.tab !== "threads") return;
     // Refresh immediately because the mount-time value can be hours old.
     setNowMinute(new Date().toISOString().slice(0, 16));
     const id = setInterval(() => setNowMinute(new Date().toISOString().slice(0, 16)), 60_000);
     return () => clearInterval(id);
-  }, []);
+  }, [boardSelection.tab]);
   // Threads on servers without the settlement capability never classify as
   // settled (the user could neither un-settle nor pin them).
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
@@ -956,40 +984,52 @@ function ThreadNavigationSidebarPane(
           }}
         />
         <View className="flex-1">
-          <SwipeableScrollGateProvider enabled={swipeEnabled}>
-            <GestureDetector gesture={sidebarScrollGesture}>
-              <LegendList
-                data={listItems}
-                drawDistance={500}
-                estimatedItemSize={64}
-                extraData={listExtraData}
-                getItemType={(item) => item.type}
-                itemsAreEqual={sidebarItemsAreEqual}
-                keyExtractor={(item) => item.key}
-                renderItem={renderListItem}
-                automaticallyAdjustsScrollIndicatorInsets={NATIVE_LIQUID_GLASS_SUPPORTED}
-                contentInsetAdjustmentBehavior={
-                  NATIVE_LIQUID_GLASS_SUPPORTED ? "automatic" : "never"
-                }
-                contentContainerStyle={[
-                  styles.threadListContent,
-                  Platform.OS === "android" ? { paddingHorizontal: 0 } : null,
-                  {
-                    paddingBottom: Math.max(insets.bottom, 16) + 16,
-                    paddingTop: 6,
-                  },
-                ]}
-                keyboardDismissMode="on-drag"
-                keyboardShouldPersistTaps="handled"
-                {...scrollGateHandlers}
-                recycleItems
-                scrollEventThrottle={16}
-                showsVerticalScrollIndicator={false}
-                style={styles.threadList}
-                ListEmptyComponent={listEmpty}
-              />
-            </GestureDetector>
-          </SwipeableScrollGateProvider>
+          {boardSelection.tab === "agents" ? (
+            <AgentsBoard
+              onStartAgentChat={props.onStartAgentChat}
+              onSelectPendingTask={props.onSelectPendingTask}
+              onSelectThread={props.onSelectThread}
+              searchQuery={props.searchQuery}
+              environmentId={options.selectedEnvironmentId}
+              projectRefs={selectedProjectScope?.projectRefs}
+            />
+          ) : (
+            <SwipeableScrollGateProvider enabled={swipeEnabled}>
+              <GestureDetector gesture={sidebarScrollGesture}>
+                <LegendList
+                  data={listItems}
+                  drawDistance={500}
+                  estimatedItemSize={64}
+                  extraData={listExtraData}
+                  getItemType={(item) => item.type}
+                  itemsAreEqual={sidebarItemsAreEqual}
+                  keyExtractor={(item) => item.key}
+                  renderItem={renderListItem}
+                  automaticallyAdjustsScrollIndicatorInsets={NATIVE_LIQUID_GLASS_SUPPORTED}
+                  contentInsetAdjustmentBehavior={
+                    NATIVE_LIQUID_GLASS_SUPPORTED ? "automatic" : "never"
+                  }
+                  contentContainerStyle={[
+                    styles.threadListContent,
+                    Platform.OS === "android" ? { paddingHorizontal: 0 } : null,
+                    {
+                      paddingBottom: Math.max(insets.bottom, 16) + 16,
+                      paddingTop: 6,
+                    },
+                  ]}
+                  keyboardDismissMode="on-drag"
+                  keyboardShouldPersistTaps="handled"
+                  {...scrollGateHandlers}
+                  recycleItems
+                  scrollEventThrottle={16}
+                  showsVerticalScrollIndicator={false}
+                  style={styles.threadList}
+                  ListHeaderComponent={<WorkspaceBoardTabs />}
+                  ListEmptyComponent={listEmpty}
+                />
+              </GestureDetector>
+            </SwipeableScrollGateProvider>
+          )}
         </View>
       </>
     );
@@ -1019,8 +1059,21 @@ function ThreadNavigationSidebarPane(
             : { paddingBottom: insets.bottom }
         }
       >
-        {Platform.OS === "android" && listItems.length === 0 ? (
-          <View className="flex-1 items-center justify-center">{listEmpty}</View>
+        {Platform.OS === "android" && listItems.length === 0 && boardSelection.tab === "threads" ? (
+          <View className="flex-1">
+            <WorkspaceBoardTabs />
+            <View className="flex-1 items-center justify-center">{listEmpty}</View>
+          </View>
+        ) : boardSelection.tab === "agents" ? (
+          <AgentsBoard
+            onStartAgentChat={props.onStartAgentChat}
+            onSelectPendingTask={props.onSelectPendingTask}
+            onSelectThread={props.onSelectThread}
+            searchQuery={props.searchQuery}
+            environmentId={options.selectedEnvironmentId}
+            projectRefs={selectedProjectScope?.projectRefs}
+            topInset={Platform.OS === "ios" ? topListInset : 6}
+          />
         ) : (
           <SwipeableScrollGateProvider enabled={swipeEnabled}>
             <GestureDetector gesture={sidebarScrollGesture}>
@@ -1051,6 +1104,7 @@ function ThreadNavigationSidebarPane(
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
+                ListHeaderComponent={<WorkspaceBoardTabs />}
                 ListEmptyComponent={listEmpty}
               />
             </GestureDetector>

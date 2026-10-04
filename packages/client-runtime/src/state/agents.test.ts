@@ -19,7 +19,7 @@ import {
   agentRunLinkTargets,
   agentRunDropZone,
   agentRunReorderOver,
-} from "./agents.logic";
+} from "./agents.ts";
 const profile: McpGatewayProfile = {
   profileId: "write",
   name: "Write",

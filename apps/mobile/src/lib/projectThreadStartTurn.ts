@@ -7,6 +7,7 @@ import {
   type ProjectId,
   type ProviderInteractionMode,
   type RuntimeMode,
+  type ThreadProfileSelection,
 } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 
@@ -24,6 +25,7 @@ export function deriveThreadTitleFromPrompt(value: string): string {
 
 export interface ProjectThreadStartTurnSpec {
   readonly projectId: ProjectId;
+  readonly profileSelection?: ThreadProfileSelection;
   readonly projectCwd: string;
   readonly threadId: string;
   readonly commandId: string;
@@ -69,6 +71,7 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
     bootstrap: {
       createThread: {
         projectId: spec.projectId,
+        ...(spec.profileSelection ? { profileSelection: spec.profileSelection } : {}),
         title,
         modelSelection: spec.modelSelection,
         runtimeMode: spec.runtimeMode,

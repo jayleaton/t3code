@@ -1,3 +1,5 @@
+import { resolveGatewayProfileModelSelection } from "@t3tools/client-runtime/gateway";
+import { withReasoningEffortOption } from "@t3tools/shared/model";
 import { useAtomValue } from "@effect/atom-react";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
@@ -29,6 +31,7 @@ import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useFontFamily } from "../../lib/useFontFamily";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
@@ -165,6 +168,7 @@ function NewTaskWorkspaceIcon(props: {
 }
 
 export function NewTaskDraftScreen(props: {
+  readonly profileId?: string;
   readonly initialProjectRef?: {
     readonly environmentId?: string;
     readonly projectId?: string;
@@ -291,6 +295,51 @@ export function NewTaskDraftScreen(props: {
       states: uploadStates,
     });
   const queuesInsteadOfStarting = !environmentConnected || attachmentsUploading;
+  const appliedAgentDraft = useRef<string | null>(null);
+  useEffect(() => {
+    if (!props.profileId || !flow.draftKey || !selectedEnvironmentServerConfig) return;
+    if (
+      appliedAgentDraft.current === null &&
+      props.initialProjectRef?.projectId &&
+      (selectedProject?.id !== props.initialProjectRef.projectId ||
+        selectedProject.environmentId !== props.initialProjectRef.environmentId)
+    )
+      return;
+    const key = `${flow.draftKey}:${selectedProject?.environmentId}:${props.profileId}`;
+    if (appliedAgentDraft.current === key) return;
+    const profile = selectedEnvironmentServerConfig.settings.mcpGatewayProfiles.find(
+      (candidate) => candidate.profileId === props.profileId,
+    );
+    const model =
+      profile &&
+      resolveGatewayProfileModelSelection(profile, selectedEnvironmentServerConfig.providers);
+    if (!profile || !model || profile.runtimeMode === "read-only") return;
+    const descriptors = selectedEnvironmentServerConfig.providers
+      .find((provider) => provider.instanceId === model.instanceId)
+      ?.models.find((candidate) => candidate.slug === model.model)?.capabilities?.optionDescriptors;
+    updateComposerDraftSettings(flow.draftKey, {
+      modelSelection: {
+        ...model,
+        instanceId: ProviderInstanceId.make(model.instanceId),
+        options: withReasoningEffortOption(model.options, profile.reasoningEffort, descriptors),
+      },
+      runtimeMode: profile.runtimeMode,
+      interactionMode: profile.interactionMode,
+      profileSelection: {
+        profileId: profile.profileId,
+        revision: profile.revision,
+        overrideFields: ["modelSelection", "runtimeMode", "interactionMode", "reasoningEffort"],
+      },
+    });
+    appliedAgentDraft.current = key;
+  }, [
+    props.profileId,
+    props.initialProjectRef,
+    flow.draftKey,
+    selectedProject,
+    selectedEnvironmentServerConfig,
+  ]);
+
   const promptInputRef = useRef<ComposerEditorHandle>(null);
   const loadedBranchesProjectKeyRef = useRef<string | null>(null);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
@@ -1188,6 +1237,26 @@ export function NewTaskDraftScreen(props: {
     const workspaceMode = draft.workspaceSelection?.mode ?? flow.workspaceMode;
     const selectedBranchName = draft.workspaceSelection?.branch ?? flow.selectedBranchName;
     const initialMessageText = draft.text.trim();
+    const requestedProfileId = props.profileId ?? draft.profileSelection?.profileId;
+    if (requestedProfileId) {
+      const profile = selectedEnvironmentServerConfig?.settings.mcpGatewayProfiles.find(
+        (candidate) => candidate.profileId === requestedProfileId,
+      );
+      if (
+        !profile ||
+        profile.runtimeMode === "read-only" ||
+        draft.profileSelection?.profileId !== requestedProfileId ||
+        draft.profileSelection.revision !== profile.revision ||
+        (profile.environmentIds?.length &&
+          !profile.environmentIds.includes(selectedProject.environmentId))
+      ) {
+        Alert.alert(
+          "Agent unavailable",
+          "Choose an environment with this agent's current configuration, or start a new chat from the Agents tab.",
+        );
+        return;
+      }
+    }
 
     if (
       attachmentBlockReason !== null ||

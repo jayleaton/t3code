@@ -17,6 +17,10 @@ import { MaterialButton } from "../../components/MaterialButton";
 import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
 import { AppText as Text } from "../../components/AppText";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
+import { mergeAgentLibraries } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
+import { resolveGatewayProfileModelSelection } from "@t3tools/client-runtime/gateway";
+import { environmentServerConfigsAtom } from "../../state/server";
 import { useProjects } from "../../state/entities";
 import type { WorkspaceState } from "../../state/workspaceModel";
 import { useWorkspaceState } from "../../state/workspace";
@@ -27,6 +31,8 @@ import { filterProjectScopes, getProjectScopeSelectionTarget } from "./new-task-
 
 type NewTaskRouteParams = {
   readonly incomingShareId?: string | string[];
+  readonly profileId?: string;
+  readonly environmentId?: string;
 };
 
 function deriveProjectEmptyState(catalogState: WorkspaceState): {
@@ -147,7 +153,32 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
     : null;
   const screenTitle = incomingShare ? "Start a task" : "Choose project";
   const projectEmptyState = deriveProjectEmptyState(catalogState);
-  const visibleScopes = filterProjectScopes(projectScopes, searchText);
+  const configs = useAtomValue(environmentServerConfigsAtom);
+  const currentProfile = mergeAgentLibraries(
+    [...configs.values()].map((config) => config.settings),
+  ).mcpGatewayProfiles.find((profile) => profile.profileId === route.params?.profileId);
+  const visibleScopes = filterProjectScopes(projectScopes, searchText).flatMap((scope) => {
+    if (!route.params?.profileId) return [scope];
+    const eligible = scope.projects.filter((project) => {
+      if (route.params?.environmentId && project.environmentId !== route.params.environmentId)
+        return false;
+      const config = configs.get(project.environmentId);
+      const profile = config?.settings.mcpGatewayProfiles.find(
+        (candidate) => candidate.profileId === route.params?.profileId,
+      );
+      return (
+        profile &&
+        currentProfile &&
+        profile.revision === currentProfile.revision &&
+        config &&
+        profile.runtimeMode !== "read-only" &&
+        (!profile.environmentIds?.length ||
+          profile.environmentIds.includes(project.environmentId)) &&
+        resolveGatewayProfileModelSelection(profile, config.providers)
+      );
+    });
+    return eligible.length ? [{ ...scope, projects: eligible, representative: eligible[0]! }] : [];
+  });
   const resumedDestinationKeyRef = useRef<string | null>(null);
   const reservedDestinationProject = incomingShare?.destination
     ? (projects.find(
@@ -185,6 +216,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
         projectId: project.id,
         title: project.title,
         incomingShareId: incomingShare?.id,
+        profileId: route.params?.profileId,
       }),
     );
   }
