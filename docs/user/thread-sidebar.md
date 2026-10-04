@@ -125,7 +125,7 @@ cannot drag or move threads within it. Your saved order returns when you turn it
 
 Choose **Settle thread** from its menu to move finished work out of the active list
 without deleting the conversation. **Un-settle thread** restores it to active work
-and prevents automatic settlement until new activity resumes the usual rules.
+and resets its inactivity clock, preventing automatic settlement until its usual idle age passes again.
 Manually settling an idle thread dismisses unanswered async questions without
 sending an answer or restarting the agent. Settling also closes the thread's
 terminals that wait at an idle prompt, and keeps their output. A terminal that
@@ -136,13 +136,10 @@ settle every thread in that section between it and the one you release on.
 The **Un-settle** and **Wake** buttons work the same way in their sections.
 Press `Escape` while dragging to cancel.
 
-By default, environments settle inactive threads after three days and settle
-threads whose pull request merged. A closed pull request can also settle an idle
-thread. Work in progress, pending questions or approvals, and live background work
-prevent automatic settlement. An open pull request does not prevent inactivity
-settlement, but an old closed or merged pull request does not settle work you
-resumed after it closed. Only your own messages count as resuming. A turn that
-finished background work or a pull request watch starts on its own does not.
+By default, environments settle inactive threads after three days. Finished threads
+remain active until this idle age passes. Work in progress, pending questions or approvals,
+and live background work prevent automatic settlement. New activity and un-settling reset
+the idle clock. Pull request state does not trigger automatic settlement.
 
 To keep one thread out of the settled shelf no matter how long it sits idle, open its menu,
 choose **Auto-settle behavior**, and pick **Disabled**. The current option is checked. Pick
@@ -183,7 +180,7 @@ automatic branch links do not appear.
 On web and desktop, right-click a pull request link in a thread and choose
 **Link to thread** to select a different PR. Use **Unlink from thread** on the
 same link to return to the branch PR, if one exists.
-The linked pull request participates in automatic settlement.
+The linked pull request does not affect automatic settlement.
 
 ## Find and reference work
 

@@ -315,14 +315,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     scope: "project-defaults",
   },
   {
-    id: "auto-settle-merged-threads",
-    title: "Auto-settle merged threads",
-    to: "/settings/general",
-    searchTerms: ["pull request merge closed automatically sidebar"],
-    requiresThreadAutoSettlement: true,
-    scope: "project-defaults",
-  },
-  {
     id: "days-before-auto-settle",
     title: "Days of inactivity before auto-settle",
     to: "/settings/general",

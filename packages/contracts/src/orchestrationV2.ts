@@ -429,6 +429,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   settledAt: Schema.NullOr(Schema.DateTimeUtc).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  // Only manual settlement can complete a deferred parent cascade.
+  settlementSource: Schema.optional(Schema.NullOr(Schema.Literals(["manual", "inactivity"]))),
   unsettledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -2582,8 +2584,7 @@ export const OrchestrationV2Command = Schema.Union([
   /**
    * Server-internal settlement (#8600): dispatched by the settlement sweep,
    * never by clients. Rejected when the thread changed after `snapshotAt` or
-   * carries any explicit settled override, so automatic settlement can never
-   * race a user action or clobber an explicit un-settle.
+   * is already settled or has active work. Unsettle restarts the idle clock.
    */
   Schema.Struct({
     type: Schema.Literal("thread.auto-settle"),

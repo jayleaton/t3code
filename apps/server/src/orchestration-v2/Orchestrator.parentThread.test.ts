@@ -9,6 +9,8 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderThreadId,
+  RuntimeRequestId,
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
@@ -467,7 +469,7 @@ it("a sub-run nests under the chat that spawned it, not that chat's parent", () 
   assert.isNull(child.autoSettleDisabledAt);
 });
 
-it.effect("an agent sub-run settles when its run completes and again after each reuse", () =>
+it.effect("Agent child chats and delegated subagents stay unsettled on completion and reuse", () =>
   Effect.gen(function* () {
     const orchestrator = yield* OrchestratorV2;
     const projections = yield* ProjectionStoreV2;
@@ -488,7 +490,7 @@ it.effect("an agent sub-run settles when its run completes and again after each 
         creationSource: "mcp",
         ...(parentThreadId === undefined ? {} : { parentThreadId: ThreadId.make(parentThreadId) }),
       });
-    // Starts a run on the thread, which is what a parent re-sending to a sub-run does.
+    // Reusing a child chat or delegated subagent starts a new run in that thread.
     const send = (id: string, turn: number) =>
       orchestrator.dispatch({
         type: "message.dispatch",
@@ -522,36 +524,66 @@ it.effect("an agent sub-run settles when its run completes and again after each 
           ],
         });
       });
-    // Settling runs off the terminal-run worker; wait for its event, not a timer.
-    const waitForSettled = (id: string, afterSequence: number) =>
-      sink.stream({ afterSequence, eventType: "thread.settled" }).pipe(
-        Stream.filter((stored) => stored.event.threadId === id),
-        Stream.runHead,
-      );
     const settledOverride = (id: string) =>
       projections.getThread(ThreadId.make(id)).pipe(Effect.map((thread) => thread.settledOverride));
 
     yield* create("orchestrator");
     yield* create("sub-run", "orchestrator");
+    yield* create("delegated", "orchestrator");
+    const delegated = yield* projections.getThread(ThreadId.make("delegated"));
+    yield* sink.write({
+      events: [
+        {
+          id: EventId.make("event:delegated-lineage"),
+          type: "thread.metadata-updated",
+          threadId: delegated.id,
+          occurredAt: delegated.updatedAt,
+          payload: {
+            ...delegated,
+            lineage: {
+              ...delegated.lineage,
+              parentThreadId: ThreadId.make("orchestrator"),
+              relationshipToParent: "subagent",
+            },
+          },
+        },
+      ],
+    });
     yield* send("orchestrator", 1);
     yield* send("sub-run", 1);
 
-    let before = yield* sink.latestSequence();
-    // The worker handles terminal runs in order, so once the sub-run settles
-    // the top-level chat's earlier completion has been handled too.
     yield* completeLatestRun("orchestrator");
     yield* completeLatestRun("sub-run");
-    yield* waitForSettled("sub-run", before);
-    assert.equal(yield* settledOverride("sub-run"), "settled");
+    const receipt = yield* orchestrator.dispatch({
+      type: "thread.sub-run.settle",
+      commandId: CommandId.make("completion:1"),
+      threadId: ThreadId.make("sub-run"),
+    });
+    assert.equal(receipt.storedEvents.length, 0);
+    assert.isNull(yield* settledOverride("sub-run"));
     assert.isNull(yield* settledOverride("orchestrator"));
 
     yield* send("sub-run", 2);
     assert.isNull(yield* settledOverride("sub-run"));
 
-    before = yield* sink.latestSequence();
     yield* completeLatestRun("sub-run");
-    yield* waitForSettled("sub-run", before);
-    assert.equal(yield* settledOverride("sub-run"), "settled");
+    yield* orchestrator.dispatch({
+      type: "thread.sub-run.settle",
+      commandId: CommandId.make("completion:2"),
+      threadId: ThreadId.make("sub-run"),
+    });
+    assert.isNull(yield* settledOverride("sub-run"));
+    for (const turn of [1, 2]) {
+      yield* send("delegated", turn);
+      yield* completeLatestRun("delegated");
+      const delegatedReceipt = yield* orchestrator.dispatch({
+        type: "thread.sub-run.settle",
+        commandId: CommandId.make(`completion:delegated:${turn}`),
+        threadId: delegated.id,
+      });
+      assert.equal(delegatedReceipt.storedEvents.length, 0);
+      assert.isNull(yield* settledOverride("delegated"));
+    }
   }).pipe(Effect.provide(testLayer)),
 );
 
@@ -590,6 +622,14 @@ it.effect("a sub-run whose turn ended with background work still open stays acti
       creationSource: "mcp",
     });
     const threadId = ThreadId.make("sleeper");
+    // A child only settles by following a manually settled parent; settling
+    // the lead while the sleeper still works defers the sleeper's settle.
+    yield* orchestrator.dispatch({
+      type: "thread.settle",
+      commandId: CommandId.make("settle:lead"),
+      threadId: ThreadId.make("lead"),
+    });
+    assert.isNull((yield* projections.getThread(threadId)).settledOverride);
     const run = (yield* projections.getThreadRecords(threadId, ["runs"])).runs.at(-1)!;
     const now = yield* DateTime.now;
     const command = (status: "running" | "completed") => ({
@@ -646,7 +686,7 @@ it.effect("a sub-run whose turn ended with background work still open stays acti
     assert.equal((yield* projections.getThreadShell(threadId))?.pendingBackgroundTasks?.length, 1);
     yield* settle("open");
     assert.isNull(yield* settledOverride());
-    // Once the background work ends, the finished sub-run settles as before.
+    // Once the background work ends, the finished child follows its settled parent.
     yield* sink.write({ events: [command("completed")] });
     yield* settle("done");
     assert.equal(yield* settledOverride(), "settled");
@@ -750,7 +790,7 @@ it.effect(
     }).pipe(Effect.provide(testLayer)),
 );
 
-it.effect("automatic settlement cascades but keeps a sub-run the user chose to keep active", () =>
+it.effect("age settlement applies to one card without cascading to child chats or subagents", () =>
   Effect.gen(function* () {
     const orchestrator = yield* OrchestratorV2;
     const projections = yield* ProjectionStoreV2;
@@ -794,8 +834,256 @@ it.effect("automatic settlement cascades but keeps a sub-run the user chose to k
     });
 
     assert.deepEqual((yield* thread("merged")).settledAt, settledAt);
-    assert.deepEqual((yield* thread("idle")).settledAt, settledAt);
-    assert.deepEqual((yield* thread("idle-helper")).settledAt, settledAt);
+    assert.isNull((yield* thread("idle")).settledAt);
+    assert.isNull((yield* thread("idle-helper")).settledAt);
     assert.equal((yield* thread("kept")).settledOverride, "active");
+
+    // A later child chat completion must not turn an inactivity settlement into a manual cascade.
+    yield* create("later-child", "merged");
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("send:later-child"),
+      threadId: ThreadId.make("later-child"),
+      messageId: MessageId.make("message:later-child"),
+      text: "Next task",
+      attachments: [],
+      dispatchMode: { type: "defer_start" },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const run = (yield* projections.getThreadRecords(ThreadId.make("later-child"), [
+      "runs",
+    ])).runs.at(-1)!;
+    const now = yield* DateTime.now;
+    const sink = yield* EventSinkV2;
+    yield* sink.write({
+      events: [
+        {
+          id: EventId.make("event:later-child:complete"),
+          type: "run.updated",
+          threadId: ThreadId.make("later-child"),
+          occurredAt: now,
+          payload: { ...run, status: "completed", completedAt: now },
+        },
+      ],
+    });
+    const receipt = yield* orchestrator.dispatch({
+      type: "thread.sub-run.settle",
+      commandId: CommandId.make("completion:later-child"),
+      threadId: ThreadId.make("later-child"),
+    });
+    assert.equal(receipt.storedEvents.length, 0);
+    assert.isNull((yield* thread("later-child")).settledAt);
+    // Matching idle timestamps are not evidence of a manual cascade.
+    const idle = yield* thread("idle");
+    yield* orchestrator.dispatch({
+      type: "thread.auto-settle",
+      commandId: CommandId.make("auto-settle:idle"),
+      threadId: idle.id,
+      snapshotAt: idle.updatedAt,
+      settledAt,
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.unsettle",
+      commandId: CommandId.make("unsettle:aged-parent"),
+      threadId: parent.id,
+      reason: "user",
+    });
+    assert.isNull((yield* thread("merged")).settledAt);
+    assert.deepEqual((yield* thread("idle")).settledAt, settledAt);
+    yield* TestClock.adjust("1 day");
+    const refreshedAt = yield* DateTime.now;
+    yield* orchestrator.dispatch({
+      type: "thread.unsettle",
+      commandId: CommandId.make("unsettle:already-active"),
+      threadId: parent.id,
+      reason: "user",
+    });
+    assert.deepEqual((yield* thread("merged")).unsettledAt, refreshedAt);
   }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect(
+  "automatic settlement rejects active descendants and stale snapshots; receipts are idempotent",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const projections = yield* ProjectionStoreV2;
+      const sink = yield* EventSinkV2;
+      const create = (id: string, parentThreadId?: string) =>
+        orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`create:${id}`),
+          threadId: ThreadId.make(id),
+          projectId: ProjectId.make("project:parents"),
+          title: id,
+          modelSelection: { instanceId, model: "gpt-5.1-codex" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "user",
+          creationSource: "web",
+          ...(parentThreadId === undefined
+            ? {}
+            : { parentThreadId: ThreadId.make(parentThreadId) }),
+        });
+      const automatic = (id: string, snapshotAt: DateTime.Utc) => ({
+        type: "thread.auto-settle" as const,
+        commandId: CommandId.make(`auto:${id}`),
+        threadId: ThreadId.make(id),
+        snapshotAt,
+      });
+      const dispatchMessage = (id: string) =>
+        orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`send:${id}`),
+          threadId: ThreadId.make(id),
+          messageId: MessageId.make(`message:${id}`),
+          text: "Work",
+          attachments: [],
+          dispatchMode: { type: "defer_start" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+
+      for (const activity of ["queued", "running", "approval", "user_input", "monitor"] as const) {
+        const parentId = `parent:${activity}`;
+        const childId = `child:${activity}`;
+        yield* create(parentId);
+        const middleId = `middle:${activity}`;
+        yield* create(middleId, parentId);
+        yield* create(childId, middleId);
+        const child = yield* projections.getThread(ThreadId.make(childId));
+        const now = yield* DateTime.now;
+        if (activity === "queued" || activity === "running") {
+          yield* dispatchMessage(childId);
+          if (activity === "running") {
+            const run = (yield* projections.getThreadRecords(child.id, ["runs"])).runs.at(-1)!;
+            yield* sink.write({
+              events: [
+                {
+                  id: EventId.make("running:run"),
+                  type: "run.updated",
+                  threadId: child.id,
+                  occurredAt: now,
+                  payload: { ...run, status: "running", startedAt: now },
+                },
+              ],
+            });
+          }
+        } else if (activity === "approval" || activity === "user_input") {
+          yield* sink.write({
+            events: [
+              {
+                id: EventId.make(`request:${activity}`),
+                type: "runtime-request.updated",
+                threadId: child.id,
+                occurredAt: now,
+                payload: {
+                  id: RuntimeRequestId.make(`request:${activity}`),
+                  nodeId: NodeId.make(`node:${activity}`),
+                  providerTurnId: null,
+                  nativeRequestRef: null,
+                  kind: activity === "approval" ? "command" : "user_input",
+                  status: "pending",
+                  responseCapability: { type: "not_resumable", reason: "Process stopped" },
+                  createdAt: now,
+                  resolvedAt: null,
+                },
+              },
+            ],
+          });
+        } else {
+          yield* sink.write({
+            events: [
+              {
+                id: EventId.make("monitor:lineage"),
+                type: "thread.metadata-updated",
+                threadId: child.id,
+                occurredAt: now,
+                payload: {
+                  ...child,
+                  lineage: {
+                    ...child.lineage,
+                    parentThreadId: ThreadId.make(middleId),
+                    relationshipToParent: "subagent",
+                  },
+                },
+              },
+            ],
+          });
+          yield* dispatchMessage(childId);
+          const run = (yield* projections.getThreadRecords(child.id, ["runs"])).runs.at(-1)!;
+          yield* sink.write({
+            events: [
+              {
+                id: EventId.make("monitor:run-completed"),
+                type: "run.updated",
+                threadId: child.id,
+                occurredAt: now,
+                payload: { ...run, status: "completed", completedAt: now },
+              },
+              {
+                id: EventId.make("monitor:roster"),
+                type: "provider-thread.updated",
+                threadId: child.id,
+                occurredAt: now,
+                payload: {
+                  id: ProviderThreadId.make("monitor:provider-thread"),
+                  appThreadId: child.id,
+                  ownerNodeId: null,
+                  driver: ProviderDriverKind.make("codex"),
+                  providerInstanceId: instanceId,
+                  providerSessionId: null,
+                  nativeThreadRef: null,
+                  nativeConversationHeadRef: null,
+                  status: "idle",
+                  firstRunOrdinal: null,
+                  lastRunOrdinal: null,
+                  handoffIds: [],
+                  forkedFrom: null,
+                  createdAt: now,
+                  updatedAt: now,
+                  pendingBackgroundTasks: [{ taskId: "monitor:task", kind: "monitor" }],
+                },
+              },
+            ],
+          });
+        }
+        assert.isTrue(yield* projections.hasActiveDescendants(ThreadId.make(parentId)));
+        const parent = yield* projections.getThread(ThreadId.make(parentId));
+        const sequence = yield* sink.latestSequence();
+        yield* orchestrator.dispatch(automatic(parentId, parent.updatedAt)).pipe(Effect.flip);
+        assert.equal(yield* sink.latestSequence(), sequence);
+        assert.isNull((yield* projections.getThread(parent.id)).settledAt);
+        yield* orchestrator
+          .dispatch(automatic(childId, (yield* projections.getThread(child.id)).updatedAt))
+          .pipe(Effect.flip);
+        assert.isNull((yield* projections.getThread(child.id)).settledAt);
+      }
+
+      yield* create("stale");
+      const stale = yield* projections.getThread(ThreadId.make("stale"));
+      yield* TestClock.adjust("1 minute");
+      yield* orchestrator.dispatch({
+        type: "thread.unsettle",
+        commandId: CommandId.make("unsettle:stale"),
+        threadId: stale.id,
+        reason: "user",
+      });
+      const sequence = yield* sink.latestSequence();
+      yield* orchestrator.dispatch(automatic("stale", stale.updatedAt)).pipe(Effect.flip);
+      assert.equal(yield* sink.latestSequence(), sequence);
+      assert.isNull((yield* projections.getThread(stale.id)).settledAt);
+
+      yield* create("idle-receipt");
+      const idle = yield* projections.getThread(ThreadId.make("idle-receipt"));
+      const command = automatic("idle-receipt", idle.updatedAt);
+      const first = yield* orchestrator.dispatch(command);
+      const duplicate = yield* orchestrator.dispatch(command);
+      assert.equal(first.storedEvents.length, 1);
+      assert.deepEqual(duplicate, first);
+      assert.equal(yield* sink.latestSequence(), first.sequence);
+    }).pipe(Effect.provide(testLayer)),
 );

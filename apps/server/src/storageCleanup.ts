@@ -31,7 +31,7 @@ import * as GitManager from "./git/GitManager.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
-import { threadHasQueuedTurnStart } from "./orchestration-v2/ThreadSettlementService.ts";
+import { threadHasQueuedTurnStart } from "./orchestration-v2/autoSettlement.ts";
 import { forkParked } from "./serverActivation.ts";
 import * as Settings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";

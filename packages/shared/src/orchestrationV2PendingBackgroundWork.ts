@@ -4,6 +4,7 @@ import type {
   OrchestrationV2Run,
   OrchestrationV2TurnItem,
   ThreadId,
+  OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import { isOrchestrationV2WorkActive } from "@t3tools/contracts";
 
@@ -265,4 +266,19 @@ export function derivePendingBackgroundWork(input: {
   }
 
   return Array.from(byTaskId.values());
+}
+
+/** A card stays active while foreground work, a question, or work that wakes it remains. */
+export function threadShellHasActiveWork(
+  thread: Pick<
+    OrchestrationV2ThreadShell,
+    "status" | "activityRunStatus" | "pendingRuntimeRequest" | "pendingBackgroundTasks"
+  >,
+): boolean {
+  return (
+    thread.activityRunStatus != null ||
+    ["queued", "preparing", "starting", "running", "waiting"].includes(thread.status) ||
+    thread.pendingRuntimeRequest != null ||
+    backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])
+  );
 }

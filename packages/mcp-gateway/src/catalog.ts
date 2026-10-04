@@ -164,7 +164,7 @@ export const TOOL_SPECS = {
     },
   ],
   t3_get_agents_view: [
-    "List the Agents board across environments (or one): agent specializations and their chat/run summaries, including thread IDs and status. Use this to find an agent’s running or completed work without searching unrelated threads. Filter by profileId, state (active means unsettled, including completed chats), and executionState (for example running or waiting-input). Use t3_get_thread or t3_open_thread with a returned threadId for details.",
+    "List the Agents board across environments (or one): agent specializations and their chat/run summaries, including thread IDs and status. Use this to find an agent’s running or completed work without searching unrelated threads. Filter by profileId, state (active means unsettled, including completed chats), and executionState (for example running or waiting-input). Finished chats remain active until manually settled or automatically settled after their idle age (3 days by default); new activity and un-settling reset the idle clock. Manually settling a parent chat also settles its child chats. Use t3_get_thread or t3_open_thread with a returned threadId for details.",
     {
       environmentId: discoveryEnvironmentId,
       profileId: z.string().trim().min(1).optional(),
@@ -194,11 +194,11 @@ export const TOOL_SPECS = {
     handoffInputSchema.shape,
   ],
   t3_settle_thread: [
-    "Settle a conversation only after the user explicitly chooses to settle it. Requires lifecycle scope. Does not delete the conversation. Its sub-runs settle with it; ones still working settle when they finish. Do not call automatically after a handoff.",
+    "Settle a conversation only after the user explicitly chooses to settle it. Requires lifecycle scope. Does not delete the conversation. Its child chats and delegated subagents settle with it; ones still working follow this manual cascade when they finish. Do not call automatically after a handoff.",
     { environmentId, threadId, confirmed: z.literal(true) },
   ],
   t3_unsettle_thread: [
-    "Return a settled chat to active work in its agent column, with the sub-runs that settled along with it. Requires lifecycle scope. Does not send a message or start a turn.",
+    "Return a settled chat to active work in its agent column, with the child chats and subagents that settled along with it. Unsettling restarts the idle clock. Requires lifecycle scope. Does not send a message or start a turn.",
     { environmentId, threadId },
   ],
   t3_set_thread_parent: [
@@ -242,7 +242,7 @@ export const TOOL_SPECS = {
     { environmentId: discoveryEnvironmentId, ...optionalRequestContext },
   ],
   t3_list_threads: [
-    "List chats across every connected T3 environment (or one), optionally filtered by agent profileId, project, parentThreadId, active/settled state, and executionState. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly. hasPendingUserInput marks a chat waiting on a question; pass includeQuestions to attach each one's pendingQuestions (full text and options, as t3_get_pending_questions returns). profileSnapshot omits systemPrompt; read it with t3_list_agents includeSystemPrompt.",
+    "List chats across every connected T3 environment (or one), optionally filtered by agent profileId, project, parentThreadId, active/settled state, and executionState. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly. Finished chats remain active until manually settled or automatically settled after their idle age (3 days by default); new activity and un-settling reset the idle clock. Manually settling a parent chat also settles its child chats. hasPendingUserInput marks a chat waiting on a question; pass includeQuestions to attach each one's pendingQuestions (full text and options, as t3_get_pending_questions returns). profileSnapshot omits systemPrompt; read it with t3_list_agents includeSystemPrompt.",
     {
       environmentId: discoveryEnvironmentId,
       state: z.enum(["all", "active", "settled"]).optional(),

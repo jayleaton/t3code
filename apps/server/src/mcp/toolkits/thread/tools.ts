@@ -29,7 +29,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
   description:
-    "Pin, snooze, settle, archive, or mark a thread unread in the calling project. Omit threadId for this thread. snooze requires snoozedUntil. Settling also settles idle sub-runs; unsettling restores the ones that settled with it. Existing thread lifecycle rules apply; this does not schedule a future action.",
+    "Pin, snooze, settle, archive, or mark a thread unread in the calling project. Omit threadId for this thread. snooze requires snoozedUntil. Manual settlement also settles child chats and delegated subagents; ones still working follow the cascade when they finish. Unsettling restores those that settled with it and resets their idle clocks. Ordinary run completion never settles a card; age-based settlement defaults to three idle days. Existing thread lifecycle rules apply; this does not schedule a future action.",
   parameters: Schema.Struct({
     threadId: Schema.optional(ThreadId),
     action: Schema.Literals([

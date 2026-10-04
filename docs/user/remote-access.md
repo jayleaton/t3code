@@ -344,29 +344,28 @@ not cards: they appear only in the **Lineage** panel of the chat that owns them.
 agent, title, and status; click it to open that chat.
 Right-click a child for the same actions as a card. **Pin to top of parent** keeps it first in
 its parent's list, **Move up** and **Move down** arrange it among its siblings, and settling moves
-it into its parent's collapsed **Settled** group. A live sub-run whose parent is settled keeps its
+it into its parent's collapsed **Settled** group. A live child chat whose parent is settled keeps its
 own card, which names its parent's agent and chat; click that name to open the parent.
 
-A run reads **In progress** while any sub-run below it is still working, even after its own turn
-finishes. A child chat starts with a **Child of** link to its parent, and a parent's details list
-its **Children** with their status.
+A card reads **In progress** while any child chat or subagent below it is still working, even
+after its own turn finishes. A child chat starts with a **Child of** link to its parent, and a
+parent's details list its **Children** with their status.
 
-Settling a run also settles its sub-runs, at every depth, including when the run settles
-automatically. Settling never stops work: a sub-run that is still working or waiting on an approval
-stays active and settles with its parent when it finishes. Automatic settlement leaves alone a
-sub-run you un-settled or turned auto-settle off for. Un-settling the run brings back the sub-runs
-that settled with it; ones you settled earlier stay settled.
+Manually settling a parent card also settles its child chats through the existing cascade.
+Working child chats remain active and follow that manual choice when they finish. Un-settling
+the parent restores chats that settled with it; ones you settled earlier stay settled.
 
-A sub-run an agent created settles on its own when it finishes, unless it is waiting on a question
-or an approval. When its parent sends it more work it returns to the active list, and it settles
-again when that work finishes. Turn off auto-settle on a sub-run to keep it active.
+Completing a turn leaves a card unsettled. Automatic settlement applies to each card's own
+inactivity period, three days by default. Running child chats, subagents, monitoring,
+and pending questions or approvals keep a parent active. New activity and un-settling reset
+the idle clock. Disable auto-settle on a card to keep it active indefinitely.
 
 To link chats yourself on web and desktop, drag a card onto the middle of another card to make it a
 child, or drag a child out of its card to make it independent. Dragging a child onto
 another card moves it there. The board shows the move at once and puts it back, with the reason,
-if it fails: a run cannot go under itself or its own sub-runs, or under an archived chat. To
-remove a run from its parent without dragging, right-click it (or focus it and press the context
-menu key) and choose **Remove from parent**. Deleting a chat leaves its sub-runs as their own
+if it fails: a chat cannot go under itself or its own child chats, or under an archived chat. To
+remove a chat from its parent without dragging, right-click it (or focus it and press the context
+menu key) and choose **Remove from parent**. Deleting a chat leaves its child chats as their own
 cards, and a chat left pointing at a missing parent is detached when the server starts.
 
 ### Schedule prompts for an agent

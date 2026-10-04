@@ -1,3 +1,4 @@
+import { threadShellHasActiveWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import {
   latestExecutedRun,
   latestRootProviderFailure,
@@ -2416,7 +2417,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     >,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
-    options?: { readonly keepProviderSession?: boolean },
+    options?: {
+      readonly keepProviderSession?: boolean;
+      readonly settlementSource?: "manual" | "inactivity";
+    },
   ) {
     const thread = yield* projectionStore.getThread(command.threadId).pipe(
       Effect.mapError(
@@ -2782,6 +2786,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return {
             ...thread,
             settledOverride: "settled",
+            settlementSource: options?.settlementSource ?? "manual",
             settledAt: alreadySettled ? thread.settledAt : (command.settledAt ?? now),
             unsettledAt: null,
             pinnedAt: null,
@@ -2791,13 +2796,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           };
         }
         case "thread.unsettle": {
-          const alreadyPinnedActive = thread.settledOverride === "active";
           return {
             ...thread,
             settledOverride: "active",
+            settlementSource: null,
             settledAt: null,
-            unsettledAt: alreadyPinnedActive ? (thread.unsettledAt ?? null) : now,
-            updatedAt: alreadyPinnedActive ? thread.updatedAt : now,
+            // Each new explicit unsettle restarts the full idle period.
+            unsettledAt: now,
+            updatedAt: now,
           };
         }
         case "thread.snooze": {
@@ -8113,16 +8119,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
-  /**
-   * Settles an agent-spawned sub-run once its run completes, so finished child
-   * work leaves the active list. A later message to the child unsettles it
-   * (see dispatchMessage) and its next completion settles it again. Any
-   * sub-run of a settled parent settles the same way, with the parent's
-   * settledAt, so work left running when the parent settled follows it once
-   * done. Threads with an explicit settle choice or auto-settle turned off are
-   * left alone, and so is any thread with new work or an open question or
-   * approval: automatic settlement must not dismiss what the user has not seen.
-   */
+  /** Completes the deferred cascade of a manually settled parent, never ordinary run completion. */
   const dispatchSubRunSettle = Effect.fn("orchestrationV2.dispatch.subRunSettle")(function* (
     command: Extract<OrchestrationV2ServerCommand, { readonly type: "thread.sub-run.settle" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -8140,10 +8137,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             .getThread(thread.parentThreadId)
             .pipe(Effect.orElseSucceed(() => null));
     const parentSettledAt =
-      parent?.settledOverride === "settled" && parent.deletedAt === null ? parent.settledAt : null;
+      parent?.settledOverride === "settled" &&
+      parent.settlementSource !== "inactivity" &&
+      parent.deletedAt === null
+        ? parent.settledAt
+        : null;
     if (
       thread.parentThreadId == null ||
-      (thread.createdBy !== "agent" && parentSettledAt == null) ||
+      parentSettledAt == null ||
       thread.settledOverride !== null ||
       thread.autoSettleDisabledAt != null ||
       thread.archivedAt !== null ||
@@ -9665,8 +9666,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.auto-settle": {
         // Automatic settlement (#8600): the sweep evaluated a shell snapshot,
         // so re-check against the live thread before settling. Any change
-        // after the snapshot — or any explicit override, including the
-        // un-settle button's "active" — wins over the sweep.
+        // after the snapshot wins over the sweep. Unsettle restarts the age
+        // clock; it does not disable automatic settlement forever.
         const thread = yield* projectionStore
           .getThread(command.threadId)
           .pipe(
@@ -9674,9 +9675,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
             ),
           );
+        const candidates = yield* projectionStore
+          .getSettlementCandidates(command.threadId)
+          .pipe(mapDispatchError(command));
         if (
-          thread.settledOverride !== null ||
-          DateTime.toEpochMillis(thread.updatedAt) > DateTime.toEpochMillis(command.snapshotAt)
+          thread.settledOverride === "settled" ||
+          (thread.settledOverride === "active" &&
+            (command.settledAt == null ||
+              thread.unsettledAt == null ||
+              DateTime.toEpochMillis(command.settledAt) <
+                DateTime.toEpochMillis(thread.unsettledAt))) ||
+          DateTime.toEpochMillis(thread.updatedAt) > DateTime.toEpochMillis(command.snapshotAt) ||
+          !candidates.some((candidate) => !threadShellHasActiveWork(candidate)) ||
+          (yield* projectionStore
+            .hasActiveDescendants(command.threadId)
+            .pipe(mapDispatchError(command)))
         ) {
           return yield* new OrchestratorDispatchError({
             commandId: command.commandId,
@@ -9693,6 +9706,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           },
           events,
           effects,
+          { settlementSource: "inactivity" },
         );
         break;
       }
@@ -10108,10 +10122,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
    * unsettled sub-runs with it, and a user un-settle brings back the sub-runs
    * that settled with it (same settledAt). Each sub-run gets its own command,
    * dispatched after the parent's lock is released, and recurses from there,
-   * so its own guard applies: a working sub-run stays active and settles when
-   * its run completes (see dispatchSubRunSettle). Automatic settlement only
-   * asks sub-runs to settle the automatic way, which respects their explicit
-   * settle choices.
+   * so its own guard applies: a working child chat or subagent stays active
+   * and follows the manual cascade once its run completes. Age-based
+   * automatic settlement never cascades.
    */
   const cascadeSettlement = Effect.fn("orchestrationV2.dispatch.cascadeSettlement")(function* (
     command: Extract<
@@ -10137,6 +10150,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const childCommand: OrchestrationV2ServerCommand | null =
         command.type === "thread.unsettle"
           ? settled &&
+            child.settlementSource !== "inactivity" &&
             child.settledAt != null &&
             DateTime.toEpochMillis(child.settledAt) === settledAtMs
             ? { type: "thread.unsettle", commandId, threadId: child.id, reason: "user" }
@@ -10206,11 +10220,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       if (command.type !== "thread.unsettle") {
         const result = yield* dispatchLocked(command);
-        if (
-          command.type === "thread.settle" ||
-          command.type === "thread.auto-settle" ||
-          command.type === "thread.sub-run.settle"
-        ) {
+        if (command.type === "thread.settle" || command.type === "thread.sub-run.settle") {
           const settled = result.storedEvents.find(
             (stored) =>
               stored.event.type === "thread.settled" && stored.event.threadId === command.threadId,
@@ -10221,9 +10231,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }
         return result;
       }
-      // Un-settling matches sub-runs against the settledAt the parent had before.
+      // Only reverse a manual cascade; independently aged cards keep their clocks.
       const settledAt = yield* projectionStore.getThread(command.threadId).pipe(
-        Effect.map((thread) => (thread.settledOverride === "settled" ? thread.settledAt : null)),
+        Effect.map((thread) =>
+          thread.settledOverride === "settled" && thread.settlementSource !== "inactivity"
+            ? thread.settledAt
+            : null,
+        ),
         Effect.orElseSucceed(() => null),
       );
       const result = yield* dispatchLocked(command);
@@ -10231,12 +10245,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return result;
     });
 
-  /** Asks the orchestrator to settle a sub-run whose run just completed. */
+  /** Finishes a manual parent cascade after a child chat or subagent completes. */
   const settleCompletedSubRun = (threadId: ThreadId, runId: RunId) =>
-    dispatchWithReceipt({
-      type: "thread.sub-run.settle",
-      commandId: CommandId.make(`server:sub-run-settle:${threadId}:${runId}`),
-      threadId,
+    Effect.gen(function* () {
+      const thread = yield* projectionStore.getThread(threadId);
+      if (thread.parentThreadId == null || thread.parentEnvironmentId != null) return;
+      const parent = yield* projectionStore.getThread(thread.parentThreadId);
+      if (parent.settledOverride !== "settled" || parent.settlementSource === "inactivity") return;
+      yield* dispatchWithReceipt({
+        type: "thread.sub-run.settle",
+        commandId: CommandId.make(`server:sub-run-settle:${threadId}:${runId}`),
+        threadId,
+      });
     });
 
   const handleTerminalRun = (stored: OrchestrationV2StoredEvent) =>
@@ -10267,7 +10287,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             : undefined,
         ),
       );
-      // After queue promotion, so a queued follow-up keeps the sub-run active.
+      // Only a manually settled parent can request this deferred cascade.
+      // Ordinary completion leaves child chats and subagents unsettled.
       if (stored.event.type === "run.updated" && stored.event.payload.status === "completed") {
         yield* settleCompletedSubRun(threadId, stored.event.payload.id);
       }

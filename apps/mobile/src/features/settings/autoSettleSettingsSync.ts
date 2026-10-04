@@ -1,9 +1,6 @@
 import type { EnvironmentId, ProjectId, ServerSettings } from "@t3tools/contracts";
 
-export type AutoSettleSettings = Pick<
-  ServerSettings,
-  "sidebarAutoSettleAfterDays" | "sidebarAutoSettleOnMerge"
->;
+export type AutoSettleSettings = Pick<ServerSettings, "sidebarAutoSettleAfterDays">;
 
 interface AutoSettleSyncTarget {
   readonly environmentId: EnvironmentId;
@@ -23,15 +20,13 @@ export function planAutoSettleSettingsSync(
 ) {
   const patch: AutoSettleSettings = {
     sidebarAutoSettleAfterDays: reference.settings.sidebarAutoSettleAfterDays,
-    sidebarAutoSettleOnMerge: reference.settings.sidebarAutoSettleOnMerge,
   };
   const mismatches = targets.filter(
     (target) =>
       (target.environmentId !== reference.environmentId ||
         target.projectId !== reference.projectId) &&
       target.settings !== null &&
-      (target.settings.sidebarAutoSettleAfterDays !== patch.sidebarAutoSettleAfterDays ||
-        target.settings.sidebarAutoSettleOnMerge !== patch.sidebarAutoSettleOnMerge),
+      target.settings.sidebarAutoSettleAfterDays !== patch.sidebarAutoSettleAfterDays,
   );
   return { patch, mismatches };
 }

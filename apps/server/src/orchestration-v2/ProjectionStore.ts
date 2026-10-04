@@ -61,7 +61,10 @@ import {
   isOrchestrationV2SupersededInterrupt,
   isOrchestrationV2TurnItemVisible,
 } from "@t3tools/shared/orchestrationV2Timeline";
-import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import {
+  derivePendingBackgroundWork,
+  threadShellHasActiveWork,
+} from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -77,6 +80,28 @@ import {
   THREAD_HISTORY_MAX_RAW_TURNS,
 } from "./threadHistoryPaging.ts";
 import type { ThreadParentLink } from "./threadParentLinks.ts";
+
+function hasActiveDescendants(
+  getWorkChildren: ProjectionStoreV2Shape["getChildThreads"],
+  getThreadShell: ProjectionStoreV2Shape["getThreadShell"],
+  threadId: ThreadId,
+): Effect.Effect<boolean, ProjectionStoreV2Error> {
+  return Effect.gen(function* () {
+    const visited = new Set<ThreadId>([threadId]);
+    const pending = [threadId];
+    for (let index = 0; index < pending.length; index++) {
+      const children = yield* getWorkChildren(pending[index]!);
+      for (const child of children) {
+        if (visited.has(child.id)) continue;
+        visited.add(child.id);
+        const shell = yield* getThreadShell(child.id);
+        if (shell !== null && threadShellHasActiveWork(shell)) return true;
+        pending.push(child.id);
+      }
+    }
+    return false;
+  });
+}
 
 export class ProjectionStoreApplyEventError extends Schema.TaggedError<ProjectionStoreApplyEventError>()(
   "ProjectionStoreApplyEventError",
@@ -179,6 +204,8 @@ export type ProjectionSettlementCandidate = Pick<
   | "branchPullRequest"
   | "createdAt"
   | "updatedAt"
+  | "unsettledAt"
+  | "lastVisitedAt"
   | "archivedAt"
   | "settledOverride"
   | "pinnedAt"
@@ -195,7 +222,10 @@ export type ProjectionSettlementCandidate = Pick<
   | "activityRunStatus"
   | "pendingRuntimeRequest"
   | "pendingBackgroundTasks"
-> & { readonly latestUserAuthoredMessageAt: DateTime.Utc | null };
+> & {
+  readonly latestUserAuthoredMessageAt: DateTime.Utc | null;
+  readonly latestBackgroundActivityAt?: DateTime.Utc | null;
+};
 
 const ProjectionCheckpointContext = Schema.Struct({
   runs: Schema.Array(
@@ -350,6 +380,10 @@ export interface ProjectionStoreV2Shape {
   readonly getChildThreads: (
     parentThreadId: ThreadId,
   ) => Effect.Effect<ReadonlyArray<OrchestrationV2AppThread>, ProjectionStoreV2Error>;
+  /** Active child chats or delegated subagents at any depth, within this environment. */
+  readonly hasActiveDescendants: (
+    threadId: ThreadId,
+  ) => Effect.Effect<boolean, ProjectionStoreV2Error>;
   /** Owner link and kind of every live (not deleted) thread, archived ones included. */
   readonly getThreadParentLinks: () => Effect.Effect<
     ReadonlyArray<ThreadParentLink>,
@@ -951,7 +985,10 @@ type SettlementThreadRow = Pick<
   | "latest_run_started_at"
   | "latest_run_completed_at"
   | "latest_user_message_at"
-> & { readonly latest_user_authored_message_at: string | null };
+> & {
+  readonly latest_user_authored_message_at: string | null;
+  readonly latest_background_activity_at: string | null;
+};
 
 type ShellRunItemCountRow = {
   readonly thread_id: string;
@@ -5230,6 +5267,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               r.requested_at AS latest_run_requested_at,
               json_extract(r.payload_json, '$.startedAt') AS latest_run_started_at,
               r.completed_at AS latest_run_completed_at,
+              (SELECT MAX(activity_at) FROM (
+                SELECT (SELECT updated_at FROM orchestration_v2_projection_turn_items
+                  WHERE thread_id = t.thread_id ORDER BY updated_at DESC LIMIT 1) AS activity_at
+                UNION ALL
+                SELECT (SELECT updated_at FROM orchestration_v2_projection_provider_threads
+                  WHERE thread_id = t.thread_id ORDER BY updated_at DESC LIMIT 1)
+              )) AS latest_background_activity_at,
               (
                 SELECT message.updated_at
                 FROM orchestration_v2_projection_messages message
@@ -5254,13 +5298,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             )
             WHERE t.deleted_at IS NULL${threadId === undefined ? sql`` : sql` AND t.thread_id = ${threadId}`}
               AND json_extract(t.payload_json, '$.archivedAt') IS NULL
-              AND json_extract(t.payload_json, '$.settledOverride') IS NULL
+              AND COALESCE(json_extract(t.payload_json, '$.settledOverride'), '') != 'settled'
               AND json_extract(t.payload_json, '$.pinnedAt') IS NULL
               AND json_extract(t.payload_json, '$.autoSettleDisabledAt') IS NULL
               AND NOT EXISTS (
                 SELECT 1 FROM orchestration_v2_projection_runs active
                 WHERE active.thread_id = t.thread_id
-                  AND active.status IN ('preparing', 'starting', 'running', 'waiting')
+                  AND active.status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
               )
               AND NOT EXISTS (
                 SELECT 1 FROM orchestration_v2_projection_nodes node
@@ -5290,6 +5334,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   row.latest_run_id === null ? null : RunId.make(row.latest_run_id);
                 return {
                   ...thread,
+                  latestBackgroundActivityAt:
+                    row.latest_background_activity_at == null
+                      ? null
+                      : DateTime.makeUnsafe(row.latest_background_activity_at),
                   pinnedAt: thread.pinnedAt ?? null,
 
                   autoSettleDisabledAt: thread.autoSettleDisabledAt ?? null,
@@ -5674,6 +5722,28 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getThreadShell,
       getThread,
       getChildThreads,
+      hasActiveDescendants: (threadId) =>
+        hasActiveDescendants(
+          (parentId) =>
+            sql<PayloadRow>`
+          SELECT payload_json FROM orchestration_v2_projection_threads
+          WHERE deleted_at IS NULL AND (
+            (json_extract(payload_json, '$.parentThreadId') = ${parentId}
+              AND json_extract(payload_json, '$.parentEnvironmentId') IS NULL)
+            OR (json_extract(payload_json, '$.lineage.relationshipToParent') = 'subagent'
+              AND json_extract(payload_json, '$.lineage.parentThreadId') = ${parentId})
+          )
+        `.pipe(
+              Effect.flatMap((rows) =>
+                Effect.forEach(rows, (row) => decodeThreadPayload(row.payload_json)),
+              ),
+              Effect.mapError(
+                (cause) => new ProjectionStoreReadError({ threadId: parentId, cause }),
+              ),
+            ),
+          getThreadShell,
+          threadId,
+        ),
       getThreadParentLinks,
       getSettlementCandidates,
       getThreadsWithPullRequests,
@@ -5796,6 +5866,25 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               })),
           ),
         ),
+      hasActiveDescendants: (threadId) =>
+        hasActiveDescendants(
+          (parentId) =>
+            Ref.get(replayState).pipe(
+              Effect.map((state) =>
+                [...state.projections.values()]
+                  .map((projection) => projection.thread)
+                  .filter(
+                    (thread) =>
+                      thread.deletedAt === null &&
+                      ((thread.parentThreadId === parentId && thread.parentEnvironmentId == null) ||
+                        (thread.lineage.relationshipToParent === "subagent" &&
+                          thread.lineage.parentThreadId === parentId)),
+                  ),
+              ),
+            ),
+          service.getThreadShell,
+          threadId,
+        ),
       getChildThreads: (parentThreadId) =>
         Ref.get(replayState).pipe(
           Effect.map((state) =>
@@ -5826,14 +5915,20 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 (threadId === undefined || thread.id === threadId) &&
                 thread.deletedAt === null &&
                 thread.archivedAt === null &&
-                thread.settledOverride === null &&
+                thread.settledOverride !== "settled" &&
                 thread.pinnedAt == null &&
                 thread.autoSettleDisabledAt == null &&
-                !runs.some(isActivityRunForShell) &&
+                !runs.some((run) => isActivityRunForShell(run) || run.status === "queued") &&
                 !runtimeRequests.some((request) => request.status === "pending"),
             )
             .map((projection) => ({
               ...threadShellFromProjection(projection),
+              latestBackgroundActivityAt:
+                [
+                  ...projection.turnItems.map((item) => item.updatedAt),
+                  ...projection.providerThreads.map((thread) => thread.updatedAt),
+                ].toSorted((a, b) => DateTime.toEpochMillis(b) - DateTime.toEpochMillis(a))[0] ??
+                null,
               latestUserAuthoredMessageAt:
                 projection.messages
                   .filter((message) => message.role === "user" && message.createdBy === "user")

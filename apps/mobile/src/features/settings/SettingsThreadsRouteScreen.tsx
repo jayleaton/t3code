@@ -130,17 +130,10 @@ function AutoSettleSettingsRows() {
   const disabled = pendingWrites > 0 || (projectSelected && !supportsProjectOverrides);
   const hasProjectOverrides =
     projectSelected &&
-    syncTargets.some(
-      (target) =>
-        target.sources.sidebarAutoSettleOnMerge === "project" ||
-        target.sources.sidebarAutoSettleAfterDays === "project",
-    );
+    syncTargets.some((target) => target.sources.sidebarAutoSettleAfterDays === "project");
   const clearProjectOverrides = () => {
     if (writeInFlight.current) return;
-    const writes = planMobileScopedSettingsClear(syncTargets, [
-      "sidebarAutoSettleOnMerge",
-      "sidebarAutoSettleAfterDays",
-    ]);
+    const writes = planMobileScopedSettingsClear(syncTargets, ["sidebarAutoSettleAfterDays"]);
     if (writes.length === 0) return;
     writeInFlight.current = true;
     setPendingTargets(syncTargets);
@@ -189,16 +182,9 @@ function AutoSettleSettingsRows() {
       ) : null}
       <SettingsSection title="Auto-settle">
         <SettingsSwitchRow
-          icon="arrow.triangle.branch"
-          label="Auto-settle merged threads"
-          value={referenceSettings.sidebarAutoSettleOnMerge}
-          disabled={disabled}
-          onValueChange={(value) => writeToAll({ sidebarAutoSettleOnMerge: value })}
-        />
-        <SettingsSwitchRow
           icon="clock"
           label="Auto-settle inactive threads"
-          value={afterDays !== null}
+          value={(afterDays ?? 0) > 0}
           disabled={disabled}
           onValueChange={(value) =>
             writeToAll({ sidebarAutoSettleAfterDays: value ? AUTO_SETTLE_DEFAULT_DAYS : null })
