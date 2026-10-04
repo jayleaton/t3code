@@ -58,6 +58,16 @@
       "channel": "production",
       "environment": "production",
       "autoIncrement": true
+    },
+    "personal-testflight": {
+      "extends": "production",
+      "distribution": "store",
+      "developmentClient": false,
+      "autoIncrement": true,
+      "channel": "personal-testflight",
+      "env": {
+        "T3CODE_MOBILE_UPDATES_ENABLED": "0"
+      }
     }
   },
   "submit": {
@@ -72,6 +82,9 @@
       "android": {
         "track": "internal"
       }
+    },
+    "personal-testflight": {
+      "extends": "production"
     }
   }
 }

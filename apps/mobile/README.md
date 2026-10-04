@@ -123,21 +123,35 @@ The native lint task runs SwiftLint for Swift plus ktlint and detekt for Kotlin.
 
 This fork uses [@jayleaton/t3-code-personal](https://expo.dev/accounts/jayleaton/projects/t3-code-personal)
 for builds and OTA updates. Its bundle/package identifier is `com.jayleaton.t3code`, with `.dev`
-and `.preview` suffixes for the corresponding variants. EAS selects your Apple team during
+and `.preview` suffixes for the corresponding variants. Release builds use Apple team `4RVGYA25L8` during
 provisioning; the upstream Apple team and App Store Connect app binding are removed. TestFlight
 submission requires your own App Store Connect app record.
 
-The development, preview, and production EAS environments use the existing T3 Connect public
-configuration documented in the root `.env.example`. This continues to use T3's Clerk auth and
-relay; it does not create another backend or database. Local builds still need the root env file.
+Personal builds disable Clerk, Google sign-in, cloud accounts, and account-based T3 Connect.
+They use the existing server's direct pairing and persist its credential in SecureStore. No
+Clerk/relay environment variables are required, and inherited cloud config is ignored.
 
-Preview and production variants use Expo fingerprinting so OTA updates only reach binaries with matching native dependencies, config plugins, and patches. CI uses the `preview:dev` profile to reuse a compatible native build when possible.
+For a standalone TestFlight app with embedded JavaScript and no Metro dependency:
 
-The development variant uses `appVersion` to avoid recalculating the native fingerprint for each Metro launch manifest. `MOBILE_VERSION_POLICY` can override either default. If you distribute a custom Release build with the development identity and publish OTA updates to it, set `MOBILE_VERSION_POLICY=fingerprint` for both its build and updates. Changing the runtime policy requires a native rebuild for OTA matching; an existing dev client can still load local Metro bundles.
+```bash
+vp run eas:ios:testflight
+vp run eas:submit:ios:testflight
+```
 
-For preview or production EAS environments, set `T3CODE_CLERK_PUBLISHABLE_KEY`,
-`T3CODE_CLERK_JWT_TEMPLATE`, and `T3CODE_RELAY_URL`
-as EAS environment variables. Expo config maps the canonical values into the mobile build.
+The `personal-testflight` profile uses store distribution, the production bundle ID,
+automatically incremented build numbers, and disabled OTA updates. Configure store provisioning
+for your Apple team and your App Store Connect app/submit credentials first.
+
+On the Mac running your existing T3 environment, generate a fresh reachable link with
+`t3 pair --tailscale` (use `--base-dir` if that server uses a different T3 home). Connect the
+phone to the same tailnet, open Environments → Add environment, scan the QR or paste the full
+link into Host, then tap Add environment. Host and pairing code can also be entered separately.
+A LAN IP works on the same network if the server's network access is enabled. Localhost does
+not point to your Mac. Stop/restart the app to reconnect with the saved server credential;
+Metro can remain off, but the T3 server must remain reachable.
+
+Preview and production variants use Expo fingerprinting. Development clients below are for
+contributor workflows, not the standalone personal install.
 
 Create a PR preview dev-client build manually:
 

@@ -43,7 +43,9 @@
     "sync:pierre-icons": "node modules/t3-markdown-text/scripts/sync-pierre-file-icons.mjs",
     "generate": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/generate-uniwind-themes.mts",
     "test": "vp test run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "eas:ios:testflight": "eas build --profile personal-testflight -p ios",
+    "eas:submit:ios:testflight": "eas submit --profile personal-testflight -p ios"
   },
   "dependencies": {
     "@clerk/expo": "catalog:",

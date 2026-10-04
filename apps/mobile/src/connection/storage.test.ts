@@ -1,4 +1,15 @@
 import { describe, expect, it } from "@effect/vitest";
+import { EnvironmentId } from "@t3tools/contracts";
+import {
+  BearerConnectionCredential,
+  BearerConnectionProfile,
+  BearerConnectionRegistration,
+  BearerConnectionTarget,
+} from "@t3tools/client-runtime/connection";
+import {
+  registerConnectionInCatalog,
+  removeConnectionFromCatalog,
+} from "@t3tools/client-runtime/platform";
 import * as Effect from "effect/Effect";
 import { vi } from "vite-plus/test";
 
@@ -34,6 +45,45 @@ function makeStorage(initial: Readonly<Record<string, string>>) {
 }
 
 describe("mobile connection catalog storage", () => {
+  it.effect(
+    "restores a direct tailnet connection after cold start and forgets it after removal",
+    () =>
+      Effect.gen(function* () {
+        const memory = makeStorage({});
+        const open = () => make().pipe(Effect.provideService(MobileSecureStorage, memory.storage));
+        const environmentId = EnvironmentId.make("owner-mac");
+        const target = new BearerConnectionTarget({
+          environmentId,
+          label: "Mac",
+          connectionId: "direct-mac",
+        });
+        const profile = new BearerConnectionProfile({
+          connectionId: target.connectionId,
+          environmentId,
+          label: "Mac",
+          httpBaseUrl: "https://mac.tailnet.ts.net",
+          wsBaseUrl: "wss://mac.tailnet.ts.net",
+        });
+        const credential = new BearerConnectionCredential({ token: "server-issued-session" });
+        const firstLaunch = yield* open();
+        yield* firstLaunch.update((document) =>
+          registerConnectionInCatalog(
+            document,
+            new BearerConnectionRegistration({ target, profile, credential }),
+          ),
+        );
+        const coldStart = yield* open();
+        const restored = yield* coldStart.read;
+        expect(restored.targets).toEqual([target]);
+        expect(restored.profiles).toEqual([profile]);
+        expect(restored.credentials).toEqual([{ connectionId: target.connectionId, credential }]);
+        yield* coldStart.update((document) => removeConnectionFromCatalog(document, target));
+        const afterRemoval = yield* (yield* open()).read;
+        expect(afterRemoval.targets).toEqual([]);
+        expect(afterRemoval.credentials).toEqual([]);
+      }),
+  );
+
   it.effect("recovers from a corrupt current catalog", () =>
     Effect.gen(function* () {
       const memory = makeStorage({

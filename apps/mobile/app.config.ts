@@ -9,6 +9,8 @@ const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
 
 const APP_VARIANT = resolveAppVariant(repoEnv.APP_VARIANT);
+// This checkout builds the personal client for every EAS variant.
+const isPersonalClient = true;
 const isIosPersonalTeamBuild = repoEnv.T3CODE_IOS_PERSONAL_TEAM === "1";
 const runtimeVersionPolicy =
   process.env.MOBILE_VERSION_POLICY ??
@@ -237,11 +239,8 @@ const config: ExpoConfig = {
     // showcase capture build requires full screen (see infoPlist below).
     requireFullScreen: process.env.T3_SHOWCASE_CAPTURE_BUILD === "1",
     bundleIdentifier: iosBundleIdentifier,
-    // EAS selects the owner's Apple team when provisioning this personal build.
-    associatedDomains: [
-      `applinks:${variant.relyingParty}`,
-      `webcredentials:${variant.relyingParty}`,
-    ],
+    appleTeamId: isIosPersonalTeamBuild ? undefined : "4RVGYA25L8",
+    associatedDomains: [],
     entitlements: {
       "keychain-access-groups": [`$(AppIdentifierPrefix)${iosBundleIdentifier}`],
     },
@@ -273,9 +272,6 @@ const config: ExpoConfig = {
   android: {
     icon: variant.assets.appIcon,
     package: variant.androidPackage,
-    ...(repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE
-      ? { googleServicesFile: repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE }
-      : {}),
     adaptiveIcon: {
       backgroundColor: variant.assets.androidAdaptiveBackgroundColor,
       ...(variant.assets.androidAdaptiveBackgroundImage
@@ -331,9 +327,6 @@ const config: ExpoConfig = {
         mode: APP_VARIANT === "development" ? "development" : "production",
       },
     ],
-    // appleSignIn must be gated here: withoutIosPersonalTeamCapabilities.cjs runs before
-    // plugins earlier in this array, so it cannot strip the entitlement Clerk would add.
-    ["@clerk/expo", { theme: "./clerk-theme.json", appleSignIn: !isIosPersonalTeamBuild }],
     "expo-web-browser",
     [
       "expo-quick-actions",
@@ -431,23 +424,10 @@ const config: ExpoConfig = {
       projectId: "263247b1-0330-46c5-ac6a-7efcba44c359",
     },
     appVariant: APP_VARIANT,
+    personalClient: isPersonalClient,
     iosPersonalTeamBuild: isIosPersonalTeamBuild,
-    relay: {
-      url: repoEnv.T3CODE_RELAY_URL ?? null,
-    },
-    clerk: {
-      publishableKey: repoEnv.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY ?? null,
-      jwtTemplate: repoEnv.EXPO_PUBLIC_CLERK_JWT_TEMPLATE ?? null,
-    },
-    // Native Google sign-in credentials. @clerk/expo reads these from `extra`
-    // under their exact env-var names (not nested), and its config plugin reads
-    // the iOS URL scheme at prebuild to register it in Info.plist.
-    // Unset values must be omitted (not null): the public manifest serializes
-    // null to {}, which is truthy and would defeat Clerk's fallback checks.
-    EXPO_PUBLIC_CLERK_GOOGLE_WEB_CLIENT_ID: repoEnv.EXPO_PUBLIC_CLERK_GOOGLE_WEB_CLIENT_ID,
-    EXPO_PUBLIC_CLERK_GOOGLE_IOS_CLIENT_ID: repoEnv.EXPO_PUBLIC_CLERK_GOOGLE_IOS_CLIENT_ID,
-    EXPO_PUBLIC_CLERK_GOOGLE_ANDROID_CLIENT_ID: repoEnv.EXPO_PUBLIC_CLERK_GOOGLE_ANDROID_CLIENT_ID,
-    EXPO_PUBLIC_CLERK_GOOGLE_IOS_URL_SCHEME: repoEnv.EXPO_PUBLIC_CLERK_GOOGLE_IOS_URL_SCHEME,
+    relay: { url: null },
+    clerk: { publishableKey: null, jwtTemplate: null },
     observability: {
       tracesUrl: repoEnv.EXPO_PUBLIC_OTLP_TRACES_URL ?? "https://api.axiom.co/v1/traces",
       tracesDataset: repoEnv.EXPO_PUBLIC_OTLP_TRACES_DATASET ?? null,
