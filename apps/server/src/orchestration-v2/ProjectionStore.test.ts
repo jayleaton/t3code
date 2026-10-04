@@ -2070,6 +2070,101 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
     }),
   );
 
+  it.effect("shows a reused provider-native subagent working in SQL and memory shells", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const parentThreadId = ThreadId.make("thread:native-subagent:parent");
+      const threadId = ThreadId.make("thread:native-subagent:child");
+      yield* store.apply({
+        id: EventId.make("event:native-subagent:thread-created"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "agent",
+          creationSource: "provider",
+          id: threadId,
+          projectId: ProjectId.make("project:native-subagent"),
+          title: "Native subagent",
+          providerInstanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: {
+            parentThreadId,
+            relationshipToParent: "subagent",
+            rootThreadId: parentThreadId,
+          },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+      const applyRootTurn = (turn: number, status: "running" | "completed") => {
+        const nodeId = NodeId.make(`node:native-subagent:${turn}`);
+        const startedAt = DateTime.add(now, { seconds: turn });
+        return store.apply({
+          id: EventId.make(`event:native-subagent:${turn}:${status}`),
+          type: "node.updated",
+          threadId,
+          nodeId,
+          driver,
+          occurredAt: startedAt,
+          payload: {
+            id: nodeId,
+            threadId,
+            runId: null,
+            parentNodeId: null,
+            rootNodeId: nodeId,
+            kind: "root_turn",
+            status,
+            countsForRun: false,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            runtimeRequestId: null,
+            checkpointScopeId: null,
+            startedAt,
+            completedAt: status === "completed" ? startedAt : null,
+          },
+        });
+      };
+      const shells = Effect.gen(function* () {
+        const memory = ProjectionStore.threadShellFromProjection(
+          yield* store.getThreadProjection(threadId),
+        );
+        const sql = (yield* store.getShellSnapshot()).threads.find((row) => row.id === threadId)!;
+        return [memory, sql];
+      });
+
+      yield* applyRootTurn(1, "running");
+      yield* applyRootTurn(1, "completed");
+      for (const shell of yield* shells) {
+        assert.equal(shell.status, "completed");
+        assert.isNull(shell.activityRunStatus);
+      }
+      // The parent resumes the same subagent: a second root turn on the same thread.
+      yield* applyRootTurn(2, "running");
+      for (const shell of yield* shells) {
+        assert.equal(shell.status, "running");
+        assert.equal(shell.activityRunStatus, "running");
+        assert.isNull(shell.latestRunId);
+      }
+      assert.isUndefined(
+        (yield* store.getSettlementCandidates(threadId)).find((row) => row.id === threadId),
+      );
+    }),
+  );
+
   it.effect("projects only the latest failed root turn's limit into SQL and memory shells", () =>
     Effect.gen(function* () {
       const store = yield* ProjectionStore.ProjectionStoreV2;
