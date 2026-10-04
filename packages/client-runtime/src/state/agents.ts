@@ -3,6 +3,38 @@ import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests
 import type { EnvironmentThreadShell } from "./shell.ts";
 import type { EnvironmentId, McpGatewayProfile, ThreadId } from "@t3tools/contracts";
 
+/** Palette an agent without its own color cycles through, matching the agent editor's swatches. */
+export const agentColors = ["#f5b775", "#7bb5ff", "#b797ff", "#71d8bc", "#f293b7"];
+
+/** Stable palette color for an agent, by its position in the full profile list. */
+export function agentColorFor(
+  profile: Pick<McpGatewayProfile, "profileId" | "color">,
+  profiles: ReadonlyArray<Pick<McpGatewayProfile, "profileId">>,
+): string {
+  if (profile.color) return profile.color;
+  const index = profiles.findIndex((item) => item.profileId === profile.profileId);
+  return agentColors[(index < 0 ? 0 : index) % agentColors.length]!;
+}
+
+export type AgentIconKey = NonNullable<McpGatewayProfile["icon"]>;
+
+/** Icon choices in the agent editor, with their display labels. */
+export const agentIconLabels: Record<AgentIconKey, string> = {
+  orb: "Orb",
+  bot: "Robot",
+  code: "Code",
+  pen: "Pen",
+  search: "Search",
+  shield: "Shield",
+  sparkles: "Sparkles",
+  terminal: "Terminal",
+};
+
+/** The glyph a client draws for an agent; missing or unrecognized icons render as the orb. */
+export function agentIconKey(icon: string | null | undefined): AgentIconKey {
+  return icon && Object.hasOwn(agentIconLabels, icon) ? (icon as AgentIconKey) : "orb";
+}
+
 export function groupAgentThreads(
   profiles: ReadonlyArray<McpGatewayProfile>,
   threads: ReadonlyArray<EnvironmentThreadShell>,

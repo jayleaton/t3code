@@ -13,7 +13,8 @@ import { agentModelOptions } from "./agentModelCatalog";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import type { AgentSkill, McpGatewayProfile, ServerProvider } from "@t3tools/contracts";
 import { MCP_GATEWAY_RUNTIME_MODE_LABELS } from "@t3tools/contracts";
-import { AgentIcon, agentColors, agentIcons } from "./AgentIcon";
+import { agentColors, agentIconLabels } from "./agents.logic";
+import { AgentIcon } from "./AgentIcon";
 import { useRef, useState, type CSSProperties } from "react";
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialog";
 import { randomUUID } from "../../lib/utils";
@@ -189,7 +190,7 @@ export function AgentEditor({
               ))}
             </div>
             <div className="agent-icon-options" role="group" aria-label="Icon">
-              {Object.entries(agentIcons).map(([value, label]) => (
+              {Object.entries(agentIconLabels).map(([value, label]) => (
                 <Tooltip key={value}>
                   <TooltipTrigger
                     render={<button type="button" />}
