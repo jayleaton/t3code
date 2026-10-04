@@ -280,6 +280,7 @@ describe("age settlement", () => {
     for (const activity of [
       { unsettledAt: at(-DAY_MS), settledOverride: "active" as const },
       { lastVisitedAt: at(-DAY_MS) },
+      { updatedAt: at(-DAY_MS) },
       { latestUserMessageAt: at(-DAY_MS) },
       { latestRunRequestedAt: at(-DAY_MS) },
       { latestRunCompletedAt: at(-DAY_MS) },

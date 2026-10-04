@@ -86,6 +86,7 @@ export function resolveAutoSettlementAt(input: {
   if (input.autoSettleAfterDays === null || input.autoSettleAfterDays <= 0) return null;
   const activityAtMs = latestMillis([
     toMillis(thread.createdAt),
+    toMillis(thread.updatedAt),
     toMillis(thread.unsettledAt),
     toMillis(thread.lastVisitedAt),
     toMillis(thread.latestBackgroundActivityAt),
