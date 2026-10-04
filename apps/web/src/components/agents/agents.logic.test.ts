@@ -13,6 +13,7 @@ import {
   excludePinnedAgentThreads,
   resolveAgentTaskProject,
   nestAgentRuns,
+  selectAgentSidebarThreads,
   agentRunLinkTargets,
   agentRunParentKey,
   agentRunDropZone,
@@ -398,6 +399,39 @@ describe("sidebar delegated relationships", () => {
   };
   const all = [captain, cody, delegated, linkedCody, fork];
   const lists = { pinned: [], active: all, settled: [] };
+
+  it("excludes delegated named Agents from every sidebar shelf and nested roster", () => {
+    const pinnedDelegation = {
+      ...delegated,
+      id: ThreadId.make("pinned-delegation"),
+      pinnedAt: "2026-09-25T01:00:00Z",
+    };
+    const settledDelegation = {
+      ...delegated,
+      id: ThreadId.make("settled-delegation"),
+      settledAt: "2026-09-25T01:00:00Z",
+    };
+    const sidebarThreads = selectAgentSidebarThreads([...all, pinnedDelegation, settledDelegation]);
+    expect(sidebarThreads.map((run) => run.id)).toEqual([
+      captain.id,
+      cody.id,
+      linkedCody.id,
+      fork.id,
+    ]);
+    const shelves = selectAgentWorkspaceThreads(sidebarThreads, null, "");
+    const board = nestAgentRuns({
+      lists: { pinned: selectPinnedAgentThreads(sidebarThreads), ...shelves },
+      all: sidebarThreads,
+    });
+    expect(
+      board.childrenByKey
+        .get("local:captain-chat")
+        ?.live.map(({ thread }) => thread.id)
+        .toSorted(),
+    ).toEqual([linkedCody.id, fork.id].toSorted());
+    expect(selectAgentSidebarThreads([delegated])).toEqual([]);
+    expect(selectAgentSidebarThreads([cody])).toEqual([cody]);
+  });
 
   it("summarizes delegation to a named Agent while retaining its top-level and linked chats", () => {
     const sidebar = nestAgentRuns({ lists, all, subagentsOnly: true });

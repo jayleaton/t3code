@@ -189,24 +189,13 @@ export interface AgentCardChildren<T> {
   readonly settled: readonly AgentChildRun<T>[];
 }
 
-/** Sidebar cards summarize the whole fleet without mounting individual run rows. */
-export function agentChildRunsSummary(runs: AgentCardChildren<EnvironmentThreadShell>) {
-  let total = 0;
-  let running = 0;
-  let attention = 0;
-  for (const group of [runs.live, runs.settled]) {
-    for (const { thread } of group) {
-      total += 1;
-      const status = agentThreadStatus(thread);
-      if (status === "running" || status === "queued" || status === "monitoring") running += 1;
-      if (status === "attention" || status === "error") attention += 1;
-    }
-  }
-  return [
-    `${total} subagent${total === 1 ? "" : "s"}`,
-    ...(running > 0 ? [`${running} running`] : []),
-    ...(attention > 0 ? [`${attention} need${attention === 1 ? "s" : ""} attention`] : []),
-  ].join(" · ");
+/** Delegation is a lineage relationship, independent of the Agent profile used to run it. */
+export function isAgentSubagentThread(run: Pick<AgentRun, "lineage">) {
+  return run.lineage.relationshipToParent === "subagent" && run.lineage.parentThreadId !== null;
+}
+
+export function selectAgentSidebarThreads(threads: readonly EnvironmentThreadShell[]) {
+  return threads.filter((thread) => !isAgentSubagentThread(thread));
 }
 
 type AgentRunList = "pinned" | "active" | "settled";
@@ -249,11 +238,9 @@ export function nestAgentRuns<T extends AgentRun>(input: {
   for (const run of [...input.all, ...input.lists.pinned, ...input.lists.active]) {
     if (run.archivedAt === null) runByKey.set(threadKey(run), run);
   }
-  const isSubagent = (run: T) =>
-    run.lineage.relationshipToParent === "subagent" && run.lineage.parentThreadId !== null;
   const parentKeyOf = (run: T) =>
     input.subagentsOnly
-      ? isSubagent(run)
+      ? isAgentSubagentThread(run)
         ? threadKey({ environmentId: run.environmentId, id: run.lineage.parentThreadId! })
         : null
       : agentRunParentKey(run);
@@ -308,7 +295,7 @@ export function nestAgentRuns<T extends AgentRun>(input: {
   }
   const keep = (runs: readonly T[]) =>
     runs.filter((run) =>
-      input.subagentsOnly ? !isSubagent(run) : anchorByKey.get(threadKey(run)) == null,
+      input.subagentsOnly ? !isAgentSubagentThread(run) : anchorByKey.get(threadKey(run)) == null,
     );
   return {
     lists: {
