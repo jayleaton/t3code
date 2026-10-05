@@ -6,9 +6,13 @@ import { Popover, PopoverPopup, PopoverCreateHandle } from "../ui/popover";
 import { selectThreadPanelOpen, useRightPanelStore } from "../../rightPanelStore";
 import type { ThreadPanelPresentation } from "../../rightPanelLayout";
 import { useChatCanvas } from "./ChatCanvasContext";
+import { useResizableWidth } from "../../hooks/useResizableWidth";
+import { RightPanelResizeHandle } from "../preview/RightPanelResizeHandle";
 import {
   resolveThreadDetailsCardDensity,
   resolveThreadDetailsCardLayout,
+  resolveThreadDetailsCardMaximumWidth,
+  THREAD_DETAILS_CARD_DEFAULT_WIDTH,
 } from "./threadDetailsCardLayout";
 
 /** One card owns its placement and folds content only when that content cannot fit. */
@@ -26,9 +30,19 @@ export function ThreadDetailsCard({
   children: (density: "full" | "compact" | "essential") => ReactNode;
 }) {
   const canvas = useChatCanvas();
+  const { width, handlers } = useResizableWidth({
+    storageKey: "t3code:thread-details-card-width",
+    defaultWidth: THREAD_DETAILS_CARD_DEFAULT_WIDTH,
+    minWidth: THREAD_DETAILS_CARD_DEFAULT_WIDTH,
+    maxWidth: canvas
+      ? resolveThreadDetailsCardMaximumWidth(canvas.container.width, canvas.lane)
+      : 560,
+    edge: "left",
+  });
   const preferredPlacement = canvas
     ? resolveThreadDetailsCardLayout({
         container: canvas.container,
+        preferredWidth: width,
         lane: canvas.lane,
         frame: null,
       })
@@ -36,6 +50,7 @@ export function ThreadDetailsCard({
   const placement = canvas
     ? resolveThreadDetailsCardLayout({
         container: canvas.container,
+        preferredWidth: width,
         lane: canvas.lane,
         frame: canvas.layout.frame,
         overlapsDetailsCard: canvas.layout.overlapsDetailsCard,
@@ -138,6 +153,7 @@ export function ThreadDetailsCard({
             data-thread-details-panel="inline"
           >
             {card}
+            <RightPanelResizeHandle handlers={handlers} />
           </aside>
         ) : null
       ) : (

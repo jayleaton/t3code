@@ -103,6 +103,37 @@ export function connectGatewayBridge(input: {
   let stopped = false;
   let statusRequestId = 0;
   let configured = false;
+  let healthFiber: Fiber.Fiber<void, never> | undefined;
+  let responseFiber: Fiber.Fiber<void, never> | undefined;
+
+  const clearHealthCheck = () => {
+    healthFiber?.interruptUnsafe();
+    responseFiber?.interruptUnsafe();
+    healthFiber = undefined;
+    responseFiber = undefined;
+  };
+  const expectResponse = (next: GatewayBridgeSocket) => {
+    if (responseFiber !== undefined) return;
+    responseFiber = Effect.runFork(
+      Effect.sleep(5_000).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            responseFiber = undefined;
+            if (socket === next && !stopped) next.close();
+          }),
+        ),
+      ),
+    );
+  };
+  const requestStatus = (): boolean => {
+    const active = socket;
+    if (active === null || !configured || active.readyState !== active.OPEN) return false;
+    expectResponse(active);
+    active.send(
+      JSON.stringify({ type: "status.request", requestId: `status-${++statusRequestId}` }),
+    );
+    return true;
+  };
 
   const connect = () => {
     if (stopped) return;
@@ -114,6 +145,7 @@ export function connectGatewayBridge(input: {
     let authenticated = false;
     let expectedServerProof: string | null = null;
     socket = next;
+    expectResponse(next);
     next.addEventListener("error", () => {
       if (socket === next && !stopped) {
         configured = false;
@@ -124,6 +156,7 @@ export function connectGatewayBridge(input: {
     next.addEventListener("close", () => {
       if (socket !== next || stopped) return;
       socket = null;
+      clearHealthCheck();
       configured = false;
       input.onStatusSnapshot?.(null);
       unsubscribeEvents?.();
@@ -220,6 +253,17 @@ export function connectGatewayBridge(input: {
                 { environmentIds, afterSequenceByEnvironment },
               ) ?? null;
             configured = true;
+            // A half-open loopback connection must reconnect even when the UI is not mounted.
+            healthFiber = Effect.runFork(
+              Effect.sleep(15_000).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    requestStatus();
+                  }),
+                ),
+                Effect.forever,
+              ),
+            );
             input.onState?.("running");
             return;
           }
@@ -228,7 +272,11 @@ export function connectGatewayBridge(input: {
               throw new Error("Gateway bridge status arrived before configuration.");
             }
             const snapshot = parseGatewayStatusSnapshot(candidate.snapshot);
-            if (snapshot !== undefined) input.onStatusSnapshot?.(snapshot);
+            if (snapshot !== undefined) {
+              responseFiber?.interruptUnsafe();
+              responseFiber = undefined;
+              input.onStatusSnapshot?.(snapshot);
+            }
             return;
           }
           if (!authenticated) throw new Error("Gateway bridge is not authenticated.");
@@ -265,16 +313,10 @@ export function connectGatewayBridge(input: {
 
   connect();
   return {
-    requestStatus: (): boolean => {
-      const active = socket;
-      if (active === null || !configured || active.readyState !== active.OPEN) return false;
-      active.send(
-        JSON.stringify({ type: "status.request", requestId: `status-${++statusRequestId}` }),
-      );
-      return true;
-    },
+    requestStatus,
     stop: () => {
       stopped = true;
+      clearHealthCheck();
       configured = false;
       input.onStatusSnapshot?.(null);
       reconnectFiber?.interruptUnsafe();
