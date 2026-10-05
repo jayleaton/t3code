@@ -119,6 +119,11 @@ import {
   WorktreeSetupSubscribeInput,
 } from "./worktreeSetup.ts";
 import {
+  WorktreeReclaimError,
+  WorktreeReclaimInput,
+  WorktreeReclaimResult,
+} from "./worktreeReclamation.ts";
+import {
   GitActionProgressEvent,
   VcsSwitchRefInput,
   VcsSwitchRefResult,
@@ -416,6 +421,7 @@ export const WS_METHODS = {
   vcsListRefs: "vcs.listRefs",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
+  vcsReclaimThreadWorktree: "vcs.reclaimThreadWorktree",
   vcsApplyPatch: "vcs.applyPatch",
   vcsCreateRef: "vcs.createRef",
   vcsSwitchRef: "vcs.switchRef",
@@ -1362,6 +1368,12 @@ const WsVcsRemoveWorktreeRpc = Rpc.make(WS_METHODS.vcsRemoveWorktree, {
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
 });
 
+const WsVcsReclaimThreadWorktreeRpc = Rpc.make(WS_METHODS.vcsReclaimThreadWorktree, {
+  payload: WorktreeReclaimInput,
+  success: WorktreeReclaimResult,
+  error: Schema.Union([WorktreeReclaimError, EnvironmentAuthorizationError]),
+});
+
 const WsVcsApplyPatchRpc = Rpc.make(WS_METHODS.vcsApplyPatch, {
   payload: VcsApplyPatchInput,
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
@@ -1957,6 +1969,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsListRefsRpc,
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,
+  WsVcsReclaimThreadWorktreeRpc,
   WsVcsApplyPatchRpc,
   WsVcsCreateRefRpc,
   WsVcsSwitchRefRpc,

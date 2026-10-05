@@ -1722,6 +1722,26 @@ describe("gateway v3 event delivery tools", () => {
     ]);
   });
 
+  it("reclaims worktrees only with lifecycle scope, while a dry run needs read", async () => {
+    const operations: Array<{ operation: string; payload: Readonly<Record<string, unknown>> }> = [];
+    const context = { port: makePort({ operations }), grants: { local: ["read"] } as const };
+    const input = { environmentId: "local", threadId: "finished-task" };
+    await expect(callGatewayTool(context, "t3_reclaim_worktree", input)).rejects.toMatchObject({
+      code: "scope_required",
+    });
+    expect(operations).toEqual([]);
+    await callGatewayTool(context, "t3_reclaim_worktree", { ...input, dryRun: true });
+    await callGatewayTool(
+      { port: makePort({ operations }), grants: { local: ["lifecycle"] } },
+      "t3_reclaim_worktree",
+      input,
+    );
+    expect(operations).toEqual([
+      { operation: "worktree.reclaim", payload: { ...input, dryRun: true } },
+      { operation: "worktree.reclaim", payload: input },
+    ]);
+  });
+
   it("does not let the legacy control scope authorize repository writes", async () => {
     const operations: Array<{ operation: string; payload: Readonly<Record<string, unknown>> }> = [];
     await expect(

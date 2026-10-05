@@ -1665,6 +1665,20 @@ export async function callGatewayTool(
         ...(typeof input.requestId === "string" ? { requestId: input.requestId } : {}),
       });
     }
+    case "t3_reclaim_worktree": {
+      const environmentId = environmentWithScope(
+        context,
+        input,
+        input.dryRun === true ? "read" : "lifecycle",
+      );
+      const execute = requireOperationPort(context);
+      return execute({
+        environmentId,
+        operation: "worktree.reclaim",
+        payload: input,
+        ...(typeof input.requestId === "string" ? { requestId: input.requestId } : {}),
+      });
+    }
     case "t3_apply_patch":
     case "t3_create_branch":
     case "t3_commit_changes":

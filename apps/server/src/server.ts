@@ -3,6 +3,7 @@ import * as Clock from "effect/Clock";
 import * as Random from "effect/Random";
 import * as Semaphore from "effect/Semaphore";
 import * as StorageCleanup from "./storageCleanup.ts";
+import * as WorktreeReclamation from "./workspace/WorktreeReclamation.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as McpGatewayBroker from "./mcp/McpGatewayBroker.ts";
 import * as LocalGatewayPort from "./mcp/agents/LocalGatewayPort.ts";
@@ -515,6 +516,10 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
     Layer.provide(ProjectionStoreV2.layer),
   ),
   ThreadPullRequestWorkerLive,
+  WorktreeReclamation.layer.pipe(
+    Layer.provide(ProjectionStoreV2.layer),
+    Layer.provide(ProcessRunner.layer),
+  ),
   Layer.effectDiscard(
     Effect.gen(function* () {
       const service = yield* PullRequestSyncReactor.PullRequestSyncReactor;
