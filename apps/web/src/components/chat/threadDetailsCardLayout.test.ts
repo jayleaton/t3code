@@ -13,7 +13,7 @@ const resolve = (width: number, height: number, previewY: number | null = null) 
   });
 
 describe("workspace card", () => {
-  it("pins to the top right at a fixed width", () => {
+  it("pins to the top right at the default width", () => {
     expect(resolve(1600, 900)).toEqual({
       x: 1308,
       y: 12,
@@ -21,6 +21,22 @@ describe("workspace card", () => {
       height: 876,
     });
     expect(resolve(1344, 900)).toMatchObject({ x: 1052, width: 280 });
+  });
+  it("anchors a chosen width to the right while preserving a readable chat lane", () => {
+    const layout = (containerWidth: number, preferredWidth: number) =>
+      resolveThreadDetailsCardLayout({
+        container: { width: containerWidth, height: 900 },
+        lane,
+        frame: null,
+        preferredWidth,
+      });
+    expect(layout(1600, 440)).toMatchObject({ x: 1148, width: 440 });
+    expect(layout(1600, 900)).toMatchObject({ x: 1028, width: 560 });
+    expect(layout(1100, 440)).toMatchObject({ x: 692, width: 396 });
+    expect(layout(984, 440)).toMatchObject({ x: 692, width: 280 });
+    expect(layout(983, 440)).toBeNull();
+    expect(layout(1600, 200)).toMatchObject({ x: 1308, width: 280 });
+    expect(layout(1600, 440)).toMatchObject({ width: 440 });
   });
   it("hides when a readable chat lane cannot fit beside it", () => {
     expect(resolve(984, 900)).toMatchObject({ x: 692 });

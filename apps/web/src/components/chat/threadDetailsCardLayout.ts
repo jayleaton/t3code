@@ -1,6 +1,18 @@
 import type { PreviewMiniPlayerFrame } from "../preview/previewMiniPlayerLayout";
 import { DETAILS_CARD_CLEARANCE } from "./chatCanvasLayout";
 
+export const THREAD_DETAILS_CARD_DEFAULT_WIDTH = 280;
+
+export function resolveThreadDetailsCardMaximumWidth(
+  containerWidth: number,
+  lane: { padding: number; minChatWidth: number },
+) {
+  return Math.max(
+    THREAD_DETAILS_CARD_DEFAULT_WIDTH,
+    Math.min(560, containerWidth - 12 - DETAILS_CARD_CLEARANCE - lane.padding - lane.minChatWidth),
+  );
+}
+
 export function resolveThreadDetailsCardDensity(
   height: number,
   content: { full: number; compact: number },
@@ -19,15 +31,19 @@ export function resolveThreadDetailsCardLayout({
   lane,
   frame,
   overlapsDetailsCard = false,
+  preferredWidth = THREAD_DETAILS_CARD_DEFAULT_WIDTH,
 }: {
   container: { width: number; height: number };
   lane: { padding: number; minChatWidth: number };
   frame: PreviewMiniPlayerFrame | null;
   overlapsDetailsCard?: boolean;
+  preferredWidth?: number;
 }) {
   const gap = 12;
-  // Keep in sync with --thread-details-panel-width, which sizes the popover.
-  const width = 280;
+  const width = Math.max(
+    THREAD_DETAILS_CARD_DEFAULT_WIDTH,
+    Math.min(preferredWidth, resolveThreadDetailsCardMaximumWidth(container.width, lane)),
+  );
   const x = container.width - width - gap;
   if (x - DETAILS_CARD_CLEARANCE - lane.padding < lane.minChatWidth) return null;
   // Resizing consumes the height above the player. Dragging first tries to
