@@ -73,6 +73,12 @@ export function makeSubagentChildThread(input: {
     parentThreadId: input.parentThread.id,
     parentEnvironmentId: null,
     parentRelationship: input.parentRelationship ?? "subagent",
+    // Pull requests belong to the thread that linked or watched them. A spawned
+    // thread starts with none, like any new thread, so the parent's watches never
+    // wake it and branch discovery decides its own branch pull request.
+    linkedPullRequest: null,
+    pullRequests: [],
+    branchPullRequest: null,
     lineage: {
       parentThreadId: input.parentThread.id,
       relationshipToParent: "subagent",
