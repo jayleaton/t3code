@@ -160,7 +160,7 @@ describe("getProviderSkillsForSlashMenu", () => {
 describe("getProviderSlashCommandsForSlashMenu", () => {
   const commands = [
     { name: "ask-matt", description: "Ask which skill fits your situation." },
-    { name: "compact", description: "Compact the conversation." },
+    { name: "review", description: "Review the current changes." },
   ];
   const skills = [
     {
@@ -173,7 +173,7 @@ describe("getProviderSlashCommandsForSlashMenu", () => {
   it("lets the skill alias win when a provider command has the same name", () => {
     expect(
       getProviderSlashCommandsForSlashMenu(commands, skills).map((command) => command.name),
-    ).toEqual(["compact"]);
+    ).toEqual(["review"]);
   });
 
   it("keeps the provider command when the matching skill alias is hidden", () => {
@@ -181,7 +181,16 @@ describe("getProviderSlashCommandsForSlashMenu", () => {
 
     expect(
       getProviderSlashCommandsForSlashMenu(commands, visibleSkills).map((command) => command.name),
-    ).toEqual(["ask-matt", "compact"]);
+    ).toEqual(["ask-matt", "review"]);
+  });
+
+  it("never offers the provider's compact command", () => {
+    expect(
+      getProviderSlashCommandsForSlashMenu(
+        [...commands, { name: "compact", description: "Compact the conversation." }],
+        [],
+      ).map((command) => command.name),
+    ).toEqual(["ask-matt", "review"]);
   });
 });
 

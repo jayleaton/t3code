@@ -58,7 +58,6 @@ export function buildComposerSlashCommandItems(input: {
   readonly query: string;
   readonly atMessageStart: boolean;
   readonly hasThread: boolean;
-  readonly hasCompactableConversation?: boolean;
   /** Whether T3 itself offers /usage-limits for the selected provider. */
   readonly offersUsageLimits?: boolean;
   readonly allowInteractionMode: boolean;
@@ -102,7 +101,6 @@ export function buildComposerSlashCommandItems(input: {
   if (!input.atMessageStart) return items;
   for (const command of input.selectedProviderStatus?.slashCommands ?? []) {
     if (!command.name.toLowerCase().includes(query)) continue;
-    if (command.name === "compact" && !input.hasCompactableConversation) continue;
     // T3's own limits command is answered by the thread composer; New Task has
     // nowhere to show it. A provider's same-named command is left alone.
     if (command.name === USAGE_LIMITS_COMMAND.name && input.offersUsageLimits && !input.hasThread) {
@@ -176,7 +174,6 @@ export function useComposerCommandMenu({
   pullRequestRepository = null,
   selectedProviderStatus,
   hasThread,
-  hasCompactableConversation,
   offersUsageLimits = false,
   enabled = true,
   onChangeDraftMessage,
@@ -195,7 +192,6 @@ export function useComposerCommandMenu({
   readonly pullRequestRepository?: string | null;
   readonly selectedProviderStatus: ServerProvider | null;
   readonly hasThread: boolean;
-  readonly hasCompactableConversation: boolean;
   /** Whether T3 itself offers /usage-limits for the selected provider. */
   readonly offersUsageLimits?: boolean;
   readonly enabled?: boolean;
@@ -347,7 +343,6 @@ export function useComposerCommandMenu({
         query: q,
         atMessageStart: trigger.rangeStart === 0,
         hasThread,
-        hasCompactableConversation,
         offersUsageLimits,
         allowInteractionMode: onUpdateInteractionMode !== undefined,
         selectedProviderStatus: selectedProviderStatus
@@ -488,7 +483,6 @@ export function useComposerCommandMenu({
     environmentId,
     threadShells,
     hasThread,
-    hasCompactableConversation,
     onUpdateInteractionMode,
     pathSearch.entries,
     pullRequestSearch.entries,

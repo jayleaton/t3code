@@ -291,7 +291,6 @@ import {
 } from "./composerProviderState";
 import { ContextWindowMeter, ContextWindowMeterPlaceholder } from "./ContextWindowMeter";
 import {
-  providerSupportsManualCompaction,
   resolveContextWindowModelDisplayName,
   shouldReserveContextWindowMeter,
 } from "./ContextWindowMeter.logic";
@@ -1378,9 +1377,6 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
-  onCompactContext?: (() => void) | undefined;
-  compactDisabled: boolean;
-  compactDisabledReason: string | null;
 }) {
   return (
     <>
@@ -1388,9 +1384,6 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         <ContextWindowMeter
           usage={props.activeContextWindow}
           modelDisplayName={props.activeThreadModelDisplayName}
-          onCompact={props.onCompactContext}
-          compactDisabled={props.compactDisabled}
-          compactDisabledReason={props.compactDisabledReason}
         />
       ) : props.reserveContextWindowMeter ? (
         <ContextWindowMeterPlaceholder />
@@ -1452,7 +1445,6 @@ export interface ChatComposerHandle {
   isModelPickerOpen: () => boolean;
   /** True when a collapsed caret sits before everything in the draft, including when it is empty. */
   isCaretAtStart: () => boolean;
-  compactContext: () => void;
   readSnapshot: () => {
     value: string;
     cursor: number;
@@ -1586,9 +1578,6 @@ export interface ChatComposerProps {
 
   // Context window
   activeContextWindow: ContextWindowSnapshot | null;
-  compactThreadUnavailable: boolean;
-  compactDisabled: boolean;
-  compactDisabledReason: string | null;
 
   // Misc
   resolvedTheme: "light" | "dark";
@@ -1634,7 +1623,6 @@ export interface ChatComposerProps {
   onRemoveEditingQueuedAttachment: (attachmentId: string) => void;
 
   // Callbacks
-  onCompactContext: () => void;
   onSend: (
     e?: { preventDefault: () => void },
     dispatchMode?: ComposerDispatchMode,
@@ -1732,9 +1720,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeThreadModelSelection,
     reportedModelSelection,
     activeContextWindow,
-    compactThreadUnavailable,
-    compactDisabled,
-    compactDisabledReason,
     resolvedTheme,
     settings,
     keybindings,
@@ -1758,7 +1743,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onPageScrollKeyDown,
     onPageScrollKeyUp,
     onPageScrollRelease,
-    onCompactContext,
     onSend,
     onResume,
     onInterrupt,
@@ -2123,8 +2107,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         ? providerInstanceEntries.find((entry) => hasProviderSetup(entry.snapshot))?.instanceId
         : undefined))
     : undefined;
-  const resolvedCompactDisabledReason =
-    compactDisabledReason ?? (noProviderAvailable ? "Compacting is unavailable right now" : null);
   // The driver kind follows the instance that will actually run the turn,
   // which can differ from the persisted selection when that selection is
   // disabled.
@@ -2169,7 +2151,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     () => selectedProviderEntry?.snapshot ?? null,
     [selectedProviderEntry],
   );
-  const compactCommandAvailable = providerSupportsManualCompaction(selectedProviderEntry);
   const selectedProviderSkills = selectedProviderStatus
     ? resolveProviderSkillsForCwd(selectedProviderStatus, gitCwd)
     : [];
@@ -2495,16 +2476,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     cwd: isPathTrigger ? gitCwd : null,
     query: isPathTrigger ? pathTriggerQuery : null,
   });
-  const compactSlashCommandAvailable =
-    composerTrigger?.kind === "slash-command" &&
-    prompt.slice(0, composerTrigger.rangeStart).trim() === "" &&
-    !compactThreadUnavailable &&
-    prompt.slice(composerTrigger.rangeEnd).trim() === "" &&
-    composerImages.length + composerFiles.length === 0 &&
-    composerDraft.persistedAttachments.length === 0 &&
-    composerTerminalContexts.length === 0 &&
-    composerPreviewAnnotations.length === 0 &&
-    composerReviewComments.length === 0;
 
   const pullRequestListTargets = useMemo(
     () =>
@@ -2645,11 +2616,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           skill.description ??
           (skill.scope ? `${skill.scope} skill` : ""),
       }));
-      const visibleProviderSlashCommandItems = providerSlashCommandItems.filter(
-        (item) => item.command.name !== "compact" || compactSlashCommandAvailable,
-      );
       const slashCommandItems = slashCommandItemsForPromptPosition(
-        [...builtInSlashCommandItems, ...visibleProviderSlashCommandItems, ...skillItems],
+        [...builtInSlashCommandItems, ...providerSlashCommandItems, ...skillItems],
         composerTrigger.rangeStart === 0,
       );
       return searchSlashCommandItems(slashCommandItems, query);
@@ -2721,7 +2689,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     return [];
   }, [
     activeThreadId,
-    compactSlashCommandAvailable,
     composerTrigger,
     environmentId,
     environmentThreadShells,
@@ -4198,31 +4165,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }),
     );
   }, [phase, settings.followUpBehavior, submitComposer]);
-  const compactThreadContext = useCallback(() => {
-    if (
-      compactDisabled ||
-      noProviderAvailable ||
-      activePendingApproval !== null ||
-      pendingUserInputs.length > 0 ||
-      phase === "running" ||
-      isSendBusy ||
-      isConnecting ||
-      !activeThreadId
-    ) {
-      return;
-    }
-    onCompactContext();
-  }, [
-    activePendingApproval,
-    activeThreadId,
-    compactDisabled,
-    isConnecting,
-    isSendBusy,
-    noProviderAvailable,
-    onCompactContext,
-    pendingUserInputs.length,
-    phase,
-  ]);
   const expandMobileComposer = useCallback(() => {
     if (composerBlurFrameRef.current !== null) {
       window.cancelAnimationFrame(composerBlurFrameRef.current);
@@ -6336,7 +6278,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         trigger.focus({ preventScroll: true });
         trigger.click();
       },
-      compactContext: compactThreadContext,
       isModelPickerOpen: () => isComposerModelPickerOpen,
       isCaretAtStart: () => {
         const range = composerEditorRef.current?.readSelectionRange();
@@ -6479,7 +6420,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       selectedProviderModels,
       interactionMode,
       planModeUiEnabled,
-      compactThreadContext,
       restoreAfterTimelineReachedEnd,
       getTimelineScrollableNode,
       isTimelineAtLogicalEnd,
@@ -7517,11 +7457,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                     onInterrupt={handleInterruptPrimaryAction}
                     onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
-                    compactDisabled={
-                      compactDisabled || noProviderAvailable || isSendBusy || isConnecting
-                    }
-                    compactDisabledReason={resolvedCompactDisabledReason}
-                    {...(compactCommandAvailable ? { onCompactContext: compactThreadContext } : {})}
                   />
                 </div>
               </div>

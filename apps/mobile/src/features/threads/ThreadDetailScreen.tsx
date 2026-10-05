@@ -498,16 +498,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
       (entry) => "acknowledged" in entry && entry.acknowledged === true,
     );
   const selectedThreadFeed = props.selectedThreadFeed;
-  const hasCompactableConversation =
-    selectedThreadFeed.some(
-      (entry) =>
-        entry.type === "message" &&
-        entry.message.role === "user" &&
-        ((entry.message.attachments?.length ?? 0) > 0 ||
-          entry.message.text.trim().toLowerCase() !== "/compact"),
-    ) ||
-    (props.historyControls?.hasMoreHistory === true &&
-      props.selectedThread.latestUserMessageAt !== null);
   const composerChrome = composerExpanded ? COMPOSER_EXPANDED_CHROME : COMPOSER_COLLAPSED_CHROME;
   const composerOverlapHeight = composerChrome + composerBottomInset;
   // While a user-input request is pending, the questionnaire owns the
@@ -1309,7 +1299,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                       connectionState={props.connectionStateLabel}
                       environmentLabel={props.environmentLabel}
                       selectedThread={props.selectedThread}
-                      hasCompactableConversation={hasCompactableConversation && !props.isCompacting}
                       serverConfig={props.serverConfig}
                       queueCount={props.selectedThreadQueueCount}
                       activeThreadBusy={props.activeThreadBusy}
