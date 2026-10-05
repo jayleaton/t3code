@@ -398,3 +398,79 @@ describe("gateway bridge client", () => {
     bridge.stop();
   });
 });
+
+it("closes an unresponsive bridge so its existing reconnect path can recover", async () => {
+  vi.useFakeTimers();
+  const socket = new FakeSocket();
+  const token = "test-token-123456789";
+  vi.spyOn(socket, "close").mockImplementation(() => {
+    socket.closed = true;
+    socket.emit("close");
+  });
+  const createSocket = vi.fn(() => socket);
+  const bridge = connectGatewayBridge({
+    port: unusedPort,
+    token,
+    url: "ws://127.0.0.1:47631",
+    createSocket,
+  });
+  try {
+    const nonce = "e".repeat(64);
+    socket.emit("message", JSON.stringify({ type: "challenge", nonce }));
+    await socket.waitForSent(1);
+    socket.emit(
+      "message",
+      JSON.stringify({
+        type: "authenticated",
+        proof: await proof(token, `server:${nonce}`),
+      }),
+    );
+    await socket.waitForSent(2);
+    socket.emit("message", JSON.stringify({ type: "configured", cursors: {} }));
+    const snapshot = {
+      schemaVersion: "3",
+      capturedAt: "2026-09-05T00:00:00.000Z",
+      live: true,
+      stale: false,
+      retention: { maxEventsPerEnvironment: 100, maxAgeDays: 7 },
+      environments: [],
+    };
+    socket.emit("message", JSON.stringify({ type: "status.snapshot", snapshot }));
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({ type: "status.request" });
+    expect(socket.closed).toBe(false);
+    socket.emit("message", JSON.stringify({ type: "status.snapshot", snapshot }));
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(socket.closed).toBe(false);
+    // Requests from another health UI do not extend an unanswered request's deadline.
+    bridge.requestStatus();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(socket.closed).toBe(true);
+    createSocket.mockReturnValueOnce(new FakeSocket());
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(createSocket).toHaveBeenCalledTimes(2);
+  } finally {
+    bridge.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+  }
+});
+
+it("closes a bridge that never completes its handshake", async () => {
+  vi.useFakeTimers();
+  const socket = new FakeSocket();
+  const bridge = connectGatewayBridge({
+    port: unusedPort,
+    token: "test-token-123456789",
+    url: "ws://127.0.0.1:47631",
+    createSocket: () => socket,
+  });
+  try {
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(socket.closed).toBe(true);
+  } finally {
+    bridge.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+  }
+});

@@ -44,10 +44,12 @@ allowlist, or grants), or a bridge-token authentication failure. The diagnostics
 the token or other credentials. Start or stop the process that owns the port according to the
 reported class, then reconnect.
 
-If the owner stops, attached MCP sessions disconnect. Reconnect through the MCP host to start
-or attach to an owner again. The desktop uses its existing bridge reconnect behavior. The
-launcher does not automatically replay in-flight mutations; use the same idempotency key to
-recover their durable receipts.
+If the owner stops, stdio launchers reconnect to a replacement owner. The desktop monitors its
+managed MCP session and relaunches it if it exits or stops answering health checks. Its runtime
+bridge also checks for replies and reconnects an unresponsive connection, including while the
+Agents board is closed. Disabling the gateway or closing its desktop window stops recovery.
+In-flight mutations are never replayed on reconnect; use the same idempotency key to recover
+their durable receipts.
 
 ## Upgrade from a gateway that binds once per MCP session
 
