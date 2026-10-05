@@ -33,6 +33,7 @@ vi.mock("@t3tools/client-runtime/gateway", () => ({
 }));
 vi.mock("../../lib/composerDraftUploads", () => ({ releaseComposerDraftUploads: vi.fn() }));
 vi.mock("../ChatView", () => ({ default: () => <div>Standard composer</div> }));
+vi.mock("../ProjectFavicon", () => ({ ProjectFavicon: () => null }));
 vi.mock("../ui/dialog", () => ({
   Dialog: ({ children }: { children: ReactNode }) => children,
   DialogPopup: ({ children }: { children: ReactNode }) => <div role="dialog">{children}</div>,

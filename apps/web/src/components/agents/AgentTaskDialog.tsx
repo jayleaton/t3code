@@ -21,6 +21,7 @@ import { releaseComposerDraftUploads } from "../../lib/composerDraftUploads";
 import { newDraftId, newThreadId, randomUUID } from "../../lib/utils";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import ChatView from "../ChatView";
+import { ProjectFavicon } from "../ProjectFavicon";
 import { Button } from "../ui/button";
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialog";
 import { agentMachineUnavailableReason } from "./agentMachineAvailability";
@@ -317,6 +318,7 @@ function AgentTaskForm({
                     checked={project?.id === item.id}
                     onChange={() => selectProject(item.id)}
                   />
+                  <ProjectFavicon project={item} className="mt-px size-4 shrink-0" />
                   <span className="agent-choice-body">
                     <span className="agent-choice-name">{item.title}</span>
                     <span className="agent-choice-detail">{item.workspaceRoot}</span>
@@ -347,17 +349,19 @@ function AgentTaskForm({
         draftSession?.environmentId === target.environmentId &&
         draftSession.projectId === project.id &&
         profile.runtimeMode !== "read-only" && (
-          <ChatView
-            composerOnly
-            autoFocusComposer
-            routeKind="draft"
-            draftId={draftId}
-            environmentId={target.environmentId}
-            threadId={draftSession.threadId}
-            profileSelection={profileSelection}
-            onSendBusyChange={setSending}
-            onTurnStarted={finish}
-          />
+          <div className="agent-task-composer">
+            <ChatView
+              composerOnly
+              autoFocusComposer
+              routeKind="draft"
+              draftId={draftId}
+              environmentId={target.environmentId}
+              threadId={draftSession.threadId}
+              profileSelection={profileSelection}
+              onSendBusyChange={setSending}
+              onTurnStarted={finish}
+            />
+          </div>
         )}
       {error && (
         <p role="alert" className="text-destructive">
