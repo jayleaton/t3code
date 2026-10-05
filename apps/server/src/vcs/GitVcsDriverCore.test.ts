@@ -2615,6 +2615,88 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         }
       }),
     );
+    // Git takes `.git/config.lock` without waiting, and every new worktree
+    // records its merge base there, as does every temporary-branch rename.
+    it.effect("prepares concurrent worktrees without losing their branch config", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const path = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const worktreesRoot = yield* makeTmpDir("git-worktrees-");
+        const indexes = Array.from({ length: 12 }, (_, index) => index);
+
+        yield* Effect.forEach(
+          indexes,
+          (index) =>
+            driver
+              .createWorktree({
+                cwd,
+                path: path.join(worktreesRoot, `child-${index}`),
+                refName: initialBranch,
+                newRefName: `t3code/child-${index}`,
+                baseRefName: initialBranch,
+              })
+              .pipe(
+                Effect.andThen((created) =>
+                  driver.renameBranch({
+                    cwd: created.worktree.path,
+                    oldBranch: created.worktree.refName,
+                    newBranch: `feature/child-${index}`,
+                    exactName: true,
+                  }),
+                ),
+              ),
+          { concurrency: "unbounded" },
+        );
+
+        for (const index of indexes) {
+          assert.equal(
+            yield* git(path.join(worktreesRoot, `child-${index}`), ["branch", "--show-current"]),
+            `feature/child-${index}`,
+          );
+          assert.equal(
+            yield* git(cwd, ["config", `branch.feature/child-${index}.gh-merge-base`]),
+            initialBranch,
+          );
+        }
+      }),
+    );
+
+    it.effect("explains a held config lock and leaves nothing behind for a retry", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const input = {
+          cwd,
+          path: path.join(yield* makeTmpDir("git-worktrees-"), "locked"),
+          refName: initialBranch,
+          newRefName: "feature/locked",
+          baseRefName: initialBranch,
+        };
+        // Another Git process holding the repository config.
+        yield* fs.writeFileString(path.join(cwd, ".git", "config.lock"), "");
+
+        // The driver backs off on a held lock before reporting it.
+        const error = yield* driver.createWorktree(input).pipe(Effect.flip, TestClock.withLive);
+        assert.equal(error.operation, "GitVcsDriver.createWorktree.configureBaseRef");
+        assert.match(error.message, /config\.lock/u);
+        assert.equal(yield* fs.exists(input.path), false);
+        assert.equal(yield* git(cwd, ["branch", "--list", "feature/locked"]), "");
+
+        yield* fs.remove(path.join(cwd, ".git", "config.lock"));
+        const retried = yield* driver.createWorktree(input);
+        assert.deepEqual(retried.worktree, { path: input.path, refName: "feature/locked" });
+        assert.equal(yield* git(input.path, ["branch", "--show-current"]), "feature/locked");
+        assert.equal(
+          yield* git(cwd, ["config", "branch.feature/locked.gh-merge-base"]),
+          initialBranch,
+        );
+      }),
+    );
     it("parses checkout progress lines from git's stderr", () => {
       assert.deepStrictEqual(parseGitCheckoutProgressLine("Updating files:  78% (2104/2700)"), {
         percent: 78,

@@ -14,6 +14,7 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
@@ -44,6 +45,13 @@ import * as ServerConfig from "../config.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const gitProcesses = Semaphore.makeUnsafe(8);
+// Git takes `.git/config.lock` without waiting, so concurrent writers of one
+// repository's config fail outright: every new worktree records its merge base
+// there, and renaming a branch moves its config section. These writes take
+// milliseconds, so this server queues its own instead of racing them.
+const gitConfigWriters = Semaphore.makeUnsafe(1);
+const GIT_CONFIG_LOCKED_DETAIL =
+  "Another Git process holds the repository config lock (.git/config.lock). Retry once it finishes, or delete .git/config.lock if no Git process is running.";
 // `git worktree add` checks out the full tree, so on large repositories it can
 // take well beyond the default 30s (e.g. a 375k-file repo takes ~40s on an idle
 // machine). Give it generous headroom while still bounding a genuinely hung git.
@@ -480,6 +488,10 @@ function isMissingWorktreeStderr(stderr: string): boolean {
     normalized.includes("is not a working tree") ||
     normalized.includes("cannot remove working tree")
   );
+}
+
+function isConfigLockStderr(stderr: string): boolean {
+  return stderr.toLowerCase().includes("could not lock config file");
 }
 
 // Fetch stderr can contain remote credentials. Only fixed diagnoses may enter
@@ -1048,6 +1060,41 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     options: ExecuteGitOptions = {},
   ): Effect.Effect<void, GitCommandError> =>
     executeGit(operation, cwd, args, options).pipe(Effect.asVoid);
+
+  // A lock held by a Git process outside this server, such as an agent working
+  // in the main checkout, gets a brief retry before it is reported.
+  const writeConfigValue = (operation: string, cwd: string, key: string, value: string) => {
+    const args = ["config", key, value];
+    return gitConfigWriters
+      .withPermits(1)(
+        executeGitWithStableDiagnostics(operation, cwd, args, {
+          timeoutMs: 10_000,
+          allowNonZeroExit: true,
+        }),
+      )
+      .pipe(
+        Effect.flatMap((result) =>
+          result.exitCode === 0
+            ? Effect.void
+            : Effect.fail(
+                new GitCommandError({
+                  ...gitCommandContext({ operation, cwd, args }),
+                  detail: isConfigLockStderr(result.stderr)
+                    ? GIT_CONFIG_LOCKED_DETAIL
+                    : "git config failed",
+                  ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
+                  stdoutLength: result.stdout.length,
+                  stderrLength: result.stderr.length,
+                }),
+              ),
+        ),
+        Effect.retry({
+          while: (error) => error.detail === GIT_CONFIG_LOCKED_DETAIL,
+          times: 5,
+          schedule: Schedule.exponential("25 millis").pipe(Schedule.jittered),
+        }),
+      );
+  };
 
   const runGitStdout = (
     operation: string,
@@ -2233,11 +2280,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           true,
         ).pipe(Effect.map((stdout) => stdout.trim()));
         if (configuredMergeBase.length === 0) {
-          yield* runGit("GitVcsDriver.pushCurrentBranch.recordMergeBase", cwd, [
-            "config",
+          yield* writeConfigValue(
+            "GitVcsDriver.pushCurrentBranch.recordMergeBase",
+            cwd,
             `branch.${branch}.gh-merge-base`,
             currentUpstream.branchName,
-          ]);
+          );
         }
         yield* runGit(
           "GitVcsDriver.pushCurrentBranch.pushOwnBranch",
@@ -3305,11 +3353,34 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         remoteNames.toSorted((left, right) => right.length - left.length),
       );
       const baseBranch = parsedBaseRef?.branchName ?? input.baseRefName;
-      yield* runGit("GitVcsDriver.createWorktree.configureBaseRef", input.cwd, [
-        "config",
-        `branch.${input.newRefName}.gh-merge-base`,
+      const newRefName = input.newRefName;
+      yield* writeConfigValue(
+        "GitVcsDriver.createWorktree.configureBaseRef",
+        input.cwd,
+        `branch.${newRefName}.gh-merge-base`,
         baseBranch,
-      ]);
+      ).pipe(
+        // Undo the worktree and branch this call created, so a retry with the
+        // same branch and path is not refused by its leftovers.
+        Effect.tapError(() =>
+          removeWorktree({ cwd: input.cwd, path: worktreePath, force: true }).pipe(
+            Effect.andThen(
+              runGit("GitVcsDriver.createWorktree.deleteBranch", input.cwd, [
+                "branch",
+                "-D",
+                "--",
+                newRefName,
+              ]),
+            ),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Failed to undo a worktree whose base ref was not recorded", {
+                worktreePath,
+                cause,
+              }),
+            ),
+          ),
+        ),
+      );
     }
 
     return {
@@ -3641,14 +3712,18 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       ? input.newBranch
       : yield* resolveAvailableBranchName(input.cwd, input.newBranch);
 
-    yield* executeGit(
-      "GitVcsDriver.renameBranch",
-      input.cwd,
-      ["branch", "-m", "--", input.oldBranch, targetBranch],
-      {
-        timeoutMs: 10_000,
-        fallbackErrorDetail: "git branch rename failed",
-      },
+    // Renaming also moves the branch's config section, and Git reports a
+    // config lock only after it already renamed the ref.
+    yield* gitConfigWriters.withPermits(1)(
+      executeGit(
+        "GitVcsDriver.renameBranch",
+        input.cwd,
+        ["branch", "-m", "--", input.oldBranch, targetBranch],
+        {
+          timeoutMs: 10_000,
+          fallbackErrorDetail: "git branch rename failed",
+        },
+      ),
     );
 
     return { branch: targetBranch };
