@@ -279,6 +279,7 @@ Support repositories on the `jayleaton/t3code` fork and configured upstream repo
 MCP tools:
 
 - `t3_git_status`, `t3_get_diff`, `t3_apply_patch`
+- `t3_reclaim_worktree` (removes a finished thread's T3-managed checkout while keeping its binding; refuses with reasons, `dryRun` reports only)
 - `t3_create_branch`, `t3_commit_changes`
 - `t3_create_pr` (draft by default)
 - `t3_update_pr`, `t3_get_pr`, `t3_get_pr_checks`

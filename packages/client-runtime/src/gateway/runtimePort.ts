@@ -1235,6 +1235,15 @@ export function createGatewayRuntimePort(
               ),
             )) as unknown as Record<string, unknown>;
           }
+          if (input.operation === "worktree.reclaim") {
+            return (yield* registry.run(
+              environmentId,
+              request(WS_METHODS.vcsReclaimThreadWorktree, {
+                threadId: ThreadId.make(String(payload.threadId ?? "")),
+                ...(payload.dryRun === true ? { dryRun: true } : {}),
+              }),
+            )) as unknown as Record<string, unknown>;
+          }
           if (input.operation === "git.diff") {
             const rawThreadId = String(payload.threadId ?? "");
             const detail = yield* threadSnapshot(environmentId, ThreadId.make(rawThreadId));

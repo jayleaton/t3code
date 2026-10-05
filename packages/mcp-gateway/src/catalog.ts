@@ -574,6 +574,15 @@ export const TOOL_SPECS = {
     "Read the bounded thread diff.",
     { environmentId, threadId, ...optionalRequestContext },
   ],
+  t3_reclaim_worktree: [
+    "Free the disk used by a finished thread's T3-managed worktree. Removes the checkout while the thread keeps its history, branch and worktree binding; its next turn recreates the checkout from the branch. Refuses, listing every reason, while the thread or any child is working, another thread shares the checkout, a provider session or terminal is open there, or the checkout has uncommitted changes, ignored files that cannot be regenerated, unpushed commits or an unmerged branch. dryRun reports eligibility and allocated bytes without removing anything. Requires lifecycle scope, or read for dryRun.",
+    {
+      environmentId,
+      threadId,
+      dryRun: z.boolean().optional(),
+      ...optionalRequestContext,
+    },
+  ],
   t3_apply_patch: [
     "Apply a patch through the authoritative T3 runtime.",
     {
