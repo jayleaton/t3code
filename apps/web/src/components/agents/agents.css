@@ -351,7 +351,7 @@
   gap: 7px;
   font-size: 12px;
 }
-.agent-form input:not([type="checkbox"]),
+.agent-form input:not([type="checkbox"], [type="radio"]),
 .agent-form select,
 .agent-form textarea {
   width: 100%;
@@ -1001,47 +1001,82 @@
   flex-shrink: 0;
   white-space: nowrap;
 }
-.agents-new-chat-menu .agent-orb,
-.agents-new-chat-menu .agent-custom-icon {
-  width: 18px;
-  height: 18px;
+/* New chat dialog: agents and projects as radio cards, filled row by row. */
+.agent-choice-group {
+  margin-top: 18px;
+  min-width: 0;
 }
-.agents-new-chat-menu .agent-custom-icon svg {
-  width: 16px;
-  height: 16px;
+.agent-choice-group legend {
+  font-size: 12px;
+  margin-bottom: 7px;
 }
-.agents-new-chat-menu {
-  min-width: 220px;
-  max-width: 320px;
+.agent-form > .agent-choice-group {
+  margin-top: 0;
 }
-.agents-new-chat-menu [data-slot="menu-item"] {
-  align-items: flex-start;
+.agent-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px;
 }
-.agents-new-chat-option {
+.agent-choice-grid > .agent-choice-card {
   display: flex;
+  /* Overrides .agent-form label's column layout so long paths truncate. */
+  flex-direction: row;
   align-items: flex-start;
   gap: 8px;
   min-width: 0;
-  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  cursor: pointer;
 }
-.agents-new-chat-option > .agent-orb,
-.agents-new-chat-option > .agent-custom-icon {
+.agent-choice-card:hover {
+  background: var(--accent);
+}
+.agent-choice-card:has(:checked) {
+  border-color: var(--agent-color, var(--foreground));
+  background: color-mix(in srgb, var(--agent-color, var(--foreground)) 10%, var(--background));
+}
+.agent-choice-card:has(:focus-visible) {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.agent-choice-card:has(:disabled) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.agent-choice-card > .agent-orb,
+.agent-choice-card > .agent-custom-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
   margin-top: 1px;
 }
-.agents-new-chat-option-body {
+.agent-task-composer {
+  margin-top: 18px;
+}
+.agent-choice-card > .agent-custom-icon svg {
+  width: 16px;
+  height: 16px;
+}
+.agent-choice-body {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
   flex: 1;
 }
-.agents-new-chat-option-name {
-  white-space: nowrap;
-}
-.agents-new-chat-option-description {
+.agent-choice-name,
+.agent-choice-detail {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.agent-choice-name {
+  font-size: 13px;
+}
+.agent-choice-detail {
   color: var(--muted-foreground);
   font-size: 11px;
   line-height: 1.35;
