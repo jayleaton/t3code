@@ -13,6 +13,7 @@ import { useComposerDraftStore } from "../../composerDraftStore";
 const state = vi.hoisted(() => ({
   environments: [] as unknown[],
   projects: [] as unknown[],
+  threads: [] as unknown[],
   createThread: vi.fn(async () => ({})),
 }));
 const navigate = vi.hoisted(() => vi.fn());
@@ -22,7 +23,10 @@ vi.mock("../../connection/runtime", () => ({ connectionAtomRuntime: {} }));
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({ environments: state.environments }),
 }));
-vi.mock("../../state/entities", () => ({ useProjects: () => state.projects }));
+vi.mock("../../state/entities", () => ({
+  useProjects: () => state.projects,
+  useThreadShells: () => state.threads,
+}));
 vi.mock("@t3tools/client-runtime/gateway", () => ({
   createGatewayRuntimePortFromContext: () => ({ createThread: state.createThread }),
   resolveGatewayProfileModelSelection: () => ({ instanceId: "codex", model: "gpt-5" }),
@@ -37,8 +41,8 @@ vi.mock("../ui/dialog", () => ({
 }));
 import { AgentTaskDialog } from "./AgentTaskDialog";
 const profile: McpGatewayProfile = {
-  profileId: "agent",
-  name: "Agent",
+  profileId: "captain",
+  name: "Captain",
   revision: 1,
   modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
   runtimeMode: "approval-required",
@@ -62,16 +66,35 @@ const root = createRoot(container);
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
 const onClose = vi.fn();
+const cody: McpGatewayProfile = { ...profile, profileId: "cody", name: "Cody" };
+const profiles = [cody, profile];
+// The hook mocks are not subscriptions, so each render passes a fresh onClose
+// to get past the compiler's memoized form, as a store update would.
 const render = () =>
   act(async () => {
-    root.render(<AgentTaskDialog profile={profile} onClose={onClose} />);
+    root.render(
+      <AgentTaskDialog profiles={profiles} orderedProfiles={profiles} onClose={() => onClose()} />,
+    );
   });
-const select = async (index: number, value: string) =>
+const machineSelect = () => container.querySelector("select")!;
+const selectMachine = async (value: string) =>
   act(async () => {
-    const element = container.querySelectorAll("select")[index]!;
+    const element = machineSelect();
     element.value = value;
     element.dispatchEvent(new Event("change", { bubbles: true }));
   });
+const choose = async (group: "agent" | "project", value: string) =>
+  act(async () => {
+    container
+      .querySelector<HTMLInputElement>(`input[name="agent-task-${group}"][value="${value}"]`)!
+      .click();
+  });
+const projectCards = () =>
+  Array.from(container.querySelectorAll('input[name="agent-task-project"]')).map(
+    (input) => input.closest("label")!.querySelector(".agent-choice-name")!.textContent,
+  );
+const checkedProject = () =>
+  container.querySelector<HTMLInputElement>('input[name="agent-task-project"]:checked')?.value;
 const submit = () =>
   act(async () => {
     Array.from(container.querySelectorAll("button"))
@@ -80,6 +103,8 @@ const submit = () =>
   });
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
+  state.threads = [];
   useComposerDraftStore.setState({
     draftsByThreadKey: {},
     draftThreadsByThreadKey: {},
@@ -103,8 +128,8 @@ afterEach(async () => {
 describe("Agents new chat workspace", () => {
   it("keeps the agent permission mode explicit instead of inheriting the project default", async () => {
     await render();
-    await select(0, mac);
-    await select(1, t3code);
+    await selectMachine(mac);
+    await choose("project", t3code);
     const drafts = Object.values(useComposerDraftStore.getState().draftsByThreadKey);
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({
@@ -114,13 +139,13 @@ describe("Agents new chat workspace", () => {
   });
   it("keeps disconnected machines visible and prevents submission if the selected machine disconnects", async () => {
     await render();
-    await select(0, mac);
-    await select(1, t3code);
+    await selectMachine(mac);
+    await choose("project", t3code);
     state.environments = [
       { environmentId: mac, label: "MacBook", connection: { phase: "offline" } },
     ];
     await render();
-    const option = container.querySelectorAll("select")[0]!.options[1]!;
+    const option = machineSelect().options[1]!;
     expect(option.text).toContain("MacBook — Not connected");
     expect(option.disabled).toBe(true);
     expect(container.textContent).toContain("Settings → Connections");
@@ -129,11 +154,9 @@ describe("Agents new chat workspace", () => {
   });
   it("only lists the chosen machine's projects and sends the explicit project despite updates", async () => {
     await render();
-    await select(0, mac);
-    expect(
-      Array.from(container.querySelectorAll("select")[1]!.options).map((option) => option.text),
-    ).toEqual(["Select project", "buildthings", "t3code"]);
-    await select(1, t3code);
+    await selectMachine(mac);
+    expect(projectCards()).toEqual(["buildthings", "t3code"]);
+    await choose("project", t3code);
     state.projects = state.projects.toReversed();
     await render();
     expect(container.textContent).toContain("/projects/mac/t3code");
@@ -145,13 +168,13 @@ describe("Agents new chat workspace", () => {
   });
   it("requires a fresh project choice after switching machines", async () => {
     await render();
-    await select(0, mac);
-    await select(1, t3code);
-    await select(0, windows);
+    await selectMachine(mac);
+    await choose("project", t3code);
+    await selectMachine(windows);
     await submit();
     expect(state.createThread).not.toHaveBeenCalled();
-    expect(container.querySelectorAll("select")[1]!.value).toBe("");
-    await select(1, t3code);
+    expect(checkedProject()).toBeUndefined();
+    await choose("project", t3code);
     await submit();
     expect(state.createThread).toHaveBeenCalledWith(
       expect.objectContaining({ environmentId: windows, projectId: t3code }),
@@ -167,8 +190,8 @@ describe("Agents new chat workspace", () => {
       },
     ];
     await render();
-    await select(0, mac);
-    await select(1, t3code);
+    await selectMachine(mac);
+    await choose("project", t3code);
     expect(container.textContent).not.toContain("Standard composer");
     expect(container.textContent).toContain("Update this machine");
     await submit();
@@ -178,12 +201,81 @@ describe("Agents new chat workspace", () => {
   });
   it("does not fall back when the selected project disappears", async () => {
     await render();
-    await select(0, mac);
-    await select(1, t3code);
+    await selectMachine(mac);
+    await choose("project", t3code);
     state.projects = [makeProject(mac, buildthings, "buildthings")];
     await render();
     await submit();
     expect(state.createThread).not.toHaveBeenCalled();
-    expect(container.querySelectorAll("select")[1]!.value).toBe("");
+    expect(checkedProject()).toBeUndefined();
+  });
+  it("opens on Captain and the machine the last new chat was created on", async () => {
+    localStorage.setItem("t3code:agents:new-chat-machine", JSON.stringify(windows));
+    await render();
+    expect(container.querySelector("h2")!.textContent).toBe("New chat · Captain");
+    expect(machineSelect().value).toBe(windows);
+    await choose("project", t3code);
+    await submit();
+    expect(state.createThread).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environmentId: windows,
+        projectId: t3code,
+        profileSelection: expect.objectContaining({ profileId: "captain" }),
+      }),
+    );
+  });
+  it("remembers the machine a chat was created on and falls back when it is unavailable", async () => {
+    await render();
+    expect(machineSelect().value).toBe(mac);
+    await selectMachine(windows);
+    await choose("project", t3code);
+    await submit();
+    expect(JSON.parse(localStorage.getItem("t3code:agents:new-chat-machine")!)).toBe(windows);
+    state.environments = state.environments.slice(0, 1);
+    await act(async () => root.render(null));
+    await render();
+    expect(machineSelect().value).toBe(mac);
+  });
+  it("keeps a defaulted machine once a project is chosen, even if it disconnects", async () => {
+    await render();
+    await choose("project", t3code);
+    state.environments = [
+      { environmentId: mac, label: "mac", connection: { phase: "offline" } },
+      ...state.environments.slice(1),
+    ];
+    await render();
+    await submit();
+    expect(state.createThread).not.toHaveBeenCalled();
+    expect(machineSelect().value).toBe(mac);
+  });
+  it("orders project cards by when a chat was last created in them", async () => {
+    state.threads = [
+      {
+        environmentId: mac,
+        projectId: buildthings,
+        createdAt: "2026-10-01T00:00:00.000Z",
+        parentThreadId: null,
+        lineage: {},
+      },
+      {
+        environmentId: mac,
+        projectId: t3code,
+        createdAt: "2026-10-05T00:00:00.000Z",
+        parentThreadId: null,
+        lineage: {},
+      },
+    ];
+    await render();
+    expect(projectCards()).toEqual(["t3code", "buildthings"]);
+  });
+  it("starts the chat with whichever agent card is chosen", async () => {
+    await render();
+    await choose("agent", "cody");
+    expect(container.querySelector("h2")!.textContent).toBe("New chat · Cody");
+    await choose("project", buildthings);
+    await submit();
+    expect(state.createThread).toHaveBeenCalledWith(
+      expect.objectContaining({ profileSelection: expect.objectContaining({ profileId: "cody" }) }),
+    );
   });
 });

@@ -186,7 +186,7 @@ export function AgentsBoard() {
   const sidebarThreads = useMemo(() => selectAgentSidebarThreads(threads), [threads]);
   const ready = useAllEnvironmentShellsBootstrapped();
   const [editor, setEditor] = useState<McpGatewayProfile | "new" | null>(null);
-  const [task, setTask] = useState<McpGatewayProfile | null>(null);
+  const [newChatOpen, setNewChatOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [savedFilter, setFilter] = useLocalStorage("t3code:agents:filter", null, agentFilterSchema);
   const filter = profiles.some((profile) => profile.profileId === savedFilter) ? savedFilter : null;
@@ -475,40 +475,16 @@ export function AgentsBoard() {
               </h2>
               <p>Active & unread</p>
             </div>
-            <Menu>
-              <MenuTrigger
-                className="agent-primary agents-new-chat"
-                aria-label="New chat"
-                disabled={!available || orderedProfiles.length === 0}
-              >
-                <PlusIcon size={14} />
-                New chat
-              </MenuTrigger>
-              <MenuPopup align="end" className="agents-new-chat-menu">
-                {orderedProfiles.map((profile) => (
-                  <MenuItem
-                    key={profile.profileId}
-                    disabled={profile.runtimeMode === "read-only"}
-                    onClick={() => setTask(profile)}
-                  >
-                    <span
-                      className="agents-new-chat-option"
-                      style={{ "--agent-color": agentColorFor(profile, profiles) } as CSSProperties}
-                    >
-                      <AgentIcon icon={profile.icon} />
-                      <span className="agents-new-chat-option-body">
-                        <span className="agents-new-chat-option-name">{profile.name}</span>
-                        {profile.description && (
-                          <span className="agents-new-chat-option-description">
-                            {profile.description}
-                          </span>
-                        )}
-                      </span>
-                    </span>
-                  </MenuItem>
-                ))}
-              </MenuPopup>
-            </Menu>
+            <button
+              type="button"
+              className="agent-primary agents-new-chat"
+              aria-haspopup="dialog"
+              disabled={!available || orderedProfiles.length === 0}
+              onClick={() => setNewChatOpen(true)}
+            >
+              <PlusIcon size={14} />
+              New chat
+            </button>
           </header>
           {visible.length === 0 && pinned.length === 0 && (
             <p role="status" className="agent-empty">
@@ -560,7 +536,13 @@ export function AgentsBoard() {
           }
         />
       )}
-      {task && <AgentTaskDialog profile={task} onClose={() => setTask(null)} />}
+      {newChatOpen && (
+        <AgentTaskDialog
+          profiles={profiles}
+          orderedProfiles={orderedProfiles}
+          onClose={() => setNewChatOpen(false)}
+        />
+      )}
       {deleting && (
         <Dialog
           open
