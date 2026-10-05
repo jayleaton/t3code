@@ -113,8 +113,8 @@ Existing prompts for deleting a worktree manually remain available when this pol
 To free a finished thread's worktree without enabling a policy, ask an agent connected through
 T3's MCP tools to reclaim it (`t3_reclaim_worktree`; a dry run only reports). The thread keeps
 its history and branch, and its next turn recreates the checkout. Reclaiming also requires the
-commits to be pushed and merged, or a merged linked pull request; dependency installs and build
-output may be removed, other ignored files are kept. Every reason a checkout is kept is reported.
+latest commit to be included in the remote default branch, so squash-merged branches are kept;
+dependency installs and build output may be removed, other ignored files are kept. Every reason a checkout is kept is reported.
 
 Browser captures and rotated logs have separate retention periods. Expired capture links stop
 working. Current logs, message attachments, and browser profiles are kept.

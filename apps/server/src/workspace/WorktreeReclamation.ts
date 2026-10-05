@@ -338,16 +338,13 @@ export const make = Effect.fn("WorktreeReclamation.make")(function* (runtime: Re
         message: `Commit ${head.slice(0, 12)} is not on any remote branch.`,
       });
     }
-    const mergedPullRequest = (thread.pullRequests ?? []).some(
-      (link) =>
-        link.source !== "stack-dismissed" &&
-        link.snapshot?.state === "merged" &&
-        link.snapshot.headBranch === thread.branch,
-    );
-    if (!mergedPullRequest && !containing.some((ref) => defaultRefs.has(ref))) {
+    // Merge evidence must name this exact commit. Pull request snapshots carry no
+    // head commit, so a merged link cannot prove a later push was merged; squash
+    // merges are refused here and left to the inactivity cleanup policy.
+    if (!containing.some((ref) => defaultRefs.has(ref))) {
       refusals.push({
         code: "unmerged",
-        message: `Branch '${thread.branch}' is not merged into a remote default branch and has no merged pull request.`,
+        message: `Commit ${head.slice(0, 12)} on '${thread.branch}' is not in a remote default branch. Squash-merged branches cannot be proven merged.`,
       });
     }
     return done(refusals, { worktreePath, projectRoot, head });

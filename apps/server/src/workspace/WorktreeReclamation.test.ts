@@ -255,7 +255,8 @@ describe("WorktreeReclamation", () => {
         "unmerged",
       ]);
 
-      // A squash-merged pull request for the bound branch counts as merged.
+      // A merged pull request for the branch is not proof for this HEAD: its snapshot has no
+      // head commit, and this commit was pushed after the earlier merge.
       updateThread({
         pullRequests: [
           {
@@ -278,9 +279,10 @@ describe("WorktreeReclamation", () => {
           },
         ],
       });
-      expect(yield* service.reclaim({ threadId, dryRun: true })).toMatchObject({
-        status: "eligible",
-      });
+      const stale = yield* service.reclaim({ threadId });
+      expect(stale.status).toBe("refused");
+      expect(codes(stale.refusals)).toEqual(["unmerged"]);
+      expect(NodeFS.existsSync(fixture.worktree)).toBe(true);
     }).pipe(Effect.scoped, Effect.provide(TestLayer)),
   );
 
