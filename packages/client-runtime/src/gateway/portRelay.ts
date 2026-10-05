@@ -1,6 +1,8 @@
-import { EnvironmentId, WS_METHODS } from "@t3tools/contracts";
+import { EnvironmentId, toMcpGatewayRelayJson, WS_METHODS } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import type * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { subscribeDynamicWithSession } from "../rpc/client.ts";
@@ -65,12 +67,13 @@ export function serveGatewayPortRelays<R>(
             Effect.sync(() => {
               // Calls run concurrently; a slow handoff must not hold up a listing.
               void answerGatewayPortCall(port, granted, event.method, event.args)
-                .then(
-                  (result) => ({ result }),
-                  (error: unknown) => ({
-                    error: error instanceof Error ? error.message : String(error),
-                  }),
-                )
+                .then((result) => {
+                  const json = toMcpGatewayRelayJson(result);
+                  return json === undefined ? {} : { result: json };
+                })
+                .catch((error: unknown) => ({
+                  error: error instanceof Error ? error.message : String(error),
+                }))
                 .then((outcome) =>
                   Effect.runPromise(
                     session.client[WS_METHODS.mcpGatewayRespond]({
@@ -87,9 +90,18 @@ export function serveGatewayPortRelays<R>(
           ),
         );
     });
-    void Effect.runPromiseWith(context)(serve, { signal: abort.signal }).catch((error) => {
-      if (!abort.signal.aborted) onFailure(error);
-    });
+    // A failed subscription is reported and replaced; otherwise this environment's agents lose
+    // every other granted environment until the gateway is restarted.
+    const supervised = Effect.sandbox(serve).pipe(
+      Effect.tapError((cause) => Effect.sync(() => onFailure(Cause.squash(cause)))),
+      Effect.retry({
+        schedule: Schedule.spaced("2 seconds"),
+        while: (cause) => !Cause.hasInterruptsOnly(cause),
+      }),
+    );
+    void Effect.runPromiseWith(context)(supervised, { signal: abort.signal }).catch(
+      () => undefined,
+    );
   }
   return () => abort.abort();
 }

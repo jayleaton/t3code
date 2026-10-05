@@ -29,3 +29,13 @@ export const McpGatewayRelayResponse = Schema.Struct({
   error: Schema.optionalKey(Schema.String),
 });
 export type McpGatewayRelayResponse = typeof McpGatewayRelayResponse.Type;
+
+/**
+ * Relayed args and results are arbitrary runtime port values, but the relay encodes them as
+ * JSON and rejects `undefined` anywhere inside them. One optional field left `undefined` would
+ * otherwise fail the app's whole relay stream. Drops it the way `JSON.stringify` does; throws
+ * only for values JSON cannot carry at all, such as cycles or bigints.
+ */
+export function toMcpGatewayRelayJson(value: unknown): unknown {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}

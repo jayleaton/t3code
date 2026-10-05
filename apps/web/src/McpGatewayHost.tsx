@@ -138,10 +138,10 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
           // Agents in granted environments' chats reach the other granted environments
           // through this app, under the same grants as the gateway.
           if (state === "running" && !stopRelays) {
-            stopRelays = serveGatewayPortRelays(value.value, port, configuration.grants, () => {
-              console.error("MCP gateway relay failed");
-              publishMcpGatewayStatus("degraded");
-            });
+            // A relay resubscribes on its own and says nothing about the local bridge's health.
+            stopRelays = serveGatewayPortRelays(value.value, port, configuration.grants, (error) =>
+              console.error("MCP gateway relay failed", error),
+            );
           } else if (state === "degraded" || state === "disabled") {
             stopRelays?.();
             stopRelays = undefined;
