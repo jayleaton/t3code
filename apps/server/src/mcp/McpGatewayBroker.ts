@@ -1,6 +1,7 @@
 import type * as Cause from "effect/Cause";
 import {
   McpGatewayUnavailableError,
+  toMcpGatewayRelayJson,
   type McpGatewayRelayEvent,
   type McpGatewayRelayGrants,
   type McpGatewayRelayResponse,
@@ -88,6 +89,12 @@ export const make = Effect.gen(function* () {
         ),
       );
     }
+    // Omitted trailing arguments stay omitted rather than arriving as null.
+    const sent = args.slice(0, args.findLastIndex((arg) => arg !== undefined) + 1);
+    const relayedArgs = yield* Effect.try({
+      try: () => toMcpGatewayRelayJson(sent) as ReadonlyArray<unknown>,
+      catch: () => unavailable(`The arguments of ${method} cannot be relayed to a T3 app.`),
+    });
     const invocationId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
     const deferred = yield* Deferred.make<unknown, McpGatewayUnavailableError>();
     pending.set(invocationId, { host, deferred });
@@ -97,7 +104,7 @@ export const make = Effect.gen(function* () {
         connectionId: host.connectionId,
         invocationId,
         method,
-        args,
+        args: relayedArgs,
       });
       return yield* Deferred.await(deferred);
     }).pipe(
