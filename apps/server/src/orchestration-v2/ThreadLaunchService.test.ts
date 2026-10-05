@@ -1615,6 +1615,75 @@ it.effect("removes a worktree that failed before the thread recorded it", () => 
   }).pipe(Effect.provide(harness.layer));
 });
 
+it.effect("retries a failed checkout with its original branch instead of the root", () => {
+  let checkoutFailures = 1;
+  const harness = makeHarness({
+    createWorktree: (input, options) =>
+      checkoutFailures-- > 0
+        ? (options?.progress?.onWorktreeClaimed?.("/repo-worktrees/feature") ?? Effect.void).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new GitCommandError({
+                  operation: "GitVcsDriver.createWorktree.configureBaseRef",
+                  command: "git",
+                  cwd: project.workspaceRoot,
+                  detail:
+                    "Another Git process holds the repository config lock (.git/config.lock).",
+                  exitCode: 255,
+                }),
+              ),
+            ),
+          )
+        : Effect.succeed({
+            worktree: { path: "/repo-worktrees/feature", refName: input.newRefName! },
+          }),
+  });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const outbox = yield* EffectOutbox.EffectOutboxV2;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const launched = yield* launches.launch(
+      launchInput({
+        command: "command:launch:checkout-retry",
+        thread: "thread:launch:checkout-retry",
+        message: "Child task",
+        workspace: { type: "worktree", baseRef: "main", branch: "feature/child" },
+      }),
+    );
+    yield* waitUntil(() =>
+      threads
+        .getThreadProjection(launched.threadId)
+        .pipe(Effect.map((projection) => projection.runs[0]?.status === "failed")),
+    );
+    const failed = yield* threads.getThreadProjection(launched.threadId);
+    assert.match(
+      failed.turnItems.find((item) => item.type === "error")?.failure.message ?? "",
+      /createWorktree\.configureBaseRef.*\.git\/config\.lock/u,
+    );
+
+    yield* launches.retryPreparation({
+      commandId: CommandId.make("command:launch:checkout-retry:1"),
+      threadId: launched.threadId,
+      runId: failed.runs[0]!.id,
+    });
+    yield* waitUntil(() =>
+      outbox
+        .listByCommandId(CommandId.make("command:launch:checkout-retry:1:release"))
+        .pipe(Effect.map((effects) => effects.length === 1)),
+    );
+    const retried = yield* threads.getThreadProjection(launched.threadId);
+    assert.deepEqual(
+      harness.createWorktree.mock.calls.map(([input]) => [input.newRefName, input.baseRefName]),
+      [
+        ["feature/child", "main"],
+        ["feature/child", "main"],
+      ],
+    );
+    assert.equal(retried.thread.branch, "feature/child");
+    assert.equal(retried.thread.worktreePath, "/repo-worktrees/feature");
+  }).pipe(Effect.provide(harness.layer));
+});
+
 it.effect.each(["worktree", "setup"] as const)(
   "%s failure keeps the thread and message visible and emits failure items",
   (failurePoint) =>
