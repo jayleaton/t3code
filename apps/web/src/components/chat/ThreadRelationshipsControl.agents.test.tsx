@@ -31,7 +31,7 @@ vi.mock("../ui/tooltip", () => ({
   TooltipPopup: ({ children }: { children: ReactNode }) => (state.showTooltips ? children : null),
 }));
 
-import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
+import { ThreadChildChatsPanel, ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 
 let renderer: ReactTestRenderer;
 
@@ -594,4 +594,70 @@ it("lists subagents in Lineage with live statuses and collapsed previous work, n
   );
   expect(text()).not.toContain("Previous Cody");
   expect(text()).toContain("Waiting Cody");
+});
+
+it("lists a child chat running on another environment and opens it there", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const captainEnvironment = EnvironmentId.make("machine-a");
+  const workerEnvironment = EnvironmentId.make("machine-b");
+  const shell = (
+    environmentId: EnvironmentId,
+    id: string,
+    link: { parentThreadId: string; parentEnvironmentId: EnvironmentId | null } | null,
+  ) => {
+    const source = {
+      id,
+      title: id,
+      status: "running",
+      lineage: { parentThreadId: null, relationshipToParent: null },
+    };
+    return {
+      environmentId,
+      id,
+      title: id,
+      createdAt: "2026-10-05T00:00:00.000Z",
+      settledAt: null,
+      lineage: source.lineage,
+      parentThreadId: link?.parentThreadId ?? null,
+      parentEnvironmentId: link?.parentEnvironmentId ?? null,
+      ...(link ? { parentRelationship: "child" } : {}),
+      source,
+    };
+  };
+  state.shells = [
+    shell(captainEnvironment, "captain", null),
+    shell(captainEnvironment, "local worker", {
+      parentThreadId: "captain",
+      parentEnvironmentId: null,
+    }),
+    shell(workerEnvironment, "remote worker", {
+      parentThreadId: "captain",
+      parentEnvironmentId: captainEnvironment,
+    }),
+    // Machine B's own "captain" is a different chat.
+    shell(workerEnvironment, "other machine child", {
+      parentThreadId: "captain",
+      parentEnvironmentId: null,
+    }),
+  ];
+  await act(async () => {
+    renderer = create(
+      <ThreadChildChatsPanel
+        environmentId={captainEnvironment}
+        threadId={ThreadId.make("captain")}
+      />,
+    );
+  });
+  const rows = renderer.root.findAll(
+    (node) => typeof node.type === "string" && node.props["aria-label"]?.endsWith(" Running"),
+  );
+  expect(rows.map((row) => row.props["aria-label"])).toEqual([
+    "local worker Running",
+    "remote worker Running",
+  ]);
+  await act(async () => rows[1]!.props.onClick());
+  expect(state.navigate).toHaveBeenLastCalledWith({
+    to: "/$environmentId/$threadId",
+    params: { environmentId: workerEnvironment, threadId: "remote worker" },
+  });
 });

@@ -204,21 +204,20 @@ export function ThreadChildChatsPanel(props: {
   const navigate = useNavigate();
   const threadShells = useThreadShells();
   const [visibleCount, setVisibleCount] = useState(THREAD_LINEAGE_INITIAL_COUNT);
+  // Shells from every environment: a child on another machine nests here too.
   const children = useMemo(
     () =>
-      threadChildChats(
-        threadShells
-          .filter((thread) => thread.environmentId === props.environmentId)
-          .map((thread) => thread.source),
-        props.threadId,
-      ),
+      threadChildChats(threadShells, {
+        environmentId: props.environmentId,
+        threadId: props.threadId,
+      }),
     [props.environmentId, props.threadId, threadShells],
   );
   if (children.length === 0) return null;
   const { visibleRows, hiddenCount } = resolveThreadLineageWindow(children, visibleCount);
-  const working = children.filter((child) =>
+  const working = children.filter(({ source }) =>
     ["preparing", "starting", "running", "waiting"].includes(
-      child.activityRunStatus ?? child.status,
+      source.activityRunStatus ?? source.status,
     ),
   ).length;
   return (
@@ -232,11 +231,17 @@ export function ThreadChildChatsPanel(props: {
         onShowMore={() => setVisibleCount((count) => count + THREAD_LINEAGE_PAGE_COUNT)}
       >
         {visibleRows.map((child) => {
-          const status = child.settledAt != null ? null : (child.activityRunStatus ?? child.status);
+          const status =
+            child.settledAt != null
+              ? null
+              : (child.source.activityRunStatus ?? child.source.status);
           const statusLabel =
             child.settledAt != null ? "Settled" : threadRelationshipStatusLabel(status);
           return (
-            <li key={child.id} className="group flex h-8 items-center rounded-lg">
+            <li
+              key={scopedThreadKey(scopeThreadRef(child.environmentId, child.id))}
+              className="group flex h-8 items-center rounded-lg"
+            >
               <ThreadDetailsControl
                 size="sm"
                 variant="ghost"
@@ -245,7 +250,7 @@ export function ThreadChildChatsPanel(props: {
                 onClick={() =>
                   void navigate({
                     to: "/$environmentId/$threadId",
-                    params: buildThreadRouteParams(scopeThreadRef(props.environmentId, child.id)),
+                    params: buildThreadRouteParams(scopeThreadRef(child.environmentId, child.id)),
                   })
                 }
               >

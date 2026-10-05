@@ -80,23 +80,77 @@ describe("thread relationships", () => {
     });
 
     it("lists a parent's children, oldest first, and follows re-parenting", () => {
-      expect(threadChildChats(fleet as never, captain).map((thread) => thread.id)).toEqual([
-        cody,
-        doug,
-        randy,
+      const local = "local";
+      // Shells as the client holds them: scoped to an environment, ISO dates.
+      const scoped = (environmentId: string, thread: ReturnType<typeof shell>) => ({
+        ...thread,
+        environmentId,
+        parentThreadId: thread.parentThreadId ?? null,
+        parentEnvironmentId: thread.parentEnvironmentId ?? null,
+        createdAt: DateTime.formatIso(thread.createdAt),
+      });
+      const childIds = (threads: ReadonlyArray<object>, environmentId: string, id: ThreadId) =>
+        threadChildChats(threads as never, {
+          environmentId: environmentId as never,
+          threadId: id,
+        }).map((thread) => `${thread.environmentId}:${thread.id}`);
+      const localFleet = fleet.map((thread) => scoped(local, thread));
+      expect(childIds(localFleet, local, captain)).toEqual([
+        "local:cody",
+        "local:doug",
+        "local:randy",
       ]);
       const moved = [
-        ...fleet.filter((thread) => thread.id !== doug),
-        shell(doug, { parentThreadId: cody, parentRelationship: "child" }),
+        ...localFleet.filter((thread) => thread.id !== doug),
+        scoped(local, shell(doug, { parentThreadId: cody, parentRelationship: "child" })),
       ];
-      expect(threadChildChats(moved as never, cody).map((thread) => thread.id)).toEqual([doug]);
+      expect(childIds(moved, local, cody)).toEqual(["local:doug"]);
       const detached = [
-        shell(captain),
-        shell(doug, { parentThreadId: null, parentRelationship: null }),
+        scoped(local, shell(captain)),
+        scoped(local, shell(doug, { parentThreadId: null, parentRelationship: null })),
       ];
-      expect(threadChildChats(detached as never, captain)).toEqual([]);
-      const remote = shell(doug, { parentThreadId: captain, parentEnvironmentId: "remote" });
-      expect(threadChildChats([shell(captain), remote] as never, captain)).toEqual([]);
+      expect(childIds(detached, local, captain)).toEqual([]);
+    });
+
+    it("lists a child chat on another environment under its parent, as the board nests it", () => {
+      const scoped = (environmentId: string, thread: ReturnType<typeof shell>) => ({
+        ...thread,
+        environmentId,
+        parentThreadId: thread.parentThreadId ?? null,
+        parentEnvironmentId: thread.parentEnvironmentId ?? null,
+        createdAt: DateTime.formatIso(thread.createdAt),
+      });
+      const threads = [
+        scoped("machine-a", shell(captain)),
+        // Doug runs on machine B, parented to Captain on machine A.
+        scoped(
+          "machine-b",
+          shell(doug, {
+            parentThreadId: captain,
+            parentEnvironmentId: "machine-a",
+            parentRelationship: "child",
+          }),
+        ),
+        // Same thread id on machine B without a remote parent is B's own child.
+        scoped("machine-b", shell(cody, { parentThreadId: captain, parentRelationship: "child" })),
+        // A remote subagent link is never a child chat.
+        scoped(
+          "machine-b",
+          shell(helper, {
+            parentThreadId: captain,
+            parentEnvironmentId: "machine-a",
+            parentRelationship: "subagent",
+            spawnedBy: captain,
+          }),
+        ),
+      ];
+      const childIds = (environmentId: string) =>
+        threadChildChats(threads as never, {
+          environmentId: environmentId as never,
+          threadId: captain,
+        }).map((thread) => `${thread.environmentId}:${thread.id}`);
+      expect(childIds("machine-a")).toEqual(["machine-b:doug"]);
+      expect(childIds("machine-b")).toEqual(["machine-b:cody"]);
     });
   });
 
