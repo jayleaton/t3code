@@ -258,6 +258,43 @@ describe("age settlement", () => {
     },
   );
 
+  it("keeps a card waiting on a watched pull request until the watch ends", () => {
+    const link = {
+      host: "github.com",
+      repository: "pingdotgg/t3code",
+      number: 7,
+      url: "https://github.com/pingdotgg/t3code/pull/7",
+      source: "agent" as const,
+      linkedAt: "2026-06-01T00:00:00.000Z",
+      snapshot: null,
+      stack: null,
+    };
+    const watch = {
+      startedAt: "2026-06-01T00:00:00.000Z",
+      headSha: null,
+      failedChecks: [],
+      passed: false,
+      remarksThrough: "2026-06-01T00:00:00.000Z",
+      remarkIds: [],
+      conflicting: false,
+      wakes: 0,
+    };
+    const settleAt = (pullRequests: SettlementShell["pullRequests"]) =>
+      AutoSettlement.resolveAutoSettlementAt({
+        thread: shell({
+          status: "completed",
+          latestRunCompletedAt: at(-10 * DAY_MS),
+          pullRequests,
+        }),
+        nowMs: NOW_MS,
+        autoSettleAfterDays: 3,
+      });
+    expect(settleAt([{ ...link, watch }])).toBeNull();
+    // A dismissed stack member's leftover watch is not checked, so it holds nothing open.
+    expect(settleAt([{ ...link, source: "stack-dismissed", watch }])).not.toBeNull();
+    expect(settleAt([link])).not.toBeNull();
+  });
+
   it("keeps finished cards unsettled for the full period, including the boundary", () => {
     const thread = shell({ latestRunCompletedAt: at(-3 * DAY_MS) });
     expect(

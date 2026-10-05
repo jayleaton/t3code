@@ -8,6 +8,7 @@ import {
 import {
   normalizeThreadPullRequestKey,
   threadPullRequestKeyOf,
+  threadPullRequestWatchesSuspended,
   visibleThreadPullRequests,
 } from "@t3tools/shared/threadPullRequests";
 import * as Cause from "effect/Cause";
@@ -60,8 +61,9 @@ function watchesEqual(left: ThreadPullRequestWatch, right: ThreadPullRequestWatc
 /**
  * Wakes a thread's agent when a pull request it watches (`watch_pull_request`) needs a look:
  * checks finished on the head commit, someone else commented, or the branch started to
- * conflict. One pass a minute reads each watched pull request; settled threads wait until
- * they are active again, and a merged or closed pull request ends its watch.
+ * conflict. One pass a minute reads each watched pull request; a watch keeps its thread from
+ * settling through inactivity, a manually settled thread waits until it is active again, and a
+ * merged or closed pull request ends its watch.
  */
 export class PullRequestWatchReactor extends Context.Service<
   PullRequestWatchReactor,
@@ -131,7 +133,7 @@ export const make = Effect.gen(function* () {
     // A merged pull request cannot reopen, so its watch ends without a host read, even on a
     // settled thread. A closed one can, so the host decides below.
     if (link.snapshot?.state === "merged") return yield* record(target, null);
-    if (thread.settledOverride === "settled" || thread.settledAt !== null) return;
+    if (threadPullRequestWatchesSuspended(thread)) return;
 
     const reference = { projectId: thread.projectId, ...pullRequest };
     const read = yield* Effect.exit(

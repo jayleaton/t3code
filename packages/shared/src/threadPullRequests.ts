@@ -345,3 +345,30 @@ export function threadPullRequestsOf(thread: {
         },
       ];
 }
+
+/**
+ * Whether a settled or archived thread parks its pull request watches. The watch stays
+ * registered but is not checked and cannot wake the agent until the thread is active again.
+ */
+export function threadPullRequestWatchesSuspended(thread: {
+  readonly settledOverride: "settled" | "active" | null;
+  readonly settledAt: unknown;
+  readonly archivedAt?: unknown;
+}): boolean {
+  return (
+    thread.settledOverride === "settled" || thread.settledAt != null || thread.archivedAt != null
+  );
+}
+
+/**
+ * Whether the agent is still waiting on a watched pull request. Such a thread does not settle
+ * from inactivity, since that would silently suspend the watch; the watch itself ends when the
+ * pull request merges or closes, when it cannot be read, or on unwatch.
+ */
+export function threadHasPullRequestWatch(thread: {
+  readonly pullRequests?: ReadonlyArray<ThreadPullRequestLink> | undefined;
+}): boolean {
+  return visibleThreadPullRequests(thread.pullRequests ?? []).some(
+    (link) => link.watch !== undefined,
+  );
+}

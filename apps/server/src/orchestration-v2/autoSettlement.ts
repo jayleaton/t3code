@@ -1,5 +1,6 @@
 import type { OrchestrationV2ThreadShell } from "@t3tools/contracts";
 import { threadShellHasActiveWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import { threadHasPullRequestWatch } from "@t3tools/shared/threadPullRequests";
 import * as DateTime from "effect/DateTime";
 import type * as ProjectionStore from "./ProjectionStore.ts";
 
@@ -61,6 +62,9 @@ export function isAutoSettlementCandidate(
   // A live run, or background work that will wake the agent, is not
   // staleness. A dev server left running is: the agent is done.
   if (threadShellHasActiveWork(thread)) return false;
+  // Settling would suspend the watch, so the agent would never hear about its pull request.
+  // Manual settlement still parks it deliberately.
+  if (threadHasPullRequestWatch(thread)) return false;
   if (threadHasQueuedTurnStart(thread, nowMs)) return false;
   const snoozedUntilMs = toMillis(thread.snoozedUntil);
   if (snoozedUntilMs === null || snoozedUntilMs <= nowMs) return true;

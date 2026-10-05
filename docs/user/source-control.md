@@ -185,7 +185,9 @@ the thread is active, the server checks the pull request every minute and wakes 
 fails, the required checks pass, someone else comments or reviews, or the branch starts to conflict.
 Comments from your own account do not wake it. Watching ends when the pull request merges or closes,
 after 10 wakes in a row that bring only comments, or when the server cannot read the pull request for
-15 minutes. To start or stop it yourself, use the row menu in the **Linked pull requests** panel.
+15 minutes. A watched thread does not settle from inactivity. Settling it yourself pauses the watch
+until you un-settle the thread, and the panel shows the watch as paused. To start or stop it yourself,
+use the row menu in the **Linked pull requests** panel.
 
 Cross-repository links use a project on the same host. Azure DevOps reviews require a project checked
 out from the matching organization and repository.
