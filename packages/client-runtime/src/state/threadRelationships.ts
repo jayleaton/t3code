@@ -1,10 +1,14 @@
 import type {
+  EnvironmentId,
   OrchestrationV2ThreadProjection,
   OrchestrationV2ThreadShell,
   ThreadId,
 } from "@t3tools/contracts";
 import { isSubagentThread, threadParentRelationship } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+
+import { agentRunParentKey } from "./agents.ts";
+import type { EnvironmentThreadShell } from "./models.ts";
 
 /**
  * Edges of a thread's Lineage: where its context came from (forks, context
@@ -210,26 +214,35 @@ export function isParentThreadRelationship(
 }
 
 type ChildChatShell = Pick<
-  OrchestrationV2ThreadShell,
-  "id" | "parentThreadId" | "parentEnvironmentId" | "parentRelationship" | "lineage" | "createdAt"
+  EnvironmentThreadShell,
+  | "environmentId"
+  | "id"
+  | "parentThreadId"
+  | "parentEnvironmentId"
+  | "parentRelationship"
+  | "lineage"
+  | "createdAt"
 >;
 
-/** Child chats directly under `threadId` on the same environment, oldest first. */
+/**
+ * Child chats directly under `parent`, oldest first. A child may live on
+ * another environment than its parent, as on the Agents board, so callers pass
+ * shells from every environment.
+ */
 export function threadChildChats<T extends ChildChatShell>(
   threads: ReadonlyArray<T>,
-  threadId: ThreadId,
+  parent: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId },
 ): ReadonlyArray<T> {
+  const parentKey = `${parent.environmentId}:${parent.threadId}`;
   return threads
     .filter(
       (thread) =>
-        thread.parentThreadId === threadId &&
-        thread.parentEnvironmentId == null &&
-        thread.id !== threadId &&
-        threadParentRelationship(thread) === "child",
+        agentRunParentKey(thread) === parentKey && threadParentRelationship(thread) === "child",
     )
     .sort(
       (left, right) =>
-        (createdAtMillis(left.createdAt) ?? 0) - (createdAtMillis(right.createdAt) ?? 0) ||
+        left.createdAt.localeCompare(right.createdAt) ||
+        left.environmentId.localeCompare(right.environmentId) ||
         (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
     );
 }
