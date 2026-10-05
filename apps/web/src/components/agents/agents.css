@@ -1020,6 +1020,8 @@
 }
 .agent-choice-grid > .agent-choice-card {
   display: flex;
+  /* Overrides .agent-form label's column layout so long paths truncate. */
+  flex-direction: row;
   align-items: flex-start;
   gap: 8px;
   min-width: 0;
