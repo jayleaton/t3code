@@ -1,5 +1,41 @@
-import { isSubagentThread, type McpGatewayProfile } from "@t3tools/contracts";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import * as Schema from "effect/Schema";
+import type { McpGatewayProfile } from "@t3tools/contracts";
+
+/**
+ * What the user last picked when creating a chat from the New chat dialog.
+ * Only that dialog writes it, so chats agents, MCP tools or scheduled tasks
+ * create never reorder the cards. Stored per client.
+ */
+export const NewChatHistory = Schema.Struct({
+  machine: Schema.NullOr(Schema.String),
+  /** Last pick time per profileId. */
+  agents: Schema.Record(Schema.String, Schema.String),
+  /** Last pick time per `environmentId:projectId`. */
+  projects: Schema.Record(Schema.String, Schema.String),
+});
+export type NewChatHistory = typeof NewChatHistory.Type;
+
+export const emptyNewChatHistory: NewChatHistory = { machine: null, agents: {}, projects: {} };
+
+export const newChatProjectKey = (project: {
+  readonly environmentId: string;
+  readonly id: string;
+}) => `${project.environmentId}:${project.id}`;
+
+/** Records a created chat's agent, machine and project as the latest picks. */
+export function recordNewChat(
+  history: NewChatHistory,
+  chat: { profileId: string; environmentId: string; projectId: string; at: string },
+): NewChatHistory {
+  return {
+    machine: chat.environmentId,
+    agents: { ...history.agents, [chat.profileId]: chat.at },
+    projects: {
+      ...history.projects,
+      [newChatProjectKey({ environmentId: chat.environmentId, id: chat.projectId })]: chat.at,
+    },
+  };
+}
 
 /** Agent the New chat dialog starts on: Captain when it can start chats, else the first that can. */
 export function defaultNewChatProfile(
@@ -22,37 +58,35 @@ export function defaultNewChatMachine(
   return eligibleEnvironmentIds[0] ?? "";
 }
 
-/**
- * Orders projects by when a chat was last created in them, newest first, so
- * the project a user keeps starting chats in sits top-left. Messages and other
- * activity do not count, and neither do subagents an agent spawned itself.
- * Projects without chats follow alphabetically.
- */
-export function sortProjectsByNewChatRecency<
-  T extends { readonly environmentId: string; readonly id: string; readonly title: string },
->(
-  projects: readonly T[],
-  threads: ReadonlyArray<
-    Pick<
-      EnvironmentThreadShell,
-      | "environmentId"
-      | "projectId"
-      | "createdAt"
-      | "parentThreadId"
-      | "parentRelationship"
-      | "lineage"
-    >
-  >,
+/** Most recently picked first; never-picked agents keep their board order. */
+export function sortProfilesByNewChatPick<T extends Pick<McpGatewayProfile, "profileId">>(
+  profiles: readonly T[],
+  history: NewChatHistory,
 ): T[] {
-  const latest = new Map<string, string>();
-  for (const thread of threads) {
-    if (isSubagentThread(thread)) continue;
-    const key = `${thread.environmentId}:${thread.projectId}`;
-    const current = latest.get(key);
-    if (current === undefined || thread.createdAt > current) latest.set(key, thread.createdAt);
-  }
-  const createdAt = (project: T) => latest.get(`${project.environmentId}:${project.id}`) ?? "";
+  const pickedAt = (profile: T) => history.agents[profile.profileId] ?? "";
+  return profiles.toSorted((a, b) => pickedAt(b).localeCompare(pickedAt(a)));
+}
+
+/** Most recently picked first; never-picked projects follow alphabetically. */
+export function sortProjectsByNewChatPick<
+  T extends { readonly environmentId: string; readonly id: string; readonly title: string },
+>(projects: readonly T[], history: NewChatHistory): T[] {
+  const pickedAt = (project: T) => history.projects[newChatProjectKey(project)] ?? "";
   return projects.toSorted(
-    (a, b) => createdAt(b).localeCompare(createdAt(a)) || a.title.localeCompare(b.title),
+    (a, b) => pickedAt(b).localeCompare(pickedAt(a)) || a.title.localeCompare(b.title),
   );
+}
+
+/**
+ * The first `limit` choices while a grid is collapsed. A selection beyond them
+ * takes the last slot so the chosen card never hides behind Show more.
+ */
+export function collapsedNewChatChoices<T>(
+  items: readonly T[],
+  isSelected: (item: T) => boolean,
+  limit: number,
+): readonly T[] {
+  const visible = items.slice(0, limit);
+  const selected = items.slice(limit).find(isSelected);
+  return selected === undefined ? visible : [...visible.slice(0, limit - 1), selected];
 }

@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
-import { EnvironmentId, ProjectId, type McpGatewayProfile } from "@t3tools/contracts";
+import type { McpGatewayProfile } from "@t3tools/contracts";
 import {
+  collapsedNewChatChoices,
   defaultNewChatMachine,
   defaultNewChatProfile,
-  sortProjectsByNewChatRecency,
+  emptyNewChatHistory,
+  recordNewChat,
+  sortProfilesByNewChatPick,
+  sortProjectsByNewChatPick,
 } from "./agentNewChat.logic";
 
 const agent = (name: string, runtimeMode: McpGatewayProfile["runtimeMode"] = "full-access") =>
@@ -36,52 +40,55 @@ describe("defaultNewChatMachine", () => {
   });
 });
 
-describe("sortProjectsByNewChatRecency", () => {
+describe("new chat pick order", () => {
   const project = (id: string, environmentId = "mac") => ({ environmentId, id, title: id });
-  const thread = (
-    projectId: string,
-    createdAt: string,
-    extra: { environmentId?: string; parentRelationship?: "subagent" | "child" } = {},
-  ) => ({
-    environmentId: EnvironmentId.make(extra.environmentId ?? "mac"),
-    projectId: ProjectId.make(projectId),
-    createdAt,
-    parentThreadId: extra.parentRelationship ? ("parent" as never) : null,
-    parentRelationship: extra.parentRelationship ?? null,
-    lineage: {} as never,
-  });
+  const picks = [
+    { profileId: "cody", projectId: "lockpick", at: "2026-10-01T00:00:00.000Z" },
+    { profileId: "captain", projectId: "t3", at: "2026-09-01T00:00:00.000Z" },
+    { profileId: "doug", projectId: "sidebud", at: "2026-10-03T00:00:00.000Z" },
+    { profileId: "captain", projectId: "t3", at: "2026-10-05T00:00:00.000Z" },
+  ].reduce(
+    (history, pick) => recordNewChat(history, { ...pick, environmentId: "mac" }),
+    emptyNewChatHistory,
+  );
 
-  it("orders by the latest chat created in each project, then alphabetically", () => {
-    const sorted = sortProjectsByNewChatRecency(
-      [project("alpha"), project("lockpick"), project("sidebud"), project("t3"), project("zeta")],
-      [
-        thread("lockpick", "2026-10-01T00:00:00.000Z"),
-        thread("t3", "2026-09-01T00:00:00.000Z"),
-        thread("t3", "2026-10-05T00:00:00.000Z"),
-        thread("sidebud", "2026-10-03T00:00:00.000Z"),
-      ],
+  it("puts the most recently created project first, then the rest alphabetically", () => {
+    const sorted = sortProjectsByNewChatPick(
+      [project("zeta"), project("lockpick"), project("sidebud"), project("t3"), project("alpha")],
+      picks,
     );
     expect(sorted.map(({ id }) => id)).toEqual(["t3", "sidebud", "lockpick", "alpha", "zeta"]);
   });
-  it("ignores subagents and the same project id on another machine", () => {
-    const sorted = sortProjectsByNewChatRecency(
-      [project("lockpick"), project("t3")],
-      [
-        thread("lockpick", "2026-10-01T00:00:00.000Z"),
-        thread("t3", "2026-10-04T00:00:00.000Z", { parentRelationship: "subagent" }),
-        thread("t3", "2026-10-05T00:00:00.000Z", { environmentId: "windows" }),
-      ],
+  it("keeps the same project id on another machine separate", () => {
+    const sorted = sortProjectsByNewChatPick(
+      [project("alpha", "windows"), project("t3", "windows")],
+      picks,
     );
-    expect(sorted.map(({ id }) => id)).toEqual(["lockpick", "t3"]);
+    expect(sorted.map(({ id }) => id)).toEqual(["alpha", "t3"]);
   });
-  it("counts child chats an agent started as new chats", () => {
-    const sorted = sortProjectsByNewChatRecency(
-      [project("lockpick"), project("t3")],
-      [
-        thread("lockpick", "2026-10-01T00:00:00.000Z"),
-        thread("t3", "2026-10-04T00:00:00.000Z", { parentRelationship: "child" }),
-      ],
+  it("puts the most recently chosen agent first and keeps board order for the rest", () => {
+    const sorted = sortProfilesByNewChatPick(
+      ["reel", "doug", "alex", "captain", "cody"].map((profileId) => ({ profileId })),
+      picks,
     );
-    expect(sorted.map(({ id }) => id)).toEqual(["t3", "lockpick"]);
+    expect(sorted.map(({ profileId }) => profileId)).toEqual([
+      "captain",
+      "doug",
+      "cody",
+      "reel",
+      "alex",
+    ]);
+    expect(picks.machine).toBe("mac");
+  });
+});
+
+describe("collapsedNewChatChoices", () => {
+  const items = ["a", "b", "c", "d", "e", "f"];
+  it("shows the first four", () => {
+    expect(collapsedNewChatChoices(items, () => false, 4)).toEqual(["a", "b", "c", "d"]);
+  });
+  it("keeps a selection beyond them visible in the last slot", () => {
+    expect(collapsedNewChatChoices(items, (item) => item === "f", 4)).toEqual(["a", "b", "c", "f"]);
+    expect(collapsedNewChatChoices(items, (item) => item === "b", 4)).toEqual(["a", "b", "c", "d"]);
   });
 });

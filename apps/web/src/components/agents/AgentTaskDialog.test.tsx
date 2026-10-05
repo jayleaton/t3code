@@ -13,7 +13,6 @@ import { useComposerDraftStore } from "../../composerDraftStore";
 const state = vi.hoisted(() => ({
   environments: [] as unknown[],
   projects: [] as unknown[],
-  threads: [] as unknown[],
   createThread: vi.fn(async () => ({})),
 }));
 const navigate = vi.hoisted(() => vi.fn());
@@ -25,7 +24,6 @@ vi.mock("../../state/environments", () => ({
 }));
 vi.mock("../../state/entities", () => ({
   useProjects: () => state.projects,
-  useThreadShells: () => state.threads,
 }));
 vi.mock("@t3tools/client-runtime/gateway", () => ({
   createGatewayRuntimePortFromContext: () => ({ createThread: state.createThread }),
@@ -94,6 +92,10 @@ const projectCards = () =>
   Array.from(container.querySelectorAll('input[name="agent-task-project"]')).map(
     (input) => input.closest("label")!.querySelector(".agent-choice-name")!.textContent,
   );
+const agentCards = () =>
+  Array.from(container.querySelectorAll('input[name="agent-task-agent"]')).map(
+    (input) => input.closest("label")!.querySelector(".agent-choice-name")!.textContent,
+  );
 const checkedProject = () =>
   container.querySelector<HTMLInputElement>('input[name="agent-task-project"]:checked')?.value;
 const submit = () =>
@@ -105,7 +107,6 @@ const submit = () =>
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
-  state.threads = [];
   useComposerDraftStore.setState({
     draftsByThreadKey: {},
     draftThreadsByThreadKey: {},
@@ -211,7 +212,10 @@ describe("Agents new chat workspace", () => {
     expect(checkedProject()).toBeUndefined();
   });
   it("opens on Captain and the machine the last new chat was created on", async () => {
-    localStorage.setItem("t3code:agents:new-chat-machine", JSON.stringify(windows));
+    localStorage.setItem(
+      "t3code:agents:new-chat-history",
+      JSON.stringify({ machine: windows, agents: {}, projects: {} }),
+    );
     await render();
     expect(container.querySelector("h2")!.textContent).toBe("New chat · Captain");
     expect(machineSelect().value).toBe(windows);
@@ -231,7 +235,9 @@ describe("Agents new chat workspace", () => {
     await selectMachine(windows);
     await choose("project", t3code);
     await submit();
-    expect(JSON.parse(localStorage.getItem("t3code:agents:new-chat-machine")!)).toBe(windows);
+    expect(JSON.parse(localStorage.getItem("t3code:agents:new-chat-history")!).machine).toBe(
+      windows,
+    );
     state.environments = state.environments.slice(0, 1);
     await act(async () => root.render(null));
     await render();
@@ -249,25 +255,39 @@ describe("Agents new chat workspace", () => {
     expect(state.createThread).not.toHaveBeenCalled();
     expect(machineSelect().value).toBe(mac);
   });
-  it("orders project cards by when a chat was last created in them", async () => {
-    state.threads = [
-      {
-        environmentId: mac,
-        projectId: buildthings,
-        createdAt: "2026-10-01T00:00:00.000Z",
-        parentThreadId: null,
-        lineage: {},
-      },
-      {
-        environmentId: mac,
-        projectId: t3code,
-        createdAt: "2026-10-05T00:00:00.000Z",
-        parentThreadId: null,
-        lineage: {},
-      },
-    ];
+  it("orders cards by the user's last picks and records each created chat", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-10-05T10:00:00.000Z"));
+      await render();
+      await choose("agent", "cody");
+      await choose("project", buildthings);
+      await submit();
+      vi.setSystemTime(new Date("2026-10-05T11:00:00.000Z"));
+      await choose("agent", "captain");
+      await choose("project", t3code);
+      await submit();
+    } finally {
+      vi.useRealTimers();
+    }
+    await act(async () => root.render(null));
     await render();
+    // Board order is Cody, Captain and titles sort buildthings first; the last pick wins both.
+    expect(agentCards()).toEqual(["Captain", "Cody"]);
     expect(projectCards()).toEqual(["t3code", "buildthings"]);
+  });
+  it("collapses long lists to four cards behind Show more", async () => {
+    state.projects = ["a", "b", "c", "d", "e", "f"].map((title) =>
+      makeProject(mac, ProjectId.make(title), title),
+    );
+    await render();
+    expect(projectCards()).toEqual(["a", "b", "c", "d"]);
+    await act(async () => {
+      Array.from(container.querySelectorAll("button"))
+        .find((button) => button.textContent === "Show 2 more")!
+        .click();
+    });
+    expect(projectCards()).toEqual(["a", "b", "c", "d", "e", "f"]);
   });
   it("starts the chat with whichever agent card is chosen", async () => {
     await render();

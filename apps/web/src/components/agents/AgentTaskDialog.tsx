@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import * as Schema from "effect/Schema";
+import { ChevronDownIcon } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -15,7 +15,7 @@ import {
 import { withReasoningEffortOption } from "@t3tools/shared/model";
 import { connectionAtomRuntime } from "../../connection/runtime";
 import { useEnvironments } from "../../state/environments";
-import { useProjects, useThreadShells } from "../../state/entities";
+import { useProjects } from "../../state/entities";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { releaseComposerDraftUploads } from "../../lib/composerDraftUploads";
 import { newDraftId, newThreadId, randomUUID } from "../../lib/utils";
@@ -28,13 +28,46 @@ import { agentMachineUnavailableReason } from "./agentMachineAvailability";
 import { agentColorFor, resolveAgentTaskProject } from "./agents.logic";
 import { AgentIcon } from "./AgentIcon";
 import {
+  collapsedNewChatChoices,
   defaultNewChatMachine,
   defaultNewChatProfile,
-  sortProjectsByNewChatRecency,
+  emptyNewChatHistory,
+  NewChatHistory,
+  recordNewChat,
+  sortProfilesByNewChatPick,
+  sortProjectsByNewChatPick,
 } from "./agentNewChat.logic";
 
-const lastMachineSchema = Schema.NullOr(Schema.String);
-const LAST_MACHINE_KEY = "t3code:agents:new-chat-machine";
+const NEW_CHAT_HISTORY_KEY = "t3code:agents:new-chat-history";
+const COLLAPSED_CHOICES = 4;
+
+const useNewChatHistory = () =>
+  useLocalStorage(NEW_CHAT_HISTORY_KEY, emptyNewChatHistory, NewChatHistory);
+
+function ShowMoreChoices({
+  total,
+  expanded,
+  onToggle,
+}: {
+  total: number;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  if (total <= COLLAPSED_CHOICES) return null;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="xs"
+      className="mt-2"
+      aria-expanded={expanded}
+      onClick={onToggle}
+    >
+      <ChevronDownIcon className={expanded ? "rotate-180" : undefined} />
+      {expanded ? "Show less" : `Show ${total - COLLAPSED_CHOICES} more`}
+    </Button>
+  );
+}
 
 /**
  * New chat from the Agents board. Opens on Captain (or the first agent that can
@@ -48,7 +81,7 @@ export function AgentTaskDialog({
 }: {
   /** Library order, which agent colors are derived from. */
   profiles: readonly McpGatewayProfile[];
-  /** The board's column order, used for the agent cards. */
+  /** The board's column order, which never-picked agent cards keep. */
   orderedProfiles: readonly McpGatewayProfile[];
   onClose: () => void;
 }) {
@@ -59,6 +92,19 @@ export function AgentTaskDialog({
     orderedProfiles.find((item) => item.profileId === profileId) ??
     defaultNewChatProfile(orderedProfiles);
   const [lock, setLock] = useState({ busy: false, hasContent: false });
+  const [history] = useNewChatHistory();
+  const [showAllAgents, setShowAllAgents] = useState(false);
+  const sortedProfiles = useMemo(
+    () => sortProfilesByNewChatPick(orderedProfiles, history),
+    [orderedProfiles, history],
+  );
+  const visibleProfiles = showAllAgents
+    ? sortedProfiles
+    : collapsedNewChatChoices(
+        sortedProfiles,
+        (item) => item.profileId === profile?.profileId,
+        COLLAPSED_CHOICES,
+      );
   return (
     <Dialog
       open
@@ -74,7 +120,7 @@ export function AgentTaskDialog({
         <fieldset className="agent-choice-group" disabled={lock.busy || lock.hasContent}>
           <legend>Agent</legend>
           <div className="agent-choice-grid">
-            {orderedProfiles.map((item) => (
+            {visibleProfiles.map((item) => (
               <label
                 key={item.profileId}
                 className="agent-choice-card"
@@ -99,6 +145,11 @@ export function AgentTaskDialog({
               </label>
             ))}
           </div>
+          <ShowMoreChoices
+            total={sortedProfiles.length}
+            expanded={showAllAgents}
+            onToggle={() => setShowAllAgents((value) => !value)}
+          />
         </fieldset>
         {profile ? (
           <AgentTaskForm
@@ -137,8 +188,8 @@ function AgentTaskForm({
   const navigate = useNavigate();
   const { environments } = useEnvironments();
   const projects = useProjects();
-  const threads = useThreadShells();
-  const [lastMachine, setLastMachine] = useLocalStorage(LAST_MACHINE_KEY, null, lastMachineSchema);
+  const [history, setHistory] = useNewChatHistory();
+  const [showAllProjects, setShowAllProjects] = useState(false);
   const [initialDraft] = useState(() =>
     useComposerDraftStore
       .getState()
@@ -165,20 +216,23 @@ function AgentTaskForm({
     chosenMachine ||
     defaultNewChatMachine(
       eligible.map((env) => env.environmentId),
-      lastMachine,
+      history.machine,
     );
   const target = eligible.find((env) => env.environmentId === machine);
   const supportsAgentDrafts =
     target?.serverConfig?.environment.capabilities.agentThreadBootstrap === true;
   const targetProjects = useMemo(
     () =>
-      sortProjectsByNewChatRecency(
+      sortProjectsByNewChatPick(
         projects.filter((project) => project.environmentId === machine),
-        threads,
+        history,
       ),
-    [projects, threads, machine],
+    [projects, history, machine],
   );
   const project = resolveAgentTaskProject(projects, machine, projectId);
+  const visibleProjects = showAllProjects
+    ? targetProjects
+    : collapsedNewChatChoices(targetProjects, (item) => item.id === project?.id, COLLAPSED_CHOICES);
   const modelSelection = target
     ? resolveGatewayProfileModelSelection(profile, target.serverConfig?.providers ?? [])
     : undefined;
@@ -249,7 +303,17 @@ function AgentTaskForm({
     // Open the new chat inside the Agents workspace instead of dropping the
     // user back on the board with nothing selected.
     const environmentId = target?.environmentId ?? draftSession?.environmentId;
-    if (environmentId) setLastMachine(environmentId);
+    const projectId = project?.id ?? draftSession?.projectId;
+    if (environmentId && projectId) {
+      setHistory((current) =>
+        recordNewChat(current, {
+          profileId: profile.profileId,
+          environmentId,
+          projectId,
+          at: new Date().toISOString(),
+        }),
+      );
+    }
     onClose();
     if (environmentId) {
       void navigate({
@@ -308,7 +372,7 @@ function AgentTaskForm({
           <fieldset className="agent-choice-group" disabled={busy || hasContent}>
             <legend>Project</legend>
             <div className="agent-choice-grid">
-              {targetProjects.map((item) => (
+              {visibleProjects.map((item) => (
                 <label key={item.id} className="agent-choice-card" title={item.workspaceRoot}>
                   <input
                     type="radio"
@@ -326,6 +390,11 @@ function AgentTaskForm({
                 </label>
               ))}
             </div>
+            <ShowMoreChoices
+              total={targetProjects.length}
+              expanded={showAllProjects}
+              onToggle={() => setShowAllProjects((value) => !value)}
+            />
           </fieldset>
         )}
         {hasContent && (
