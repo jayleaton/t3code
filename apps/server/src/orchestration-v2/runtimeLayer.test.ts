@@ -61,6 +61,7 @@ import * as ProviderRuntimeRecoveryService from "./ProviderRuntimeRecoveryServic
 import * as ProjectionMaintenance from "./ProjectionMaintenance.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as PullRequestWatchReactor from "./PullRequestWatchReactor.ts";
+import { listThreadPullRequests } from "../mcp/toolkits/pullRequests/handlers.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import type { ProviderAdapterV2SessionRuntime, ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
@@ -2304,6 +2305,101 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         messages.flatMap((message) => message.notification?.summary ?? []),
         ["#8: stopped watching, could not read it"],
       );
+    }),
+  );
+
+  it.effect("a watch keeps its thread from auto-settling and pauses only on manual settle", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("runtime-pull-request-watch-settlement");
+      const projectId = ProjectId.make("pr-watch-settlement-project");
+      yield* seedProject({
+        projectId,
+        title: "Watch settlement",
+        workspaceRoot: "/workspace/watch-settlement",
+        defaultModelSelection: null,
+        createdAt: "2026-10-01T00:00:00.000Z",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-watch-settlement-create"),
+        threadId,
+        projectId,
+        title: "Watch settlement",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const key = { host: "github.com", repository: "pingdotgg/t3code", number: 11 };
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("pr-watch-settlement-start"),
+        threadId,
+        ...key,
+        watching: true,
+        link: { url: "https://github.com/pingdotgg/t3code/pull/11", source: "agent" },
+      });
+      const shell = Effect.map(orchestrator.getThreadShell(threadId), (thread) => {
+        assert.isDefined(thread);
+        return thread!;
+      });
+
+      // The sweep's fresh snapshot still loses: settling would silently park the watch.
+      const autoSettle = yield* orchestrator
+        .dispatch({
+          type: "thread.auto-settle",
+          commandId: CommandId.make("pr-watch-settlement-auto"),
+          threadId,
+          snapshotAt: (yield* shell).updatedAt,
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(autoSettle, Orchestrator.OrchestratorDispatchError);
+      assert.isNull((yield* shell).settledOverride);
+
+      let reads = 0;
+      const reactor = yield* PullRequestWatchReactor.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            Layer.mock(PullRequestService.PullRequestService)({
+              detail: () =>
+                Effect.sync(() => (reads += 1)).pipe(Effect.andThen(Effect.die("offline"))),
+              activity: () => Effect.die("offline"),
+            }),
+          ),
+        ),
+      );
+
+      // A manual settle is explicit, so it wins and the watch reports itself paused.
+      yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("pr-watch-settlement-settle"),
+        threadId,
+      });
+      assert.isDefined((yield* shell).pullRequests?.[0]?.watch);
+      assert.deepInclude(listThreadPullRequests(yield* shell).pullRequests[0], {
+        watching: true,
+        watchSuspended: true,
+      });
+      yield* reactor.sweep;
+      assert.equal(reads, 0);
+
+      yield* orchestrator.dispatch({
+        type: "thread.unsettle",
+        commandId: CommandId.make("pr-watch-settlement-unsettle"),
+        threadId,
+        reason: "user",
+      });
+      assert.deepInclude(listThreadPullRequests(yield* shell).pullRequests[0], {
+        watching: true,
+        watchSuspended: false,
+      });
+      yield* reactor.sweep;
+      assert.equal(reads, 1);
     }),
   );
 

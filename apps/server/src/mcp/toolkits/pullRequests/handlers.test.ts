@@ -449,6 +449,7 @@ describe("pull request toolkit handlers", () => {
         url: "https://github.com/t3tools/t3code/pull/3",
         source: "agent",
         watching: false,
+        watchSuspended: false,
         state: "open",
         title: "PR 3",
         headBranch: "feat-c",
@@ -485,6 +486,8 @@ describe("listThreadPullRequests", () => {
       ],
     };
     const result = listThreadPullRequests({
+      settledOverride: null,
+      settledAt: null,
       pullRequests: [
         makeLink(2, { stack, source: "stack" }),
         makeLink(1, { stack, source: "created" }),

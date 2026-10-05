@@ -357,7 +357,7 @@ the parent restores chats that settled with it; ones you settled earlier stay se
 
 Completing a turn leaves a card unsettled. Automatic settlement applies to each card's own
 inactivity period, three days by default. Running child chats, subagents, monitoring,
-and pending questions or approvals keep a parent active. New activity and un-settling reset
+watched pull requests, and pending questions or approvals keep a parent active. New activity and un-settling reset
 the idle clock. Disable auto-settle on a card to keep it active indefinitely.
 
 To link chats yourself on web and desktop, drag a card onto the middle of another card to make it a

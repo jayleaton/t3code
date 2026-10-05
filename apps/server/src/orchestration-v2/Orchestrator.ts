@@ -5,7 +5,11 @@ import {
   runRanAfter,
   usageLimitBlockedRun,
 } from "@t3tools/shared/orchestrationV2ThreadError";
-import { threadPullRequestsOf } from "@t3tools/shared/threadPullRequests";
+import {
+  threadHasPullRequestWatch,
+  threadPullRequestWatchesSuspended,
+  threadPullRequestsOf,
+} from "@t3tools/shared/threadPullRequests";
 import {
   normalizeThreadPullRequestKey,
   visibleThreadPullRequests,
@@ -2352,10 +2356,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       // Same rule as a direct message.dispatch: a provider-native subagent takes no messages.
       const inactive =
-        thread.archivedAt !== null ||
-        thread.settledOverride === "settled" ||
-        thread.settledAt !== null ||
-        isProviderNativeSubagentThread(thread);
+        threadPullRequestWatchesSuspended(thread) || isProviderNativeSubagentThread(thread);
       if (link?.watch?.startedAt !== command.startedAt || (command.wake && inactive)) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
@@ -9686,7 +9687,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               DateTime.toEpochMillis(command.settledAt) <
                 DateTime.toEpochMillis(thread.unsettledAt))) ||
           DateTime.toEpochMillis(thread.updatedAt) > DateTime.toEpochMillis(command.snapshotAt) ||
-          !candidates.some((candidate) => !threadShellHasActiveWork(candidate)) ||
+          !candidates.some(
+            (candidate) =>
+              !threadShellHasActiveWork(candidate) && !threadHasPullRequestWatch(candidate),
+          ) ||
           (yield* projectionStore
             .hasActiveDescendants(command.threadId)
             .pipe(mapDispatchError(command)))

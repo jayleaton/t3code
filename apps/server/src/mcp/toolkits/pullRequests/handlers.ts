@@ -16,6 +16,7 @@ import {
   normalizeThreadPullRequestKey,
   resolveThreadPullRequestChains,
   threadPullRequestKeyOf,
+  threadPullRequestWatchesSuspended,
   visibleThreadPullRequests,
 } from "@t3tools/shared/threadPullRequests";
 import * as Cause from "effect/Cause";
@@ -107,6 +108,7 @@ const resolveTarget = Effect.fn("PullRequestsToolkit.resolveTarget")(function* (
 function entryOf(
   link: ThreadPullRequestLink,
   chains: ReturnType<typeof resolveThreadPullRequestChains>,
+  suspended: boolean,
 ): ThreadPullRequestEntry {
   const key = threadPullRequestKeyOf(link);
   let stack: ThreadPullRequestEntry["stack"] = null;
@@ -125,6 +127,7 @@ function entryOf(
     url: link.url,
     source: link.source,
     watching: link.watch !== undefined,
+    watchSuspended: link.watch !== undefined && suspended,
     state: link.snapshot?.state ?? null,
     title: link.snapshot?.title ?? null,
     headBranch: link.snapshot?.headBranch ?? null,
@@ -136,12 +139,14 @@ function entryOf(
 
 /** What the tools report from a thread shell; exported so the shape is testable without a layer. */
 export function listThreadPullRequests(
-  thread: Pick<OrchestrationV2ThreadShell, "pullRequests">,
+  thread: Pick<OrchestrationV2ThreadShell, "pullRequests"> &
+    Parameters<typeof threadPullRequestWatchesSuspended>[0],
 ): ListThreadPullRequestsResult {
   const chains = resolveThreadPullRequestChains(thread.pullRequests ?? []);
+  const suspended = threadPullRequestWatchesSuspended(thread);
   return {
     pullRequests: visibleThreadPullRequests(thread.pullRequests ?? []).map((link) =>
-      entryOf(link, chains),
+      entryOf(link, chains, suspended),
     ),
     chains: chains.map((chain) => ({
       kind: chain.kind,
@@ -242,12 +247,14 @@ const make = Effect.gen(function* () {
       })
       .pipe(Effect.catchCause(dispatchFailure(PullRequestWatchFailedError)));
     const after = yield* requireThread(PullRequestWatchFailedError);
+    const watchingAfter = watchedLink(after)?.watch !== undefined;
     return {
       host: target.host,
       repository: target.repository,
       number: target.number,
       url: target.url,
-      watching: watchedLink(after)?.watch !== undefined,
+      watching: watchingAfter,
+      watchSuspended: watchingAfter && threadPullRequestWatchesSuspended(after),
       wasWatching: before?.watch !== undefined,
     };
   });

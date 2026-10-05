@@ -1,6 +1,7 @@
 import type { ScopedThreadRef, ThreadPullRequestLink } from "@t3tools/contracts";
 import {
   resolveThreadPullRequestChains,
+  threadPullRequestWatchesSuspended,
   visibleThreadPullRequests,
 } from "@t3tools/shared/threadPullRequests";
 import {
@@ -76,9 +77,12 @@ function LinkRow({
   threadRef,
   onUnlink,
   onSetWatching,
+  watchSuspended,
 }: {
   line: PullRequestListLine;
   threadRef: ScopedThreadRef;
+  /** The thread is settled or archived, so its watches are paused. */
+  watchSuspended: boolean;
   onUnlink: (link: ThreadPullRequestLink) => void;
   /** Null when the environment cannot watch pull requests. */
   onSetWatching: ((link: ThreadPullRequestLink, watching: boolean) => void) | null;
@@ -133,11 +137,16 @@ function LinkRow({
                 {watching ? (
                   <Tooltip>
                     <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
-                      <EyeIcon role="img" aria-label="Watching" className="size-3.5" />
+                      <EyeIcon
+                        role="img"
+                        aria-label={watchSuspended ? "Watch paused" : "Watching"}
+                        className="size-3.5"
+                      />
                     </TooltipTrigger>
                     <TooltipPopup>
-                      Watching: the agent wakes when checks finish, someone comments, or the branch
-                      conflicts
+                      {watchSuspended
+                        ? "Watch paused: this thread is settled. Unsettle it to resume watching"
+                        : "Watching: the agent wakes when checks finish, someone comments, or the branch conflicts"}
                     </TooltipPopup>
                   </Tooltip>
                 ) : null}
@@ -353,6 +362,7 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
               threadRef={threadRef}
               onUnlink={handleUnlink}
               onSetWatching={supportsWatch ? handleSetWatching : null}
+              watchSuspended={thread != null && threadPullRequestWatchesSuspended(thread)}
             />
           ))}
         </div>

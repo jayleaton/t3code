@@ -179,6 +179,10 @@ export const WatchPullRequestResult = Schema.Struct({
   watching: Schema.Boolean.annotate({
     description: "Whether T3 Code now watches the pull request for this thread.",
   }),
+  watchSuspended: Schema.Boolean.annotate({
+    description:
+      "True when the watch is registered but paused because this thread is settled or archived: nothing is checked and no wake arrives until the thread is active again. An active watch keeps the thread from settling through inactivity.",
+  }),
   wasWatching: Schema.Boolean.annotate({
     description: "Whether it was already watched before the call.",
   }),
@@ -188,7 +192,13 @@ export type WatchPullRequestResult = typeof WatchPullRequestResult.Type;
 export const ThreadPullRequestEntry = Schema.Struct({
   ...PullRequestIdentity,
   source: ThreadPullRequestLinkSource,
-  watching: Schema.Boolean,
+  watching: Schema.Boolean.annotate({
+    description: "Whether a watch is registered for this thread; see watchSuspended.",
+  }),
+  watchSuspended: Schema.Boolean.annotate({
+    description:
+      "True when the watch is registered but paused because this thread is settled or archived: nothing is checked and no wake arrives until the thread is active again. An active watch keeps the thread from settling through inactivity.",
+  }),
   state: Schema.NullOr(PullRequestState),
   title: Schema.NullOr(Schema.String),
   headBranch: Schema.NullOr(Schema.String),
@@ -258,7 +268,7 @@ const ListThreadPullRequestsTool = Tool.make("list_thread_pull_requests", {
 
 const WatchPullRequestTool = Tool.make("watch_pull_request", {
   description:
-    "Have T3 Code watch an open pull request for this thread, linking it first if needed. T3 Code checks it every minute and wakes you with a message when a check fails, the required checks pass, someone else comments or reviews, or the branch starts to conflict with its base. Use this to monitor or babysit a pull request instead of polling, sleeping, or running a watcher. Only comments posted after this call wake you, so handle the existing ones first, then end your turn. A wake is news, not a merge decision: check readiness yourself before merging. Watching ends when the pull request merges or closes, when T3 Code cannot read it for 15 minutes, or when you call unwatch_pull_request.",
+    "Have T3 Code watch an open pull request for this thread, linking it first if needed. T3 Code checks it every minute and wakes you with a message when a check fails, the required checks pass, someone else comments or reviews, or the branch starts to conflict with its base. Use this to monitor or babysit a pull request instead of polling, sleeping, or running a watcher. Only comments posted after this call wake you, so handle the existing ones first, then end your turn. A wake is news, not a merge decision: check readiness yourself before merging. Watching ends when the pull request merges or closes, when T3 Code cannot read it for 15 minutes, or when you call unwatch_pull_request. While watching, the thread does not settle through inactivity; settling it manually pauses the watch (watchSuspended=true) until the thread is unsettled.",
   parameters: PullRequestTargetInput,
   success: WatchPullRequestResult,
   failure: PullRequestToolError,
