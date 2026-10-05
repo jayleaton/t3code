@@ -65,12 +65,19 @@ export function getProviderSkillsForSlashMenu(
     : [];
 }
 
+/**
+ * Provider commands offered in the slash menu. Compaction is never offered:
+ * harnesses compact on their own, and T3 does not start compaction.
+ */
 export function getProviderSlashCommandsForSlashMenu(
   slashCommands: ReadonlyArray<ServerProviderSlashCommand>,
   visibleSkills: ReadonlyArray<ServerProviderSkill>,
 ): ServerProviderSlashCommand[] {
   const skillNames = new Set(visibleSkills.map((skill) => skill.name.trim().toLowerCase()));
-  return slashCommands.filter((command) => !skillNames.has(command.name.trim().toLowerCase()));
+  return slashCommands.filter((command) => {
+    const name = command.name.trim().toLowerCase();
+    return name !== "compact" && !skillNames.has(name);
+  });
 }
 
 export function resolveProviderSkillSourceKind(

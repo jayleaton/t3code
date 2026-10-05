@@ -523,7 +523,6 @@ export function NewTaskDraftScreen(props: {
     projectCwd: composerWorkspaceCwd,
     selectedProviderStatus: flow.selectedProviderStatus,
     hasThread: false,
-    hasCompactableConversation: false,
     offersUsageLimits: offersUsageLimits,
     enabled: isComposerFocused && !isComposerInteractionLocked,
     onChangeDraftMessage: flow.setPrompt,
