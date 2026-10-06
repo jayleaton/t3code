@@ -6,6 +6,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as ThreadTaskService from "../../../threadTask/ThreadTaskService.ts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as ThreadMessageIntake from "../../../orchestration-v2/ThreadMessageIntake.ts";
@@ -176,6 +177,17 @@ export const layer = ProjectToolkit.toLayer({
         }),
       );
       const thread = result.projection.thread;
+      // A named child reports to its launcher through a task; profile-less chats do not.
+      if (profile !== undefined && context.scope.thread !== undefined) {
+        const tasks = yield* Effect.serviceOption(ThreadTaskService.ThreadTaskService);
+        if (Option.isSome(tasks)) {
+          yield* tasks.value.assignLaunchedChild({
+            ownerThreadId: context.scope.thread.threadId,
+            workerThreadId: thread.id,
+            summary: input.title,
+          });
+        }
+      }
       const run = result.projection.runs.find((run) => run.userMessageId === messageId);
       return {
         threadId: thread.id,

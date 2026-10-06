@@ -64,6 +64,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as ThreadTaskService from "../threadTask/ThreadTaskService.ts";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -2130,6 +2131,17 @@ const make = Effect.gen(function* () {
                     ),
                   ),
                 );
+              // A named child reports to its launcher through a task; profile-less chats do not.
+              if (request.profileId !== undefined) {
+                const tasks = yield* Effect.serviceOption(ThreadTaskService.ThreadTaskService);
+                if (Option.isSome(tasks)) {
+                  yield* tasks.value.assignLaunchedChild({
+                    ownerThreadId: scope.thread.threadId,
+                    workerThreadId: threadId,
+                    summary: title,
+                  });
+                }
+              }
               if (request.prompt !== undefined) {
                 yield* threadManagement
                   .dispatch({
