@@ -134,6 +134,31 @@ export function setMcpGatewayEnabled(enabled: boolean): void {
   window.dispatchEvent(new Event(MCP_GATEWAY_STATE_EVENT));
 }
 
+/** Outcome of the desktop starting its managed gateway session for the current configuration. */
+export type McpGatewayStartup =
+  | { readonly phase: "starting" }
+  | { readonly phase: "ready" }
+  | { readonly phase: "failed"; readonly message: string };
+let currentMcpGatewayStartup: McpGatewayStartup = { phase: "starting" };
+
+export function getMcpGatewayStartup(): McpGatewayStartup {
+  return currentMcpGatewayStartup;
+}
+
+export function publishMcpGatewayStartup(startup: McpGatewayStartup): void {
+  currentMcpGatewayStartup = startup;
+  window.dispatchEvent(
+    new CustomEvent<McpGatewayStartup>(`${MCP_GATEWAY_STATE_EVENT}:startup`, { detail: startup }),
+  );
+}
+
+/** Electron wraps main-process errors as "Error invoking remote method '…': Name: message". */
+export function mcpGatewayStartupMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const message = raw.replace(/^Error invoking remote method '[^']*': (?:\w+: )?/u, "").trim();
+  return message === "" ? "Gateway could not start." : message;
+}
+
 let restartGateway: (() => void) | null = null;
 
 export function setMcpGatewayRestarter(restarter: (() => void) | null): void {

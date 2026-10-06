@@ -14,6 +14,8 @@ export async function createManagedGatewayHost(launch: {
   let timer: Fiber.Fiber<void, never> | undefined;
   let connecting: Promise<void> | undefined;
   let active: { control: Client; transport: StdioClientTransport } | undefined;
+  // Each relaunch starts a runtime process; a persistent rejection must not respawn every second.
+  let failures = 0;
 
   const schedule = (run: () => void, delay: number) => {
     timer?.interruptUnsafe();
@@ -27,10 +29,12 @@ export async function createManagedGatewayHost(launch: {
       active = undefined;
       await previous?.control.close();
       if (!stopped) await connect();
+      failures = 0;
     })()
       .catch(() => {
         // A temporarily unavailable executable or owner must not disable an enabled gateway.
-        schedule(recover, 1_000);
+        failures += 1;
+        schedule(recover, Math.min(1_000 * 2 ** (failures - 1), 30_000));
       })
       .finally(() => {
         connecting = undefined;
@@ -54,7 +58,14 @@ export async function createManagedGatewayHost(launch: {
       command: launch.command,
       args: [...launch.args],
       env: { ...launch.env },
-      stderr: "ignore",
+      stderr: "pipe",
+    });
+    // The launcher reports why it could not start only on stderr, as `t3-mcp-gateway: <reason>`.
+    let reason: string | undefined;
+    transport.stderr?.on("data", (chunk: Buffer) => {
+      for (const line of chunk.toString().split(/\r?\n/u)) {
+        if (line.startsWith("t3-mcp-gateway: ")) reason = line.slice("t3-mcp-gateway: ".length);
+      }
     });
     const current = { control, transport };
     active = current;
@@ -70,7 +81,7 @@ export async function createManagedGatewayHost(launch: {
     } catch (error) {
       if (active === current) active = undefined;
       await transport.close();
-      throw error;
+      throw reason === undefined ? error : new Error(reason, { cause: error });
     }
   };
 

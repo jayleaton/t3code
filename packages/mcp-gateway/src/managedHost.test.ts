@@ -91,6 +91,24 @@ it("retries failed relaunches without leaving another host running", async () =>
   await second.ready;
 });
 
+it("backs off relaunches an owner keeps rejecting instead of spawning one every second", async () => {
+  vi.useFakeTimers();
+  const first = session();
+  const host = await createManagedGatewayHost(launch);
+  cleanup.push(host.close);
+  createTransport.mockImplementation(() => {
+    throw new Error("State file or configuration mismatch");
+  });
+  await first.server.close();
+  await vi.advanceTimersByTimeAsync(61_000);
+  // Relaunches at 1, 3, 7, 15, 31 and 61 seconds, then every 30 seconds.
+  expect(createTransport).toHaveBeenCalledTimes(7);
+  const recovered = session();
+  await vi.advanceTimersByTimeAsync(30_000);
+  await recovered.ready;
+  expect(createTransport).toHaveBeenCalledTimes(8);
+});
+
 it("reports initial startup failure and cancels recovery", async () => {
   vi.useFakeTimers();
   createTransport.mockImplementationOnce(() => {

@@ -8,6 +8,7 @@ import {
   getMcpGatewayToken,
   MCP_GATEWAY_GRANTS_KEY,
   MCP_GATEWAY_TOKEN_KEY,
+  mcpGatewayStartupMessage,
   setMcpGatewayGrants,
 } from "./mcpGatewayState";
 
@@ -115,5 +116,18 @@ describe("MCP gateway grants", () => {
     expect(getMcpGatewayGrants()).toEqual({
       "a534b83f-a352-44d8-aedc-c4230c179390": MCP_GATEWAY_CONFIGURABLE_SCOPES,
     });
+  });
+});
+
+describe("MCP gateway startup failures", () => {
+  it("shows the desktop's reason without Electron's IPC wrapper", () => {
+    expect(
+      mcpGatewayStartupMessage(
+        new Error(
+          "Error invoking remote method 'desktop:configure-managed-mcp-gateway': McpGatewayUnavailableError: Desktop MCP gateway failed: State file or configuration mismatch",
+        ),
+      ),
+    ).toBe("Desktop MCP gateway failed: State file or configuration mismatch");
+    expect(mcpGatewayStartupMessage(new Error(""))).toBe("Gateway could not start.");
   });
 });

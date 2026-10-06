@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  getMcpGatewayStartup,
   getMcpGatewayStatus,
   getMcpGatewayStatusSnapshot,
   isMcpGatewayEnabled,
@@ -16,9 +17,17 @@ export function AgentGatewayStatus() {
   const [status, setStatus] = useState(getMcpGatewayStatus);
   const [live, setLive] = useState(false);
   const [recovering, setRecovering] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const recoveringRef = useRef(false);
+  const [error, setError] = useState<string | null>(() => {
+    const startup = getMcpGatewayStartup();
+    return startup.phase === "failed" ? startup.message : null;
+  });
   const responseTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const recoveryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  useEffect(() => {
+    recoveringRef.current = recovering;
+  }, [recovering]);
 
   useEffect(() => {
     if (!available) return;
@@ -56,6 +65,23 @@ export function AgentGatewayStatus() {
       setRecovering(false);
       setError(null);
     };
+    // Recovery reports the desktop's own startup error; only a started gateway waits for health.
+    const onStartup = () => {
+      const startup = getMcpGatewayStartup();
+      if (startup.phase === "failed") {
+        clearTimeout(recoveryTimer.current);
+        setLive(false);
+        setRecovering(false);
+        setError(startup.message);
+      } else if (startup.phase === "ready") {
+        if (!recoveringRef.current) return;
+        clearTimeout(recoveryTimer.current);
+        recoveryTimer.current = setTimeout(() => {
+          setRecovering(false);
+          setError("Gateway started but its bridge did not report healthy. Try again.");
+        }, 15_000);
+      }
+    };
     const unsubscribe = subscribeMcpGatewayConfiguration(() => {
       setEnabled(isMcpGatewayEnabled());
       setLive(false);
@@ -66,6 +92,7 @@ export function AgentGatewayStatus() {
     });
     window.addEventListener(`${MCP_GATEWAY_STATE_EVENT}:status`, onStatus);
     window.addEventListener(`${MCP_GATEWAY_STATE_EVENT}:snapshot`, onSnapshot);
+    window.addEventListener(`${MCP_GATEWAY_STATE_EVENT}:startup`, onStartup);
     window.addEventListener("focus", refresh);
     refresh();
     const interval = setInterval(refresh, 15_000);
@@ -73,6 +100,7 @@ export function AgentGatewayStatus() {
       unsubscribe();
       window.removeEventListener(`${MCP_GATEWAY_STATE_EVENT}:status`, onStatus);
       window.removeEventListener(`${MCP_GATEWAY_STATE_EVENT}:snapshot`, onSnapshot);
+      window.removeEventListener(`${MCP_GATEWAY_STATE_EVENT}:startup`, onStartup);
       window.removeEventListener("focus", refresh);
       clearInterval(interval);
       clearTimeout(responseTimer.current);
@@ -115,12 +143,14 @@ export function AgentGatewayStatus() {
             setError(null);
             setLive(false);
             setRecovering(true);
+            recoveringRef.current = true;
             try {
               if (!restartMcpGateway()) throw new Error("Unavailable");
+              // Backstop only: startup itself is bounded and reports its own failure.
               recoveryTimer.current = setTimeout(() => {
                 setRecovering(false);
                 setError("Gateway recovery failed. Try again or check MCP Gateway settings.");
-              }, 15_000);
+              }, 45_000);
             } catch {
               setRecovering(false);
               setError("Gateway restart is unavailable. Check MCP Gateway settings.");

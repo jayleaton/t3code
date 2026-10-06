@@ -51,7 +51,8 @@ const retentionEvents = Number.parseInt(process.env.T3_MCP_EVENT_RETENTION ?? "1
 if (!Number.isInteger(retentionEvents) || retentionEvents < 1) {
   throw new Error("T3_MCP_EVENT_RETENTION must be a positive integer.");
 }
-const stateDirectory = process.env.T3CODE_HOME ?? NodePath.join(NodeOS.homedir(), ".t3code");
+// Same T3 home as the desktop, whose managed launcher every manual launcher must share an owner with.
+const stateDirectory = process.env.T3CODE_HOME ?? NodePath.join(NodeOS.homedir(), ".t3");
 const stateFile =
   process.env.T3_MCP_STATE_FILE ?? NodePath.join(stateDirectory, "mcp-gateway-v3.sqlite");
 const config: SharedGatewayConfig = {
