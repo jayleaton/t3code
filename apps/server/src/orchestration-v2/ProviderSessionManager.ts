@@ -157,6 +157,11 @@ export interface ProviderSessionManagerV2Shape {
   readonly get: (
     providerSessionId: ProviderSessionId,
   ) => Effect.Effect<Option.Option<ProviderAdapterV2SessionRuntime>, ProviderSessionManagerV2Error>;
+  /**
+   * Whether this process holds the session open. Unlike `get` it does not count
+   * as activity, so checks that only observe liveness cannot keep it alive.
+   */
+  readonly isResident: (providerSessionId: ProviderSessionId) => Effect.Effect<boolean>;
   readonly close: (
     providerSessionId: ProviderSessionId,
   ) => Effect.Effect<void, ProviderSessionManagerV2Error>;
@@ -212,6 +217,12 @@ interface LiveSessionEntry {
   readonly idleFiber: Fiber.Fiber<void, never> | null;
   /** Set when idle release is deferred for pending background work; bounds total deferral. */
   readonly pinnedSinceMs: number | null;
+  /**
+   * The thread that detached last. Detaching removes the projection binding, so
+   * once no thread is attached the release status is recorded on this thread;
+   * otherwise the session row would stay "ready" after its process is gone.
+   */
+  readonly lastDetachedThreadId: ThreadId | null;
 }
 
 type ProviderSessionEventSignal =
@@ -622,9 +633,13 @@ export const layerWithOptions = (
                 ? (input.detail ?? "Provider runtime failed.")
                 : null,
           };
+          const { attachedThreadIds, lastDetachedThreadId } = input.entry;
           yield* writeProviderSessionEvents({
             runtime: input.entry.runtime,
-            threadIds: input.entry.attachedThreadIds,
+            threadIds:
+              attachedThreadIds.size > 0 || lastDetachedThreadId === null
+                ? attachedThreadIds
+                : [lastDetachedThreadId],
             type: "provider-session.updated",
             payload,
           });
@@ -1825,6 +1840,7 @@ export const layerWithOptions = (
                 lastActivityAtMs: now,
                 idleFiber: null,
                 pinnedSinceMs: null,
+                lastDetachedThreadId: null,
               };
               yield* Ref.update(sessions, (current) => {
                 const updated = new Map(current);
@@ -1855,6 +1871,10 @@ export const layerWithOptions = (
               yield* scheduleIdleRelease(input.providerSessionId);
               return exposedRuntime;
             }),
+          ),
+        isResident: (providerSessionId) =>
+          Ref.get(sessions).pipe(
+            Effect.map((current) => current.has(sessionKey(providerSessionId))),
           ),
         get: (providerSessionId) =>
           Effect.gen(function* () {
@@ -1990,6 +2010,7 @@ export const layerWithOptions = (
                 attachedThreadIds,
                 loadedProviderThreadKeyByThread,
                 mcpCredentialIdByThread,
+                lastDetachedThreadId: input.threadId,
               };
               const updated = new Map(current);
               updated.set(key, updatedEntry);
