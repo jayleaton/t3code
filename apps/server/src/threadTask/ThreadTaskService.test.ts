@@ -796,3 +796,90 @@ it.effect("an agent's message does not cancel settle-after-turn; the user's does
     }),
   ).pipe(Effect.provide(testLayer)),
 );
+
+it.effect(
+  "a named child from before tasks is a managed worker and reports through an adopted task",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = yield* fixture;
+        const store = yield* ThreadTaskStore.ThreadTaskStore;
+        const tasks = yield* makeService;
+        yield* tasks.start();
+        const named = (id: string, parent?: string) =>
+          f.orchestrator.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make(`create:${id}`),
+            threadId: ThreadId.make(id),
+            projectId: ProjectId.make("project:tasks"),
+            title: `Legacy ${id}`,
+            modelSelection: { instanceId, model: "gpt-5.1-codex" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            createdBy: "agent",
+            creationSource: "mcp",
+            profileSnapshot: {
+              profileId: "cody",
+              profileName: "Cody",
+              revision: 1,
+              effectiveSource: {
+                modelSelection: "profile",
+                runtimeMode: "profile",
+                interactionMode: "profile",
+                reasoningEffort: "profile",
+              },
+            },
+            ...(parent === undefined ? {} : { parentThreadId: ThreadId.make(parent) }),
+          });
+        yield* f.create("captain");
+        yield* named("legacy", "captain");
+        yield* named("peer", "captain");
+        yield* named("idle", "captain");
+        yield* f.create("helper", "captain");
+        const send = (from: string, to: string | null) =>
+          tasks.authorizeMessage({
+            senderThreadId: ThreadId.make(from),
+            targetThreadId: to === null ? null : ThreadId.make(to),
+          });
+        assert.isTrue(Option.isNone(yield* store.get(ThreadId.make("legacy"))));
+
+        // No task row yet: still refused toward its Captain, a peer, or another environment.
+        for (const target of ["captain", "peer", null]) {
+          assert.equal((yield* send("legacy", target).pipe(Effect.flip)).code, "scope_denied");
+        }
+        // The Captain still relays; a profile-less chat is not a named worker.
+        yield* send("captain", "legacy");
+        yield* send("helper", "captain");
+
+        // The refusal adopted a task owned by the Captain, so the status path works.
+        const adopted = Option.getOrThrow(yield* store.get(ThreadId.make("legacy")));
+        assert.equal(adopted.ownerThreadId, "captain");
+        assert.equal(adopted.summary, "Legacy legacy");
+
+        // Its turn ending wakes the Captain instead of being stranded.
+        yield* f.send("legacy", 1);
+        yield* f.endLatestRun("legacy");
+        yield* tasks.drain;
+        const wakes = yield* f.wakes("captain");
+        assert.equal(wakes.length, 1);
+        assert.include(wakes[0]!.text, "Legacy legacy");
+        const done = yield* tasks.update(
+          { kind: "thread", threadId: ThreadId.make("legacy") },
+          { expectedRevision: adopted.revision, status: "DONE", evidence: ["staging deployed"] },
+        );
+        assert.equal(done.task.status, "DONE");
+        assert.equal((yield* f.wakes("captain")).length, 2);
+
+        // An idle legacy child is adopted when the server starts.
+        assert.isTrue(Option.isNone(yield* store.get(ThreadId.make("idle"))));
+        yield* (yield* makeService).recover;
+        assert.equal(
+          Option.getOrThrow(yield* store.get(ThreadId.make("idle"))).ownerThreadId,
+          "captain",
+        );
+        assert.isTrue(Option.isNone(yield* store.get(ThreadId.make("helper"))));
+      }),
+    ).pipe(Effect.provide(testLayer)),
+);

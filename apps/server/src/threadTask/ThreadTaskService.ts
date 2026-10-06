@@ -798,6 +798,7 @@ export const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const workerThreadId =
         input.threadId ?? (caller.kind === "thread" ? caller.threadId : undefined);
+      if (workerThreadId !== undefined) yield* ensureTask(workerThreadId);
       const mirror = workerThreadId === undefined ? undefined : yield* getTask(workerThreadId);
       if (mirror?.workerEnvironmentId == null) return yield* updateLocal(caller, input);
       if (caller.kind === "thread" && caller.threadId !== mirror.ownerThreadId) {
@@ -993,12 +994,70 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  // ---- adoption ----------------------------------------------------------
+
+  /** A child chat launched as a named agent: a managed worker with or without a task row. */
+  const isNamedChild = (shell: OrchestrationV2ThreadShell) =>
+    shell.parentThreadId != null &&
+    threadParentRelationship(shell) === "child" &&
+    shell.profileSnapshot?.profileId != null;
+
+  /**
+   * The chat's task, creating it for a named child that has none yet, owned by
+   * its parent. A parent on another environment adopts the task on its first
+   * delivery. Profile-less chats and top-level chats get no task.
+   */
+  const ensureTask = (workerThreadId: ThreadId) =>
+    Effect.gen(function* () {
+      const existing = yield* getTask(workerThreadId);
+      if (existing !== undefined) return existing;
+      const worker = yield* getShell(workerThreadId);
+      if (worker === undefined || !isNamedChild(worker)) return undefined;
+      const adopted = yield* writes.withPermits(1)(
+        Effect.gen(function* () {
+          const raced = yield* getTask(workerThreadId);
+          if (raced !== undefined) return raced;
+          const remoteOwner = worker.parentEnvironmentId ?? null;
+          if (remoteOwner !== null) {
+            yield* store
+              .putLink({
+                workerThreadId,
+                role: "worker",
+                peerEnvironmentId: remoteOwner,
+                capability: `${yield* randomUuidV4}${yield* randomUuidV4}`,
+                deliveredCursor: 0,
+                pendingCursor: 0,
+                state: "pending",
+                lastSyncedAt: null,
+                lastError: null,
+              })
+              .pipe(Effect.catch(unavailable));
+          }
+          return yield* writeAssignment({
+            owner: worker.parentThreadId!,
+            ownerEnvironmentId: remoteOwner,
+            actor: "server",
+            worker,
+            summary: worker.title,
+            taskId: undefined,
+            settleWhenAccepted: undefined,
+            clientRequestId: undefined,
+            existing: undefined,
+          });
+        }),
+      );
+      yield* record(workerThreadId, "transition", adopted.revision, "server:adopted");
+      return adopted;
+    }).pipe(Effect.orElseSucceed(() => undefined));
+
   // ---- messaging -------------------------------------------------------
 
   const authorizeMessage: ThreadTaskService["Service"]["authorizeMessage"] = (input) =>
     Effect.gen(function* () {
       if (input.targetThreadId === input.senderThreadId) return;
-      if ((yield* getTask(input.senderThreadId)) === undefined) return;
+      // A named child is a managed worker even before it has a task (a chat
+      // launched before tasks existed); it gets one here so it can report.
+      if ((yield* ensureTask(input.senderThreadId)) === undefined) return;
       const target =
         input.targetThreadId === null ? undefined : yield* getShell(input.targetThreadId);
       if (target?.parentThreadId === input.senderThreadId && target.parentEnvironmentId == null) {
@@ -1466,6 +1525,38 @@ export const make = Effect.gen(function* () {
   /** Owner side: the worker's environment delivers a change. */
   const remoteDeliver: ThreadTaskService["Service"]["remoteDeliver"] = (input) =>
     Effect.gen(function* () {
+      // A child adopted on its own environment introduces its task here once:
+      // only for a chat on this environment, and never over an existing link.
+      const known = Option.getOrUndefined(
+        yield* store.getLink(input.view.task.workerThreadId).pipe(Effect.catch(unavailable)),
+      );
+      if (
+        known === undefined &&
+        input.view.task.ownerEnvironmentId === transport?.localEnvironmentId &&
+        (yield* getTask(input.view.task.workerThreadId)) === undefined &&
+        (yield* getShell(input.view.task.ownerThreadId)) !== undefined
+      ) {
+        yield* store
+          .putLink({
+            workerThreadId: input.view.task.workerThreadId,
+            role: "owner",
+            peerEnvironmentId: input.workerEnvironmentId,
+            capability: input.capability,
+            deliveredCursor: 0,
+            pendingCursor: 0,
+            state: "pending",
+            lastSyncedAt: null,
+            lastError: null,
+            taskId: input.view.task.taskId,
+          })
+          .pipe(Effect.catch(unavailable));
+        yield* record(
+          input.view.task.workerThreadId,
+          "transition",
+          input.view.task.revision,
+          "owner:adopted-remote",
+        );
+      }
       yield* requireLink(
         input.view.task.workerThreadId,
         "owner",
@@ -1716,6 +1807,7 @@ export const make = Effect.gen(function* () {
 
   const onRunEnded = (workerThreadId: ThreadId, runId: RunId, runStatus: string) =>
     Effect.gen(function* () {
+      yield* ensureTask(workerThreadId);
       const wakeNow = yield* writes.withPermits(1)(
         Effect.gen(function* () {
           const task = yield* getTask(workerThreadId);
@@ -1747,6 +1839,7 @@ export const make = Effect.gen(function* () {
 
   const onQuestion = (workerThreadId: ThreadId, requestId: RuntimeRequestId, pending: boolean) =>
     Effect.gen(function* () {
+      if (pending) yield* ensureTask(workerThreadId);
       const wakeNow = yield* writes.withPermits(1)(
         Effect.gen(function* () {
           const task = yield* getTask(workerThreadId);
@@ -1855,6 +1948,18 @@ export const make = Effect.gen(function* () {
         TERMINAL_RUN_STATUSES.has(latest.status)
       ) {
         yield* onRunEnded(task.workerThreadId, latest.id, latest.status);
+      }
+    }
+    // Named children launched before tasks existed get one, so their status
+    // reaches their parent instead of chat messages.
+    const links = yield* projections.getThreadParentLinks();
+    for (const link of links) {
+      if (
+        link.parentThreadId !== null &&
+        link.parentRelationship !== "subagent" &&
+        link.profileId != null
+      ) {
+        yield* ensureTask(link.threadId);
       }
     }
     yield* reevaluatePendingSettlements;

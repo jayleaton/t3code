@@ -169,7 +169,11 @@ const environment = (network: Effect.Success<typeof makeNetwork>, environmentId:
         return service;
       }),
     );
-    const create = (id: ThreadId, parent?: { thread: ThreadId; environment?: EnvironmentId }) =>
+    const create = (
+      id: ThreadId,
+      parent?: { thread: ThreadId; environment?: EnvironmentId },
+      profileId?: string,
+    ) =>
       run(
         Effect.flatMap(OrchestratorV2, (orchestrator) =>
           orchestrator.dispatch({
@@ -185,6 +189,21 @@ const environment = (network: Effect.Success<typeof makeNetwork>, environmentId:
             worktreePath: null,
             createdBy: "agent",
             creationSource: "mcp",
+            ...(profileId === undefined
+              ? {}
+              : {
+                  profileSnapshot: {
+                    profileId,
+                    profileName: profileId,
+                    revision: 1,
+                    effectiveSource: {
+                      modelSelection: "profile" as const,
+                      runtimeMode: "profile" as const,
+                      interactionMode: "profile" as const,
+                      reasoningEffort: "profile" as const,
+                    },
+                  },
+                }),
             ...(parent === undefined
               ? {}
               : {
@@ -605,4 +624,58 @@ it.effect("Captains on two environments read one project board with explicit cov
       assert.isNotNull(bCoverage.error);
     }),
   ),
+);
+
+it.effect(
+  "a legacy named child on another environment reports to its Captain without messaging it",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const network = yield* makeNetwork;
+        const envA = yield* environment(network, A);
+        const envB = yield* environment(network, B);
+        const tasksA = yield* envA.startService;
+        const tasksB = yield* envB.startService;
+        const drain = Effect.gen(function* () {
+          yield* tasksB.drain;
+          yield* tasksA.drain;
+        });
+        yield* envA.create(captain);
+        // Launched on B as a named agent before tasks existed: no task on either side.
+        yield* envB.create(worker, { thread: captain, environment: A }, "cody");
+
+        // Messaging its Captain on A is refused even without a task row.
+        const denied = yield* tasksB
+          .authorizeMessage({ senderThreadId: worker, targetThreadId: null })
+          .pipe(Effect.flip);
+        assert.equal(denied.code, "scope_denied");
+
+        // Its turn ending reaches the Captain on A through the adopted task.
+        yield* envB.send(worker, 1);
+        yield* envB.endOpenRuns(worker);
+        yield* drain;
+        const wakes = yield* envA.wakes(captain);
+        assert.equal(wakes.length, 1);
+        const mirror = (yield* tasksA.read(asCaptain, { threadId: worker })).tasks[0]!;
+        assert.equal(mirror.task.workerEnvironmentId, B);
+        assert.equal(mirror.sync?.state, "synced");
+
+        // The adopted link carries owner actions back to B.
+        yield* tasksB.update(asWorker, {
+          expectedRevision: (yield* tasksB.read(asWorker, {})).tasks[0]!.task.revision,
+          status: "DONE",
+          evidence: ["staging deployed"],
+        });
+        yield* drain;
+        const current = (yield* tasksA.read(asCaptain, { threadId: worker })).tasks[0]!;
+        assert.equal(current.task.status, "DONE");
+        const accepted = yield* tasksA.update(asCaptain, {
+          threadId: worker,
+          expectedRevision: current.task.revision,
+          accept: true,
+        });
+        assert.isTrue(accepted.accepted);
+        assert.equal((yield* envA.wakes(captain)).length, 2);
+      }),
+    ),
 );
