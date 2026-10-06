@@ -107,7 +107,11 @@ export function attachmentTokenAllowance(attachments: ReadonlyArray<ChatAttachme
 // One UTF-8 byte per token is deliberately pessimistic for byte-based tokenizers,
 // including multilingual text. It is not a tokenizer or a guarantee for arbitrary
 // custom models. Unknown windows use a 128k allowance, reserving a quarter for
-// tools, instructions and subsequent work. Current input is never truncated.
+// tools, instructions and subsequent work. Measured native occupancy already
+// includes tools and instructions, and the provider compacts its own transcript
+// as work continues, so it reserves only space for the reply. Otherwise a long
+// thread past three quarters full could not recover a missed run, and each
+// refused turn would become another missed run. Current input is never truncated.
 export function handoffBudget(input: {
   readonly tokenCap: number;
   readonly userText: string;
@@ -122,9 +126,11 @@ export function handoffBudget(input: {
     usage?.maxTokens ?? Infinity,
     usage?.autoCompactThreshold ?? Infinity,
   );
-  const native = usage?.usedTokens ?? input.nativeContextEstimate;
+  const measured = usage?.usedTokens;
+  const native = measured ?? input.nativeContextEstimate;
   const current =
     Buffer.byteLength(JSON.stringify(input.userText)) + attachmentTokenAllowance(input.attachments);
+  const reserve = measured === undefined ? Math.max(16_000, Math.ceil(window / 4)) : 16_000;
   return Math.max(
     0,
     Math.min(
@@ -132,7 +138,7 @@ export function handoffBudget(input: {
       // Cap only imported history. Attachment transport limits belong to adapters;
       // they may send binary/base64 data separately from the history request.
       HANDOFF_BYTE_CAP,
-      window - native - current - Math.max(16_000, Math.ceil(window / 4)),
+      window - native - current - reserve,
     ),
   );
 }
