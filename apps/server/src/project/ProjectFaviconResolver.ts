@@ -2,7 +2,8 @@
  * ProjectFaviconResolver - Effect service contract for project icon discovery.
  *
  * Resolves a representative favicon or app icon file for a workspace by
- * checking common file locations and project source metadata.
+ * checking common file locations and project source metadata, then the same
+ * locations inside each `apps/*` package of a monorepo.
  *
  * @module ProjectFaviconResolver
  */
@@ -21,9 +22,10 @@ import * as Schema from "effect/Schema";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as T3ProjectFileLoader from "./T3ProjectFileLoader.ts";
 
-// Resolution walks up to 12 well-known paths plus 7 source files, so a miss
-// costs ~20 filesystem probes. AssetAccess resolves on every project-favicon
-// asset URL, and a project's icon does not move, so the answer is cached.
+// Resolution walks ~20 well-known paths, 7 source files, and the well-known
+// paths again in each `apps/*` package, so a miss costs dozens of filesystem
+// probes. AssetAccess resolves on every project-favicon asset URL, and a
+// project's icon does not move, so the answer is cached.
 const FAVICON_CACHE_CAPACITY = 512;
 const FAVICON_POSITIVE_CACHE_TTL = Duration.minutes(10);
 const FAVICON_NEGATIVE_CACHE_TTL = Duration.minutes(1);
@@ -67,8 +69,15 @@ const FAVICON_CANDIDATES = [
   "assets/icon.png",
   "assets/logo.svg",
   "assets/logo.png",
+  "assets/images/icon.png",
   ".idea/icon.svg",
 ] as const;
+
+// Monorepos keep their apps one level below this directory, each with its own
+// icon (for example `apps/web/app/favicon.ico` or `apps/mobile/assets/images/icon.png`).
+const MONOREPO_APPS_DIRECTORY = "apps";
+// Bounds the probes for a workspace with an unusually large apps directory.
+const MAX_MONOREPO_APPS = 16;
 
 // Files that may contain a <link rel="icon"> or icon metadata declaration.
 const ICON_SOURCE_FILES = [
@@ -98,6 +107,7 @@ export class ProjectFaviconResolutionError extends Schema.TaggedError<ProjectFav
       "resolve-path",
       "stat-candidate",
       "read-source",
+      "list-apps",
     ]),
     workspaceRoot: Schema.String,
     relativePath: Schema.optional(Schema.String),
@@ -205,6 +215,39 @@ export const make = Effect.gen(function* () {
     return null;
   });
 
+  // Lists the package directories under `apps/`, sorted so resolution is stable.
+  const listMonorepoApps = Effect.fn("ProjectFaviconResolver.listMonorepoApps")(function* (
+    projectCwd: string,
+  ): Effect.fn.Return<ReadonlyArray<string>, ProjectFaviconResolutionError> {
+    const appsDirectory = path.join(projectCwd, MONOREPO_APPS_DIRECTORY);
+    const toError = (cause: PlatformError.PlatformError) =>
+      new ProjectFaviconResolutionError({
+        operation: "list-apps",
+        workspaceRoot: projectCwd,
+        relativePath: MONOREPO_APPS_DIRECTORY,
+        absolutePath: appsDirectory,
+        cause,
+      });
+    const appsStats = yield* optionOnNotFound(fileSystem.stat(appsDirectory)).pipe(
+      Effect.mapError(toError),
+    );
+    if (Option.isNone(appsStats) || appsStats.value.type !== "Directory") {
+      return [];
+    }
+    const entries = yield* fileSystem.readDirectory(appsDirectory).pipe(Effect.mapError(toError));
+    const apps: Array<string> = [];
+    for (const entry of entries.filter((name) => !name.startsWith(".")).toSorted()) {
+      if (apps.length === MAX_MONOREPO_APPS) break;
+      const entryStats = yield* optionOnNotFound(
+        fileSystem.stat(path.join(appsDirectory, entry)),
+      ).pipe(Effect.mapError(toError));
+      if (Option.isSome(entryStats) && entryStats.value.type === "Directory") {
+        apps.push(entry);
+      }
+    }
+    return apps;
+  });
+
   const resolvePathUncached = Effect.fn("ProjectFaviconResolver.resolvePathUncached")(function* (
     cwd: string,
     faviconPath?: string,
@@ -292,7 +335,13 @@ export const make = Effect.gen(function* () {
       }
     }
 
-    return null;
+    // A monorepo root rarely has an icon of its own. Each well-known path is
+    // tried across every app before the next, so the best icon format wins.
+    const apps = yield* listMonorepoApps(projectCwd);
+    const appCandidates = FAVICON_CANDIDATES.flatMap((candidate) =>
+      apps.map((app) => path.join(MONOREPO_APPS_DIRECTORY, app, candidate)),
+    );
+    return yield* findExistingFile(projectCwd, appCandidates, "workspace");
   });
 
   const faviconCache = yield* Cache.makeWith<string, string | null, ProjectFaviconResolutionError>(

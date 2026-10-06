@@ -123,6 +123,48 @@ it.layer(layerTest)("ProjectFaviconResolverLive", (it) => {
       }),
     );
 
+    it.effect("finds the best app icon in a monorepo without a root icon", () =>
+      Effect.gen(function* () {
+        const resolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        // An Expo app sorts first, but a web app's favicon is a better match.
+        yield* writeTextFile(cwd, "apps/mobile-app/assets/images/icon.png", "png");
+        yield* writeTextFile(cwd, "apps/web-app/public/favicon.svg", "<svg>web</svg>");
+        yield* writeTextFile(cwd, "apps/.hidden/favicon.svg", "<svg>hidden</svg>");
+
+        expect(yield* resolver.resolvePath(cwd)).toBe(
+          path.join(cwd, "apps", "web-app", "public", "favicon.svg"),
+        );
+      }),
+    );
+
+    it.effect("finds an Expo app icon when it is the only app icon", () =>
+      Effect.gen(function* () {
+        const resolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "apps/mobile-app/assets/images/icon.png", "png");
+        yield* writeTextFile(cwd, "apps/README.md", "not an app");
+
+        expect(yield* resolver.resolvePath(cwd)).toBe(
+          path.join(cwd, "apps", "mobile-app", "assets", "images", "icon.png"),
+        );
+      }),
+    );
+
+    it.effect("prefers a root icon over app icons", () =>
+      Effect.gen(function* () {
+        const resolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "apps/web/favicon.svg", "<svg>app</svg>");
+        yield* writeTextFile(cwd, "app/favicon.ico", "ico");
+
+        expect(yield* resolver.resolvePath(cwd)).toBe(path.join(cwd, "app", "favicon.ico"));
+      }),
+    );
+
     it.effect("prefers a t3.json iconPath over well-known files", () =>
       Effect.gen(function* () {
         const resolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;
