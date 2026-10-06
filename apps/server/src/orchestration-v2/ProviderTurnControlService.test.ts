@@ -270,6 +270,7 @@ it.effect(
             Effect.succeed(
               providerSessionId === oldSessionId ? Option.some(runtime) : Option.none(),
             ),
+          isResident: (providerSessionId) => Effect.succeed(providerSessionId === oldSessionId),
           close: () => Effect.void,
           closeInstance: () => Effect.void,
           release: () => Effect.void,

@@ -28,6 +28,7 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/sql/SqlClient";
 import { TestClock } from "effect/testing";
 import { HttpServer } from "effect/http";
 
@@ -1703,6 +1704,68 @@ it.effect("ProviderSessionManagerV2 releases idle sessions without sweeping all 
     });
 
     yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })));
+  }),
+);
+
+it.effect("ProviderSessionManagerV2 records a stopped session after its last thread detaches", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const effect = Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const sql = yield* SqlClient.SqlClient;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread-provider-session-manager-settle-detach");
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+
+      yield* eventSink.write({
+        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+      });
+      yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+      assert.isTrue(yield* manager.isResident(providerSessionId));
+
+      // Settling a thread commits the detach (dropping the binding) before the
+      // effect worker releases the session, as thread.settle does.
+      yield* eventSink.write({
+        events: [
+          {
+            id: yield* idAllocator.allocate.event({ threadId, providerSessionId }),
+            type: "provider-session.detached",
+            threadId,
+            driver: CODEX_DRIVER,
+            providerInstanceId: modelSelection.instanceId,
+            occurredAt: now,
+            payload: { providerSessionId, detachedAt: now, reason: "Thread settled." },
+          },
+        ],
+      });
+      yield* manager.detach({ providerSessionId, threadId });
+
+      assert.isFalse(yield* manager.isResident(providerSessionId));
+      assert.equal((yield* Ref.get(state)).closeCount, 1);
+      const rows = yield* sql<{ status: string; bound: number }>`
+        SELECT status, EXISTS (
+          SELECT 1 FROM orchestration_v2_projection_provider_session_bindings AS bindings
+          WHERE bindings.provider_session_id = sessions.provider_session_id
+        ) AS bound
+        FROM orchestration_v2_projection_provider_sessions AS sessions
+        WHERE provider_session_id = ${providerSessionId}
+      `;
+      assert.deepEqual(rows, [{ status: "stopped", bound: 0 }]);
+    });
+
+    yield* effect.pipe(
+      Effect.provide(
+        Layer.merge(
+          layerTest({ state, idleTimeoutMs: 60_000, capabilities: ExclusiveCapabilities }),
+          layerTestDatabase,
+        ),
+      ),
+    );
   }),
 );
 

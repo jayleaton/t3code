@@ -7,8 +7,11 @@ import * as NodePath from "node:path";
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  OrchestrationV2ProviderSessionJson,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
+  ProviderSessionId,
   RunId,
   ThreadId,
   type OrchestrationV2ThreadShell,
@@ -17,12 +20,22 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
+import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import { readLiveProviderSessionCwds } from "../storageCleanup.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { make, regenerableIgnoredPath, type ReclamationState } from "./WorktreeReclamation.ts";
+
+const encodeSession = Schema.encodeEffect(
+  Schema.fromJsonString(OrchestrationV2ProviderSessionJson),
+);
 
 const projectId = ProjectId.make("project-reclaim");
 const threadId = ThreadId.make("thread-reclaim");
@@ -33,6 +46,7 @@ const TestLayer = Layer.mergeAll(
     Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-reclaim-config-" })),
   ),
   ProcessRunner.layer,
+  SqlitePersistence.layerMemory,
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
 /** Fixture commands ignore the developer's git config (signing, hooks, identity). */
@@ -152,7 +166,13 @@ interface Harness {
   descendantActive: boolean;
 }
 
-const setup = (options: { readonly worktreesDir?: string } = {}) =>
+const setup = (
+  options: {
+    readonly worktreesDir?: string;
+    /** Replaces the harness session cwds, as production reads them. */
+    readonly liveSessionCwds?: Effect.Effect<ReadonlyArray<string>>;
+  } = {},
+) =>
   Effect.gen(function* () {
     const fixture = yield* Effect.acquireRelease(Effect.sync(makeFixture), (fixture) =>
       Effect.sync(() => NodeFS.rmSync(fixture.base, { recursive: true, force: true })),
@@ -168,7 +188,12 @@ const setup = (options: { readonly worktreesDir?: string } = {}) =>
     };
     const service = yield* make({
       worktreesDir: options.worktreesDir ?? fixture.worktreesDir,
-      readState: Effect.sync(() => harness.state),
+      readState:
+        options.liveSessionCwds === undefined
+          ? Effect.sync(() => harness.state)
+          : options.liveSessionCwds.pipe(
+              Effect.map((liveSessionCwds) => ({ ...harness.state, liveSessionCwds })),
+            ),
       hasActiveDescendants: () => Effect.sync(() => harness.descendantActive),
       afterRemove: () => Effect.void,
     });
@@ -306,6 +331,98 @@ describe("WorktreeReclamation", () => {
       ]);
       expect(NodeFS.existsSync(fixture.worktree)).toBe(true);
     }).pipe(Effect.scoped, Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "reclaims a completed, stopped thread whose released session row still reads ready",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const resident = new Set<string>();
+        const sessionManager = ProviderSessionManager.ProviderSessionManagerV2.of({
+          shutdown: Effect.void,
+          open: () => Effect.die("unused open"),
+          get: () => Effect.die("liveness checks must not count as session activity"),
+          isResident: (providerSessionId) => Effect.sync(() => resident.has(providerSessionId)),
+          close: () => Effect.void,
+          closeInstance: () => Effect.void,
+          release: () => Effect.void,
+          detach: () => Effect.void,
+        });
+        const { fixture, service, updateThread } = yield* setup({
+          liveSessionCwds: readLiveProviderSessionCwds().pipe(
+            Effect.provideService(SqlClient.SqlClient, sql),
+            Effect.provideService(ProviderSessionManager.ProviderSessionManagerV2, sessionManager),
+            Effect.orDie,
+          ),
+        });
+        // The real owner after Stop and settle: its latest run completed, and
+        // settling detached (unbound) a session whose release left it "ready".
+        updateThread({
+          status: "completed",
+          latestRunId: RunId.make("run-finished"),
+          latestRunStartedAt: DateTime.makeUnsafe(Date.parse("2025-12-31T23:00:00.000Z")),
+        });
+        const providerSessionId = ProviderSessionId.make("provider-session-released");
+        const writeSession = (status: "ready" | "starting") =>
+          Effect.gen(function* () {
+            const at = DateTime.makeUnsafe(Date.parse("2026-01-01T00:00:00.000Z"));
+            const payload = yield* encodeSession({
+              id: providerSessionId,
+              driver: ProviderDriverKind.make("codex"),
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              status,
+              cwd: fixture.worktree,
+              model: null,
+              capabilities: CodexProviderCapabilitiesV2,
+              createdAt: at,
+              updatedAt: at,
+              lastError: null,
+            });
+            yield* sql`
+            INSERT OR REPLACE INTO orchestration_v2_projection_provider_sessions (
+              provider_session_id, thread_id, provider, driver, provider_instance_id,
+              status, model, updated_at, payload_json
+            ) VALUES (
+              ${providerSessionId}, ${threadId}, 'codex', 'codex', 'codex',
+              ${status}, NULL, '2026-01-01T00:00:00.000Z', ${payload}
+            )
+          `;
+          }).pipe(Effect.orDie);
+        yield* writeSession("ready");
+        expect(yield* service.reclaim({ threadId, dryRun: true })).toMatchObject({
+          status: "eligible",
+          refusals: [],
+        });
+
+        // A session this process still holds keeps the checkout.
+        resident.add(providerSessionId);
+        expect(codes((yield* service.reclaim({ threadId, dryRun: true })).refusals)).toEqual([
+          "live_session",
+        ]);
+        resident.clear();
+        // So does one still bound to a thread, or one that is starting.
+        yield* sql`
+        INSERT INTO orchestration_v2_projection_provider_session_bindings
+        VALUES (${providerSessionId}, ${threadId})
+      `;
+        expect(codes((yield* service.reclaim({ threadId, dryRun: true })).refusals)).toEqual([
+          "live_session",
+        ]);
+        yield* sql`DELETE FROM orchestration_v2_projection_provider_session_bindings`;
+        yield* writeSession("starting");
+        expect(codes((yield* service.reclaim({ threadId, dryRun: true })).refusals)).toEqual([
+          "live_session",
+        ]);
+        yield* writeSession("ready");
+
+        const reclaimed = yield* service.reclaim({ threadId });
+        expect(reclaimed).toMatchObject({ status: "reclaimed", refusals: [], branch: "feature" });
+        expect(NodeFS.existsSync(fixture.worktree)).toBe(false);
+        expect(git(fixture.project, "rev-parse", "--verify", "refs/heads/feature").trim()).toBe(
+          git(fixture.project, "rev-parse", "origin/feature").trim(),
+        );
+      }).pipe(Effect.scoped, Effect.provide(TestLayer)),
   );
 
   it.effect("refuses a checkout shared with another thread", () =>

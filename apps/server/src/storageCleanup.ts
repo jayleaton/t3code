@@ -31,6 +31,7 @@ import * as GitManager from "./git/GitManager.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
+import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import { threadHasQueuedTurnStart } from "./orchestration-v2/autoSettlement.ts";
 import { forkParked } from "./serverActivation.ts";
 import * as Settings from "./serverSettings.ts";
@@ -80,18 +81,63 @@ function sameProjectWorktreePolicies(left: ServerSettings, right: ServerSettings
   );
 }
 
+// The shell status is the latest run's status. A run that ended leaves the
+// thread idle; "waiting" is excluded because it precedes checkpoint capture.
+const FINISHED_THREAD_STATUSES = new Set<OrchestrationV2ThreadShell["status"]>([
+  "idle",
+  "completed",
+  "interrupted",
+  "failed",
+  "cancelled",
+  "rolled_back",
+]);
+
 /** Live sessions keep their cwd even when no turn is currently running. */
 export function storageCleanupThreadIdle(thread: OrchestrationV2ThreadShell, now: number): boolean {
   return (
     thread.branch !== null &&
     thread.worktreePath !== null &&
     thread.activeRunId === null &&
-    (thread.status === "idle" || thread.status === "failed") &&
+    FINISHED_THREAD_STATUSES.has(thread.status) &&
     (thread.pendingBackgroundTasks?.length ?? 0) === 0 &&
     thread.pendingRuntimeRequest === null &&
     !threadHasQueuedTurnStart(thread, now)
   );
 }
+
+/**
+ * Working directories of provider sessions that may still be open. A row bound
+ * to a thread, or still starting, counts as open. An unbound row counts only
+ * while this process holds the session: settling or archiving detaches the
+ * thread before the session is released, and rows from such releases can be
+ * left "ready" after their process is gone.
+ */
+export const readLiveProviderSessionCwds = Effect.fn("StorageCleanup.readLiveProviderSessionCwds")(
+  function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+    const rows = yield* sql<{ payload_json: string; bound: number }>`
+      SELECT sessions.payload_json, EXISTS (
+        SELECT 1 FROM orchestration_v2_projection_provider_session_bindings AS bindings
+        WHERE bindings.provider_session_id = sessions.provider_session_id
+      ) AS bound
+      FROM orchestration_v2_projection_provider_sessions AS sessions
+      WHERE sessions.status != 'stopped'
+    `;
+    const cwds: Array<string> = [];
+    for (const row of rows) {
+      const session = yield* decodeCleanupSession(row.payload_json);
+      if (
+        row.bound !== 0 ||
+        session.status === "starting" ||
+        (yield* manager.isResident(session.id))
+      ) {
+        cwds.push(session.cwd);
+      }
+    }
+    return cwds;
+  },
+);
 
 /** PR metadata refreshes must not reset the inactivity clock. */
 export function storageCleanupActivityAt(thread: OrchestrationV2ThreadShell): number {
@@ -113,6 +159,7 @@ export const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const sql = yield* SqlClient.SqlClient;
+  const sessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
   const terminals = yield* TerminalManager.TerminalManager;
@@ -337,16 +384,13 @@ export const make = Effect.gen(function* () {
         )
           return;
         // Sessions can outlive their run and can be shared across app threads.
-        const sessionRows = yield* sql<{ payload_json: string }>`
-          SELECT payload_json FROM orchestration_v2_projection_provider_sessions
-          WHERE status != 'stopped'
-        `;
-        const sessions = yield* Effect.forEach(sessionRows, (row) =>
-          decodeCleanupSession(row.payload_json),
+        const sessionCwds = yield* readLiveProviderSessionCwds().pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.provideService(ProviderSessionManager.ProviderSessionManagerV2, sessionManager),
         );
         if (
-          sessions.some((session) => {
-            const cwd = path.resolve(session.cwd);
+          sessionCwds.some((sessionCwd) => {
+            const cwd = path.resolve(sessionCwd);
             return cwd === worktreePath || inside(worktreePath, cwd);
           })
         )

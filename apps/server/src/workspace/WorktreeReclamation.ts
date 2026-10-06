@@ -1,5 +1,4 @@
 import {
-  OrchestrationV2ProviderSessionJson,
   type OrchestrationV2ThreadShell,
   type ProjectId,
   type ThreadId,
@@ -23,8 +22,13 @@ import * as ServerConfig from "../config.ts";
 import * as GitManager from "../git/GitManager.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
 import * as ProcessRunner from "../processRunner.ts";
-import { storageCleanupActivityAt, storageCleanupThreadIdle } from "../storageCleanup.ts";
+import {
+  readLiveProviderSessionCwds,
+  storageCleanupActivityAt,
+  storageCleanupThreadIdle,
+} from "../storageCleanup.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { withWorkspaceLease } from "./workspaceLease.ts";
@@ -419,10 +423,6 @@ export const make = Effect.fn("WorktreeReclamation.make")(function* (runtime: Re
   return WorktreeReclamation.of({ reclaim });
 });
 
-const decodeSession = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(OrchestrationV2ProviderSessionJson),
-);
-
 export const layer = Layer.effect(
   WorktreeReclamation,
   Effect.gen(function* () {
@@ -430,6 +430,7 @@ export const layer = Layer.effect(
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const projectStore = yield* ProjectStore.ProjectStoreV2;
     const sql = yield* SqlClient.SqlClient;
+    const sessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const terminals = yield* TerminalManager.TerminalManager;
     const gitManager = yield* GitManager.GitManager;
 
@@ -456,17 +457,16 @@ export const layer = Layer.effect(
       const active = yield* projections.getShellSnapshot();
       const archived = yield* projections.getShellSnapshot({ location: "archive" });
       const projects = yield* projectStore.listShells();
-      const sessionRows = yield* sql<{ payload_json: string }>`
-        SELECT payload_json FROM orchestration_v2_projection_provider_sessions
-        WHERE status != 'stopped'
-      `;
-      const sessions = yield* Effect.forEach(sessionRows, (row) => decodeSession(row.payload_json));
+      const liveSessionCwds = yield* readLiveProviderSessionCwds().pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+        Effect.provideService(ProviderSessionManager.ProviderSessionManagerV2, sessionManager),
+      );
       return {
         threads: [...active.threads, ...archived.threads].filter(
           (thread) => thread.deletedAt === null,
         ),
         projects,
-        liveSessionCwds: sessions.map((session) => session.cwd),
+        liveSessionCwds,
         liveTerminalCwds: yield* liveTerminalCwds,
       };
     }).pipe(toReclaimError("Unable to read thread state"));
