@@ -8,9 +8,9 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
-import { makeSqlitePersistenceLive } from "../src/persistence/Layers/Sqlite.ts";
+import * as Sqlite from "../src/persistence/Sqlite.ts";
 import {
   applyReviewedCandidates,
   selectRecoveryCandidates,
@@ -108,7 +108,7 @@ function withMigratedDatabase<A>(run: (db: NodeSqlite.DatabaseSync) => A) {
 
   return Effect.gen(function* () {
     yield* writeFixtures.pipe(
-      Effect.provide(makeSqlitePersistenceLive(dbPath).pipe(Layer.provide(NodeServices.layer))),
+      Effect.provide(Sqlite.layerFromPath(dbPath).pipe(Layer.provide(NodeServices.layer))),
     );
     const db = new NodeSqlite.DatabaseSync(dbPath, { readOnly: true });
     try {

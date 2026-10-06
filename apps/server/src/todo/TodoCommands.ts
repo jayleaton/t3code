@@ -3,7 +3,7 @@ import * as DateTime from "effect/DateTime";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
-import type { UnsequencedTodoEvent } from "../persistence/Services/OrchestrationEventStore.ts";
+import type { UnsequencedTodoEvent } from "../persistence/OrchestrationEventStore.ts";
 import type { TodoRow } from "./TodoStore.ts";
 
 interface TodoCommandBase {

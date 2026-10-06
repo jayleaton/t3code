@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Tool } from "effect/unstable/ai";
+import { Tool } from "effect/ai";
 
 import {
   CreateThreadsTool,
@@ -11,12 +11,12 @@ import {
 
 describe("orchestrator MCP tool guidance", () => {
   it("directs subagent requests to delegation instead of ordinary threads", () => {
-    assert.include(DelegateTaskTool.description ?? "", "child agent/subagent");
+    assert.include(DelegateTaskTool.description ?? "", "CHILD chat");
     assert.include(DelegateTaskTool.description ?? "", "cross-provider");
-    assert.include(CreateThreadsTool.description ?? "", "not delegation");
-    assert.include(CreateThreadsTool.description ?? "", "call delegate_task");
+    assert.include(CreateThreadsTool.description ?? "", "It is not a subagent");
+    assert.include(CreateThreadsTool.description ?? "", "delegate_task without a profileId");
     assert.include(DelegateTaskTool.description ?? "", "waitTimedOut");
-    assert.include(DelegateTaskTool.description ?? "", "does not cancel the child");
+    assert.include(DelegateTaskTool.description ?? "", "does not cancel the task");
     assert.include(DelegateTaskTool.description ?? "", "keep that taskId");
     assert.include(DelegateTaskTool.description ?? "", "call delegate_task again");
     assert.include(DelegateTaskTool.description ?? "", "childThreadId is backing storage");
@@ -26,7 +26,7 @@ describe("orchestrator MCP tool guidance", () => {
     );
     assert.include(
       OrchestratorToolkit.tools.task_cancel.description ?? "",
-      "without interrupting later child-thread runs",
+      "This includes later child-thread runs, even after the task is terminal",
     );
   });
 

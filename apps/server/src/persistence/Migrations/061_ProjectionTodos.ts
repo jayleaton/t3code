@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 // Read model for todo events. Removed todos keep their row (deleted_at) so a
 // reused todo id cannot be recreated.

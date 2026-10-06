@@ -273,6 +273,7 @@ describe("age settlement", () => {
       startedAt: "2026-06-01T00:00:00.000Z",
       headSha: null,
       failedChecks: [],
+      passedChecks: [],
       passed: false,
       remarksThrough: "2026-06-01T00:00:00.000Z",
       remarkIds: [],
@@ -351,7 +352,7 @@ const makeHarness = Effect.fn(function* (input: {
   const activation = yield* Deferred.make<void>();
   const settings = yield* Ref.make(input.settings ?? DEFAULT_SERVER_SETTINGS);
   const settingsChanges = yield* Queue.unbounded<ContractServerSettings>();
-  const dependencies = Layer.mergeAll(
+  const layerDependencies = Layer.mergeAll(
     Layer.mock(ProjectionStore.ProjectionStoreV2)({
       getSettlementCandidates: (id) =>
         Ref.get(candidates).pipe(
@@ -397,7 +398,7 @@ const makeHarness = Effect.fn(function* (input: {
     events,
     commands,
     closedIdle,
-    layer: ThreadSettlementService.layer.pipe(Layer.provide(dependencies)),
+    layer: ThreadSettlementService.layer.pipe(Layer.provide(layerDependencies)),
     start: (service: ThreadSettlementService.ThreadSettlementServiceV2["Service"]) =>
       Effect.gen(function* () {
         yield* service.start();

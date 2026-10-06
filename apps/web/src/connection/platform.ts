@@ -26,6 +26,7 @@ import {
   type DesktopBridge,
   type DesktopEnvironmentBootstrap,
   type DesktopSshEnvironmentTarget,
+  type EnvironmentId,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
@@ -36,11 +37,11 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 import { APP_VERSION } from "../branding";
 import { readDesktopPrimaryBearerToken } from "../environments/primary/desktopAuth";
-import { primaryEnvironmentHttpLayer } from "../environments/primary/httpLayer";
+import * as PrimaryEnvironmentHttpLayer from "../environments/primary/httpLayer";
 import {
   readPrimaryEnvironmentTarget,
   type PrimaryEnvironmentTarget,
@@ -55,7 +56,7 @@ import {
   readDesktopSecondaryBootstrapsResult,
   type DesktopSecondaryBootstrapsRead,
 } from "./desktopLocal";
-import { connectionStorageLayer } from "./storage";
+import * as ConnectionStorage from "./storage";
 import { clientPresentationMetadata } from "./clientMetadata";
 
 let nextObservedRpcRequestId = 0;
@@ -67,7 +68,7 @@ function currentNetworkStatus(): "unknown" | "offline" | "online" {
   return navigator.onLine ? "online" : "offline";
 }
 
-const connectivityLayer = Connectivity.layer({
+const layerConnectivity = Connectivity.layer({
   status: Effect.sync(currentNetworkStatus),
   changes: Stream.callback((queue) =>
     Effect.acquireRelease(
@@ -87,28 +88,68 @@ const connectivityLayer = Connectivity.layer({
   ),
 });
 
-const wakeupsLayer = Wakeups.layer({
-  changes: Stream.merge(
-    Stream.callback<"application-active">((queue) =>
-      Effect.acquireRelease(
-        Effect.sync(() => {
-          const listener = () => {
-            if (document.visibilityState === "visible") {
-              Queue.offerUnsafe(queue, "application-active");
-            }
-          };
-          document.addEventListener("visibilitychange", listener);
-          return listener;
-        }),
-        (listener) =>
+interface NetworkInformationLike extends EventTarget {
+  readonly type?: string;
+}
+
+/**
+ * Wakes connections when the browser reports a different network type, such
+ * as a laptop moving from Wi-Fi to a phone hotspot. `change` also fires for
+ * bandwidth and latency estimates on the same network, so only a type change
+ * counts. Browsers without `navigator.connection.type` rely on the periodic
+ * route check instead.
+ */
+const networkPathChanges = Stream.callback<"network-changed">((queue) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      const connection =
+        typeof navigator === "undefined"
+          ? undefined
+          : (navigator as Navigator & { readonly connection?: NetworkInformationLike }).connection;
+      if (connection?.type === undefined) return undefined;
+      let previous = connection.type;
+      const listener = () => {
+        const type = connection.type;
+        if (type === undefined || type === previous) return;
+        previous = type;
+        Queue.offerUnsafe(queue, "network-changed");
+      };
+      connection.addEventListener("change", listener);
+      return { connection, listener };
+    }),
+    (subscription) =>
+      Effect.sync(() =>
+        subscription?.connection.removeEventListener("change", subscription.listener),
+      ),
+  ).pipe(Effect.asVoid),
+);
+
+const layerWakeups = Wakeups.layer({
+  changes: Stream.mergeAll(
+    [
+      Stream.callback<"application-active">((queue) =>
+        Effect.acquireRelease(
           Effect.sync(() => {
-            document.removeEventListener("visibilitychange", listener);
+            const listener = () => {
+              if (document.visibilityState === "visible") {
+                Queue.offerUnsafe(queue, "application-active");
+              }
+            };
+            document.addEventListener("visibilitychange", listener);
+            return listener;
           }),
-      ).pipe(Effect.asVoid),
-    ),
-    managedRelayAccountChanges(appAtomRegistry).pipe(
-      Stream.map(() => "credentials-changed" as const),
-    ),
+          (listener) =>
+            Effect.sync(() => {
+              document.removeEventListener("visibilitychange", listener);
+            }),
+        ).pipe(Effect.asVoid),
+      ),
+      managedRelayAccountChanges(appAtomRegistry).pipe(
+        Stream.map(() => "credentials-changed" as const),
+      ),
+      networkPathChanges,
+    ],
+    { concurrency: "unbounded" },
   ),
 });
 
@@ -141,7 +182,11 @@ function sshPreparationError(cause: unknown) {
 
 export const provisionDesktopSshEnvironment = Effect.fn(
   "web.connectionPlatform.ssh.provisionDesktop",
-)(function* (bridge: DesktopBridge, target: DesktopSshEnvironmentTarget) {
+)(function* (
+  bridge: DesktopBridge,
+  target: DesktopSshEnvironmentTarget,
+  expectedEnvironmentId?: EnvironmentId,
+) {
   const bootstrap = yield* Effect.tryPromise({
     try: () =>
       bridge.ensureSshEnvironment(target, {
@@ -160,6 +205,12 @@ export const provisionDesktopSshEnvironment = Effect.fn(
     try: () => bridge.fetchSshEnvironmentDescriptor(bootstrap.httpBaseUrl),
     catch: sshPreparationError,
   });
+  if (expectedEnvironmentId !== undefined && descriptor.environmentId !== expectedEnvironmentId) {
+    return yield* new ConnectionBlockedError({
+      reason: "configuration",
+      detail: `That host reaches ${descriptor.label}, a different machine. Add it as its own environment instead.`,
+    });
+  }
   const access = yield* Effect.tryPromise({
     try: () => bridge.bootstrapSshBearerSession(bootstrap.httpBaseUrl, pairingToken),
     catch: sshPreparationError,
@@ -172,7 +223,7 @@ export const provisionDesktopSshEnvironment = Effect.fn(
   };
 });
 
-const capabilitiesLayer = Layer.effectContext(
+const layerCapabilities = Layer.effectContext(
   Effect.sync(() => {
     const presentation = ClientCapabilities.ClientPresentation.of({
       metadata: clientMetadata(),
@@ -222,16 +273,18 @@ const capabilitiesLayer = Layer.effectContext(
       }).pipe(Effect.map(Option.fromNullishOr)),
     });
     const ssh = ClientCapabilities.SshEnvironmentGateway.of({
-      provision: Effect.fn("web.connectionPlatform.ssh.provision")(function* (target) {
-        const bridge = window.desktopBridge;
-        if (bridge === undefined) {
-          return yield* new ConnectionBlockedError({
-            reason: "unsupported",
-            detail: "SSH environments are only available in the desktop app.",
-          });
-        }
-        return yield* provisionDesktopSshEnvironment(bridge, target);
-      }),
+      provision: Effect.fn("web.connectionPlatform.ssh.provision")(
+        function* (target, expectedEnvironmentId) {
+          const bridge = window.desktopBridge;
+          if (bridge === undefined) {
+            return yield* new ConnectionBlockedError({
+              reason: "unsupported",
+              detail: "SSH environments are only available in the desktop app.",
+            });
+          }
+          return yield* provisionDesktopSshEnvironment(bridge, target, expectedEnvironmentId);
+        },
+      ),
       prepare: Effect.fn("web.connectionPlatform.ssh.prepare")(function* (input) {
         const bridge = window.desktopBridge;
         if (bridge === undefined) {
@@ -293,7 +346,10 @@ const loadPrimaryConnectionRegistration = Effect.fn(
 )(function* (resolved: PrimaryEnvironmentTarget) {
   const descriptor = yield* fetchRemoteEnvironmentDescriptor({
     httpBaseUrl: resolved.target.httpBaseUrl,
-  }).pipe(Effect.provide(primaryEnvironmentHttpLayer), Effect.mapError(mapRemoteEnvironmentError));
+  }).pipe(
+    Effect.provide(PrimaryEnvironmentHttpLayer.layer),
+    Effect.mapError(mapRemoteEnvironmentError),
+  );
   return new PrimaryConnectionRegistration({
     target: new PrimaryConnectionTarget({
       environmentId: descriptor.environmentId,
@@ -458,7 +514,7 @@ export function secondaryRegistrationsToRetainAfterTopologyRead(
   );
 }
 
-const platformConnectionSourceLayer = Layer.effect(
+const layerPlatformConnectionSource = Layer.effect(
   PlatformConnectionSource.PlatformConnectionSource,
   Effect.gen(function* () {
     if (isHostedStaticApp() || isLocalEnvironmentDisabled()) {
@@ -578,7 +634,7 @@ const platformConnectionSourceLayer = Layer.effect(
   }),
 );
 
-const environmentOwnedDataCleanupLayer = Layer.succeed(
+const layerEnvironmentOwnedDataCleanup = Layer.succeed(
   Persistence.EnvironmentOwnedDataCleanup,
   Persistence.EnvironmentOwnedDataCleanup.of({
     clear: (environmentId) =>
@@ -588,7 +644,7 @@ const environmentOwnedDataCleanupLayer = Layer.succeed(
   }),
 );
 
-const rpcRequestObserverLayer = Layer.succeed(
+const layerRpcRequestObserver = Layer.succeed(
   EnvironmentRpcRequestObserver,
   EnvironmentRpcRequestObserver.of({
     observe: ({ environmentId, method }) =>
@@ -604,24 +660,24 @@ const rpcRequestObserverLayer = Layer.succeed(
 );
 
 type ConnectionPlatformLayerSource =
-  | typeof connectionStorageLayer
-  | typeof connectivityLayer
-  | typeof wakeupsLayer
-  | typeof capabilitiesLayer
-  | typeof platformConnectionSourceLayer
-  | typeof environmentOwnedDataCleanupLayer
-  | typeof rpcRequestObserverLayer;
+  | typeof ConnectionStorage.layer
+  | typeof layerConnectivity
+  | typeof layerWakeups
+  | typeof layerCapabilities
+  | typeof layerPlatformConnectionSource
+  | typeof layerEnvironmentOwnedDataCleanup
+  | typeof layerRpcRequestObserver;
 
-export const connectionPlatformLayer: Layer.Layer<
+export const layer: Layer.Layer<
   Layer.Success<ConnectionPlatformLayerSource>,
   Layer.Error<ConnectionPlatformLayerSource>,
   Layer.Services<ConnectionPlatformLayerSource>
 > = Layer.mergeAll(
-  connectionStorageLayer,
-  connectivityLayer,
-  wakeupsLayer,
-  capabilitiesLayer,
-  platformConnectionSourceLayer,
-  environmentOwnedDataCleanupLayer,
-  rpcRequestObserverLayer,
+  ConnectionStorage.layer,
+  layerConnectivity,
+  layerWakeups,
+  layerCapabilities,
+  layerPlatformConnectionSource,
+  layerEnvironmentOwnedDataCleanup,
+  layerRpcRequestObserver,
 );

@@ -14,7 +14,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { Rpc, RpcClient, RpcGroup, RpcMessage } from "effect/unstable/rpc";
+import { Rpc, RpcClient, RpcGroup, RpcMessage } from "effect/rpc";
 import { gatewayEventFromV2 } from "./runtimePort.ts";
 import { v2ThreadShell } from "../state/orchestrationV2TestFixtures.ts";
 import { subscribe } from "../rpc/client.ts";

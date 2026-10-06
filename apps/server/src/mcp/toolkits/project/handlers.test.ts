@@ -5,6 +5,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   type OrchestrationV2ThreadShell,
+  type Project as ProjectRecord,
 } from "@t3tools/contracts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -20,7 +21,7 @@ import * as ServerSettings from "../../../serverSettings.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import { ProjectHandlersLive } from "./handlers.ts";
+import * as ProjectHandlers from "./handlers.ts";
 import { ProjectToolkit } from "./tools.ts";
 
 it.effect("parents a launched thread to the calling thread and attributes its first message", () =>
@@ -42,13 +43,17 @@ it.effect("parents a launched thread to the calling thread and attributes its fi
     } as OrchestrationV2ThreadShell;
     let launchedSender: ThreadId | undefined;
     let launchedParent: ThreadId | undefined;
-    const dependencies = Layer.mergeAll(
+    const layerDependencies = Layer.mergeAll(
       NodeCrypto.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
-        threadId: sourceThreadId,
-        providerSessionId: "session",
-        providerInstanceId,
+        requestNamespace: "session",
+        thread: {
+          threadId: sourceThreadId,
+          providerSessionId: "session",
+          providerInstanceId,
+        },
+        client: undefined,
         issuedAt: 0,
         capabilities: new Set(["orchestration" as const]),
       }),
@@ -78,11 +83,11 @@ it.effect("parents a launched thread to the calling thread and attributes its fi
       ),
     );
     const toolkit = yield* ProjectToolkit.pipe(
-      Effect.provide(ProjectHandlersLive.pipe(Layer.provide(dependencies))),
+      Effect.provide(ProjectHandlers.layer.pipe(Layer.provide(layerDependencies))),
     );
     const result = yield* toolkit
       .handle("t3_thread_launch", { title: "Audit", message: "Review the change" })
-      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(layerDependencies));
     expect(result.at(-1)?.result).toMatchObject({ projectId, modelSelection });
     expect(launchedSender).toBe(sourceThreadId);
     expect(launchedParent).toBe(sourceThreadId);
@@ -107,13 +112,17 @@ it.effect("launches a scratch thread into the Scratch project", () =>
       deletedAt: null,
     } as OrchestrationV2ThreadShell;
     const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
-    const dependencies = Layer.mergeAll(
+    const layerDependencies = Layer.mergeAll(
       NodeCrypto.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
-        threadId: sourceThreadId,
-        providerSessionId: "session",
-        providerInstanceId,
+        requestNamespace: "session",
+        thread: {
+          threadId: sourceThreadId,
+          providerSessionId: "session",
+          providerInstanceId,
+        },
+        client: undefined,
         issuedAt: 0,
         capabilities: new Set(["orchestration" as const]),
       }),
@@ -145,12 +154,12 @@ it.effect("launches a scratch thread into the Scratch project", () =>
       ),
     );
     const toolkit = yield* ProjectToolkit.pipe(
-      Effect.provide(ProjectHandlersLive.pipe(Layer.provide(dependencies))),
+      Effect.provide(ProjectHandlers.layer.pipe(Layer.provide(layerDependencies))),
     );
     const handle = (params: Parameters<typeof toolkit.handle<"t3_thread_launch">>[1]) =>
       toolkit
         .handle("t3_thread_launch", params)
-        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(layerDependencies));
 
     const result = yield* handle({ title: "Notes", scratch: true, message: "Draft a list" });
     expect(result.at(-1)?.result).toMatchObject({ projectId: scratchProjectId });
@@ -186,13 +195,17 @@ it.effect("launches an agent thread from profileId and rejects unknown agents", 
       deletedAt: null,
     } as OrchestrationV2ThreadShell;
     const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
-    const dependencies = Layer.mergeAll(
+    const layerDependencies = Layer.mergeAll(
       NodeCrypto.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
-        threadId: sourceThreadId,
-        providerSessionId: "session",
-        providerInstanceId,
+        requestNamespace: "session",
+        thread: {
+          threadId: sourceThreadId,
+          providerSessionId: "session",
+          providerInstanceId,
+        },
+        client: undefined,
         issuedAt: 0,
         capabilities: new Set(["orchestration" as const]),
       }),
@@ -230,12 +243,12 @@ it.effect("launches an agent thread from profileId and rejects unknown agents", 
       ),
     );
     const toolkit = yield* ProjectToolkit.pipe(
-      Effect.provide(ProjectHandlersLive.pipe(Layer.provide(dependencies))),
+      Effect.provide(ProjectHandlers.layer.pipe(Layer.provide(layerDependencies))),
     );
     const handle = (params: Parameters<typeof toolkit.handle<"t3_thread_launch">>[1]) =>
       toolkit
         .handle("t3_thread_launch", params)
-        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(layerDependencies));
 
     yield* handle({ title: "Review", profileId: "doug", runtimeMode: "auto", message: "Go" });
     expect(launched.map((input) => input.profileSelection)).toEqual([
@@ -276,13 +289,17 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
       updatedAt: "2026-10-01T00:00:00.000Z",
       deletedAt: null,
     };
-    const dependencies = Layer.mergeAll(
+    const layerDependencies = Layer.mergeAll(
       NodeCrypto.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
-        threadId: sourceThreadId,
-        providerSessionId: "session",
-        providerInstanceId,
+        requestNamespace: "session",
+        thread: {
+          threadId: sourceThreadId,
+          providerSessionId: "session",
+          providerInstanceId,
+        },
+        client: undefined,
         issuedAt: 0,
         capabilities: new Set(["orchestration" as const]),
       }),
@@ -319,12 +336,12 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
       ),
     );
     const toolkit = yield* ProjectToolkit.pipe(
-      Effect.provide(ProjectHandlersLive.pipe(Layer.provide(dependencies))),
+      Effect.provide(ProjectHandlers.layer.pipe(Layer.provide(layerDependencies))),
     );
     const handle = (params: Parameters<typeof toolkit.handle<"t3_project_create">>[1]) =>
       toolkit
         .handle("t3_project_create", params)
-        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(layerDependencies));
 
     const result = yield* handle({ title: "Pinball Stats" });
     expect(result.at(-1)?.result).toMatchObject({
@@ -347,5 +364,90 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
       expect(rejected.at(-1)?.result).toMatchObject({ code: "invalid_request" });
     }
     expect(named).toEqual(["Pinball Stats"]);
+  }),
+);
+
+const clientLaunchHarness = (input: {
+  readonly runtimeModeCeiling: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
+  readonly launched: Array<ThreadLaunch.ThreadLaunchInput>;
+}) => {
+  const projectId = ProjectId.make("project:client-target");
+  const modelSelection = { instanceId: ProviderInstanceId.make("claude"), model: "claude-opus" };
+  const layerDependencies = Layer.mergeAll(
+    NodeCrypto.layer,
+    Layer.succeed(McpInvocationContext.McpInvocationContext, {
+      environmentId: EnvironmentId.make("environment"),
+      requestNamespace: "client:session-1",
+      thread: undefined,
+      client: {
+        sessionId: "session-1",
+        label: "Claude Code",
+        runtimeModeCeiling: input.runtimeModeCeiling,
+      },
+      issuedAt: 0,
+      capabilities: new Set(["orchestration" as const]),
+    }),
+    Layer.mock(ThreadManagement.ThreadManagementService)({}),
+    Layer.mock(ThreadLaunch.ThreadLaunchService)({
+      launch: (launch) => {
+        input.launched.push(launch);
+        return Effect.succeed({
+          threadId: launch.threadId,
+          projection: {
+            thread: {
+              id: launch.threadId,
+              projectId: launch.projectId,
+              modelSelection: launch.modelSelection,
+            },
+            runs: [],
+          },
+          resumed: false,
+        } as unknown as ThreadLaunch.ThreadLaunchResult);
+      },
+    }),
+    Layer.mock(Project.ProjectService)({
+      getById: (id) =>
+        Effect.succeed(
+          id === projectId
+            ? Option.some({ id, defaultModelSelection: modelSelection } as unknown as ProjectRecord)
+            : Option.none(),
+        ),
+    }),
+    Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
+    ServerSettings.layerTest(),
+    NodeServices.layer,
+    ServerConfig.layerTest(process.cwd(), { prefix: "t3-client-launch-" }).pipe(
+      Layer.provide(NodeServices.layer),
+    ),
+  );
+  return { projectId, modelSelection, dependencies: layerDependencies };
+};
+
+it.effect("a client launches at its ceiling with the project's default model", () =>
+  Effect.gen(function* () {
+    const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+    const { projectId, modelSelection, dependencies } = clientLaunchHarness({
+      runtimeModeCeiling: "auto-accept-edits",
+      launched,
+    });
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(ProjectHandlers.layer.pipe(Layer.provide(dependencies))),
+    );
+    const handle = (params: Parameters<typeof toolkit.handle<"t3_thread_launch">>[1]) =>
+      toolkit
+        .handle("t3_thread_launch", params)
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+
+    const result = yield* handle({ title: "Fix", projectId, message: "Fix the bug" });
+    expect(result.at(-1)?.result).toMatchObject({ projectId, modelSelection });
+    expect(launched[0]?.runtimeMode).toBe("auto-accept-edits");
+    expect(launched[0]?.initialMessage?.senderThreadId).toBeUndefined();
+
+    const escalated = yield* handle({ title: "Fix", projectId, runtimeMode: "full-access" });
+    expect(escalated.at(-1)?.result).toMatchObject({ code: "runtime_mode_escalation_denied" });
+
+    const untargeted = yield* handle({ title: "Fix" });
+    expect(untargeted.at(-1)?.result).toMatchObject({ code: "target_required" });
+    expect(launched).toHaveLength(1);
   }),
 );
