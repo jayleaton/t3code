@@ -27,7 +27,11 @@ import {
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { threadShellHasActiveWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
-import { threadPullRequestsOf } from "@t3tools/shared/threadPullRequests";
+import {
+  threadPullRequestsOf,
+  threadPullRequestWatchesSuspended,
+  visibleThreadPullRequests,
+} from "@t3tools/shared/threadPullRequests";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -194,9 +198,18 @@ export const make = Effect.gen(function* () {
           return shell !== undefined && hasLiveRun(shell);
         }
         case "pull_request": {
+          // Registered is not live: a settled, archived, or deleted thread parks its watches.
           for (const threadId of [task.workerThreadId, task.ownerThreadId]) {
-            const shell = yield* getShell(threadId);
-            const watched = threadPullRequestsOf(shell ?? {}).some(
+            const thread = yield* projections
+              .getThread(threadId)
+              .pipe(Effect.orElseSucceed(() => undefined));
+            if (
+              thread === undefined ||
+              thread.deletedAt != null ||
+              threadPullRequestWatchesSuspended(thread)
+            )
+              continue;
+            const watched = visibleThreadPullRequests(threadPullRequestsOf(thread)).some(
               (link) =>
                 link.watch !== undefined &&
                 link.repository.toLowerCase() === continuation.repository.toLowerCase() &&
