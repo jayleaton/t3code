@@ -14,6 +14,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 
@@ -714,6 +715,84 @@ it.effect("restart recovery leaves a run that its restart continuation resumes",
       yield* f.endLatestRun("worker", "failed");
       yield* (yield* makeService).recover;
       assert.equal((yield* f.wakes("captain")).length, 1);
+    }),
+  ).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("managed workers message only their own children; Captains relay freely", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const tasks = yield* makeService;
+      yield* f.create("captain");
+      yield* f.create("worker", "captain");
+      yield* f.create("sibling", "captain");
+      yield* f.create("helper", "worker");
+      yield* f.create("stranger");
+      yield* tasks.assign(owner, { threadId: worker.threadId, summary: "Build it" });
+      yield* tasks.assign(owner, { threadId: ThreadId.make("sibling"), summary: "Test it" });
+      const send = (from: string, to: string | null) =>
+        tasks.authorizeMessage({
+          senderThreadId: ThreadId.make(from),
+          targetThreadId: to === null ? null : ThreadId.make(to),
+        });
+
+      // The exact peer pattern from the audit: worker to sibling, and to its own Captain.
+      for (const target of ["sibling", "captain", "stranger", null]) {
+        const denied = yield* send("worker", target).pipe(Effect.flip);
+        assert.equal(denied.code, "scope_denied");
+        assert.include(denied.detail, "t3_task_update");
+      }
+      // Its own child, the Captain's relays, and chats without a task stay open.
+      yield* send("worker", "helper");
+      yield* send("captain", "worker");
+      yield* send("captain", "stranger");
+      yield* send("stranger", "worker");
+    }),
+  ).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("an agent's message does not cancel settle-after-turn; the user's does", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const tasks = yield* makeService;
+      yield* tasks.start();
+      yield* f.create("captain");
+      yield* f.send("captain", 1);
+      yield* tasks.settleAfterTurn(owner, {});
+      const message = (id: string, createdBy: "agent" | "user") =>
+        f.orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`message:${id}`),
+          threadId: owner.threadId,
+          messageId: MessageId.make(`message:${id}`),
+          text: `From ${createdBy}`,
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy,
+          creationSource: createdBy === "agent" ? "mcp" : "web",
+        });
+
+      const store = yield* ThreadTaskStore.ThreadTaskStore;
+      const stored = store
+        .getSettleRequest(owner.threadId)
+        .pipe(Effect.map((request) => Option.getOrThrow(request).state));
+
+      // A relayed agent message keeps the request; it still waits for the queued turn.
+      yield* TestClock.adjust("1 second");
+      yield* message("relay", "agent");
+      yield* f.endLatestRun("captain");
+      yield* tasks.drain;
+      assert.equal(yield* stored, "pending");
+
+      // A message JJ writes withdraws it.
+      yield* TestClock.adjust("1 second");
+      yield* message("jj", "user");
+      yield* f.endOpenRuns("captain");
+      yield* tasks.drain;
+      assert.equal(yield* stored, "cancelled");
+      assert.isFalse(yield* f.settled("captain"));
     }),
   ).pipe(Effect.provide(testLayer)),
 );

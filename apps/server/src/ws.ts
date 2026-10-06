@@ -1853,7 +1853,15 @@ const layerWsRpc = (
                   ? threadLaunch.retryPreparation(command)
                   : ThreadMessageIntake.dispatchCommand(
                       ThreadManagementService.withCreationProvenance(command, {
-                        createdBy: "user",
+                        // A client may mark text it relays from an agent (T3 gateway
+                        // tools) as agent-sent; that only lowers its authority, so it
+                        // never reads as the user's and never counts as user input.
+                        createdBy:
+                          command.type === "message.dispatch" &&
+                          command.createdBy === "agent" &&
+                          command.creationSource === "mcp"
+                            ? "agent"
+                            : "user",
                         creationSource:
                           "creationSource" in command ? command.creationSource : "web",
                       }),

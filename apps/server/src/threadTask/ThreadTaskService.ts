@@ -136,6 +136,16 @@ export class ThreadTaskService extends Context.Service<
       caller: ThreadTaskCaller,
       input: ThreadSettleAfterTurnInput,
     ) => Effect.Effect<ThreadSettleRequest, ThreadTaskError>;
+    /**
+     * Whether a chat may message another. A managed worker (a chat with a task)
+     * reports through its task instead; it may message only its own children.
+     * Chats without a task, and the user, are not restricted here.
+     */
+    readonly authorizeMessage: (input: {
+      readonly senderThreadId: ThreadId;
+      /** Null when the target is on another environment. */
+      readonly targetThreadId: ThreadId | null;
+    }) => Effect.Effect<void, ThreadTaskError>;
     readonly recover: Effect.Effect<void>;
     readonly start: () => Effect.Effect<void, never, Scope.Scope>;
     /** Waits until every committed event has been handled. */
@@ -804,6 +814,23 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  // ---- messaging -------------------------------------------------------
+
+  const authorizeMessage: ThreadTaskService["Service"]["authorizeMessage"] = (input) =>
+    Effect.gen(function* () {
+      if (input.targetThreadId === input.senderThreadId) return;
+      if ((yield* getTask(input.senderThreadId)) === undefined) return;
+      const target =
+        input.targetThreadId === null ? undefined : yield* getShell(input.targetThreadId);
+      if (target?.parentThreadId === input.senderThreadId && target.parentEnvironmentId == null) {
+        return;
+      }
+      return yield* fail(
+        "scope_denied",
+        "Managed workers do not message other chats. Update your task status with t3_task_update (INPUT for a decision, DONE with evidence); your Captain is woken and relays requests.",
+      );
+    });
+
   // ---- settle after turn -------------------------------------------------
 
   /** Settles a requesting chat once it is quiet, or records what still blocks it. */
@@ -1122,6 +1149,7 @@ export const make = Effect.gen(function* () {
     update,
     watch,
     settleAfterTurn,
+    authorizeMessage,
     recover,
     start,
     drain,

@@ -20,6 +20,9 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { McpSchema, McpServer } from "effect/ai";
 
+import { ThreadId } from "@t3tools/contracts";
+
+import * as ThreadTaskService from "../../threadTask/ThreadTaskService.ts";
 import { McpGatewayBroker } from "../McpGatewayBroker.ts";
 import * as McpInvocationContext from "../McpInvocationContext.ts";
 import { LocalGatewayPort } from "./LocalGatewayPort.ts";
@@ -52,8 +55,23 @@ const toCallToolResult = (result: ToolResult) => {
   });
 };
 
+/** Task tools act as the calling chat, which only this environment can authenticate. */
+const TASK_TOOLS: ReadonlySet<string> = new Set([
+  "t3_task_assign",
+  "t3_task_read",
+  "t3_task_update",
+  "t3_task_watch",
+  "t3_settle_after_turn",
+]);
+
+/** Tools that deliver text to another chat; managed workers report through their task instead. */
+const MESSAGE_TOOLS: ReadonlySet<string> = new Set(["t3_send_message", "t3_answer_question"]);
+
 const registerAgentsTools = Effect.gen(function* () {
   const server = yield* McpServer.McpServer;
+  const tasks = Option.getOrUndefined(
+    yield* Effect.serviceOption(ThreadTaskService.ThreadTaskService),
+  );
   const localOption = yield* Effect.serviceOption(LocalGatewayPort);
   // Servers composed without the in-process port (for example MCP tests) host no agent tools.
   if (Option.isNone(localOption)) return;
@@ -112,9 +130,43 @@ const registerAgentsTools = Effect.gen(function* () {
             invocation.thread === undefined
               ? undefined
               : { environmentId: local.environmentId, threadId: invocation.thread.threadId };
-          return Effect.promise(() => runGatewayTool(context, name, args, { caller })).pipe(
+          const run = Effect.promise(() => runGatewayTool(context, name, args, { caller })).pipe(
             Effect.map((run) => toCallToolResult(run.result)),
           );
+          // Routing would drop the caller and act as the user, so an agent's task call stays here.
+          if (
+            caller !== undefined &&
+            TASK_TOOLS.has(name) &&
+            args.environmentId !== local.environmentId
+          ) {
+            return Effect.succeed(
+              toCallToolResult(
+                failure(
+                  new Error(
+                    "Task tools act as your chat and run only on its own environment; another environment cannot verify which chat you are.",
+                  ),
+                  requestContext(args),
+                ),
+              ),
+            );
+          }
+          if (caller === undefined || !MESSAGE_TOOLS.has(name) || tasks === undefined) return run;
+          // A worker on another environment cannot be messaging its own child.
+          const targetThreadId =
+            args.environmentId === local.environmentId && typeof args.threadId === "string"
+              ? ThreadId.make(args.threadId)
+              : null;
+          return tasks
+            .authorizeMessage({ senderThreadId: ThreadId.make(caller.threadId), targetThreadId })
+            .pipe(
+              Effect.matchEffect({
+                onFailure: (error) =>
+                  Effect.succeed(
+                    toCallToolResult(failure(new Error(error.detail), requestContext(args))),
+                  ),
+                onSuccess: () => run,
+              }),
+            );
         }),
     });
   }

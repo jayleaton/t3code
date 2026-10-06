@@ -2356,6 +2356,16 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const { parent, limits, target } = yield* loadScopedThread(scope, input.threadId);
         yield* assertLiveCallerForOtherThread(scope, parent, target);
+        // Managed workers report through their task; see ThreadTaskService.authorizeMessage.
+        const tasks = yield* Effect.serviceOption(ThreadTaskService.ThreadTaskService);
+        if (scope.thread !== undefined && Option.isSome(tasks)) {
+          yield* tasks.value
+            .authorizeMessage({
+              senderThreadId: scope.thread.threadId,
+              targetThreadId: target.thread.id,
+            })
+            .pipe(Effect.mapError((error) => failure("capability_denied", error.detail)));
+        }
         yield* resolveRuntimeMode(limits.runtimeMode, target.thread.runtimeMode);
         yield* resolveInteractionMode(limits.interactionMode, target.thread.interactionMode);
 

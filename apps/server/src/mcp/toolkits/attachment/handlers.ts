@@ -4,6 +4,7 @@ import * as Upload from "../../../assets/AttachmentUpload.ts";
 import * as Claims from "../../../orchestration-v2/AttachmentClaims.ts";
 import * as ThreadMessageIntake from "../../../orchestration-v2/ThreadMessageIntake.ts";
 import {
+  assertMayMessage,
   newCommandId,
   readMutationCaller,
   readWritableThread,
@@ -48,6 +49,7 @@ export const layer = AttachmentToolkit.toLayer({
   t3_thread_send_attachments: (input) =>
     Effect.gen(function* () {
       const { caller, projection } = yield* readWritableThread(input.threadId, ["messages"]);
+      yield* assertMayMessage(caller?.id, projection.thread.id);
       if (projection.thread.archivedAt !== null)
         return yield* new OrchestratorMcpFailure({
           code: "invalid_request",

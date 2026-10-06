@@ -1142,6 +1142,9 @@ export function createGatewayRuntimePort(
               modelSelection: thread.modelSelection,
               runtimeMode: thread.runtimeMode,
               interactionMode: thread.interactionMode,
+              // Gateway messages come from agents, never from the user typing.
+              createdBy: "agent",
+              creationSource: "mcp",
             }),
           );
           return {
@@ -1178,6 +1181,8 @@ export function createGatewayRuntimePort(
                     runtimeMode: thread.runtimeMode,
                     interactionMode: thread.interactionMode,
                     dispatchMode: input.action === "restart" ? "restart" : "auto",
+                    createdBy: "agent",
+                    creationSource: "mcp",
                   }),
           );
           return {
@@ -1329,6 +1334,8 @@ export function createGatewayRuntimePort(
                 modelSelection: thread.modelSelection,
                 runtimeMode: thread.runtimeMode,
                 interactionMode: thread.interactionMode,
+                createdBy: "agent",
+                creationSource: "mcp",
               }),
             );
             return { queued: true, threadId, reviewThreadIds: [...requestedIds] };
