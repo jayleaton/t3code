@@ -52,7 +52,7 @@ describe("createRoutedGatewayPort", () => {
     expect(environments.map((item) => item.environmentId)).toEqual(["local", "remote"]);
   });
 
-  it("gives the calling chat only to this environment's port", async () => {
+  it("keeps an agent's task call on its own server and relays only user calls", async () => {
     const received: Array<[string, ReadonlyArray<unknown>]> = [];
     const local = {
       ...fakePort("local", []),
@@ -71,10 +71,13 @@ describe("createRoutedGatewayPort", () => {
     const request = { action: "read", input: {} } as const;
 
     await port.threadTask!("local", request, caller);
+    // Relayed, the agent would arrive as the user; its own server reaches the peer instead.
     await port.threadTask!("remote", request, caller);
+    await port.threadTask!("remote", request);
 
     expect(received).toEqual([
       ["local", ["local", request, caller]],
+      ["local", ["remote", request, caller]],
       ["relay", ["remote", request]],
     ]);
   });

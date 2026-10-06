@@ -2,8 +2,10 @@ import {
   AuthSessionId,
   AuthStandardClientScopes,
   type EnvironmentId,
+  EnvironmentId as EnvironmentIdSchema,
   ThreadId,
   ThreadSettleAfterTurnInput,
+  ThreadTaskError,
   ThreadTaskAssignInput,
   ThreadTaskReadInput,
   ThreadTaskUpdateInput,
@@ -77,31 +79,50 @@ const makeThreadTask = (
   const decodeWatch = Schema.decodeUnknownEffect(ThreadTaskWatchInput);
   const decodeSettle = Schema.decodeUnknownEffect(ThreadSettleAfterTurnInput);
   return (target, request, caller) => {
+    // A call without an authenticated chat (a client acting as the user) or a
+    // peer call between environments goes through this environment's RPC.
     if (
       caller === undefined ||
       caller.environmentId !== environmentId ||
-      target !== environmentId
+      request.action === "remoteAssign" ||
+      request.action === "remoteDeliver" ||
+      request.action === "remoteOwnerAction"
     ) {
       if (fallback === undefined) throw new Error("Thread tasks are unavailable here.");
       return fallback(target, request);
     }
+    // An agent's call always runs here as its own chat; a task on another
+    // environment is reached by this server with the task's capability, never
+    // by relaying the agent as the user.
     const actor: ThreadTaskService.ThreadTaskCaller = {
       kind: "thread",
       threadId: ThreadId.make(caller.threadId),
     };
+    const remote = target === environmentId ? undefined : EnvironmentIdSchema.make(target);
+    const localOnly = (action: string) =>
+      Effect.fail(
+        new ThreadTaskError({
+          code: "scope_denied",
+          detail: `${action} runs only on your chat's own environment; omit environmentId.`,
+        }),
+      );
     return Effect.runPromise(
       Effect.gen(function* () {
         switch (request.action) {
           case "assign":
-            return yield* tasks.assign(actor, yield* decodeAssign(request.input));
+            return yield* tasks.assign(actor, yield* decodeAssign(request.input), remote);
           case "read":
             return yield* tasks.read(actor, yield* decodeRead(request.input));
           case "update":
             return yield* tasks.update(actor, yield* decodeUpdate(request.input));
           case "watch":
-            return yield* tasks.watch(actor, yield* decodeWatch(request.input));
+            return remote === undefined
+              ? yield* tasks.watch(actor, yield* decodeWatch(request.input))
+              : yield* localOnly("t3_task_watch");
           case "settleAfterTurn":
-            return yield* tasks.settleAfterTurn(actor, yield* decodeSettle(request.input));
+            return remote === undefined
+              ? yield* tasks.settleAfterTurn(actor, yield* decodeSettle(request.input))
+              : yield* localOnly("t3_settle_after_turn");
         }
       }),
     );

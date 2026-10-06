@@ -55,15 +55,6 @@ const toCallToolResult = (result: ToolResult) => {
   });
 };
 
-/** Task tools act as the calling chat, which only this environment can authenticate. */
-const TASK_TOOLS: ReadonlySet<string> = new Set([
-  "t3_task_assign",
-  "t3_task_read",
-  "t3_task_update",
-  "t3_task_watch",
-  "t3_settle_after_turn",
-]);
-
 /** Tools that deliver text to another chat; managed workers report through their task instead. */
 const MESSAGE_TOOLS: ReadonlySet<string> = new Set(["t3_send_message", "t3_answer_question"]);
 
@@ -133,23 +124,7 @@ const registerAgentsTools = Effect.gen(function* () {
           const run = Effect.promise(() => runGatewayTool(context, name, args, { caller })).pipe(
             Effect.map((run) => toCallToolResult(run.result)),
           );
-          // Routing would drop the caller and act as the user, so an agent's task call stays here.
-          if (
-            caller !== undefined &&
-            TASK_TOOLS.has(name) &&
-            args.environmentId !== local.environmentId
-          ) {
-            return Effect.succeed(
-              toCallToolResult(
-                failure(
-                  new Error(
-                    "Task tools act as your chat and run only on its own environment; another environment cannot verify which chat you are.",
-                  ),
-                  requestContext(args),
-                ),
-              ),
-            );
-          }
+          // Task tools stay with this server as the calling chat (see createRoutedGatewayPort).
           if (caller === undefined || !MESSAGE_TOOLS.has(name) || tasks === undefined) return run;
           // A worker on another environment cannot be messaging its own child.
           const targetThreadId =

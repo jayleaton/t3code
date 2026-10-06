@@ -359,6 +359,10 @@ import {
 import {
   ThreadSettleAfterTurnInput,
   ThreadSettleRequest,
+  ThreadTaskRemoteAssignInput,
+  ThreadTaskRemoteDeliverInput,
+  ThreadTaskRemoteDeliverResult,
+  ThreadTaskRemoteOwnerActionInput,
   ThreadTaskAssignInput,
   ThreadTaskError,
   ThreadTaskListResult,
@@ -553,6 +557,9 @@ export const WS_METHODS = {
   threadTasksUpdate: "threadTasks.update",
   threadTasksWatch: "threadTasks.watch",
   threadTasksSettleAfterTurn: "threadTasks.settleAfterTurn",
+  threadTasksRemoteAssign: "threadTasks.remoteAssign",
+  threadTasksRemoteDeliver: "threadTasks.remoteDeliver",
+  threadTasksRemoteOwnerAction: "threadTasks.remoteOwnerAction",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -1822,6 +1829,23 @@ const WsThreadTasksWatchRpc = Rpc.make(WS_METHODS.threadTasksWatch, {
   error: Schema.Union([ThreadTaskError, EnvironmentAuthorizationError]),
 });
 
+// Environment-to-environment task calls relayed by a connected app; authorized by the task capability.
+const WsThreadTasksRemoteAssignRpc = Rpc.make(WS_METHODS.threadTasksRemoteAssign, {
+  payload: ThreadTaskRemoteAssignInput,
+  success: ThreadTaskView,
+  error: Schema.Union([ThreadTaskError, EnvironmentAuthorizationError]),
+});
+const WsThreadTasksRemoteDeliverRpc = Rpc.make(WS_METHODS.threadTasksRemoteDeliver, {
+  payload: ThreadTaskRemoteDeliverInput,
+  success: ThreadTaskRemoteDeliverResult,
+  error: Schema.Union([ThreadTaskError, EnvironmentAuthorizationError]),
+});
+const WsThreadTasksRemoteOwnerActionRpc = Rpc.make(WS_METHODS.threadTasksRemoteOwnerAction, {
+  payload: ThreadTaskRemoteOwnerActionInput,
+  success: ThreadTaskView,
+  error: Schema.Union([ThreadTaskError, EnvironmentAuthorizationError]),
+});
+
 const WsThreadTasksSettleAfterTurnRpc = Rpc.make(WS_METHODS.threadTasksSettleAfterTurn, {
   payload: ThreadSettleAfterTurnInput,
   success: ThreadSettleRequest,
@@ -2001,6 +2025,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsThreadTasksUpdateRpc,
   WsThreadTasksWatchRpc,
   WsThreadTasksSettleAfterTurnRpc,
+  WsThreadTasksRemoteAssignRpc,
+  WsThreadTasksRemoteDeliverRpc,
+  WsThreadTasksRemoteOwnerActionRpc,
   WsScheduledTasksRotateWebhookTokenRpc,
   WsSecretsAnswerRequestRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,

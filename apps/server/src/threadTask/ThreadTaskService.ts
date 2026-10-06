@@ -22,6 +22,14 @@ import {
   type ThreadTaskWakeReason,
   type ThreadTaskWakeSkipReason,
   type ThreadTaskWatchInput,
+  type EnvironmentId,
+  type ProjectId,
+  ThreadTaskRemoteAssignInput as RemoteAssignInputSchema,
+  ThreadTaskRemoteDeliverResult as RemoteDeliverResultSchema,
+  ThreadTaskView as ThreadTaskViewSchema,
+  type ThreadTaskRemoteAssignInput,
+  type ThreadTaskRemoteDeliverInput,
+  type ThreadTaskRemoteOwnerActionInput,
   type ThreadSettleAfterTurnInput,
   type ThreadSettleRequest,
 } from "@t3tools/contracts";
@@ -40,6 +48,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -51,7 +61,10 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import { randomUuidV4 } from "../orchestration-v2/RandomUuid.ts";
 import { forkParked } from "../serverActivation.ts";
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ThreadTaskStore from "./ThreadTaskStore.ts";
+import { ThreadTaskTransport, type ThreadTaskRemoteRequest } from "./ThreadTaskTransport.ts";
 
 /**
  * Who is acting. A thread caller comes from the authenticated MCP invocation;
@@ -103,9 +116,24 @@ const sameEvidence = (left: ReadonlyArray<string>, right: ReadonlyArray<string>)
 export class ThreadTaskService extends Context.Service<
   ThreadTaskService,
   {
+    /**
+     * `workerEnvironmentId` names a child on another environment: its own
+     * server keeps the task, and this one keeps a mirror fed by delivery.
+     */
     readonly assign: (
       caller: ThreadTaskCaller,
       input: ThreadTaskAssignInput,
+      workerEnvironmentId?: EnvironmentId,
+    ) => Effect.Effect<ThreadTaskView, ThreadTaskError>;
+    /** Peer calls for a task split across environments, relayed by a connected app. */
+    readonly remoteAssign: (
+      input: ThreadTaskRemoteAssignInput,
+    ) => Effect.Effect<ThreadTaskView, ThreadTaskError>;
+    readonly remoteDeliver: (
+      input: ThreadTaskRemoteDeliverInput,
+    ) => Effect.Effect<{ readonly applied: boolean }, ThreadTaskError>;
+    readonly remoteOwnerAction: (
+      input: ThreadTaskRemoteOwnerActionInput,
     ) => Effect.Effect<ThreadTaskView, ThreadTaskError>;
     /** Assigns a task to a named child chat at launch, unless it already has one. */
     readonly assignLaunchedChild: (input: {
@@ -154,6 +182,13 @@ export class ThreadTaskService extends Context.Service<
 >()("t3/threadTask/ThreadTaskService") {}
 
 export const make = Effect.gen(function* () {
+  const transport = Option.getOrUndefined(yield* Effect.serviceOption(ThreadTaskTransport));
+  const projectStore = Option.getOrUndefined(
+    yield* Effect.serviceOption(ProjectStore.ProjectStoreV2),
+  );
+  const repositories = Option.getOrUndefined(
+    yield* Effect.serviceOption(RepositoryIdentityResolver.RepositoryIdentityResolver),
+  );
   const store = yield* ThreadTaskStore.ThreadTaskStore;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -181,9 +216,25 @@ export const make = Effect.gen(function* () {
           : Effect.succeed(shell),
       ),
     );
-  const put = (task: ThreadTask) =>
+  const put = (task: ThreadTask): Effect.Effect<ThreadTask, ThreadTaskError> =>
     store.put(task).pipe(
       Effect.tap(() => PubSub.publish(changes, undefined)),
+      // The owner is on another environment: record what it has not seen and send it.
+      Effect.tap((stored) =>
+        stored.ownerEnvironmentId === null
+          ? Effect.void
+          : store.getLink(stored.workerThreadId).pipe(
+              Effect.flatMap(
+                Option.match({
+                  onNone: () => Effect.void,
+                  onSome: (link) =>
+                    store
+                      .putLink({ ...link, pendingCursor: stored.cursor })
+                      .pipe(Effect.andThen(syncs.enqueue(stored.workerThreadId))),
+                }),
+              ),
+            ),
+      ),
       Effect.catch((cause) =>
         Effect.logWarning("thread task write failed", { cause }).pipe(
           Effect.andThen(Effect.fail(fail("task_not_found", "The task could not be saved."))),
@@ -191,6 +242,17 @@ export const make = Effect.gen(function* () {
       ),
     );
   const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
+  /** Durable timestamps for later latency and duplicate review; never fails a caller. */
+  const record = (
+    workerThreadId: ThreadId,
+    kind: ThreadTaskStore.ThreadTaskEventKind,
+    revision?: number,
+    detail?: string,
+  ) =>
+    nowIso.pipe(
+      Effect.flatMap((at) => store.appendEvent({ at, workerThreadId, kind, revision, detail })),
+      Effect.ignore,
+    );
 
   const hasLiveRun = (shell: OrchestrationV2ThreadShell) =>
     shell.activeRunId != null || threadShellHasActiveWork(shell);
@@ -242,6 +304,28 @@ export const make = Effect.gen(function* () {
 
   const view = (task: ThreadTask) =>
     Effect.gen(function* () {
+      const link = Option.getOrUndefined(
+        yield* store.getLink(task.workerThreadId).pipe(Effect.orElseSucceed(() => Option.none())),
+      );
+      const sync =
+        link === undefined
+          ? null
+          : {
+              peerEnvironmentId: link.peerEnvironmentId,
+              state: link.state,
+              lastSyncedAt: link.lastSyncedAt,
+              lastError: link.lastError,
+            };
+      // A mirror reports the worker's state as its own environment last delivered it.
+      if (task.workerEnvironmentId !== null) {
+        return {
+          task,
+          sync,
+          workerRun: link?.remoteWorkerRun ?? "idle",
+          continuationLive: link?.remoteContinuationLive ?? false,
+          accepted: isAccepted(task),
+        } as ThreadTaskView;
+      }
       const shell = yield* getShell(task.workerThreadId);
       const workerRun: ThreadTaskView["workerRun"] =
         shell?.pendingRuntimeRequest?.kind === "user_input"
@@ -254,7 +338,13 @@ export const make = Effect.gen(function* () {
         task.waitingOn !== null &&
         task.wake?.state !== "skipped" &&
         (yield* continuationExists(task, task.waitingOn));
-      return { task, workerRun, continuationLive, accepted: isAccepted(task) } as ThreadTaskView;
+      return {
+        task,
+        sync,
+        workerRun,
+        continuationLive,
+        accepted: isAccepted(task),
+      } as ThreadTaskView;
     });
 
   /** The caller's role on a task, checking the owner is still the worker's parent. */
@@ -321,6 +411,8 @@ export const make = Effect.gen(function* () {
       const task = yield* getTask(workerThreadId);
       const wake = task?.wake;
       if (task === undefined || wake == null || wake.state !== "pending") return;
+      // A remote owner's environment queues the wake when this change is delivered.
+      if (task.ownerEnvironmentId !== null) return;
       const owner = yield* getShell(task.ownerThreadId);
       const skipReason: ThreadTaskWakeSkipReason | null =
         owner === undefined
@@ -451,7 +543,29 @@ export const make = Effect.gen(function* () {
 
   // ---- commands ----------------------------------------------------------
 
+  /** repo:<canonical remote> when the project has one, else an environment-local key. */
+  const projectKeyFor = (projectId: ProjectId) =>
+    Effect.gen(function* () {
+      const project =
+        projectStore === undefined
+          ? undefined
+          : Option.getOrUndefined(
+              yield* projectStore.get(projectId).pipe(Effect.orElseSucceed(() => Option.none())),
+            );
+      const identity =
+        project === undefined || repositories === undefined
+          ? null
+          : yield* repositories
+              .resolve(project.workspaceRoot)
+              .pipe(Effect.orElseSucceed(() => null));
+      return identity === null
+        ? `project:${transport?.localEnvironmentId ?? "local"}:${projectId}`
+        : `repo:${identity.canonicalKey}`;
+    });
+
   const writeAssignment = (input: {
+    readonly ownerEnvironmentId?: EnvironmentId | null;
+    readonly projectKey?: string | undefined;
     readonly owner: ThreadId;
     readonly actor: ThreadTaskActor;
     readonly worker: OrchestrationV2ThreadShell;
@@ -468,6 +582,12 @@ export const make = Effect.gen(function* () {
         taskId: input.taskId ?? existing?.taskId ?? `task:${yield* randomUuidV4}`,
         workerThreadId: input.worker.id,
         ownerThreadId: input.owner,
+        ownerEnvironmentId: input.ownerEnvironmentId ?? null,
+        workerEnvironmentId: null,
+        projectKey:
+          input.projectKey ??
+          existing?.projectKey ??
+          (yield* projectKeyFor(input.worker.projectId)),
         status: "WAITING",
         revision: (existing?.revision ?? 0) + 1,
         cursor: 0,
@@ -494,7 +614,12 @@ export const make = Effect.gen(function* () {
       return yield* put(task);
     });
 
-  const assign: ThreadTaskService["Service"]["assign"] = (caller, input) =>
+  const assign: ThreadTaskService["Service"]["assign"] = (caller, input, workerEnvironmentId) =>
+    workerEnvironmentId !== undefined && workerEnvironmentId !== transport?.localEnvironmentId
+      ? assignRemoteChild(caller, input, workerEnvironmentId)
+      : assignLocal(caller, input);
+
+  const assignLocal = (caller: ThreadTaskCaller, input: ThreadTaskAssignInput) =>
     writes
       .withPermits(1)(
         Effect.gen(function* () {
@@ -581,8 +706,12 @@ export const make = Effect.gen(function* () {
       if (task === undefined) {
         return yield* fail("task_not_found", `Thread ${input.threadId} has no task.`);
       }
-      const worker = yield* requireShell(task.workerThreadId);
-      if (roleOf(caller, task, worker) === undefined) {
+      // A mirror's worker lives on another environment; only its owner reads it here.
+      const allowed =
+        task.workerEnvironmentId !== null
+          ? caller.kind === "user" || caller.threadId === task.ownerThreadId
+          : roleOf(caller, task, yield* requireShell(task.workerThreadId)) !== undefined;
+      if (!allowed) {
         return yield* fail("scope_denied", "Only a task's worker or owner can read it.");
       }
       return { tasks: [yield* view(task)], cursor, timedOut: false };
@@ -639,6 +768,18 @@ export const make = Effect.gen(function* () {
     });
 
   const update: ThreadTaskService["Service"]["update"] = (caller, input) =>
+    Effect.gen(function* () {
+      const workerThreadId =
+        input.threadId ?? (caller.kind === "thread" ? caller.threadId : undefined);
+      const mirror = workerThreadId === undefined ? undefined : yield* getTask(workerThreadId);
+      if (mirror?.workerEnvironmentId == null) return yield* updateLocal(caller, input);
+      if (caller.kind === "thread" && caller.threadId !== mirror.ownerThreadId) {
+        return yield* fail("scope_denied", "Only a task's owner can change it from here.");
+      }
+      return yield* forwardOwnerAction(mirror, input);
+    });
+
+  const updateLocal = (caller: ThreadTaskCaller, input: ThreadTaskUpdateInput) =>
     writes
       .withPermits(1)(
         Effect.gen(function* () {
@@ -778,7 +919,7 @@ export const make = Effect.gen(function* () {
             if (wake) yield* deliverWake(task.workerThreadId);
             yield* evaluateSettlement(task.workerThreadId);
             // An accepted child task can be the last thing its owner's settle request waits on.
-            yield* evaluateSettleRequest(task.ownerThreadId);
+            if (task.ownerEnvironmentId === null) yield* evaluateSettleRequest(task.ownerThreadId);
           }),
         ),
         Effect.flatMap(({ task }) =>
@@ -962,6 +1103,371 @@ export const make = Effect.gen(function* () {
       return current;
     });
 
+  // ---- across environments ---------------------------------------------
+  //
+  // The worker's environment keeps the authoritative task; the owner's keeps a
+  // mirror. Each side stores the task's capability, which only the two servers
+  // know, and accepts a peer call only with it. Calls travel through a
+  // connected T3 app, whose own session is never treated as the agent.
+
+  const unreachable = (environmentId: EnvironmentId, reason: string) =>
+    fail(
+      "unreachable",
+      `Environment ${environmentId} could not be reached; nothing changed there. ${reason}`,
+    );
+
+  const callPeer = (environmentId: EnvironmentId, request: ThreadTaskRemoteRequest) =>
+    transport === undefined
+      ? Effect.fail(unreachable(environmentId, "No connected T3 app relays to it."))
+      : transport
+          .call(environmentId, request)
+          .pipe(Effect.mapError((reason) => unreachable(environmentId, reason)));
+
+  const decodeView = Schema.decodeUnknownEffect(ThreadTaskViewSchema);
+  const decodeDeliverResult = Schema.decodeUnknownEffect(RemoteDeliverResultSchema);
+  const encodeAssign = Schema.encodeEffect(RemoteAssignInputSchema);
+  const encodeView = Schema.encodeEffect(ThreadTaskViewSchema);
+  const invalidPeerReply = (environmentId: EnvironmentId) => () =>
+    unreachable(environmentId, "Its reply was not a task.");
+
+  /** Capabilities are compared in constant time. */
+  const sameSecret = (left: string, right: string) => {
+    if (left.length !== right.length) return false;
+    let difference = 0;
+    for (let index = 0; index < left.length; index++) {
+      difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+    }
+    return difference === 0;
+  };
+
+  const requireLink = (
+    workerThreadId: ThreadId,
+    role: ThreadTaskStore.ThreadTaskLink["role"],
+    peerEnvironmentId: EnvironmentId,
+    capability: string,
+  ) =>
+    store.getLink(workerThreadId).pipe(
+      Effect.catch(unavailable),
+      Effect.map(Option.getOrUndefined),
+      Effect.flatMap((link) =>
+        link !== undefined &&
+        link.role === role &&
+        link.peerEnvironmentId === peerEnvironmentId &&
+        sameSecret(link.capability, capability)
+          ? Effect.succeed(link)
+          : Effect.fail(fail("scope_denied", "This task is not shared with that environment.")),
+      ),
+    );
+
+  /** Owner side: fold a delivered worker view into the mirror and wake the owner once. */
+  const applyRemoteView = (peerEnvironmentId: EnvironmentId, remote: ThreadTaskView) =>
+    writes
+      .withPermits(1)(
+        Effect.gen(function* () {
+          const link = Option.getOrUndefined(
+            yield* store.getLink(remote.task.workerThreadId).pipe(Effect.catch(unavailable)),
+          );
+          if (link === undefined || link.role !== "owner") {
+            return yield* fail("scope_denied", "This task is not shared with that environment.");
+          }
+          if (remote.task.cursor <= link.deliveredCursor) {
+            yield* record(remote.task.workerThreadId, "remote_duplicate", remote.task.revision);
+            return false;
+          }
+          const existing = yield* getTask(remote.task.workerThreadId);
+          // Wake ids are scoped by the worker's environment so they never meet local ones.
+          const remoteWake = remote.task.wake;
+          const wakeId = remoteWake === null ? null : `${peerEnvironmentId}:${remoteWake.id}`;
+          const wake =
+            remoteWake === null
+              ? (existing?.wake ?? null)
+              : existing?.wake?.id === wakeId
+                ? existing.wake
+                : remoteWake.state === "skipped"
+                  ? null
+                  : { ...remoteWake, id: wakeId!, state: "pending" as const, skipReason: null };
+          yield* put({
+            ...remote.task,
+            ownerEnvironmentId: null,
+            workerEnvironmentId: peerEnvironmentId,
+            wake,
+          });
+          const now = yield* nowIso;
+          yield* store
+            .putLink({
+              ...link,
+              deliveredCursor: remote.task.cursor,
+              state: "synced",
+              lastSyncedAt: now,
+              lastError: null,
+              remoteWorkerRun: remote.workerRun,
+              remoteContinuationLive: remote.continuationLive,
+            })
+            .pipe(Effect.catch(unavailable));
+          yield* record(remote.task.workerThreadId, "remote_applied", remote.task.revision);
+          return true;
+        }),
+      )
+      .pipe(
+        Effect.tap((applied) => (applied ? deliverWake(remote.task.workerThreadId) : Effect.void)),
+        Effect.tap((applied) =>
+          applied && remote.accepted
+            ? evaluateSettleRequest(remote.task.ownerThreadId)
+            : Effect.void,
+        ),
+      );
+
+  const assignRemoteChild = (
+    caller: ThreadTaskCaller,
+    input: ThreadTaskAssignInput,
+    workerEnvironmentId: EnvironmentId,
+  ) =>
+    Effect.gen(function* () {
+      if (caller.kind !== "thread" || transport === undefined) {
+        return yield* fail(
+          "scope_denied",
+          "A task on another environment is assigned by its parent chat's own environment.",
+        );
+      }
+      const capability = `${yield* randomUuidV4}${yield* randomUuidV4}`;
+      const taskId = input.taskId ?? `task:${yield* randomUuidV4}`;
+      const request = yield* encodeAssign({
+        ownerEnvironmentId: transport.localEnvironmentId,
+        ownerThreadId: caller.threadId,
+        workerThreadId: input.threadId,
+        taskId,
+        summary: input.summary,
+        ...(input.settleWhenAccepted === undefined
+          ? {}
+          : { settleWhenAccepted: input.settleWhenAccepted }),
+        ...(input.projectKey === undefined ? {} : { projectKey: input.projectKey }),
+        capability,
+      }).pipe(Effect.mapError(() => fail("invalid_transition", "The assignment is not valid.")));
+      // Record our side first, so the worker's first delivery is accepted.
+      yield* store
+        .putLink({
+          workerThreadId: input.threadId,
+          role: "owner",
+          peerEnvironmentId: workerEnvironmentId,
+          capability,
+          deliveredCursor: 0,
+          pendingCursor: 0,
+          state: "pending",
+          lastSyncedAt: null,
+          lastError: null,
+        })
+        .pipe(Effect.catch(unavailable));
+      const reply = yield* callPeer(workerEnvironmentId, {
+        action: "remoteAssign",
+        input: request,
+      });
+      const remote = yield* decodeView(reply).pipe(
+        Effect.mapError(invalidPeerReply(workerEnvironmentId)),
+      );
+      yield* applyRemoteView(workerEnvironmentId, remote);
+      const mirror = yield* getTask(input.threadId);
+      return yield* view(mirror ?? remote.task);
+    });
+
+  /** Owner side: send accept, consent or an owner edit to the worker's environment. */
+  const forwardOwnerAction = (mirror: ThreadTask, input: ThreadTaskUpdateInput) =>
+    Effect.gen(function* () {
+      const peer = mirror.workerEnvironmentId!;
+      const link = Option.getOrUndefined(
+        yield* store.getLink(mirror.workerThreadId).pipe(Effect.catch(unavailable)),
+      );
+      if (link === undefined || transport === undefined) {
+        return yield* unreachable(peer, "This environment holds no delivery link for the task.");
+      }
+      const reply = yield* callPeer(peer, {
+        action: "remoteOwnerAction",
+        input: {
+          ownerEnvironmentId: transport.localEnvironmentId,
+          capability: link.capability,
+          update: { ...input, threadId: mirror.workerThreadId },
+        },
+      });
+      const remote = yield* decodeView(reply).pipe(Effect.mapError(invalidPeerReply(peer)));
+      yield* record(mirror.workerThreadId, "owner_action", remote.task.revision);
+      yield* applyRemoteView(peer, remote);
+      const current = yield* getTask(mirror.workerThreadId);
+      return yield* view(current ?? remote.task);
+    });
+
+  /** Worker side: a parent on another environment assigns this chat's task. */
+  const remoteAssign: ThreadTaskService["Service"]["remoteAssign"] = (input) =>
+    writes
+      .withPermits(1)(
+        Effect.gen(function* () {
+          const worker = yield* requireShell(input.workerThreadId);
+          if (
+            worker.parentThreadId !== input.ownerThreadId ||
+            worker.parentEnvironmentId !== input.ownerEnvironmentId ||
+            threadParentRelationship(worker) !== "child"
+          ) {
+            return yield* fail(
+              "scope_denied",
+              "Only the chat this chat is nested under can assign its task.",
+            );
+          }
+          const existing = yield* getTask(worker.id);
+          if (
+            existing !== undefined &&
+            (existing.ownerThreadId !== input.ownerThreadId ||
+              existing.ownerEnvironmentId !== input.ownerEnvironmentId)
+          ) {
+            return yield* fail("scope_denied", "This chat's task belongs to another owner.");
+          }
+          yield* store
+            .putLink({
+              workerThreadId: worker.id,
+              role: "worker",
+              peerEnvironmentId: input.ownerEnvironmentId,
+              capability: input.capability,
+              deliveredCursor: 0,
+              pendingCursor: 0,
+              state: "pending",
+              lastSyncedAt: null,
+              lastError: null,
+            })
+            .pipe(Effect.catch(unavailable));
+          const task = yield* writeAssignment({
+            owner: input.ownerThreadId,
+            ownerEnvironmentId: input.ownerEnvironmentId,
+            projectKey: input.projectKey,
+            actor: "owner",
+            worker,
+            summary: input.summary,
+            taskId: input.taskId,
+            settleWhenAccepted: input.settleWhenAccepted,
+            clientRequestId: undefined,
+            existing,
+          });
+          // The owner receives this view as the reply, so it counts as delivered.
+          const link = Option.getOrUndefined(
+            yield* store.getLink(worker.id).pipe(Effect.catch(unavailable)),
+          );
+          if (link !== undefined) {
+            yield* store
+              .putLink({
+                ...link,
+                deliveredCursor: task.cursor,
+                pendingCursor: task.cursor,
+                state: "synced",
+                lastSyncedAt: yield* nowIso,
+              })
+              .pipe(Effect.catch(unavailable));
+          }
+          return task;
+        }),
+      )
+      .pipe(Effect.flatMap(view));
+
+  /** Owner side: the worker's environment delivers a change. */
+  const remoteDeliver: ThreadTaskService["Service"]["remoteDeliver"] = (input) =>
+    Effect.gen(function* () {
+      yield* requireLink(
+        input.view.task.workerThreadId,
+        "owner",
+        input.workerEnvironmentId,
+        input.capability,
+      );
+      return { applied: yield* applyRemoteView(input.workerEnvironmentId, input.view) };
+    });
+
+  /** Worker side: the owner's environment accepts, consents, or edits the task. */
+  const remoteOwnerAction: ThreadTaskService["Service"]["remoteOwnerAction"] = (input) =>
+    Effect.gen(function* () {
+      const workerThreadId = input.update.threadId;
+      if (workerThreadId === undefined) {
+        return yield* fail("thread_not_found", "The worker chat is required.");
+      }
+      yield* requireLink(workerThreadId, "worker", input.ownerEnvironmentId, input.capability);
+      const task = yield* getTask(workerThreadId);
+      if (task === undefined) {
+        return yield* fail("task_not_found", `Thread ${workerThreadId} has no task.`);
+      }
+      // The capability proves the owner's environment, which authenticated its own chat.
+      return yield* updateLocal({ kind: "thread", threadId: task.ownerThreadId }, input.update);
+    });
+
+  /** Worker side: send the owner's environment every change it has not acknowledged. */
+  const syncToOwner = (workerThreadId: ThreadId) =>
+    Effect.gen(function* () {
+      const link = Option.getOrUndefined(yield* store.getLink(workerThreadId));
+      if (link === undefined || link.role !== "worker") return;
+      const task = yield* getTask(workerThreadId);
+      if (task === undefined || task.cursor <= link.deliveredCursor) return;
+      const current = yield* view(task);
+      const encoded = yield* encodeView(current).pipe(Effect.orDie);
+      const delivered = yield* callPeer(link.peerEnvironmentId, {
+        action: "remoteDeliver",
+        input: {
+          workerEnvironmentId: transport!.localEnvironmentId,
+          capability: link.capability,
+          view: encoded,
+        },
+      }).pipe(
+        Effect.flatMap((reply) =>
+          decodeDeliverResult(reply).pipe(
+            Effect.mapError(invalidPeerReply(link.peerEnvironmentId)),
+          ),
+        ),
+        Effect.result,
+      );
+      const now = yield* nowIso;
+      const latest = Option.getOrUndefined(yield* store.getLink(workerThreadId)) ?? link;
+      if (Result.isFailure(delivered)) {
+        yield* store.putLink({
+          ...latest,
+          state: "unreachable",
+          lastError: delivered.failure.detail,
+        });
+        yield* record(
+          workerThreadId,
+          "remote_sync_failed",
+          task.revision,
+          delivered.failure.detail,
+        );
+        return;
+      }
+      yield* store.putLink({
+        ...latest,
+        deliveredCursor: Math.max(latest.deliveredCursor, task.cursor),
+        state: latest.pendingCursor > task.cursor ? "pending" : "synced",
+        lastSyncedAt: now,
+        lastError: null,
+      });
+      yield* record(workerThreadId, "remote_sync_ok", task.revision);
+      // The owner's environment queued the wake; mark it so a restart does not resend it.
+      if (task.wake?.state === "pending") {
+        yield* writes.withPermits(1)(
+          Effect.gen(function* () {
+            const fresh = yield* getTask(workerThreadId);
+            if (fresh?.wake?.id !== task.wake!.id || fresh.wake.state !== "pending") return;
+            yield* put({ ...fresh, wake: { ...fresh.wake, state: "delivered" } });
+          }),
+        );
+      }
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.failCause(cause)
+          : Effect.logWarning("thread task delivery failed", {
+              workerThreadId,
+              cause: Cause.pretty(cause),
+            }),
+      ),
+    );
+
+  const syncs = yield* makeDrainableWorker(syncToOwner);
+  const retryPendingDeliveries = store.listPendingLinks().pipe(
+    Effect.flatMap((links) =>
+      Effect.forEach(links, (link) => syncs.enqueue(link.workerThreadId), { discard: true }),
+    ),
+    Effect.ignore,
+  );
+
   // ---- reactions ---------------------------------------------------------
 
   const onRunEnded = (workerThreadId: ThreadId, runId: RunId, runStatus: string) =>
@@ -1084,6 +1590,7 @@ export const make = Effect.gen(function* () {
     }
     const open = yield* store.listVisible({ threadId: null, afterCursor: 0 });
     for (const task of open) {
+      if (task.workerEnvironmentId !== null) continue;
       if (isAccepted(task) || task.settlement.state === "settled") continue;
       const records = yield* projections.getThreadRecords(task.workerThreadId, ["runs"]);
       const latest = records.runs.at(-1);
@@ -1108,6 +1615,7 @@ export const make = Effect.gen(function* () {
     }
     yield* reevaluatePendingSettlements;
     yield* reevaluateSettleRequests;
+    yield* retryPendingDeliveries;
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.logWarning("thread task recovery failed", { cause: Cause.pretty(cause) }),
@@ -1116,6 +1624,15 @@ export const make = Effect.gen(function* () {
 
   const start: ThreadTaskService["Service"]["start"] = Effect.fn("ThreadTaskService.start")(
     function* () {
+      if (transport !== undefined) {
+        yield* forkParked(
+          Stream.runForEach(transport.connected, () => retryPendingDeliveries).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("thread task delivery retry stream failed", { cause }),
+            ),
+          ),
+        );
+      }
       const after = yield* eventSink.latestSequence().pipe(Effect.orDie);
       yield* TxRef.set(seenSequence, after).pipe(Effect.tx);
       yield* forkParked(
@@ -1140,11 +1657,15 @@ export const make = Effect.gen(function* () {
       Effect.tx,
     );
     yield* worker.drain;
+    yield* syncs.drain;
   });
 
   return ThreadTaskService.of({
     assign,
     assignLaunchedChild,
+    remoteAssign,
+    remoteDeliver,
+    remoteOwnerAction,
     read,
     update,
     watch,

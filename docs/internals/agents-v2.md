@@ -154,7 +154,20 @@ stored, so it survives the turn that made it, and it never discards a queued wak
 run, queued wakes, unaccepted child tasks, and active descendants, and a later user message
 withdraws it.
 
-Callers are never input fields. On the server-hosted gateway, a call for this environment runs as
-the MCP credential's thread (`LocalGatewayPort`); routed, relayed, and standalone calls drop the
-caller and act as the session's user under its RPC scopes. Tasks are local to one environment; a
-child on another machine has no task.
+Callers are never input fields. An agent's task call always runs on its own server as the MCP
+credential's thread (`LocalGatewayPort`, kept local by `createRoutedGatewayPort`); it is never relayed
+as the user. Calls without a calling chat act as the session's user under its RPC scopes.
+
+A child on another machine keeps its task on its own environment, the single writer. The owner's
+environment holds a read-only mirror. At assignment the owner's server mints a capability that only
+the two servers store, and every later call between them (`threadTasks.remoteDeliver`,
+`remoteOwnerAction`) presents it, so the receiver acts as that task's peer and never as the
+relaying app's user. Calls travel through a connected app (`McpGatewayBroker`), which is live only:
+the worker side keeps a delivery cursor per task, retries when an app connects or the server
+starts, and the owner side ignores a cursor it has already applied. Wakes are created where the
+facts are and queued on the owner's environment under an environment-prefixed id. With no app
+connected, owner actions fail and the mirror's `sync` shows the last delivery.
+
+Workers (any chat with a task) may message only their own children, on every send path; Captains
+coordinate freely. Gateway-originated turns are stored as agent messages, so a relay never counts
+as the user writing.

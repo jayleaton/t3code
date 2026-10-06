@@ -110,6 +110,9 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.threadTasksUpdate]: AuthOrchestrationOperateScope,
   [WS_METHODS.threadTasksWatch]: AuthOrchestrationReadScope,
   [WS_METHODS.threadTasksSettleAfterTurn]: AuthOrchestrationOperateScope,
+  [WS_METHODS.threadTasksRemoteAssign]: AuthOrchestrationOperateScope,
+  [WS_METHODS.threadTasksRemoteDeliver]: AuthOrchestrationOperateScope,
+  [WS_METHODS.threadTasksRemoteOwnerAction]: AuthOrchestrationOperateScope,
   [WS_METHODS.scheduledTasksRotateWebhookToken]: AuthOrchestrationOperateScope,
   [WS_METHODS.secretsAnswerRequest]: AuthOrchestrationOperateScope,
   // Delivery logs hold request bodies, so they need the same scope as the URL.

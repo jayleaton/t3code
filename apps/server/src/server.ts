@@ -158,6 +158,7 @@ import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as ResourceCleanupService from "./orchestration-v2/ResourceCleanupService.ts";
 import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementService.ts";
 import * as ThreadTaskService from "./threadTask/ThreadTaskService.ts";
+import * as ThreadTaskTransport from "./threadTask/ThreadTaskTransport.ts";
 import * as ThreadPullRequestService from "./orchestration-v2/ThreadPullRequestService.ts";
 import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
 import * as ProjectionStoreV2 from "./orchestration-v2/ProjectionStore.ts";
@@ -460,6 +461,9 @@ const layerScheduledTaskWebhookOrigin = Layer.effect(
 );
 
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
+  // Tasks split across machines reach the other environment through the same
+  // broker the WebSocket routes serve (one memoized instance).
+  Layer.provide(ThreadTaskTransport.layerFromBroker.pipe(Layer.provide(McpGatewayBroker.layer))),
   Layer.provide(layerScheduledTaskWebhookOrigin),
   Layer.provide(ProviderEventIngestor.layerAnalytics),
   Layer.provide(layerCheckpointStore),

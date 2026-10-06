@@ -5,6 +5,10 @@ import type {
   Todo,
   TodoListResult,
   ThreadSettleAfterTurnInput,
+  ThreadTaskRemoteAssignInput,
+  ThreadTaskRemoteDeliverInput,
+  ThreadTaskRemoteDeliverResult,
+  ThreadTaskRemoteOwnerActionInput,
   ThreadSettleRequest,
   ThreadTaskAssignInput,
   ThreadTaskListResult,
@@ -195,7 +199,11 @@ export type GatewayThreadTaskRequest =
   | { readonly action: "read"; readonly input: ThreadTaskReadInput }
   | { readonly action: "update"; readonly input: ThreadTaskUpdateInput }
   | { readonly action: "watch"; readonly input: ThreadTaskWatchInput }
-  | { readonly action: "settleAfterTurn"; readonly input: ThreadSettleAfterTurnInput };
+  | { readonly action: "settleAfterTurn"; readonly input: ThreadSettleAfterTurnInput }
+  // Environment-to-environment calls for a task split across machines (servers only).
+  | { readonly action: "remoteAssign"; readonly input: ThreadTaskRemoteAssignInput }
+  | { readonly action: "remoteDeliver"; readonly input: ThreadTaskRemoteDeliverInput }
+  | { readonly action: "remoteOwnerAction"; readonly input: ThreadTaskRemoteOwnerActionInput };
 
 /**
  * The chat whose agent made a tool call, from the server's authenticated MCP credential.
@@ -472,7 +480,9 @@ export interface GatewayRuntimePort {
     environmentId: string,
     request: GatewayThreadTaskRequest,
     caller?: GatewayThreadTaskCaller,
-  ): Promise<ThreadTaskView | ThreadTaskListResult | ThreadSettleRequest>;
+  ): Promise<
+    ThreadTaskView | ThreadTaskListResult | ThreadSettleRequest | ThreadTaskRemoteDeliverResult
+  >;
   getEnvironmentStatus(environmentId: string): Promise<Record<string, unknown>>;
   listProfiles?(environmentId: string): Promise<ReadonlyArray<GatewayProfile>>;
   /** Resolve readable profile labels against the environment's live provider catalog. */

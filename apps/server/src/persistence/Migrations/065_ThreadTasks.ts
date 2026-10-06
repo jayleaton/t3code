@@ -25,4 +25,26 @@ export default Effect.gen(function* () {
       payload_json TEXT NOT NULL
     )
   `;
+  // A task whose owner and worker are on different environments: this side's
+  // capability and delivery cursor (see threadTask/ThreadTaskRemote.ts).
+  yield* sql`
+    CREATE TABLE IF NOT EXISTS thread_task_links (
+      worker_thread_id TEXT PRIMARY KEY,
+      role TEXT NOT NULL,
+      pending INTEGER NOT NULL,
+      payload_json TEXT NOT NULL
+    )
+  `;
+  // Timestamps of task transitions, wakes and deliveries, for measuring latency
+  // and duplicates afterwards. Bounded by the store.
+  yield* sql`
+    CREATE TABLE IF NOT EXISTS thread_task_events (
+      sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+      at TEXT NOT NULL,
+      worker_thread_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      revision INTEGER,
+      detail TEXT
+    )
+  `;
 });

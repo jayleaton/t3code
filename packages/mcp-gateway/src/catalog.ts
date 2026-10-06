@@ -378,7 +378,7 @@ export const TOOL_SPECS = {
     { environmentId, todoId: z.string().trim().min(1) },
   ],
   t3_task_assign: [
-    "Assign or replace the task of a child chat nested under this chat. The child reports WAITING, INPUT, or DONE against it and you are woken on those transitions and when its turns end. Named children you launch get a task automatically. settleWhenAccepted is standing consent to settle the child after you accept its DONE revision; it is not acceptance. Requires create or admin access.",
+    "Assign or replace the task of a child chat nested under this chat. The child reports WAITING, INPUT, or DONE against it and you are woken on those transitions and when its turns end. Named children you launch get a task automatically. settleWhenAccepted is standing consent to settle the child after you accept its DONE revision; it is not acceptance. For a child on another machine pass its environmentId: its environment keeps the task and delivers changes back to you, and reads show sync state when it is unreachable. Requires create or admin access.",
     { environmentId, ...threadTaskInputFields.assign },
   ],
   t3_task_read: [

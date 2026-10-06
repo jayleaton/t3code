@@ -2222,6 +2222,20 @@ const layerWsRpc = (
           observeRpcEffect(WS_METHODS.threadTasksWatch, threadTasks.watch(userCaller, input), {
             "rpc.aggregate": "threadTasks",
           }),
+        [WS_METHODS.threadTasksRemoteAssign]: (input) =>
+          observeRpcEffect(WS_METHODS.threadTasksRemoteAssign, threadTasks.remoteAssign(input), {
+            "rpc.aggregate": "threadTasks",
+          }),
+        [WS_METHODS.threadTasksRemoteDeliver]: (input) =>
+          observeRpcEffect(WS_METHODS.threadTasksRemoteDeliver, threadTasks.remoteDeliver(input), {
+            "rpc.aggregate": "threadTasks",
+          }),
+        [WS_METHODS.threadTasksRemoteOwnerAction]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.threadTasksRemoteOwnerAction,
+            threadTasks.remoteOwnerAction(input),
+            { "rpc.aggregate": "threadTasks" },
+          ),
         [WS_METHODS.threadTasksSettleAfterTurn]: (input) =>
           observeRpcEffect(
             WS_METHODS.threadTasksSettleAfterTurn,

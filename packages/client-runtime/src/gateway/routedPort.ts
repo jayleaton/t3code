@@ -50,7 +50,11 @@ export function createRoutedGatewayPort(
       }
       const environmentIds = gatewayPortEnvironmentIds(args);
       const elsewhere = environmentIds.find((id) => id !== localEnvironmentId);
-      if (elsewhere === undefined) {
+      // An authenticated chat's task call stays with the server that knows the
+      // chat; that server reaches other environments as the task's peer, so the
+      // agent is never relayed as the user.
+      const agentTaskCall = method === "threadTask" && args[2] !== undefined;
+      if (elsewhere === undefined || agentTaskCall) {
         const run = local[method] as
           | ((...input: ReadonlyArray<unknown>) => Promise<unknown>)
           | undefined;

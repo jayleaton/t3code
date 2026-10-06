@@ -11,6 +11,7 @@ import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
@@ -35,6 +36,8 @@ export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const hosts = new Map<string, Host>();
   const pending = new Map<string, Pending>();
+  /** Fires when an app connects, so queued cross-environment work can retry at once. */
+  const connected = yield* PubSub.unbounded<void>();
   const connect = (owner: string, grants: McpGatewayRelayGrants) =>
     Stream.unwrap(
       Effect.gen(function* () {
@@ -42,7 +45,9 @@ export const make = Effect.gen(function* () {
         const requests = yield* Queue.unbounded<McpGatewayRelayEvent, Cause.Done>();
         const host: Host = { owner, connectionId, grants, requests };
         yield* Effect.acquireRelease(
-          Effect.sync(() => hosts.set(connectionId, host)),
+          Effect.sync(() => hosts.set(connectionId, host)).pipe(
+            Effect.andThen(PubSub.publish(connected, undefined)),
+          ),
           () =>
             Effect.gen(function* () {
               hosts.delete(connectionId);
@@ -131,7 +136,14 @@ export const make = Effect.gen(function* () {
     }
     yield* Deferred.succeed(call.deferred, input.result);
   });
-  return { connect, grants, invoke, respond, available: () => hosts.size > 0 };
+  return {
+    connect,
+    grants,
+    invoke,
+    respond,
+    available: () => hosts.size > 0,
+    hostConnected: Stream.fromPubSub(connected),
+  };
 });
 
 export class McpGatewayBroker extends Context.Service<

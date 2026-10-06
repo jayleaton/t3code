@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import {
+  EnvironmentId,
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
@@ -63,6 +64,8 @@ export const ThreadTaskWakeSkipReason = Schema.Literals([
   "owner_settled",
   "owner_archived",
   "owner_missing",
+  /** The owner is on another environment; its environment queues the wake on delivery. */
+  "owner_remote",
 ]);
 export type ThreadTaskWakeSkipReason = typeof ThreadTaskWakeSkipReason.Type;
 
@@ -116,6 +119,15 @@ export const ThreadTask = Schema.Struct({
   taskId: ThreadTaskId,
   workerThreadId: ThreadId,
   ownerThreadId: ThreadId,
+  /**
+   * Where the owner and worker chats live, null meaning this environment. The
+   * worker's environment holds the authoritative record; a row with a
+   * workerEnvironmentId is the owner's read-only mirror of it.
+   */
+  ownerEnvironmentId: Schema.NullOr(EnvironmentId),
+  workerEnvironmentId: Schema.NullOr(EnvironmentId),
+  /** repo:<canonical remote> for git projects, or an explicit key given at assignment. */
+  projectKey: TrimmedNonEmptyString,
   status: ThreadTaskStatus,
   revision: PositiveInt,
   cursor: NonNegativeInt,
@@ -139,8 +151,20 @@ export const ThreadTask = Schema.Struct({
 export type ThreadTask = typeof ThreadTask.Type;
 
 /** A task with the facts a reader needs to trust it, derived when it is read. */
+/** Delivery between a worker's environment and its owner's. */
+export const ThreadTaskSync = Schema.Struct({
+  peerEnvironmentId: EnvironmentId,
+  /** pending: changes not yet acknowledged; unreachable: the last attempt failed. */
+  state: Schema.Literals(["synced", "pending", "unreachable"]),
+  lastSyncedAt: Schema.NullOr(IsoDateTime),
+  lastError: Schema.NullOr(Schema.String),
+});
+export type ThreadTaskSync = typeof ThreadTaskSync.Type;
+
 export const ThreadTaskView = Schema.Struct({
   task: ThreadTask,
+  /** Null for a task whose owner and worker share this environment. */
+  sync: Schema.NullOr(ThreadTaskSync),
   workerRun: Schema.Literals(["running", "waiting_input", "idle"]),
   /** True only while `waitingOn` names something that still exists. */
   continuationLive: Schema.Boolean,
@@ -158,6 +182,12 @@ export const ThreadTaskAssignInput = Schema.Struct({
     Schema.Boolean.annotate({
       description:
         "Standing consent to settle the child once you accept its DONE revision. Not acceptance itself.",
+    }),
+  ),
+  projectKey: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(256)).annotate({
+      description:
+        "Explicit project key for a project without a git remote, so chats on different machines group together. Git projects use their remote automatically.",
     }),
   ),
   clientRequestId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
@@ -227,6 +257,8 @@ export const ThreadTaskErrorCode = Schema.Literals([
   "invalid_transition",
   "continuation_missing",
   "pending_descendant",
+  /** The other environment could not be reached; nothing changed there. */
+  "unreachable",
 ]);
 export type ThreadTaskErrorCode = typeof ThreadTaskErrorCode.Type;
 
@@ -278,3 +310,39 @@ export const ThreadSettleAfterTurnInput = Schema.Struct({
   ),
 });
 export type ThreadSettleAfterTurnInput = typeof ThreadSettleAfterTurnInput.Type;
+
+/**
+ * Calls between the owner's and the worker's environments, relayed by a
+ * connected T3 app. Each carries the task's capability, a secret both servers
+ * keep and agents never see, so the receiver acts only as that task's peer.
+ */
+const ThreadTaskCapability = TrimmedNonEmptyString.check(Schema.isMaxLength(256));
+
+export const ThreadTaskRemoteAssignInput = Schema.Struct({
+  ownerEnvironmentId: EnvironmentId,
+  ownerThreadId: ThreadId,
+  workerThreadId: ThreadId,
+  taskId: ThreadTaskId,
+  summary: ThreadTaskSummary,
+  settleWhenAccepted: Schema.optional(Schema.Boolean),
+  projectKey: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
+  capability: ThreadTaskCapability,
+});
+export type ThreadTaskRemoteAssignInput = typeof ThreadTaskRemoteAssignInput.Type;
+
+export const ThreadTaskRemoteDeliverInput = Schema.Struct({
+  workerEnvironmentId: EnvironmentId,
+  capability: ThreadTaskCapability,
+  view: ThreadTaskView,
+});
+export type ThreadTaskRemoteDeliverInput = typeof ThreadTaskRemoteDeliverInput.Type;
+
+export const ThreadTaskRemoteOwnerActionInput = Schema.Struct({
+  ownerEnvironmentId: EnvironmentId,
+  capability: ThreadTaskCapability,
+  update: ThreadTaskUpdateInput,
+});
+export type ThreadTaskRemoteOwnerActionInput = typeof ThreadTaskRemoteOwnerActionInput.Type;
+
+export const ThreadTaskRemoteDeliverResult = Schema.Struct({ applied: Schema.Boolean });
+export type ThreadTaskRemoteDeliverResult = typeof ThreadTaskRemoteDeliverResult.Type;
