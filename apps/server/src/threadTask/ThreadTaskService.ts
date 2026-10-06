@@ -449,6 +449,12 @@ export const make = Effect.gen(function* () {
               skipReason,
             },
           });
+          yield* record(
+            workerThreadId,
+            skipReason === null ? "wake_delivered" : "wake_skipped",
+            current.revision,
+            `${wake.reason}:${wake.id}${skipReason === null ? "" : `:${skipReason}`}`,
+          );
         }),
       );
     }).pipe(
@@ -910,7 +916,18 @@ export const make = Effect.gen(function* () {
               }),
             };
           }
-          return { task: yield* put(next), wake: reason !== null };
+          const stored = yield* put(next);
+          if (contentChanged) {
+            yield* record(
+              stored.workerThreadId,
+              "transition",
+              stored.revision,
+              `${role}:${task.status}->${stored.status}${input.accept === true ? ":accepted" : ""}`,
+            );
+          } else if (input.accept === true) {
+            yield* record(stored.workerThreadId, "transition", stored.revision, `${role}:accepted`);
+          }
+          return { task: stored, wake: reason !== null };
         }),
       )
       .pipe(
@@ -966,6 +983,12 @@ export const make = Effect.gen(function* () {
       if (target?.parentThreadId === input.senderThreadId && target.parentEnvironmentId == null) {
         return;
       }
+      yield* record(
+        input.senderThreadId,
+        "message_denied",
+        undefined,
+        input.targetThreadId ?? "another environment",
+      );
       return yield* fail(
         "scope_denied",
         "Managed workers do not message other chats. Update your task status with t3_task_update (INPUT for a decision, DONE with evidence); your Captain is woken and relays requests.",
