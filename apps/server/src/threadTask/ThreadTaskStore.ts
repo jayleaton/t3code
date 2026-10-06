@@ -23,6 +23,9 @@ export const ThreadTaskLink = Schema.Struct({
   /** Owner side: the worker's run state and continuation as last delivered. */
   remoteWorkerRun: Schema.optional(Schema.Literals(["running", "waiting_input", "idle"])),
   remoteContinuationLive: Schema.optional(Schema.Boolean),
+  /** Owner side: the assignment this link carries, so a retried assignment reuses it. */
+  taskId: Schema.optional(Schema.String),
+  assignRequestId: Schema.optional(Schema.NullOr(Schema.String)),
 });
 export type ThreadTaskLink = typeof ThreadTaskLink.Type;
 const decodeLink = Schema.decodeUnknownEffect(Schema.fromJsonString(ThreadTaskLink));

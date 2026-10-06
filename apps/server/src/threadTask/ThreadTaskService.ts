@@ -1031,7 +1031,8 @@ export const make = Effect.gen(function* () {
                 ? "open_task"
                 : (yield* projections
                       .hasActiveDescendants(threadId)
-                      .pipe(Effect.orElseSucceed(() => true)))
+                      .pipe(Effect.orElseSucceed(() => true))) ||
+                    (yield* remoteChildStillWorking(threadId))
                   ? "pending_descendant"
                   : null;
       let settled = false;
@@ -1068,6 +1069,25 @@ export const make = Effect.gen(function* () {
         }),
       ),
     );
+
+  /**
+   * Children on other environments are not in this server's descendant check.
+   * An accepted one counts as quiet only once its environment reported it
+   * settled, or idle on an up-to-date delivery; a stale mirror keeps blocking.
+   */
+  const remoteChildStillWorking = (ownerThreadId: ThreadId) =>
+    Effect.gen(function* () {
+      const children = yield* store.listByOwner(ownerThreadId).pipe(Effect.catch(unavailable));
+      for (const child of children) {
+        if (child.workerEnvironmentId === null) continue;
+        if (child.settlement.state === "settled") continue;
+        const link = Option.getOrUndefined(
+          yield* store.getLink(child.workerThreadId).pipe(Effect.catch(unavailable)),
+        );
+        if (link?.state !== "synced" || link.remoteWorkerRun !== "idle") return true;
+      }
+      return false;
+    });
 
   const reevaluateSettleRequests = store.listPendingSettleRequests().pipe(
     Effect.flatMap((requests) =>
@@ -1234,9 +1254,8 @@ export const make = Effect.gen(function* () {
       .pipe(
         Effect.tap((applied) => (applied ? deliverWake(remote.task.workerThreadId) : Effect.void)),
         Effect.tap((applied) =>
-          applied && remote.accepted
-            ? evaluateSettleRequest(remote.task.ownerThreadId)
-            : Effect.void,
+          // Any delivery can be the last thing the owner's own settle request waits on.
+          applied ? evaluateSettleRequest(remote.task.ownerThreadId) : Effect.void,
         ),
       );
 
@@ -1252,8 +1271,25 @@ export const make = Effect.gen(function* () {
           "A task on another environment is assigned by its parent chat's own environment.",
         );
       }
-      const capability = `${yield* randomUuidV4}${yield* randomUuidV4}`;
-      const taskId = input.taskId ?? `task:${yield* randomUuidV4}`;
+      // A retry (same clientRequestId, or an assignment the worker never
+      // acknowledged, for example after a lost reply or a restart) reuses the
+      // task and capability; it never starts a second assignment.
+      const existingLink = Option.getOrUndefined(
+        yield* store.getLink(input.threadId).pipe(Effect.catch(unavailable)),
+      );
+      const ownLink =
+        existingLink?.role === "owner" && existingLink.peerEnvironmentId === workerEnvironmentId
+          ? existingLink
+          : undefined;
+      const mirror = yield* getTask(input.threadId);
+      const retry =
+        ownLink?.taskId !== undefined &&
+        (mirror === undefined ||
+          (input.clientRequestId !== undefined &&
+            ownLink.assignRequestId === input.clientRequestId));
+      if (retry && mirror !== undefined) return yield* view(mirror);
+      const capability = ownLink?.capability ?? `${yield* randomUuidV4}${yield* randomUuidV4}`;
+      const taskId = retry ? ownLink!.taskId! : (input.taskId ?? `task:${yield* randomUuidV4}`);
       const request = yield* encodeAssign({
         ownerEnvironmentId: transport.localEnvironmentId,
         ownerThreadId: caller.threadId,
@@ -1273,11 +1309,19 @@ export const make = Effect.gen(function* () {
           role: "owner",
           peerEnvironmentId: workerEnvironmentId,
           capability,
-          deliveredCursor: 0,
+          deliveredCursor: ownLink?.deliveredCursor ?? 0,
           pendingCursor: 0,
-          state: "pending",
-          lastSyncedAt: null,
+          state: ownLink?.state ?? "pending",
+          lastSyncedAt: ownLink?.lastSyncedAt ?? null,
           lastError: null,
+          taskId,
+          assignRequestId: input.clientRequestId ?? null,
+          ...(ownLink?.remoteWorkerRun === undefined
+            ? {}
+            : { remoteWorkerRun: ownLink.remoteWorkerRun }),
+          ...(ownLink?.remoteContinuationLive === undefined
+            ? {}
+            : { remoteContinuationLive: ownLink.remoteContinuationLive }),
         })
         .pipe(Effect.catch(unavailable));
       const reply = yield* callPeer(workerEnvironmentId, {
@@ -1288,8 +1332,8 @@ export const make = Effect.gen(function* () {
         Effect.mapError(invalidPeerReply(workerEnvironmentId)),
       );
       yield* applyRemoteView(workerEnvironmentId, remote);
-      const mirror = yield* getTask(input.threadId);
-      return yield* view(mirror ?? remote.task);
+      const applied = yield* getTask(input.threadId);
+      return yield* view(applied ?? remote.task);
     });
 
   /** Owner side: send accept, consent or an owner edit to the worker's environment. */
@@ -1340,6 +1384,18 @@ export const make = Effect.gen(function* () {
               existing.ownerEnvironmentId !== input.ownerEnvironmentId)
           ) {
             return yield* fail("scope_denied", "This chat's task belongs to another owner.");
+          }
+          // The owner retrying an assignment it already made gets that assignment back.
+          const currentLink = Option.getOrUndefined(
+            yield* store.getLink(worker.id).pipe(Effect.catch(unavailable)),
+          );
+          if (
+            existing !== undefined &&
+            existing.taskId === input.taskId &&
+            currentLink?.role === "worker" &&
+            sameSecret(currentLink.capability, input.capability)
+          ) {
+            return existing;
           }
           yield* store
             .putLink({

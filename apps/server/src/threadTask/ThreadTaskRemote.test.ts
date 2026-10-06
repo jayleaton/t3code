@@ -78,7 +78,12 @@ const environmentLayer = () => {
 const makeNetwork = Effect.gen(function* () {
   const services = new Map<EnvironmentId, ThreadTaskService.ThreadTaskService["Service"]>();
   const reconnected = yield* PubSub.unbounded<void>();
-  const state = { connected: true, calls: 0 };
+  const state: { connected: boolean; calls: number; loseReplyFor: string | null } = {
+    connected: true,
+    calls: 0,
+    // The next call of this action is applied by the receiver, but its reply is lost.
+    loseReplyFor: null,
+  };
   const roundTrip = <S extends Schema.Top>(schema: S, value: unknown) =>
     Schema.decodeUnknownEffect(schema)(value).pipe(Effect.orDie);
   const call = (environmentId: EnvironmentId, request: ThreadTaskRemoteRequest) =>
@@ -111,7 +116,12 @@ const makeNetwork = Effect.gen(function* () {
         }
       });
       // A remote rejection reaches the caller as the relay's error message.
-      return yield* run.pipe(Effect.mapError((error) => error.detail));
+      const reply = yield* run.pipe(Effect.mapError((error) => error.detail));
+      if (state.loseReplyFor === request.action) {
+        state.loseReplyFor = null;
+        return yield* Effect.fail("The T3 app relaying this call disconnected.");
+      }
+      return reply;
     });
   const transport = (localEnvironmentId: EnvironmentId) =>
     ThreadTaskTransport.of({
@@ -397,4 +407,110 @@ it.effect(
         assert.equal((yield* envA.wakes(captain)).length, 2);
       }),
     ),
+);
+
+it.effect(
+  "a retried remote assignment after a lost reply and a restart returns the original one",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const network = yield* makeNetwork;
+        const envA = yield* environment(network, A);
+        const envB = yield* environment(network, B);
+        let tasksA = yield* envA.startService;
+        const tasksB = yield* envB.startService;
+        yield* envA.create(captain);
+        yield* envB.create(worker, { thread: captain, environment: A });
+        yield* envB.send(worker, 1);
+        const input = {
+          threadId: worker,
+          summary: "Deploy it",
+          settleWhenAccepted: true,
+          clientRequestId: "assign-1",
+        };
+
+        // B applies the assignment, but A never hears back.
+        network.state.loseReplyFor = "remoteAssign";
+        const lost = yield* tasksA.assign(asCaptain, input, B).pipe(Effect.flip);
+        assert.equal(lost.code, "unreachable");
+        const first = (yield* tasksB.read(asWorker, {})).tasks[0]!.task;
+
+        // A restarts, then retries the same request.
+        tasksA = yield* envA.startService;
+        const retried = yield* tasksA.assign(asCaptain, input, B);
+        const after = (yield* tasksB.read(asWorker, {})).tasks[0]!.task;
+        assert.equal(after.taskId, first.taskId);
+        assert.equal(after.revision, first.revision);
+        assert.equal(after.settleWhenAccepted?.grantedAt, first.settleWhenAccepted?.grantedAt);
+        assert.equal(retried.task.taskId, first.taskId);
+        assert.equal(retried.sync?.state, "synced");
+        const secret = (side: typeof envA) =>
+          side.link(worker).pipe(Effect.map((l) => (l._tag === "Some" ? l.value.capability : "")));
+        assert.equal(yield* secret(envA), yield* secret(envB));
+
+        // Once acknowledged, the same request is answered here without asking B again.
+        const calls = network.state.calls;
+        const again = yield* tasksA.assign(asCaptain, input, B);
+        assert.equal(again.task.taskId, first.taskId);
+        assert.equal(network.state.calls, calls);
+      }),
+    ),
+);
+
+it.effect("a Captain's deferred settlement waits for its accepted remote child to go quiet", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const network = yield* makeNetwork;
+      const envA = yield* environment(network, A);
+      const envB = yield* environment(network, B);
+      const tasksA = yield* envA.startService;
+      const tasksB = yield* envB.startService;
+      const drain = Effect.gen(function* () {
+        yield* tasksB.drain;
+        yield* tasksA.drain;
+      });
+      yield* envA.create(captain);
+      yield* envB.create(worker, { thread: captain, environment: A });
+      yield* envA.send(captain, 1);
+      yield* envB.send(worker, 1);
+      yield* tasksA.assign(
+        asCaptain,
+        { threadId: worker, summary: "Ship", settleWhenAccepted: true },
+        B,
+      );
+
+      // DONE and accepted while the worker's turn is still running on B.
+      yield* tasksB.update(asWorker, { expectedRevision: 1, status: "DONE", evidence: ["sha 1"] });
+      yield* drain;
+      const accepted = yield* tasksA.update(asCaptain, {
+        threadId: worker,
+        expectedRevision: 2,
+        accept: true,
+      });
+      assert.isTrue(accepted.accepted);
+      assert.equal(accepted.workerRun, "running");
+
+      // The Captain asks to settle after its turn; its turn ends, the remote child is still busy.
+      yield* tasksA.settleAfterTurn(asCaptain, {});
+      yield* envA.endOpenRuns(captain);
+      yield* drain;
+      const held = yield* tasksA.settleAfterTurn(asCaptain, {});
+      assert.equal(held.state, "pending");
+      assert.equal(held.blockedBy, "pending_descendant");
+
+      // The child finishes while disconnected: A cannot verify it, so it keeps waiting.
+      network.state.connected = false;
+      yield* envB.endOpenRuns(worker);
+      yield* drain;
+      assert.isTrue(yield* envB.settled(worker));
+      assert.isFalse(yield* envA.settled(captain));
+      assert.equal((yield* tasksA.settleAfterTurn(asCaptain, {})).blockedBy, "pending_descendant");
+
+      // Reconnected, the settled child arrives and the Captain settles.
+      yield* network.reconnect;
+      yield* drain;
+      assert.isTrue(yield* envA.settled(captain));
+      assert.equal((yield* tasksA.settleAfterTurn(asCaptain, {})).state, "settled");
+    }),
+  ),
 );
