@@ -131,3 +131,23 @@ Lineage.
 Parent links may point at a chat on another machine through `parentEnvironmentId`. A server
 cannot check a parent it does not host, so it validates existence and cycles only for local
 parents; clients resolve parents by both IDs.
+
+### Child tasks
+
+An ordinary child has no `task_status` delivery, so a parent learns about it through its task
+record (`apps/server/src/threadTask/`). Three distinctions are easy to collapse and must not be:
+
+- **A finished turn is not a finished task.** Run state is read, never stored on the task. A turn
+  ending wakes the owner with "turn ended", not DONE; only the worker's own DONE update reports a
+  deliverable, and the turn that raised it does not wake the owner a second time.
+- **Consent is not acceptance.** `settleWhenAccepted` is the owner's standing permission to settle;
+  the owner's `accept` names one DONE revision after its gates pass. Any content change bumps the
+  revision and drops acceptance. Settlement waits for both, then for the worker's turn and every
+  descendant task and run.
+- **Wakes are keyed by the transition, not by time.** Each wake id derives from the worker, revision,
+  run, or question that caused it, and its message and command ids reuse that key, so the
+  orchestrator's command receipts make a replayed wake a no-op. Restart recovery replays only a
+  wake still marked pending and a worker run that ended unobserved; quiet open tasks stay quiet.
+
+The caller is always the authenticated MCP invocation's thread, never an input field. Tasks are
+local to one environment; a child on another machine has no task.
