@@ -883,3 +883,63 @@ it.effect(
       }),
     ).pipe(Effect.provide(testLayer)),
 );
+
+it.effect(
+  "a later turn ending after a stale DONE wakes the Captain once, also across a restart",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = yield* fixture;
+        yield* f.create("captain");
+        yield* f.create("worker", "captain");
+        yield* f.send("worker", 1);
+
+        // The first server: assignment, a DONE turn, then a later unaccepted turn.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const tasks = yield* makeService;
+            yield* tasks.start();
+            yield* tasks.assign(owner, { threadId: worker.threadId, summary: "Ship and verify" });
+
+            // Turn 1 reports DONE; that turn's end is already covered by the DONE wake.
+            yield* tasks.update(worker, {
+              expectedRevision: 1,
+              status: "DONE",
+              evidence: ["pr 12"],
+            });
+            yield* f.endLatestRun("worker");
+            yield* tasks.drain;
+            assert.deepEqual(
+              (yield* f.wakes("captain")).map((wake) => wake.id.split(":").at(-1)),
+              ["done"],
+            );
+
+            // Turn 2 ends unaccepted, waiting on an external check, with DONE now stale.
+            yield* f.send("worker", 2);
+            const turn2 = yield* f.endLatestRun("worker");
+            yield* tasks.drain;
+            const wakes = yield* f.wakes("captain");
+            assert.equal(wakes.length, 2);
+            assert.include(wakes[1]!.id, String(turn2));
+            assert.include(wakes[1]!.text, "A finished turn is not a finished task");
+            // The Captain sees it idle with nothing resuming it, and can follow up.
+            const seen = (yield* tasks.read(owner, { threadId: worker.threadId })).tasks[0]!;
+            assert.equal(seen.workerRun, "idle");
+            assert.isFalse(seen.continuationLive);
+            assert.isFalse(seen.accepted);
+          }),
+        );
+
+        // The server is down when turn 3 ends; the next start reports it exactly once.
+        yield* f.send("worker", 3);
+        const turn3 = yield* f.endLatestRun("worker");
+        assert.equal((yield* f.wakes("captain")).length, 2);
+        const restarted = yield* makeService;
+        yield* restarted.recover;
+        yield* restarted.recover;
+        const wakes = yield* f.wakes("captain");
+        assert.equal(wakes.length, 3);
+        assert.include(wakes[2]!.id, String(turn3));
+      }),
+    ).pipe(Effect.provide(testLayer)),
+);
