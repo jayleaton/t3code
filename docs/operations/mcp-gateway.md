@@ -18,9 +18,15 @@ The desktop executable, bridge token, and state path are never sent to remote ma
 Tools that read the gateway's own event store (events, webhooks, operation history, waiting
 on status) stay gateway-only. In-flight mutations are never replayed on reconnect.
 
-Standalone MCP hosts can still use the launch configuration in Settings. Use its explicit
-state file: legacy manual launchers default to `~/.t3code/mcp-gateway-v3.sqlite`, while the
-desktop uses its T3 home (normally `~/.t3`). All launchers sharing a port must agree.
+Standalone MCP hosts can still use the launch configuration in Settings. A launcher without
+`T3_MCP_STATE_FILE` uses `mcp-gateway-v3.sqlite` in the same T3 home as the desktop
+(`T3CODE_HOME`, normally `~/.t3`). All launchers sharing a port must agree. Launchers built
+before this default changed used `~/.t3code`. If one of those starts the owner first, the
+desktop cannot join it and reports a state-file mismatch. It keeps retrying and takes over
+once that owner exits. To repair the host, replace its entry with the Settings launch
+configuration, or add the desktop's explicit `T3_MCP_STATE_FILE`. Then quit every session of
+that host and wait 30 seconds for the old owner to exit before reconnecting. The old store
+stays at `~/.t3code` and is not merged.
 
 The desktop connects to the owner's runtime bridge. Each launcher uses a separate,
 mutually authenticated MCP connection on `/mcp` at the same address. MCP connections cannot

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { AgentGatewayStatus } from "./AgentGatewayStatus";
 import {
   MCP_GATEWAY_STATE_EVENT,
+  publishMcpGatewayStartup,
   publishMcpGatewayStatus,
   publishMcpGatewayStatusSnapshot,
   setMcpGatewayRestarter,
@@ -35,6 +36,7 @@ beforeEach(() => {
       desktopBridge: { getMcpGatewayLaunchConfig: () => ({}) },
     }),
   );
+  publishMcpGatewayStartup({ phase: "starting" });
   publishMcpGatewayStatus("running");
   publishMcpGatewayStatusSnapshot(null);
   setMcpGatewayRestarter(restart);
@@ -79,10 +81,38 @@ it("waits for live health after restart and prevents duplicate recovery", async 
   expect(text()).not.toContain("Restarting");
 });
 
-it("shows recovery timeout and permits retry without exposing raw errors", async () => {
+it("shows the desktop's startup failure as soon as recovery fails", async () => {
   renderer = await act(async () => create(<AgentGatewayStatus />));
   await act(async () => restartButton().props.onClick());
-  await act(async () => vi.advanceTimersByTime(15_000));
+  await act(async () =>
+    publishMcpGatewayStartup({
+      phase: "failed",
+      message: "Desktop MCP gateway failed: State file or configuration mismatch",
+    }),
+  );
+  expect(text()).toContain("State file or configuration mismatch");
+  expect(restartButton().props.disabled).toBe(false);
+});
+
+it("fails a started gateway that never reports healthy", async () => {
+  renderer = await act(async () => create(<AgentGatewayStatus />));
+  await act(async () => restartButton().props.onClick());
+  // Startup itself may take most of its own budget without counting against health.
+  await act(async () => vi.advanceTimersByTime(14_000));
+  await act(async () => publishMcpGatewayStartup({ phase: "ready" }));
+  await act(async () => vi.advanceTimersByTime(14_000));
+  expect(text()).toContain("Recovering");
+  await act(async () => vi.advanceTimersByTime(1_000));
+  expect(text()).toContain("bridge did not report healthy");
+  expect(restartButton().props.disabled).toBe(false);
+});
+
+it("stops recovering when startup never reports and permits retry without exposing raw errors", async () => {
+  renderer = await act(async () => create(<AgentGatewayStatus />));
+  await act(async () => restartButton().props.onClick());
+  await act(async () => vi.advanceTimersByTime(44_000));
+  expect(text()).toContain("Recovering");
+  await act(async () => vi.advanceTimersByTime(1_000));
   expect(text()).toContain("Gateway recovery failed");
   expect(restartButton().props.disabled).toBe(false);
   restart.mockImplementationOnce(() => {

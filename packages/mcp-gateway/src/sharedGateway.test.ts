@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "@effect/vitest";
 import WebSocket, { WebSocketServer } from "ws";
 
 import { createBridgeRuntimePort, type GatewayGrants } from "./bridge.ts";
+import { createManagedGatewayHost } from "./managedHost.ts";
 import { connectSharedGateway, launchSharedOwner } from "./sharedLauncher.ts";
 import {
   sharedGatewayConfiguration,
@@ -337,6 +338,70 @@ describe("shared MCP gateway", () => {
     expect(launch).not.toHaveBeenCalled();
     expect(NodeFS.existsSync(input.stateFile)).toBe(false);
   });
+
+  it("gives the desktop host the launcher's reason when its gateway cannot start", async () => {
+    const input = await config();
+    const legacy = createBridgeRuntimePort({ port: input.port, token: input.token });
+    cleanup.push(legacy.close);
+    await legacy.ready;
+    await expect(
+      createManagedGatewayHost({
+        command: process.execPath,
+        args: [NodeURL.fileURLToPath(new URL("./bin.ts", import.meta.url))],
+        env: {
+          T3_MCP_BRIDGE_TOKEN: input.token,
+          T3_MCP_BRIDGE_PORT: String(input.port),
+          T3_MCP_STATE_FILE: input.stateFile,
+        },
+      }),
+    ).rejects.toThrow("The port belongs to an older gateway or a different service");
+    expect(NodeFS.existsSync(input.stateFile)).toBe(false);
+  });
+
+  it("lets the desktop join an owner a manual launcher started without an explicit state file", async () => {
+    const input = await config();
+    const home = NodePath.dirname(input.stateFile);
+    const entryPoint = NodeURL.fileURLToPath(new URL("./bin.ts", import.meta.url));
+    // A host's manual launch: only port and token, so the state file is the default T3 home.
+    const manual = new Client({ name: "manual-launch", version: "1.0.0" });
+    await manual.connect(
+      new StdioClientTransport({
+        command: process.execPath,
+        args: [entryPoint],
+        env: {
+          T3_MCP_BRIDGE_PORT: String(input.port),
+          T3_MCP_BRIDGE_TOKEN: input.token,
+          HOME: home,
+          USERPROFILE: home,
+        },
+        stderr: "pipe",
+      }),
+    );
+    cleanup.push(() => manual.close());
+    const desktop = await runtime(input);
+    const ownerClosed = new Promise<void>((resolve) =>
+      desktop.socket.once("close", () => resolve()),
+    );
+    // The desktop always names its store explicitly: <T3 home>/mcp-gateway-v3.sqlite.
+    const host = await createManagedGatewayHost({
+      command: process.execPath,
+      args: [entryPoint],
+      env: {
+        T3_MCP_BRIDGE_PORT: String(input.port),
+        T3_MCP_BRIDGE_TOKEN: input.token,
+        T3_MCP_STATE_FILE: NodePath.join(home, ".t3", "mcp-gateway-v3.sqlite"),
+      },
+    });
+    cleanup.push(async () => {
+      await host.close();
+      await manual.close();
+      // Let the owner finish its normal idle shutdown; never find or kill a PID by port.
+      await ownerClosed;
+    });
+    expect(
+      body(await manual.callTool({ name: "t3_get_gateway_health", arguments: {} })).data,
+    ).toMatchObject({ bridge: "connected" });
+  }, 45_000);
 
   it("distinguishes a gateway protocol mismatch from configuration and authentication failures", async () => {
     const input = await config();

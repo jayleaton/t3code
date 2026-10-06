@@ -4,6 +4,40 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 
+const REASON_PREFIX = "t3-mcp-gateway: ";
+const MAX_LINE_LENGTH = 4_096;
+
+/**
+ * The launcher reports why it could not start only on stderr, as `t3-mcp-gateway: <reason>`.
+ * Chunks are not lines, so stderr is framed into whole lines; an oversized line is skipped.
+ */
+function launcherReason(transport: StdioClientTransport): () => string | undefined {
+  let reason: string | undefined;
+  let partial = "";
+  let skipping = false;
+  const take = (line: string) => {
+    if (line.startsWith(REASON_PREFIX)) reason = line.slice(REASON_PREFIX.length).trimEnd();
+  };
+  // A multi-byte character can also span chunks.
+  const decoder = new TextDecoder();
+  transport.stderr?.on("data", (chunk: Uint8Array) => {
+    const lines = (partial + decoder.decode(chunk, { stream: true })).split("\n");
+    partial = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!skipping) take(line);
+      skipping = false;
+    }
+    if (partial.length > MAX_LINE_LENGTH) {
+      partial = "";
+      skipping = true;
+    }
+  });
+  return () => {
+    if (!skipping) take(partial);
+    return reason;
+  };
+}
+
 /** Keeps the desktop's gateway session alive, including after a launcher exits or stops replying. */
 export async function createManagedGatewayHost(launch: {
   readonly command: string;
@@ -14,6 +48,8 @@ export async function createManagedGatewayHost(launch: {
   let timer: Fiber.Fiber<void, never> | undefined;
   let connecting: Promise<void> | undefined;
   let active: { control: Client; transport: StdioClientTransport } | undefined;
+  // Each relaunch starts a runtime process; a persistent rejection must not respawn every second.
+  let failures = 0;
 
   const schedule = (run: () => void, delay: number) => {
     timer?.interruptUnsafe();
@@ -27,10 +63,12 @@ export async function createManagedGatewayHost(launch: {
       active = undefined;
       await previous?.control.close();
       if (!stopped) await connect();
+      failures = 0;
     })()
       .catch(() => {
         // A temporarily unavailable executable or owner must not disable an enabled gateway.
-        schedule(recover, 1_000);
+        failures += 1;
+        schedule(recover, Math.min(1_000 * 2 ** (failures - 1), 30_000));
       })
       .finally(() => {
         connecting = undefined;
@@ -54,8 +92,9 @@ export async function createManagedGatewayHost(launch: {
       command: launch.command,
       args: [...launch.args],
       env: { ...launch.env },
-      stderr: "ignore",
+      stderr: "pipe",
     });
+    const reason = launcherReason(transport);
     const current = { control, transport };
     active = current;
     let closed = false;
@@ -70,7 +109,8 @@ export async function createManagedGatewayHost(launch: {
     } catch (error) {
       if (active === current) active = undefined;
       await transport.close();
-      throw error;
+      const message = reason();
+      throw message === undefined ? error : new Error(message, { cause: error });
     }
   };
 

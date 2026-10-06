@@ -6,6 +6,7 @@ import {
   InitializeRequestSchema,
   PingRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import * as NodeStream from "node:stream";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 
 import { createManagedGatewayHost } from "./managedHost.ts";
@@ -89,6 +90,59 @@ it("retries failed relaunches without leaving another host running", async () =>
   await vi.advanceTimersByTimeAsync(2_000);
   expect(createTransport).toHaveBeenCalledTimes(3);
   await second.ready;
+});
+
+it("backs off relaunches an owner keeps rejecting instead of spawning one every second", async () => {
+  vi.useFakeTimers();
+  const first = session();
+  const host = await createManagedGatewayHost(launch);
+  cleanup.push(host.close);
+  createTransport.mockImplementation(() => {
+    throw new Error("State file or configuration mismatch");
+  });
+  await first.server.close();
+  await vi.advanceTimersByTimeAsync(61_000);
+  // Relaunches at 1, 3, 7, 15, 31 and 61 seconds, then every 30 seconds.
+  expect(createTransport).toHaveBeenCalledTimes(7);
+  const recovered = session();
+  await vi.advanceTimersByTimeAsync(30_000);
+  await recovered.ready;
+  expect(createTransport).toHaveBeenCalledTimes(8);
+});
+
+function rejectedLaunch(chunks: ReadonlyArray<string>) {
+  const [client, server] = InMemoryTransport.createLinkedPair();
+  const stderr = new NodeStream.PassThrough();
+  createTransport.mockImplementationOnce(() => {
+    setImmediate(() => {
+      for (const chunk of chunks) stderr.write(chunk);
+      setImmediate(() => void server.close());
+    });
+    return Object.assign(client, { stderr });
+  });
+}
+
+it.each([
+  {
+    name: "a reason split across chunks with a CRLF ending",
+    chunks: ["noise\nt3-mcp-", "gateway: State file or config", "uration mismatch\r\n", "after\n"],
+    reason: "State file or configuration mismatch",
+  },
+  {
+    name: "an unterminated final line",
+    chunks: ["t3-mcp-gateway: first\n", "t3-mcp-gateway: Timed out ", "starting the owner"],
+    reason: "Timed out starting the owner",
+  },
+  {
+    name: "a reason after an oversized line",
+    chunks: [`t3-mcp-gateway: ${"x".repeat(5_000)}`, "y\nt3-mcp-gateway: Port in use\n"],
+    reason: "Port in use",
+  },
+])("reports the launcher's exact reason from $name", async ({ chunks, reason }) => {
+  rejectedLaunch(chunks);
+  const error = await createManagedGatewayHost(launch).catch((cause: Error) => cause);
+  expect(error).toBeInstanceOf(Error);
+  expect((error as Error).message).toBe(reason);
 });
 
 it("reports initial startup failure and cancels recovery", async () => {

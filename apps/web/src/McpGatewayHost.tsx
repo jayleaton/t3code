@@ -6,7 +6,7 @@ import {
 } from "@t3tools/client-runtime/gateway";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { AppRouter } from "./router";
 import { openDesktopGatewayThread, openDesktopGatewayAgents } from "./mcpGatewayNavigation";
@@ -16,6 +16,8 @@ import {
   getMcpGatewayPort,
   getMcpGatewayToken,
   isMcpGatewayEnabled,
+  mcpGatewayStartupMessage,
+  publishMcpGatewayStartup,
   publishMcpGatewayStatus,
   publishMcpGatewayStatusSnapshot,
   setMcpGatewayStatusRequester,
@@ -46,8 +48,15 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
   }, []);
 
   const [restartVersion, setRestartVersion] = useState(0);
+  // Another host's gateway can hold the port with a different store; the desktop takes over
+  // once it exits, without the user having to press Restart.
+  const [retryVersion, setRetryVersion] = useState(0);
+  const startupFailures = useRef(0);
   useEffect(() => {
-    setMcpGatewayRestarter(() => setRestartVersion((version) => version + 1));
+    setMcpGatewayRestarter(() => {
+      startupFailures.current = 0;
+      setRestartVersion((version) => version + 1);
+    });
     return () => setMcpGatewayRestarter(null);
   }, []);
 
@@ -57,6 +66,7 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
       token: configuration.token,
       port: configuration.port,
       restartVersion,
+      retryVersion,
     }),
     [
       configuration.available,
@@ -64,6 +74,7 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
       configuration.token,
       configuration.port,
       restartVersion,
+      retryVersion,
     ],
   );
   const [readyConfiguration, setReadyConfiguration] = useState<typeof nativeConfiguration | null>(
@@ -72,8 +83,10 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
   const managedReady = nativeConfiguration.enabled && readyConfiguration === nativeConfiguration;
   useEffect(() => {
     let stopped = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     const desktop = window.desktopBridge;
     if (!desktop?.configureManagedMcpGateway) return;
+    publishMcpGatewayStartup({ phase: "starting" });
     void desktop
       .configureManagedMcpGateway(
         nativeConfiguration.enabled
@@ -82,17 +95,28 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
       )
       .then(
         () => {
-          if (!stopped) setReadyConfiguration(nativeConfiguration);
+          if (stopped) return;
+          startupFailures.current = 0;
+          setReadyConfiguration(nativeConfiguration);
+          publishMcpGatewayStartup({ phase: "ready" });
         },
-        () => {
-          if (!stopped) {
-            console.error("MCP gateway startup failed");
-            publishMcpGatewayStatus("degraded");
-          }
+        (error: unknown) => {
+          if (stopped) return;
+          const message = mcpGatewayStartupMessage(error);
+          console.error("MCP gateway startup failed", message);
+          publishMcpGatewayStatus("degraded");
+          publishMcpGatewayStartup({ phase: "failed", message });
+          if (!nativeConfiguration.enabled) return;
+          startupFailures.current += 1;
+          retry = setTimeout(
+            () => setRetryVersion((version) => version + 1),
+            Math.min(1_000 * 2 ** (startupFailures.current - 1), 30_000),
+          );
         },
       );
     return () => {
       stopped = true;
+      clearTimeout(retry);
       void desktop
         .configureManagedMcpGateway?.(null)
         .catch(() => console.error("MCP gateway shutdown failed"));
