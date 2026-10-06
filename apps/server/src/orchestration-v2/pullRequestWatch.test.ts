@@ -145,6 +145,112 @@ describe("evaluatePullRequestWatch", () => {
     assert.deepEqual(evaluatePullRequestWatch(first.next, both, noRemarks).changes, []);
   });
 
+  describe("with the base branch's required check list", () => {
+    const MIGRATIONS = "Validate migrations on PostgreSQL 18";
+    const AGGREGATE = "Lint, type-check, test and build";
+    const requiredChecks = [MIGRATIONS, AGGREGATE];
+    const required = (name: string, status: PullRequestCheck["status"]) => ({
+      ...check(name, status),
+      required: true,
+    });
+    const complete = detail({
+      checks: [
+        required(MIGRATIONS, "success"),
+        required(AGGREGATE, "success"),
+        check("Affected workspace checks", "success"),
+        check("CodeRabbit", "pending"),
+      ],
+    });
+
+    it("waits for a required check no run has created yet, then reports passed once", () => {
+      // The aggregate job starts only after the workspace jobs, so it is absent at first.
+      const early = evaluatePullRequestWatch(
+        watch(),
+        detail({
+          checks: [required(MIGRATIONS, "success"), check("Affected workspace checks", "pending")],
+        }),
+        noRemarks,
+        requiredChecks,
+      );
+      assert.deepEqual(early.changes, []);
+      assert.isFalse(early.next.passed);
+
+      const ready = evaluatePullRequestWatch(early.next, complete, noRemarks, requiredChecks);
+      assert.deepEqual(ready.changes, [{ kind: "checks-passed", count: 2, required: true }]);
+      assert.deepEqual(
+        evaluatePullRequestWatch(ready.next, complete, noRemarks, requiredChecks).changes,
+        [],
+      );
+    });
+
+    it("never reports passed while the list is unknown, and keeps what it already told", () => {
+      const unknown = evaluatePullRequestWatch(watch(), complete, noRemarks, "unknown");
+      assert.deepEqual(unknown.changes, []);
+      assert.isFalse(unknown.next.passed);
+
+      const ready = evaluatePullRequestWatch(unknown.next, complete, noRemarks, requiredChecks);
+      assert.equal(ready.changes.length, 1);
+      // An unreadable list later neither takes the news back nor tells it twice.
+      const blind = evaluatePullRequestWatch(ready.next, complete, noRemarks, "unknown");
+      assert.deepEqual(blind.changes, []);
+      assert.isTrue(blind.next.passed);
+      assert.deepEqual(
+        evaluatePullRequestWatch(blind.next, complete, noRemarks, requiredChecks).changes,
+        [],
+      );
+
+      // A failure is still news while the list cannot be read.
+      const failed = detail({
+        checks: [required(MIGRATIONS, "success"), required(AGGREGATE, "failure")],
+      });
+      assert.deepEqual(evaluatePullRequestWatch(watch(), failed, noRemarks, "unknown").changes, [
+        { kind: "checks-failed", failed: [required(AGGREGATE, "failure")] },
+      ]);
+    });
+
+    it("reports a failure, then passed once its rerun recovers, and again for a new head", () => {
+      const failing = detail({
+        checks: [required(MIGRATIONS, "success"), required(AGGREGATE, "failure")],
+      });
+      const failed = evaluatePullRequestWatch(watch(), failing, noRemarks, requiredChecks);
+      assert.equal(failed.changes[0]?.kind, "checks-failed");
+
+      const rerun = detail({
+        checks: [required(MIGRATIONS, "success"), required(AGGREGATE, "pending")],
+      });
+      const running = evaluatePullRequestWatch(failed.next, rerun, noRemarks, requiredChecks);
+      assert.deepEqual(running.changes, []);
+      const recovered = evaluatePullRequestWatch(running.next, complete, noRemarks, requiredChecks);
+      assert.deepEqual(recovered.changes, [{ kind: "checks-passed", count: 2, required: true }]);
+
+      const pushed = detail({ ...complete, headSha: "bbbbbbbbbb" });
+      assert.deepEqual(
+        evaluatePullRequestWatch(recovered.next, pushed, noRemarks, requiredChecks).changes,
+        [{ kind: "checks-passed", count: 2, required: true }],
+      );
+    });
+
+    it("matches a required job GitHub qualifies with its workflow", () => {
+      const qualified = detail({
+        checks: [check(`CI / ${AGGREGATE}`, "success"), check(MIGRATIONS, "success")],
+      });
+      assert.deepEqual(
+        evaluatePullRequestWatch(watch(), qualified, noRemarks, requiredChecks).changes,
+        [{ kind: "checks-passed", count: 2, required: true }],
+      );
+    });
+
+    it("needs every check to pass where the branch requires none", () => {
+      const plain = detail({ checks: [check("test", "success"), check("bot", "pending")] });
+      const waiting = evaluatePullRequestWatch(watch(), plain, noRemarks, []);
+      assert.deepEqual(waiting.changes, []);
+      const green = detail({ checks: [check("test", "success"), check("bot", "success")] });
+      assert.deepEqual(evaluatePullRequestWatch(waiting.next, green, noRemarks, []).changes, [
+        { kind: "checks-passed", count: 2, required: false },
+      ]);
+    });
+  });
+
   it("does not wake a watch saved before passed checks were recorded", () => {
     const green = detail({ checks: [{ ...check("test", "success"), required: true }] });
     const told = watch({ headSha: "aaaaaaaaaa", passed: true });

@@ -66,6 +66,7 @@ import {
   decodePullRequestNodeIdJson,
   decodePullRequestSearchJson,
   decodePullRequestStacksJson,
+  decodeRequiredStatusChecksJson,
   decodePullRequestStatsJson,
   decodePullRequestSummariesJson,
   decodePullRequestWatchFingerprintsJson,
@@ -567,6 +568,13 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly host: string;
       readonly number: number;
     }) => Effect.Effect<GitHubPullRequestWatchFingerprint | null, GitHubPullRequestCliError>;
+    /** The check names a base branch requires, including ones no run has created yet. */
+    readonly getRequiredChecks: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly baseBranch: string;
+    }) => Effect.Effect<ReadonlyArray<string>, GitHubPullRequestCliError>;
 
     readonly revalidateChecks: Effect.Success<typeof makeChecksRevalidator>;
 
@@ -2222,6 +2230,36 @@ export const make = Effect.gen(function* () {
       });
     },
     listWorkflowRunsRequiringApproval,
+
+    getRequiredChecks: (input) => {
+      const { owner, name } = parseRepositorySelector(input.repository);
+      const branch = input.baseBranch.split("/").map(encodeURIComponent).join("/");
+      const read = (endpoint: string) =>
+        github
+          .execute({ cwd: input.cwd, args: ["api", "--hostname", input.host, endpoint] })
+          .pipe(Effect.map((result) => result.stdout.trim()));
+      return Effect.all(
+        [
+          read(`repos/${owner}/${name}/rules/branches/${branch}?per_page=100`),
+          read(`repos/${owner}/${name}/branches/${branch}`),
+        ],
+        { concurrency: 2 },
+      ).pipe(
+        Effect.flatMap(([rules, protection]) => {
+          const decoded = decodeRequiredStatusChecksJson(rules, protection);
+          return Result.isSuccess(decoded)
+            ? Effect.succeed(decoded.success)
+            : Effect.fail(
+                new GitHubPullRequestReadError({
+                  command: "gh",
+                  cwd: input.cwd,
+                  operation: "getRequiredChecks",
+                  cause: decoded.failure,
+                }),
+              );
+        }),
+      );
+    },
 
     getPullRequestStack: (input) => {
       const { owner, name } = parseRepositorySelector(input.repository);

@@ -30,6 +30,7 @@ import {
   REVIEW_THREADS_GRAPHQL_QUERY,
   pullRequestCoreGraphQlQuery,
   pullRequestSearchGraphQlQuery,
+  decodeRequiredStatusChecksJson,
 } from "./gitHubPullRequestJson.ts";
 
 function listJson(entries: ReadonlyArray<Record<string, unknown>>): string {
@@ -2104,5 +2105,58 @@ describe("pull request watch fingerprints", () => {
     expect(replied.remarks).not.toBe(before.remarks);
     // A pull request GitHub had no answer for is left for a full read.
     expect(decode(null, pullRequest(base)).has(0)).toBe(false);
+  });
+});
+
+describe("required status check decoding", () => {
+  const ruleset = (contexts: ReadonlyArray<string>) =>
+    JSON.stringify([
+      { type: "deletion", ruleset_id: 1 },
+      {
+        type: "pull_request",
+        parameters: { required_approving_review_count: 0, required_reviewers: [] },
+      },
+      {
+        type: "required_status_checks",
+        parameters: {
+          strict_required_status_checks_policy: false,
+          required_status_checks: contexts.map((context) => ({ context, integration_id: 15368 })),
+        },
+      },
+    ]);
+  const branch = (protection: unknown) => JSON.stringify({ name: "main", protection });
+  const unprotected = branch({
+    enabled: false,
+    required_status_checks: { enforcement_level: "off", contexts: [], checks: [] },
+  });
+
+  it("reads the checks a ruleset requires", () => {
+    const decoded = decodeRequiredStatusChecksJson(
+      ruleset(["Lint, type-check, test and build", "Validate migrations on PostgreSQL 18"]),
+      unprotected,
+    );
+    expect(Result.getOrThrow(decoded)).toEqual([
+      "Lint, type-check, test and build",
+      "Validate migrations on PostgreSQL 18",
+    ]);
+  });
+
+  it("adds classic protection once, and nothing from a branch without either", () => {
+    const classic = branch({
+      enabled: true,
+      required_status_checks: {
+        enforcement_level: "non_admins",
+        contexts: ["build", "legacy/status"],
+        checks: [{ context: "build", app_id: 15368 }],
+      },
+    });
+    expect(Result.getOrThrow(decodeRequiredStatusChecksJson(ruleset(["build"]), classic))).toEqual([
+      "build",
+      "legacy/status",
+    ]);
+    expect(Result.getOrThrow(decodeRequiredStatusChecksJson("[]", unprotected))).toEqual([]);
+    expect(Result.isFailure(decodeRequiredStatusChecksJson('{"message":"x"}', unprotected))).toBe(
+      true,
+    );
   });
 });

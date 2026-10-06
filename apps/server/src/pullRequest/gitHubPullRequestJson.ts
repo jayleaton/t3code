@@ -3203,3 +3203,68 @@ export function decodePullRequestStacksJson(
     })),
   });
 }
+
+const RawRequiredContextSchema = Schema.Struct({ context: Schema.String });
+
+const decodeBranchRules = decodeJsonResult(
+  Schema.Array(
+    Schema.Struct({
+      type: Schema.String,
+      parameters: Schema.optional(
+        Schema.NullOr(
+          Schema.Struct({
+            required_status_checks: Schema.optional(Schema.Array(RawRequiredContextSchema)),
+          }),
+        ),
+      ),
+    }),
+  ),
+);
+
+const decodeBranchProtection = decodeJsonResult(
+  Schema.Struct({
+    protection: Schema.optional(
+      Schema.NullOr(
+        Schema.Struct({
+          required_status_checks: Schema.optional(
+            Schema.NullOr(
+              Schema.Struct({
+                enforcement_level: Schema.optional(Schema.String),
+                contexts: Schema.optional(Schema.Array(Schema.String)),
+                checks: Schema.optional(Schema.Array(RawRequiredContextSchema)),
+              }),
+            ),
+          ),
+        }),
+      ),
+    ),
+  }),
+);
+
+/**
+ * The check names a base branch requires, from its rulesets (`rules/branches/{branch}`) and its
+ * classic protection (`branches/{branch}`). Both are readable with read access, and a required
+ * check that has not been created yet appears only here, never in the head commit's rollup.
+ */
+export function decodeRequiredStatusChecksJson(
+  rules: string,
+  branch: string,
+): Result.Result<ReadonlyArray<string>, DecodeFailure> {
+  const decodedRules = decodeBranchRules(rules);
+  if (!Result.isSuccess(decodedRules)) return Result.fail(decodedRules.failure);
+  const decodedBranch = decodeBranchProtection(branch);
+  if (!Result.isSuccess(decodedBranch)) return Result.fail(decodedBranch.failure);
+  const fromRules = decodedRules.success.flatMap((rule) =>
+    rule.type === "required_status_checks"
+      ? (rule.parameters?.required_status_checks ?? []).map((check) => check.context)
+      : [],
+  );
+  const classic = decodedBranch.success.protection?.required_status_checks;
+  const fromClassic =
+    classic == null || classic.enforcement_level === "off"
+      ? []
+      : [...(classic.contexts ?? []), ...(classic.checks ?? []).map((check) => check.context)];
+  return Result.succeed([
+    ...new Set([...fromRules, ...fromClassic].flatMap((name) => trimmed(name) ?? [])),
+  ]);
+}

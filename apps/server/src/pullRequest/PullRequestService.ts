@@ -150,6 +150,8 @@ const detailTimeToLive = (state: PullRequestState | undefined) =>
  * page and a watched pull request's change reaches its watch.
  */
 const CHECKS_CACHE_TTL = Duration.seconds(15);
+/** Branch rules change rarely, and a watch would otherwise read them on every pass. */
+const REQUIRED_CHECKS_CACHE_TTL = Duration.minutes(5);
 const DIFF_CACHE_TTL = Duration.seconds(60);
 /** A commit is content-addressed, so its own diff cannot change under its key. */
 const COMMIT_DIFF_CACHE_TTL = Duration.minutes(10);
@@ -241,6 +243,13 @@ export class PullRequestService extends Context.Service<
     readonly watchFingerprint: (
       input: PullRequestRef,
     ) => Effect.Effect<ProviderChangeRequestWatchFingerprint | null, PullRequestError>;
+    /**
+     * Every check name the base branch requires, including ones not created yet, so a watch
+     * cannot call a partial gate passed. Null when the host cannot list them.
+     */
+    readonly requiredChecks: (
+      input: PullRequestRef & { readonly baseBranch: string },
+    ) => Effect.Effect<ReadonlyArray<string> | null, PullRequestError>;
     readonly activity: (
       input: PullRequestRef,
     ) => Effect.Effect<PullRequestActivity, PullRequestError>;
@@ -612,6 +621,9 @@ function withRateLimitBackoff(
             api.getChangeRequestWatchFingerprint,
           ),
         }),
+    ...(api.getRequiredChecks === undefined
+      ? {}
+      : { getRequiredChecks: wrap("getRequiredChecks", api.getRequiredChecks) }),
     getChangeRequestActivity: wrap("getChangeRequestActivity", api.getChangeRequestActivity),
     ...(api.getReviewThreadComments === undefined
       ? {}
@@ -3004,6 +3016,32 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  // Keyed by the pull request's own key and its base, so a retargeted pull request reads again.
+  const requiredChecksCache = yield* Cache.makeWith(
+    (key: string) => {
+      const [refKey, baseBranch] = JSON.parse(key) as [string, string];
+      const input = refOfCacheKey(refKey);
+      return requireProject(input).pipe(
+        Effect.flatMap((project) =>
+          project.api.getRequiredChecks === undefined
+            ? Effect.succeed(null)
+            : project.api
+                .getRequiredChecks({
+                  cwd: project.project.workspaceRoot,
+                  repository: project.repository,
+                  host: project.host,
+                  baseBranch,
+                })
+                .pipe(Effect.mapError(toPullRequestError("requiredChecks"))),
+        ),
+      );
+    },
+    {
+      capacity: DETAIL_CACHE_CAPACITY,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? REQUIRED_CHECKS_CACHE_TTL : Duration.zero),
+    },
+  );
+
   const detailCache = yield* Cache.makeWith(
     (key: string) => {
       const statsKey = statsCacheKey(key);
@@ -3382,6 +3420,9 @@ export const make = Effect.gen(function* () {
     checks: credentialCached((input) => Cache.get(checksCache, refCacheKey(input))),
     watchFingerprint: credentialCached((input) =>
       Cache.get(watchFingerprintCache, refCacheKey(input)),
+    ),
+    requiredChecks: credentialCached((input) =>
+      Cache.get(requiredChecksCache, JSON.stringify([refCacheKey(input), input.baseBranch])),
     ),
     activity: credentialCached(activity),
     preview: credentialCached(preview),

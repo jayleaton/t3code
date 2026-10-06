@@ -34,10 +34,22 @@ const isFailedCheck = (check: PullRequestCheck) =>
   check.status === "failure" || check.status === "cancelled" || check.status === "action-required";
 
 /**
+ * What the base branch requires: the check names, null where the host cannot list them (the
+ * checks' own required flags decide), or "unknown" when the list could not be read this pass.
+ */
+export type RequiredChecks = ReadonlyArray<string> | null | "unknown";
+
+// Two workflows naming a job alike are told apart as `workflow / name`; a rule names the job.
+const isCheckNamed = (check: PullRequestCheck, context: string) =>
+  check.name === context || check.name.endsWith(` / ${context}`);
+
+/**
  * Compares a watched pull request with what its agent was last told. Each check is reported as
  * soon as it fails, so a check that never finishes (an advisory review bot) cannot hold the
  * news back. "Passed" is reported once the checks the base branch requires all passed, or all
- * checks where the host marks none required. Remarks count when someone other than the agent's
+ * checks where the host marks none required. A required check the head has no run of yet holds
+ * "passed" back, and so does a required list that could not be read: neither ever announces a
+ * partial gate, and the state already told stands until the list reads again. Remarks count when someone other than the agent's
  * own account wrote them, so its own replies never wake it. `remarks` is null when the
  * conversation could not be read; remarks then wait for a later pass.
  */
@@ -45,6 +57,7 @@ export function evaluatePullRequestWatch(
   watch: ThreadPullRequestWatch,
   detail: Pick<PullRequestDetail, "headSha" | "checks" | "mergeability" | "viewer" | "author">,
   remarks: ReadonlyArray<PullRequestComment> | null,
+  requiredChecks: RequiredChecks = null,
 ): PullRequestWatchReport {
   const changes: Array<PullRequestWatchChange> = [];
   const headSha = detail.headSha ?? null;
@@ -61,20 +74,31 @@ export function evaluatePullRequestWatch(
     // A check that runs again leaves the list, so a rerun that fails again is reported.
     failedChecks = failed.map((check) => check.name);
 
-    const required = detail.checks.filter((check) => check.required === true);
-    const gate = required.length > 0 ? required : detail.checks;
-    const passedNow = gate.every((check) => check.status !== "pending" && !isFailedCheck(check));
-    const gateNames = gate.map((check) => check.name);
-    // A watch saved before passedChecks existed takes the current names, so it does not wake.
-    const told = passed && passedChecks.length === 0 ? gateNames : passedChecks;
-    // A required job created and finished between two passes is never seen pending. Without
-    // required checks, any check counts, and advisory bots keep adding passed ones: no wake.
-    const gateGrew = required.length > 0 && gateNames.some((name) => !told.includes(name));
-    if (passedNow && (!passed || gateGrew)) {
-      changes.push({ kind: "checks-passed", count: gate.length, required: required.length > 0 });
+    if (requiredChecks !== "unknown") {
+      const expected = requiredChecks ?? [];
+      const required = detail.checks.filter(
+        (check) =>
+          check.required === true || expected.some((context) => isCheckNamed(check, context)),
+      );
+      const missing = expected.filter(
+        (context) => !detail.checks.some((check) => isCheckNamed(check, context)),
+      );
+      const gate = required.length > 0 || missing.length > 0 ? required : detail.checks;
+      const passedNow =
+        missing.length === 0 &&
+        gate.every((check) => check.status !== "pending" && !isFailedCheck(check));
+      const gateNames = gate.map((check) => check.name);
+      // A watch saved before passedChecks existed takes the current names, so it does not wake.
+      const told = passed && passedChecks.length === 0 ? gateNames : passedChecks;
+      // A required job created and finished between two passes is never seen pending. Without
+      // required checks, any check counts, and advisory bots keep adding passed ones: no wake.
+      const gateGrew = required.length > 0 && gateNames.some((name) => !told.includes(name));
+      if (passedNow && (!passed || gateGrew)) {
+        changes.push({ kind: "checks-passed", count: gate.length, required: required.length > 0 });
+      }
+      passed = passedNow;
+      passedChecks = passedNow ? gateNames : [];
     }
-    passed = passedNow;
-    passedChecks = passedNow ? gateNames : [];
   }
 
   const own = (detail.viewer ?? detail.author?.login)?.toLowerCase();

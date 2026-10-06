@@ -2515,6 +2515,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
             Layer.mergeAll(
               NodeServices.layer,
               Layer.mock(PullRequestService.PullRequestService)({
+                requiredChecks: () => Effect.succeed(null),
                 detail: () =>
                   Effect.suspend(() => {
                     reads += 1;
@@ -2651,6 +2652,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           Layer.mergeAll(
             NodeServices.layer,
             Layer.mock(PullRequestService.PullRequestService)({
+              requiredChecks: () => Effect.succeed(null),
               detail: () =>
                 Effect.sync(() => ({
                   ...watchedPullRequestDetail({ projectId, number: key.number, at: "2026-10-02" }),
@@ -2753,6 +2755,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           Layer.mergeAll(
             NodeServices.layer,
             Layer.mock(PullRequestService.PullRequestService)({
+              requiredChecks: () => Effect.succeed(null),
               watchFingerprint: () =>
                 Effect.suspend(() =>
                   fingerprint === "rate-limited"
@@ -2962,6 +2965,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           Layer.mergeAll(
             NodeServices.layer,
             Layer.mock(PullRequestService.PullRequestService)({
+              requiredChecks: () => Effect.succeed(null),
               detail: () => Effect.succeed(detail),
               activity: () =>
                 Effect.succeed({
