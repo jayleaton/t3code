@@ -149,5 +149,12 @@ record (`apps/server/src/threadTask/`). Three distinctions are easy to collapse 
   orchestrator's command receipts make a replayed wake a no-op. Restart recovery replays only a
   wake still marked pending and a worker run that ended unobserved; quiet open tasks stay quiet.
 
-The caller is always the authenticated MCP invocation's thread, never an input field. Tasks are
-local to one environment; a child on another machine has no task.
+A chat may also ask to settle itself after its turn (`t3_settle_after_turn`). The request is
+stored, so it survives the turn that made it, and it never discards a queued wake: it waits for the
+run, queued wakes, unaccepted child tasks, and active descendants, and a later user message
+withdraws it.
+
+Callers are never input fields. On the server-hosted gateway, a call for this environment runs as
+the MCP credential's thread (`LocalGatewayPort`); routed, relayed, and standalone calls drop the
+caller and act as the session's user under its RPC scopes. Tasks are local to one environment; a
+child on another machine has no task.
