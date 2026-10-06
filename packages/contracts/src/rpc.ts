@@ -357,6 +357,17 @@ import {
   TodoUpdateInput,
 } from "./todo.ts";
 import {
+  ThreadSettleAfterTurnInput,
+  ThreadSettleRequest,
+  ThreadTaskAssignInput,
+  ThreadTaskError,
+  ThreadTaskListResult,
+  ThreadTaskReadInput,
+  ThreadTaskUpdateInput,
+  ThreadTaskView,
+  ThreadTaskWatchInput,
+} from "./threadTask.ts";
+import {
   ProjectCloneActionInput,
   ProjectCloneActionResult,
   ProjectCloneListEvent,
@@ -535,6 +546,13 @@ export const WS_METHODS = {
   todosSettle: "todos.settle",
   todosUnsettle: "todos.unsettle",
   todosRemove: "todos.remove",
+
+  // Thread tasks. The caller is always the authenticated user; chat callers use MCP tools.
+  threadTasksAssign: "threadTasks.assign",
+  threadTasksRead: "threadTasks.read",
+  threadTasksUpdate: "threadTasks.update",
+  threadTasksWatch: "threadTasks.watch",
+  threadTasksSettleAfterTurn: "threadTasks.settleAfterTurn",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -1780,6 +1798,36 @@ const WsScheduledTasksRunNowRpc = Rpc.make(WS_METHODS.scheduledTasksRunNow, {
   error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
 });
 
+const WsThreadTasksAssignRpc = Rpc.make(WS_METHODS.threadTasksAssign, {
+  payload: ThreadTaskAssignInput,
+  success: ThreadTaskView,
+  error: Schema.Union([ThreadTaskError, EnvironmentAuthorizationError]),
+});
+
+const WsThreadTasksReadRpc = Rpc.make(WS_METHODS.threadTasksRead, {
+  payload: ThreadTaskReadInput,
+  success: ThreadTaskListResult,
+  error: Schema.Union([ThreadTaskError, EnvironmentAuthorizationError]),
+});
+
+const WsThreadTasksUpdateRpc = Rpc.make(WS_METHODS.threadTasksUpdate, {
+  payload: ThreadTaskUpdateInput,
+  success: ThreadTaskView,
+  error: Schema.Union([ThreadTaskError, EnvironmentAuthorizationError]),
+});
+
+const WsThreadTasksWatchRpc = Rpc.make(WS_METHODS.threadTasksWatch, {
+  payload: ThreadTaskWatchInput,
+  success: ThreadTaskListResult,
+  error: Schema.Union([ThreadTaskError, EnvironmentAuthorizationError]),
+});
+
+const WsThreadTasksSettleAfterTurnRpc = Rpc.make(WS_METHODS.threadTasksSettleAfterTurn, {
+  payload: ThreadSettleAfterTurnInput,
+  success: ThreadSettleRequest,
+  error: Schema.Union([ThreadTaskError, EnvironmentAuthorizationError]),
+});
+
 const WsTodosListRpc = Rpc.make(WS_METHODS.todosList, {
   payload: TodoListInput,
   success: TodoListResult,
@@ -1948,6 +1996,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsTodosSettleRpc,
   WsTodosUnsettleRpc,
   WsTodosRemoveRpc,
+  WsThreadTasksAssignRpc,
+  WsThreadTasksReadRpc,
+  WsThreadTasksUpdateRpc,
+  WsThreadTasksWatchRpc,
+  WsThreadTasksSettleAfterTurnRpc,
   WsScheduledTasksRotateWebhookTokenRpc,
   WsSecretsAnswerRequestRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,

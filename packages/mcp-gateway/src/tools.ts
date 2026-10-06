@@ -14,6 +14,7 @@ import {
   type GatewayScope,
   type GatewayThreadControlAction,
   type GatewayThreadExecutionState,
+  type GatewayThreadTaskRequest,
 } from "./port.ts";
 import type { GatewayEvent, GatewayEventStore } from "./events.ts";
 import type { ScheduledTaskSchedule } from "@t3tools/contracts";
@@ -45,6 +46,79 @@ export interface GatewayCaller {
 export interface GatewayInvocation {
   readonly caller?: GatewayCaller | undefined;
 }
+
+const taskText = (max: number) => z.string().trim().min(1).max(max);
+const taskRequestId = taskText(256).optional();
+const taskThreadId = z.string().trim().min(1);
+const taskContinuation = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("run") }),
+  z.object({
+    kind: z.literal("pull_request"),
+    repository: z.string().trim().min(1),
+    number: z.number().int().positive(),
+  }),
+  z.object({ kind: z.literal("task"), threadId: taskThreadId }),
+]);
+
+/** Tool inputs for thread tasks, without environmentId. The caller is never an input. */
+export const threadTaskInputFields = {
+  assign: {
+    threadId: taskThreadId.describe("The child chat that works on the task."),
+    summary: taskText(2000).describe("The deliverable, in a sentence or two."),
+    taskId: taskText(128)
+      .optional()
+      .describe("Your ledger's id for the task. Defaults to a new id."),
+    settleWhenAccepted: z
+      .boolean()
+      .optional()
+      .describe(
+        "Standing consent to settle the child once you accept its DONE revision. Not acceptance itself.",
+      ),
+    clientRequestId: taskRequestId,
+  },
+  read: {
+    threadId: taskThreadId
+      .optional()
+      .describe(
+        "A child chat whose task you own, or your own chat. Omit to list every task you own.",
+      ),
+  },
+  update: {
+    threadId: taskThreadId.optional().describe("The worker chat. Omit to update your own task."),
+    expectedRevision: z
+      .number()
+      .int()
+      .positive()
+      .describe("The revision you read. A newer revision rejects the update."),
+    status: z.enum(["WAITING", "INPUT", "DONE"]).optional(),
+    summary: taskText(2000).optional(),
+    needs: taskText(2000)
+      .nullable()
+      .optional()
+      .describe("INPUT only: the missing decision or dependency."),
+    questionRequestId: z.string().trim().min(1).nullable().optional(),
+    evidence: z.array(taskText(1000)).max(20).optional(),
+    waitingOn: taskContinuation.nullable().optional(),
+    settleWhenAccepted: z.boolean().optional().describe("Owner only."),
+    accept: z
+      .literal(true)
+      .optional()
+      .describe(
+        "Owner only: accept this DONE revision after its gates (merge, deployment) passed.",
+      ),
+    clientRequestId: taskRequestId,
+  },
+  watch: {
+    afterCursor: z.number().int().min(0).optional(),
+    timeoutMs: z.number().int().min(1).max(60_000).optional(),
+  },
+  settleAfterTurn: {
+    threadId: taskThreadId
+      .optional()
+      .describe("Omit for your own chat. Only that chat or the user may ask."),
+    cancel: z.literal(true).optional().describe("Withdraw a pending request."),
+  },
+} as const;
 
 export const handoffInputSchema = z.object({
   sourceEnvironmentId: z.string().min(1),
@@ -1115,6 +1189,42 @@ function assertPatchPathsAreProjectRelative(patch: string) {
   }
 }
 
+/** Surfaces a task error's code and detail, whether it arrives bare or wrapped in a cause. */
+function threadTaskFailure(error: unknown, environmentId: string): unknown {
+  for (
+    let current = error, depth = 0;
+    depth < 4 && typeof current === "object" && current;
+    depth++
+  ) {
+    const candidate = current as {
+      _tag?: unknown;
+      code?: unknown;
+      detail?: unknown;
+      cause?: unknown;
+    };
+    if (
+      candidate._tag === "ThreadTaskError" &&
+      typeof candidate.code === "string" &&
+      typeof candidate.detail === "string"
+    ) {
+      const { currentRevision } = current as { currentRevision?: unknown };
+      return new GatewayError({
+        code: "upstream_failure",
+        message: `${candidate.code}: ${candidate.detail}`,
+        retryable: false,
+        environmentId,
+        details: {
+          taskErrorCode: candidate.code,
+          detail: candidate.detail,
+          ...(typeof currentRevision === "number" ? { currentRevision } : {}),
+        },
+      });
+    }
+    current = candidate.cause;
+  }
+  return error;
+}
+
 export async function callGatewayTool(
   context: GatewayToolContext,
   name: string,
@@ -1468,6 +1578,49 @@ export async function callGatewayTool(
               : "remove",
         todoId: requiredString(input, "todoId"),
       });
+    }
+    case "t3_task_assign":
+    case "t3_task_read":
+    case "t3_task_update":
+    case "t3_task_watch":
+    case "t3_settle_after_turn": {
+      const action =
+        name === "t3_task_assign"
+          ? "assign"
+          : name === "t3_task_read"
+            ? "read"
+            : name === "t3_task_update"
+              ? "update"
+              : name === "t3_task_watch"
+                ? "watch"
+                : "settleAfterTurn";
+      const environmentId =
+        action === "read" || action === "watch"
+          ? environmentWithScope(context, input, "read")
+          : action === "settleAfterTurn"
+            ? environmentWithScope(context, input, "lifecycle")
+            : environmentWithAnyScope(context, input, ["create", "admin"]);
+      if (!context.port.threadTask)
+        throw new Error("Thread tasks are unavailable in this runtime. Update T3.");
+      const { environmentId: _environmentId, requestId: _r, correlationId: _c, ...fields } = input;
+      const parsed = z.strictObject(threadTaskInputFields[action]).safeParse(fields);
+      if (!parsed.success) {
+        throw new GatewayError({
+          code: "invalid_input",
+          message: parsed.error.issues
+            .map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`)
+            .join("; "),
+          retryable: false,
+          environmentId,
+        });
+      }
+      const request = { action, input: parsed.data } as GatewayThreadTaskRequest;
+      try {
+        // The calling chat is the server's own record of who invoked the tool, never input.
+        return await context.port.threadTask(environmentId, request, invocation.caller);
+      } catch (error) {
+        throw threadTaskFailure(error, environmentId);
+      }
     }
     case "t3_open_thread": {
       const environmentId = environmentWithScope(context, input, "read");

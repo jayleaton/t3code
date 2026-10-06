@@ -2,6 +2,12 @@ import {
   AuthSessionId,
   AuthStandardClientScopes,
   type EnvironmentId,
+  ThreadId,
+  ThreadSettleAfterTurnInput,
+  ThreadTaskAssignInput,
+  ThreadTaskReadInput,
+  ThreadTaskUpdateInput,
+  ThreadTaskWatchInput,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -22,12 +28,14 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { RpcTest } from "effect/rpc";
 
 import type { AuthenticatedSession } from "../../auth/EnvironmentAuth.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
+import * as ThreadTaskService from "../../threadTask/ThreadTaskService.ts";
 import { makeInProcessWsRpcLayer } from "../../ws.ts";
 
 /**
@@ -51,6 +59,53 @@ const session: AuthenticatedSession = {
   subject: "t3-agents-mcp",
   method: "bearer-access-token",
   scopes: AuthStandardClientScopes,
+};
+
+/**
+ * Thread task calls for this environment, run on the task service directly so a chat
+ * keeps its own identity. `caller` comes only from the server's authenticated MCP
+ * credential; the in-process RPC session is a user and cannot name a chat.
+ */
+const makeThreadTask = (
+  environmentId: EnvironmentId,
+  tasks: ThreadTaskService.ThreadTaskService["Service"],
+  fallback: GatewayRuntimePort["threadTask"],
+): NonNullable<GatewayRuntimePort["threadTask"]> => {
+  const decodeAssign = Schema.decodeUnknownEffect(ThreadTaskAssignInput);
+  const decodeRead = Schema.decodeUnknownEffect(ThreadTaskReadInput);
+  const decodeUpdate = Schema.decodeUnknownEffect(ThreadTaskUpdateInput);
+  const decodeWatch = Schema.decodeUnknownEffect(ThreadTaskWatchInput);
+  const decodeSettle = Schema.decodeUnknownEffect(ThreadSettleAfterTurnInput);
+  return (target, request, caller) => {
+    if (
+      caller === undefined ||
+      caller.environmentId !== environmentId ||
+      target !== environmentId
+    ) {
+      if (fallback === undefined) throw new Error("Thread tasks are unavailable here.");
+      return fallback(target, request);
+    }
+    const actor: ThreadTaskService.ThreadTaskCaller = {
+      kind: "thread",
+      threadId: ThreadId.make(caller.threadId),
+    };
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        switch (request.action) {
+          case "assign":
+            return yield* tasks.assign(actor, yield* decodeAssign(request.input));
+          case "read":
+            return yield* tasks.read(actor, yield* decodeRead(request.input));
+          case "update":
+            return yield* tasks.update(actor, yield* decodeUpdate(request.input));
+          case "watch":
+            return yield* tasks.watch(actor, yield* decodeWatch(request.input));
+          case "settleAfterTurn":
+            return yield* tasks.settleAfterTurn(actor, yield* decodeSettle(request.input));
+        }
+      }),
+    );
+  };
 };
 
 export const layer = Layer.effect(
@@ -111,10 +166,12 @@ export const layer = Layer.effect(
     const context = Context.make(EnvironmentRegistry.EnvironmentRegistry, registry).pipe(
       Context.add(Crypto.Crypto, yield* Crypto.Crypto),
     );
+    const base = createGatewayRuntimePortFromContext(context);
+    const tasks = yield* ThreadTaskService.ThreadTaskService;
     return LocalGatewayPort.of({
       environmentId,
       label: descriptor.label,
-      port: createGatewayRuntimePortFromContext(context),
+      port: { ...base, threadTask: makeThreadTask(environmentId, tasks, base.threadTask) },
     });
   }),
 );

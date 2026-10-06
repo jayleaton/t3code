@@ -879,6 +879,27 @@ export function createGatewayRuntimePort(
           }
         }),
       ),
+    // The caller is ignored here: an RPC session is the connected user, never a chat.
+    threadTask: (environmentId, task) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          const call = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+            registry.run(EnvironmentId.make(environmentId), effect);
+          switch (task.action) {
+            case "assign":
+              return yield* call(request(WS_METHODS.threadTasksAssign, task.input));
+            case "read":
+              return yield* call(request(WS_METHODS.threadTasksRead, task.input));
+            case "update":
+              return yield* call(request(WS_METHODS.threadTasksUpdate, task.input));
+            case "watch":
+              return yield* call(request(WS_METHODS.threadTasksWatch, task.input));
+            case "settleAfterTurn":
+              return yield* call(request(WS_METHODS.threadTasksSettleAfterTurn, task.input));
+          }
+        }),
+      ),
     focusDevice: async (rawEnvironmentId, device, target) => {
       const environmentId = EnvironmentId.make(rawEnvironmentId);
       const resolved = resolveGatewayDevice(await run(listGatewayDevices(environmentId)), device);

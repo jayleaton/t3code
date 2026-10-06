@@ -19,6 +19,7 @@ import type {
   GatewayStatusSnapshot,
   GatewayThreadControlAction,
   GatewayThreadExecutionState,
+  GatewayThreadTaskRequest,
 } from "@t3tools/client-runtime/gateway";
 
 export {
@@ -42,6 +43,7 @@ export type {
   GatewayStatusSnapshot,
   GatewayThreadControlAction,
   GatewayThreadExecutionState,
+  GatewayThreadTaskRequest,
 };
 
 export type GatewayErrorCode =

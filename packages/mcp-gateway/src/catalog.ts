@@ -7,6 +7,7 @@ import { GatewayError, GATEWAY_THREAD_EXECUTION_STATES } from "./port.ts";
 import {
   callGatewayTool,
   handoffInputSchema,
+  threadTaskInputFields,
   type GatewayInvocation,
   type GatewayToolContext,
 } from "./tools.ts";
@@ -375,6 +376,26 @@ export const TOOL_SPECS = {
   t3_remove_todo: [
     "Delete a todo permanently. To mark finished work, settle it instead; removal cannot be undone. Requires create access.",
     { environmentId, todoId: z.string().trim().min(1) },
+  ],
+  t3_task_assign: [
+    "Assign or replace the task of a child chat nested under this chat. The child reports WAITING, INPUT, or DONE against it and you are woken on those transitions and when its turns end. Named children you launch get a task automatically. settleWhenAccepted is standing consent to settle the child after you accept its DONE revision; it is not acceptance. Requires create or admin access.",
+    { environmentId, ...threadTaskInputFields.assign },
+  ],
+  t3_task_read: [
+    "Read a task: your own as a worker, a child's as its owner, or omit threadId for every task you own or work on. Returns status, revision, needs, evidence, waitingOn, whether that continuation is live, the worker's run state, and acceptance and settlement.",
+    { environmentId, ...threadTaskInputFields.read },
+  ],
+  t3_task_update: [
+    "Update a task at expectedRevision. Workers report WAITING (waitingOn: their run, a watched pull request, or a child task), INPUT (needs: the missing decision or dependency; questionRequestId for a pending question), or DONE (evidence required, child tasks accepted). The owner is woken on INPUT, DONE, and a new waitingOn gate, never on summary edits. Owner only: accept=true accepts the current DONE revision once its merge or deployment gates passed; settleWhenAccepted grants or withdraws settlement consent. Any content change reopens the task and clears acceptance. Requires create or admin access.",
+    { environmentId, ...threadTaskInputFields.update },
+  ],
+  t3_task_watch: [
+    "Wait up to timeoutMs (max 60000) for changes to tasks you own or work on after afterCursor, returning as soon as one changes. Omit afterCursor for the current tasks and cursor. Wakes already arrive as messages; use this only when this turn must wait.",
+    { environmentId, ...threadTaskInputFields.watch },
+  ],
+  t3_settle_after_turn: [
+    "Settle this chat (or threadId) once its current turn ends and nothing remains: no queued wake, active descendant, or unaccepted child task. Returns the request with blockedBy while it waits; cancel=true withdraws it. Use instead of settling a chat that is still running. Requires lifecycle scope.",
+    { environmentId, ...threadTaskInputFields.settleAfterTurn },
   ],
   t3_get_thread: [
     "Read one T3 chat and its messages, including the full profileSnapshot with its systemPrompt.",

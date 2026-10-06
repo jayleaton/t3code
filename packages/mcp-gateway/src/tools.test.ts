@@ -319,6 +319,108 @@ describe("gateway chat tools", () => {
     expect(requests).toHaveLength(5);
   });
 
+  it("runs task tools as the invoking chat, never from input", async () => {
+    const calls: Array<{ request: unknown; caller: unknown }> = [];
+    const context = {
+      port: {
+        ...makePort(),
+        threadTask: async (_environmentId: string, request: unknown, caller?: unknown) => {
+          calls.push({ request, caller });
+          return { tasks: [], cursor: 0, timedOut: false };
+        },
+      },
+      grants: {
+        remote: ["read", "create", "lifecycle"] as const,
+        readOnly: ["read"] as const,
+        createOnly: ["create"] as const,
+      },
+    };
+    const caller = { environmentId: "remote", threadId: "worker" };
+    await callGatewayTool(
+      context,
+      "t3_task_update",
+      { environmentId: "remote", expectedRevision: 2, status: "DONE", evidence: ["PR merged"] },
+      { caller },
+    );
+    await callGatewayTool(context, "t3_task_read", { environmentId: "remote" }, { caller });
+    await callGatewayTool(context, "t3_settle_after_turn", { environmentId: "remote" }, { caller });
+    await callGatewayTool(context, "t3_task_read", { environmentId: "remote" });
+    expect(calls).toEqual([
+      {
+        request: {
+          action: "update",
+          input: { expectedRevision: 2, status: "DONE", evidence: ["PR merged"] },
+        },
+        caller,
+      },
+      { request: { action: "read", input: {} }, caller },
+      { request: { action: "settleAfterTurn", input: {} }, caller },
+      { request: { action: "read", input: {} }, caller: undefined },
+    ]);
+
+    // Identity fields are not part of any task tool's input.
+    for (const forged of [{ caller }, { callerThreadId: "owner" }, { kind: "user" }]) {
+      await expect(
+        callGatewayTool(context, "t3_task_read", { environmentId: "remote", ...forged }),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+    }
+    expect(calls).toHaveLength(4);
+  });
+
+  it("requires read, create, or lifecycle access per task tool", async () => {
+    const threadTask = vi.fn(async () => ({ tasks: [], cursor: 0, timedOut: false }));
+    const context = {
+      port: { ...makePort(), threadTask },
+      grants: {
+        readOnly: ["read"] as const,
+        createOnly: ["create"] as const,
+        lifecycleOnly: ["lifecycle"] as const,
+      },
+    };
+    const assign = { threadId: "child", summary: "Ship it" };
+    await callGatewayTool(context, "t3_task_read", { environmentId: "readOnly" });
+    await callGatewayTool(context, "t3_task_watch", { environmentId: "readOnly", timeoutMs: 10 });
+    await callGatewayTool(context, "t3_task_assign", { environmentId: "createOnly", ...assign });
+    await callGatewayTool(context, "t3_settle_after_turn", { environmentId: "lifecycleOnly" });
+    expect(threadTask).toHaveBeenCalledTimes(4);
+
+    for (const [name, environmentId, extra] of [
+      ["t3_task_assign", "readOnly", assign],
+      ["t3_task_update", "readOnly", { expectedRevision: 1 }],
+      ["t3_task_read", "createOnly", {}],
+      ["t3_task_watch", "lifecycleOnly", {}],
+      ["t3_settle_after_turn", "createOnly", {}],
+    ] as const) {
+      await expect(
+        callGatewayTool(context, name, { environmentId, ...extra }),
+      ).rejects.toMatchObject({ code: "scope_required" });
+    }
+    expect(threadTask).toHaveBeenCalledTimes(4);
+  });
+
+  it("surfaces a task error's code and detail", async () => {
+    const context = {
+      port: {
+        ...makePort(),
+        threadTask: async () => {
+          throw Object.assign(new Error("stale"), {
+            _tag: "ThreadTaskError",
+            code: "revision_conflict",
+            detail: "Task is at revision 3.",
+            currentRevision: 3,
+          });
+        },
+      },
+      grants: { remote: ["create"] as const },
+    };
+    await expect(
+      callGatewayTool(context, "t3_task_update", { environmentId: "remote", expectedRevision: 1 }),
+    ).rejects.toMatchObject({
+      message: "revision_conflict: Task is at revision 3.",
+      details: { taskErrorCode: "revision_conflict", currentRevision: 3 },
+    });
+  });
+
   it("turns runAt or cron into a schedule for scheduled tasks", async () => {
     const requests: unknown[] = [];
     const context = {

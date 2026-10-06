@@ -62,7 +62,12 @@ export function createRoutedGatewayPort(
           `Environment ${elsewhere} is not reachable from this chat. Open T3 Code on a device connected to it and grant it T3 Agents access.`,
         );
       }
-      return remote.invoke(method, args, environmentIds);
+      // The calling chat is only meaningful to the local server that authenticated it.
+      return remote.invoke(
+        method,
+        method === "threadTask" ? args.slice(0, 2) : args,
+        environmentIds,
+      );
     };
   }
   return routed as unknown as GatewayRuntimePort;

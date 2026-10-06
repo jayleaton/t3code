@@ -36,7 +36,8 @@ export async function answerGatewayPortCall(
     | ((...input: ReadonlyArray<unknown>) => Promise<unknown>)
     | undefined;
   if (run === undefined) throw new Error(`${method} is not available on this device.`);
-  return run.call(port, ...args);
+  // A relayed call never carries a calling chat: this app acts as its user.
+  return run.call(port, ...(method === "threadTask" ? args.slice(0, 2) : args));
 }
 
 /**

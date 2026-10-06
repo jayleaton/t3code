@@ -429,6 +429,8 @@ export function createBridgeRuntimePort(input: {
         invoke("focusDevice", [environmentId, device, target]),
       scheduledTask: (environmentId, request) => invoke("scheduledTask", [environmentId, request]),
       todo: (environmentId, request) => invoke("todo", [environmentId, request]),
+      // The calling chat never crosses the bridge: the app acts with its user's authority.
+      threadTask: (environmentId, request) => invoke("threadTask", [environmentId, request]),
       listEnvironments: () => invoke("listEnvironments", []),
       getEnvironmentStatus: (environmentId) => invoke("getEnvironmentStatus", [environmentId]),
       listProfiles: (environmentId) => invoke("listProfiles", [environmentId]),

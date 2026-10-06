@@ -52,6 +52,33 @@ describe("createRoutedGatewayPort", () => {
     expect(environments.map((item) => item.environmentId)).toEqual(["local", "remote"]);
   });
 
+  it("gives the calling chat only to this environment's port", async () => {
+    const received: Array<[string, ReadonlyArray<unknown>]> = [];
+    const local = {
+      ...fakePort("local", []),
+      threadTask: async (...args: ReadonlyArray<unknown>) => {
+        received.push(["local", args]);
+        return {};
+      },
+    } as unknown as GatewayRuntimePort;
+    const port = createRoutedGatewayPort("local", local, () => ({
+      invoke: async (_method, args) => {
+        received.push(["relay", args]);
+        return {};
+      },
+    }));
+    const caller = { environmentId: "local", threadId: "chat" };
+    const request = { action: "read", input: {} } as const;
+
+    await port.threadTask!("local", request, caller);
+    await port.threadTask!("remote", request, caller);
+
+    expect(received).toEqual([
+      ["local", ["local", request, caller]],
+      ["relay", ["remote", request]],
+    ]);
+  });
+
   it("explains that other environments need a connected app", async () => {
     const port = createRoutedGatewayPort("local", fakePort("local", []), () => undefined);
     await expect(port.listProjects("remote")).rejects.toThrow("not reachable from this chat");
@@ -60,6 +87,23 @@ describe("createRoutedGatewayPort", () => {
 });
 
 describe("answerGatewayPortCall", () => {
+  it("drops a calling chat from a relayed task call", async () => {
+    const received: Array<ReadonlyArray<unknown>> = [];
+    const port = {
+      threadTask: async (...args: ReadonlyArray<unknown>) => {
+        received.push(args);
+        return {};
+      },
+    } as unknown as GatewayRuntimePort;
+    const request = { action: "read", input: {} };
+    await answerGatewayPortCall(port, new Set(["a"]), "threadTask", [
+      "a",
+      request,
+      { environmentId: "a", threadId: "owner" },
+    ]);
+    expect(received).toEqual([["a", request]]);
+  });
+
   it("answers only for granted environments", async () => {
     const calls: Array<string> = [];
     const port = {

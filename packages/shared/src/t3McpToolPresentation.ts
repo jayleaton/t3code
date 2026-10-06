@@ -118,6 +118,7 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   t3_task_read: tool(["Read", "Reading", "Read", "tasks"], "task-status"),
   t3_task_update: tool(["Update", "Updating", "Updated", "a task"], "thread-update"),
   t3_task_watch: tool(["Watch", "Watching", "Watched", "tasks"], "task-status"),
+  t3_settle_after_turn: tool(["Settle", "Settling", "Settled", "this chat"], "thread-organize"),
   task_cancel: tool(
     ["Cancel", "Canceling", "Requested cancellation of", "delegated task"],
     "task-cancel",
