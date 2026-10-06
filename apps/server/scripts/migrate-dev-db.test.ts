@@ -171,6 +171,31 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
     }),
   );
 
+  it.effect("accepts the slots an earlier agent build recorded under other names", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const sourceDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-lineage-" });
+      const destDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-lineage-dest-" });
+      const source = yield* createFixtureSource(sourceDir);
+      // The ledger a database upgraded from an earlier agent build carries;
+      // 52 and 53 replayed that build's schema.
+      yield* withDatabase(
+        source,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`UPDATE effect_sql_migrations
+            SET name = 'ProjectionThreadProfileSnapshot' WHERE migration_id = 50`;
+          yield* sql`UPDATE effect_sql_migrations
+            SET name = 'AgentProfileAndPullRequestCompatibility' WHERE migration_id = 51`;
+        }),
+      );
+
+      yield* runMigrateDevDb(
+        { baseDir: destDir, source, projects: 5, threadsPerProject: 10 },
+        { sharedHome: sourceDir },
+      );
+    }),
+  );
   it.effect("refuses while a dev server holds the destination", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

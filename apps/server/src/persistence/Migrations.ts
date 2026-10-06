@@ -160,6 +160,22 @@ export const migrationEntries = [
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
+/**
+ * Names earlier agent builds recorded in slots this build uses for other
+ * migrations. 52 and 53 replay those builds' schema idempotently, so a
+ * database carrying one of these names was upgraded, not skipped.
+ */
+const supersededMigrationNames: ReadonlyMap<number, ReadonlyArray<string>> = new Map([
+  [50, ["ProjectionThreadProfileSnapshot"]],
+  [51, ["AgentProfileAndPullRequestCompatibility"]],
+  [52, ["ProjectionThreadListState"]],
+]);
+
+/** Whether a recorded migration name matches this build's slot, directly or through a repaired earlier build. */
+export const isKnownMigrationName = (id: number, name: string): boolean =>
+  migrationEntries.some(([entryId, entryName]) => entryId === id && entryName === name) ||
+  (supersededMigrationNames.get(id)?.includes(name) ?? false);
+
 const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(
     Object.fromEntries(
@@ -214,7 +230,7 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     if (expected === undefined) {
       return [`${row.migration_id}:${row.name} (unknown to this build)`];
     }
-    return expected === row.name
+    return isKnownMigrationName(row.migration_id, row.name)
       ? []
       : [`${row.migration_id}:${row.name} (this build: ${expected})`];
   });
