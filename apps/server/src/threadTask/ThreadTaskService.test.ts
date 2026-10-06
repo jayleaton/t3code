@@ -536,3 +536,83 @@ it.live("watch returns on the next change and times out without one", () =>
     }),
   ).pipe(Effect.provide(testLayer)),
 );
+
+it.effect("a captain settles itself after its turn once its children are accepted and quiet", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const tasks = yield* makeService;
+      yield* tasks.start();
+      yield* f.create("captain");
+      yield* f.create("worker", "captain");
+      yield* f.create("stranger");
+      yield* f.send("captain", 1);
+      yield* f.send("worker", 1);
+      yield* tasks.assign(owner, { threadId: worker.threadId, summary: "Last deliverable" });
+
+      // Only the chat itself may ask; while its own turn runs it waits.
+      assert.equal(
+        (yield* tasks.settleAfterTurn(stranger, { threadId: owner.threadId }).pipe(Effect.flip))
+          .code,
+        "scope_denied",
+      );
+      const requested = yield* tasks.settleAfterTurn(owner, {});
+      assert.equal(requested.state, "pending");
+      assert.equal(requested.blockedBy, "active_run");
+      assert.equal(requested.requestedBy, "self");
+
+      // Its turn ends, but the child's task is not accepted yet.
+      yield* f.endOpenRuns("captain");
+      yield* tasks.drain;
+      let current = yield* tasks.settleAfterTurn(owner, {});
+      assert.equal(current.blockedBy, "open_task");
+      assert.isFalse(yield* f.settled("captain"));
+
+      // Accepted, but the child's own turn is still running.
+      yield* tasks.update(worker, { expectedRevision: 1, status: "DONE", evidence: ["Merged"] });
+      yield* f.endOpenRuns("captain");
+      yield* tasks.drain;
+      yield* tasks.update(owner, { threadId: worker.threadId, expectedRevision: 2, accept: true });
+      current = yield* tasks.settleAfterTurn(owner, {});
+      assert.equal(current.blockedBy, "pending_descendant");
+      assert.isFalse(yield* f.settled("captain"));
+
+      // The child's turn ends: the captain and its accepted child settle together.
+      yield* f.endOpenRuns("worker");
+      yield* tasks.drain;
+      current = yield* tasks.settleAfterTurn(owner, {});
+      assert.equal(current.state, "settled");
+      assert.isTrue(yield* f.settled("captain"));
+      assert.isTrue(yield* f.settled("worker"));
+    }),
+  ).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("a pinned chat is held and a withdrawn request never settles", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const tasks = yield* makeService;
+      yield* tasks.start();
+      yield* f.create("captain");
+      yield* f.send("captain", 1);
+      yield* f.orchestrator.dispatch({
+        type: "thread.pin",
+        commandId: CommandId.make("pin:captain"),
+        threadId: owner.threadId,
+      });
+      const held = yield* tasks.settleAfterTurn(owner, {});
+      assert.equal(held.blockedBy, "held");
+      const cancelled = yield* tasks.settleAfterTurn(owner, { cancel: true });
+      assert.equal(cancelled.state, "cancelled");
+      yield* f.orchestrator.dispatch({
+        type: "thread.unpin",
+        commandId: CommandId.make("unpin:captain"),
+        threadId: owner.threadId,
+      });
+      yield* f.endOpenRuns("captain");
+      yield* tasks.drain;
+      assert.isFalse(yield* f.settled("captain"));
+    }),
+  ).pipe(Effect.provide(testLayer)),
+);

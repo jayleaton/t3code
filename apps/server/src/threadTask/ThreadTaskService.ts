@@ -22,6 +22,8 @@ import {
   type ThreadTaskWakeReason,
   type ThreadTaskWakeSkipReason,
   type ThreadTaskWatchInput,
+  type ThreadSettleAfterTurnInput,
+  type ThreadSettleRequest,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { threadShellHasActiveWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
@@ -120,6 +122,15 @@ export class ThreadTaskService extends Context.Service<
       input: ThreadTaskWatchInput,
     ) => Effect.Effect<ThreadTaskListResult, ThreadTaskError>;
     /** Delivers wakes and settlements a stopped server left unfinished. */
+    /**
+     * Records a chat's request to settle once its current turn ends and nothing
+     * it owns is still working, or withdraws it. Only the chat itself or the
+     * user may ask.
+     */
+    readonly settleAfterTurn: (
+      caller: ThreadTaskCaller,
+      input: ThreadSettleAfterTurnInput,
+    ) => Effect.Effect<ThreadSettleRequest, ThreadTaskError>;
     readonly recover: Effect.Effect<void>;
     readonly start: () => Effect.Effect<void, never, Scope.Scope>;
     /** Waits until every committed event has been handled. */
@@ -741,6 +752,8 @@ export const make = Effect.gen(function* () {
           Effect.gen(function* () {
             if (wake) yield* deliverWake(task.workerThreadId);
             yield* evaluateSettlement(task.workerThreadId);
+            // An accepted child task can be the last thing its owner's settle request waits on.
+            yield* evaluateSettleRequest(task.ownerThreadId);
           }),
         ),
         Effect.flatMap(({ task }) =>
@@ -775,6 +788,137 @@ export const make = Effect.gen(function* () {
         };
       }),
     );
+
+  // ---- settle after turn -------------------------------------------------
+
+  /** Settles a requesting chat once it is quiet, or records what still blocks it. */
+  const evaluateSettleRequest = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const request = Option.getOrUndefined(yield* store.getSettleRequest(threadId));
+      if (request === undefined || request.state !== "pending") return;
+      const shell = yield* getShell(threadId);
+      const now = yield* nowIso;
+      // A message the user wrote after the request means they want the chat active.
+      const userSpokeSince =
+        shell?.latestUserAuthoredMessageAt != null &&
+        DateTime.formatIso(shell.latestUserAuthoredMessageAt) > request.requestedAt;
+      if (shell === undefined || userSpokeSince || shell.settledOverride === "settled") {
+        yield* store.putSettleRequest({
+          ...request,
+          state: shell?.settledOverride === "settled" ? "settled" : "cancelled",
+          blockedBy: null,
+          updatedAt: now,
+        });
+        return;
+      }
+      const thread = yield* projections
+        .getThread(threadId)
+        .pipe(Effect.orElseSucceed(() => undefined));
+      const blockedBy: ThreadSettleRequest["blockedBy"] =
+        thread?.pinnedAt != null || thread?.autoSettleDisabledAt != null
+          ? "held"
+          : shell.status === "queued"
+            ? "queued_run"
+            : hasLiveRun(shell)
+              ? "active_run"
+              : (yield* openChildTasks(threadId)).length > 0
+                ? "open_task"
+                : (yield* projections
+                      .hasActiveDescendants(threadId)
+                      .pipe(Effect.orElseSucceed(() => true)))
+                  ? "pending_descendant"
+                  : null;
+      let settled = false;
+      if (blockedBy === null) {
+        settled = yield* orchestrator
+          .dispatch({
+            type: "thread.settle",
+            commandId: CommandId.make(
+              `server:settle-after-turn:${threadId}:${request.requestedAt}`,
+            ),
+            threadId,
+          })
+          .pipe(
+            Effect.as(true),
+            Effect.catchCause((cause) =>
+              Effect.logInfo("settle-after-turn kept waiting", {
+                threadId,
+                cause: Cause.pretty(cause),
+              }).pipe(Effect.as(false)),
+            ),
+          );
+      }
+      const next: ThreadSettleRequest = settled
+        ? { ...request, state: "settled", blockedBy: null, updatedAt: now }
+        : { ...request, blockedBy: blockedBy ?? "active_run", updatedAt: now };
+      if (next.state !== request.state || next.blockedBy !== request.blockedBy) {
+        yield* store.putSettleRequest(next);
+      }
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("settle-after-turn evaluation failed", {
+          threadId,
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
+
+  const reevaluateSettleRequests = store.listPendingSettleRequests().pipe(
+    Effect.flatMap((requests) =>
+      Effect.forEach(requests, (request) => evaluateSettleRequest(request.threadId), {
+        discard: true,
+      }),
+    ),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("settle-after-turn sweep failed", { cause: Cause.pretty(cause) }),
+    ),
+  );
+
+  const settleAfterTurn: ThreadTaskService["Service"]["settleAfterTurn"] = (caller, input) =>
+    Effect.gen(function* () {
+      const threadId = input.threadId ?? (caller.kind === "thread" ? caller.threadId : undefined);
+      if (threadId === undefined) {
+        return yield* fail("thread_not_found", "threadId is required without a calling chat.");
+      }
+      if (caller.kind === "thread" && caller.threadId !== threadId) {
+        return yield* fail(
+          "scope_denied",
+          "A chat may only ask to settle itself; owners settle workers by accepting their tasks.",
+        );
+      }
+      const shell = yield* requireShell(threadId);
+      const existing = Option.getOrUndefined(
+        yield* store.getSettleRequest(threadId).pipe(Effect.catch(unavailable)),
+      );
+      const now = yield* nowIso;
+      if (input.cancel === true) {
+        if (existing?.state === "pending") {
+          yield* store
+            .putSettleRequest({ ...existing, state: "cancelled", blockedBy: null, updatedAt: now })
+            .pipe(Effect.catch(unavailable));
+        }
+      } else if (existing?.state !== "pending") {
+        yield* store
+          .putSettleRequest({
+            threadId,
+            requestedBy: caller.kind === "user" ? "user" : "self",
+            requestedAt: now,
+            afterRunId: shell.activeRunId,
+            state: "pending",
+            blockedBy: null,
+            updatedAt: now,
+          })
+          .pipe(Effect.catch(unavailable));
+        yield* evaluateSettleRequest(threadId);
+      }
+      const current = Option.getOrUndefined(
+        yield* store.getSettleRequest(threadId).pipe(Effect.catch(unavailable)),
+      );
+      if (current === undefined) {
+        return yield* fail("task_not_found", `Thread ${threadId} has no settle request.`);
+      }
+      return current;
+    });
 
   // ---- reactions ---------------------------------------------------------
 
@@ -871,6 +1015,7 @@ export const make = Effect.gen(function* () {
         }
         yield* evaluateSettlement(event.threadId);
         yield* reevaluatePendingSettlements;
+        yield* reevaluateSettleRequests;
       } else if (event.type === "runtime-request.updated" && event.payload.kind === "user_input") {
         yield* onQuestion(event.threadId, event.payload.id, event.payload.status === "pending");
       }
@@ -909,6 +1054,7 @@ export const make = Effect.gen(function* () {
       }
     }
     yield* reevaluatePendingSettlements;
+    yield* reevaluateSettleRequests;
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.logWarning("thread task recovery failed", { cause: Cause.pretty(cause) }),
@@ -949,6 +1095,7 @@ export const make = Effect.gen(function* () {
     read,
     update,
     watch,
+    settleAfterTurn,
     recover,
     start,
     drain,

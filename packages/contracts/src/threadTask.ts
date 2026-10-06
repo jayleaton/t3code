@@ -47,7 +47,7 @@ export const ThreadTaskContinuation = Schema.Union([
 ]);
 export type ThreadTaskContinuation = typeof ThreadTaskContinuation.Type;
 
-export const ThreadTaskActor = Schema.Literals(["owner", "worker", "user", "server"]);
+export const ThreadTaskActor = Schema.Literals(["owner", "worker", "self", "user", "server"]);
 export type ThreadTaskActor = typeof ThreadTaskActor.Type;
 
 export const ThreadTaskWakeReason = Schema.Literals([
@@ -239,3 +239,42 @@ export class ThreadTaskError extends Schema.TaggedError<ThreadTaskError>()("Thre
     return this.detail;
   }
 }
+
+export const ThreadSettleBlock = Schema.Literals([
+  /** Pinned, or automatic settlement turned off: a human hold. */
+  "held",
+  "active_run",
+  "queued_run",
+  "pending_descendant",
+  "open_task",
+]);
+export type ThreadSettleBlock = typeof ThreadSettleBlock.Type;
+
+/**
+ * A chat's request to settle itself once its current turn ends. It settles
+ * only when no run, queued wake, active descendant, or unaccepted child task
+ * remains; until then `blockedBy` says why.
+ */
+export const ThreadSettleRequest = Schema.Struct({
+  threadId: ThreadId,
+  requestedBy: ThreadTaskActor,
+  requestedAt: IsoDateTime,
+  /** The run that was active when the request was made, if any. */
+  afterRunId: Schema.NullOr(RunId),
+  state: Schema.Literals(["pending", "settled", "cancelled"]),
+  blockedBy: Schema.NullOr(ThreadSettleBlock),
+  updatedAt: IsoDateTime,
+});
+export type ThreadSettleRequest = typeof ThreadSettleRequest.Type;
+
+export const ThreadSettleAfterTurnInput = Schema.Struct({
+  threadId: Schema.optional(
+    ThreadId.annotate({
+      description: "Omit for your own chat. Only that chat or the user may ask.",
+    }),
+  ),
+  cancel: Schema.optional(
+    Schema.Literal(true).annotate({ description: "Withdraw a pending request." }),
+  ),
+});
+export type ThreadSettleAfterTurnInput = typeof ThreadSettleAfterTurnInput.Type;

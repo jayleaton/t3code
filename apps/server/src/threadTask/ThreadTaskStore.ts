@@ -1,4 +1,4 @@
-import { ThreadTask, type ThreadId } from "@t3tools/contracts";
+import { ThreadSettleRequest, ThreadTask, type ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -17,6 +17,8 @@ export class ThreadTaskStoreError extends Schema.TaggedError<ThreadTaskStoreErro
 
 const decodeTask = Schema.decodeUnknownEffect(Schema.fromJsonString(ThreadTask));
 const encodeTask = Schema.encodeEffect(Schema.fromJsonString(ThreadTask));
+const decodeSettleRequest = Schema.decodeUnknownEffect(Schema.fromJsonString(ThreadSettleRequest));
+const encodeSettleRequest = Schema.encodeEffect(Schema.fromJsonString(ThreadSettleRequest));
 
 /** `thread_tasks`: one typed task per worker chat. Writers serialize through ThreadTaskService. */
 export class ThreadTaskStore extends Context.Service<
@@ -36,6 +38,16 @@ export class ThreadTaskStore extends Context.Service<
     /** Tasks with an undelivered wake or an unfinished settlement, for restart recovery. */
     readonly listUnfinished: () => Effect.Effect<ReadonlyArray<ThreadTask>, ThreadTaskStoreError>;
     readonly latestCursor: Effect.Effect<number, ThreadTaskStoreError>;
+    readonly getSettleRequest: (
+      threadId: ThreadId,
+    ) => Effect.Effect<Option.Option<ThreadSettleRequest>, ThreadTaskStoreError>;
+    readonly listPendingSettleRequests: () => Effect.Effect<
+      ReadonlyArray<ThreadSettleRequest>,
+      ThreadTaskStoreError
+    >;
+    readonly putSettleRequest: (
+      request: ThreadSettleRequest,
+    ) => Effect.Effect<void, ThreadTaskStoreError>;
     /** Writes the task under the next cursor and returns it as stored. */
     readonly put: (task: ThreadTask) => Effect.Effect<ThreadTask, ThreadTaskStoreError>;
   }
@@ -55,7 +67,39 @@ const make = Effect.gen(function* () {
     Effect.mapError(fail("latest-cursor")),
   );
 
+  const decodeSettleRows =
+    (operation: string) => (rows: ReadonlyArray<{ readonly payload: string }>) =>
+      Effect.forEach(rows, (row) => decodeSettleRequest(row.payload)).pipe(
+        Effect.mapError(fail(operation)),
+      );
+
   return ThreadTaskStore.of({
+    getSettleRequest: (threadId) =>
+      sql<{ readonly payload: string }>`
+        SELECT payload_json AS payload FROM thread_settle_requests WHERE thread_id = ${threadId}
+      `.pipe(
+        Effect.mapError(fail("get-settle-request")),
+        Effect.flatMap(decodeSettleRows("get-settle-request")),
+        Effect.map((requests) => Option.fromNullishOr(requests[0])),
+      ),
+    listPendingSettleRequests: () =>
+      sql<{ readonly payload: string }>`
+        SELECT payload_json AS payload FROM thread_settle_requests WHERE state = 'pending'
+      `.pipe(
+        Effect.mapError(fail("list-settle-requests")),
+        Effect.flatMap(decodeSettleRows("list-settle-requests")),
+      ),
+    putSettleRequest: (request) =>
+      Effect.gen(function* () {
+        const payload = yield* encodeSettleRequest(request).pipe(Effect.mapError(fail("encode")));
+        yield* sql`
+          INSERT INTO thread_settle_requests (thread_id, state, payload_json)
+          VALUES (${request.threadId}, ${request.state}, ${payload})
+          ON CONFLICT (thread_id) DO UPDATE SET
+            state = excluded.state,
+            payload_json = excluded.payload_json
+        `.pipe(Effect.mapError(fail("put-settle-request")));
+      }),
     get: (workerThreadId) =>
       sql<{ readonly payload: string }>`
         SELECT payload_json AS payload FROM thread_tasks WHERE worker_thread_id = ${workerThreadId}
