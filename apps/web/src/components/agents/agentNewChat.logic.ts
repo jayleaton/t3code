@@ -90,3 +90,19 @@ export function collapsedNewChatChoices<T>(
   const selected = items.slice(limit).find(isSelected);
   return selected === undefined ? visible : [...visible.slice(0, limit - 1), selected];
 }
+
+/**
+ * Projects whose name or path contains the query, ignoring case. A blank query
+ * keeps every project, so clearing the search restores the normal list.
+ */
+export function filterNewChatProjects<
+  T extends { readonly title: string; readonly workspaceRoot: string },
+>(projects: readonly T[], query: string): readonly T[] {
+  const needle = query.trim().toLowerCase();
+  if (needle === "") return projects;
+  return projects.filter(
+    (project) =>
+      project.title.toLowerCase().includes(needle) ||
+      project.workspaceRoot.toLowerCase().includes(needle),
+  );
+}
