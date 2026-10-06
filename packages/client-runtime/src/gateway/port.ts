@@ -8,6 +8,10 @@ import type {
   ThreadTaskRemoteAssignInput,
   ThreadTaskRemoteDeliverInput,
   ThreadTaskRemoteDeliverResult,
+  ThreadTaskBoard,
+  ThreadTaskBoardInput,
+  ThreadTaskProjectSnapshot,
+  ThreadTaskProjectSnapshotInput,
   ThreadTaskRemoteOwnerActionInput,
   ThreadSettleRequest,
   ThreadTaskAssignInput,
@@ -203,7 +207,9 @@ export type GatewayThreadTaskRequest =
   // Environment-to-environment calls for a task split across machines (servers only).
   | { readonly action: "remoteAssign"; readonly input: ThreadTaskRemoteAssignInput }
   | { readonly action: "remoteDeliver"; readonly input: ThreadTaskRemoteDeliverInput }
-  | { readonly action: "remoteOwnerAction"; readonly input: ThreadTaskRemoteOwnerActionInput };
+  | { readonly action: "remoteOwnerAction"; readonly input: ThreadTaskRemoteOwnerActionInput }
+  | { readonly action: "projectSnapshot"; readonly input: ThreadTaskProjectSnapshotInput }
+  | { readonly action: "board"; readonly input: ThreadTaskBoardInput };
 
 /**
  * The chat whose agent made a tool call, from the server's authenticated MCP credential.
@@ -481,7 +487,12 @@ export interface GatewayRuntimePort {
     request: GatewayThreadTaskRequest,
     caller?: GatewayThreadTaskCaller,
   ): Promise<
-    ThreadTaskView | ThreadTaskListResult | ThreadSettleRequest | ThreadTaskRemoteDeliverResult
+    | ThreadTaskView
+    | ThreadTaskListResult
+    | ThreadSettleRequest
+    | ThreadTaskRemoteDeliverResult
+    | ThreadTaskProjectSnapshot
+    | ThreadTaskBoard
   >;
   getEnvironmentStatus(environmentId: string): Promise<Record<string, unknown>>;
   listProfiles?(environmentId: string): Promise<ReadonlyArray<GatewayProfile>>;

@@ -112,6 +112,15 @@ export const threadTaskInputFields = {
     afterCursor: z.number().int().min(0).optional(),
     timeoutMs: z.number().int().min(1).max(60_000).optional(),
   },
+  board: {
+    projectKey: z
+      .string()
+      .trim()
+      .min(1)
+      .max(256)
+      .optional()
+      .describe("Omit for your own chat's project."),
+  },
   settleAfterTurn: {
     threadId: taskThreadId
       .optional()
@@ -1583,6 +1592,7 @@ export async function callGatewayTool(
     case "t3_task_read":
     case "t3_task_update":
     case "t3_task_watch":
+    case "t3_task_board":
     case "t3_settle_after_turn": {
       const action =
         name === "t3_task_assign"
@@ -1593,9 +1603,11 @@ export async function callGatewayTool(
               ? "update"
               : name === "t3_task_watch"
                 ? "watch"
-                : "settleAfterTurn";
+                : name === "t3_task_board"
+                  ? "board"
+                  : "settleAfterTurn";
       const environmentId =
-        action === "read" || action === "watch"
+        action === "read" || action === "watch" || action === "board"
           ? environmentWithScope(context, input, "read")
           : action === "settleAfterTurn"
             ? environmentWithScope(context, input, "lifecycle")

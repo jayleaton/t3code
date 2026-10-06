@@ -363,6 +363,10 @@ import {
   ThreadTaskRemoteDeliverInput,
   ThreadTaskRemoteDeliverResult,
   ThreadTaskRemoteOwnerActionInput,
+  ThreadTaskBoard,
+  ThreadTaskBoardInput,
+  ThreadTaskProjectSnapshot,
+  ThreadTaskProjectSnapshotInput,
   ThreadTaskAssignInput,
   ThreadTaskError,
   ThreadTaskListResult,
@@ -560,6 +564,8 @@ export const WS_METHODS = {
   threadTasksRemoteAssign: "threadTasks.remoteAssign",
   threadTasksRemoteDeliver: "threadTasks.remoteDeliver",
   threadTasksRemoteOwnerAction: "threadTasks.remoteOwnerAction",
+  threadTasksProjectSnapshot: "threadTasks.projectSnapshot",
+  threadTasksBoard: "threadTasks.board",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -1846,6 +1852,17 @@ const WsThreadTasksRemoteOwnerActionRpc = Rpc.make(WS_METHODS.threadTasksRemoteO
   error: Schema.Union([ThreadTaskError, EnvironmentAuthorizationError]),
 });
 
+const WsThreadTasksProjectSnapshotRpc = Rpc.make(WS_METHODS.threadTasksProjectSnapshot, {
+  payload: ThreadTaskProjectSnapshotInput,
+  success: ThreadTaskProjectSnapshot,
+  error: Schema.Union([ThreadTaskError, EnvironmentAuthorizationError]),
+});
+const WsThreadTasksBoardRpc = Rpc.make(WS_METHODS.threadTasksBoard, {
+  payload: ThreadTaskBoardInput,
+  success: ThreadTaskBoard,
+  error: Schema.Union([ThreadTaskError, EnvironmentAuthorizationError]),
+});
+
 const WsThreadTasksSettleAfterTurnRpc = Rpc.make(WS_METHODS.threadTasksSettleAfterTurn, {
   payload: ThreadSettleAfterTurnInput,
   success: ThreadSettleRequest,
@@ -2028,6 +2045,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsThreadTasksRemoteAssignRpc,
   WsThreadTasksRemoteDeliverRpc,
   WsThreadTasksRemoteOwnerActionRpc,
+  WsThreadTasksProjectSnapshotRpc,
+  WsThreadTasksBoardRpc,
   WsScheduledTasksRotateWebhookTokenRpc,
   WsSecretsAnswerRequestRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,

@@ -23,11 +23,18 @@ import {
   type ThreadTaskWakeSkipReason,
   type ThreadTaskWatchInput,
   type EnvironmentId,
+  EnvironmentId as EnvironmentIdSchema,
   type ProjectId,
   ThreadTaskRemoteAssignInput as RemoteAssignInputSchema,
   ThreadTaskRemoteDeliverResult as RemoteDeliverResultSchema,
   ThreadTaskView as ThreadTaskViewSchema,
   type ThreadTaskRemoteAssignInput,
+  type ThreadTaskBoard,
+  type ThreadTaskBoardInput,
+  type ThreadTaskProjectSnapshot,
+  type ThreadTaskProjectSnapshotInput,
+  THREAD_TASK_PROJECT_LIMIT,
+  ThreadTaskProjectSnapshot as ProjectSnapshotSchema,
   type ThreadTaskRemoteDeliverInput,
   type ThreadTaskRemoteOwnerActionInput,
   type ThreadSettleAfterTurnInput,
@@ -132,6 +139,19 @@ export class ThreadTaskService extends Context.Service<
     readonly remoteDeliver: (
       input: ThreadTaskRemoteDeliverInput,
     ) => Effect.Effect<{ readonly applied: boolean }, ThreadTaskError>;
+    /** This environment's own task records for a project key, for a peer's board read. */
+    readonly projectSnapshot: (
+      input: ThreadTaskProjectSnapshotInput,
+    ) => Effect.Effect<ThreadTaskProjectSnapshot, ThreadTaskError>;
+    /**
+     * A read-only view of a project's tasks here and on every environment a
+     * connected app reaches, grouped by owner, with per-environment coverage.
+     * Captains and the user read it; managed workers read their own task.
+     */
+    readonly board: (
+      caller: ThreadTaskCaller,
+      input: ThreadTaskBoardInput,
+    ) => Effect.Effect<ThreadTaskBoard, ThreadTaskError>;
     readonly remoteOwnerAction: (
       input: ThreadTaskRemoteOwnerActionInput,
     ) => Effect.Effect<ThreadTaskView, ThreadTaskError>;
@@ -655,6 +675,7 @@ export const make = Effect.gen(function* () {
             actor: caller.kind === "user" ? "user" : "owner",
             worker,
             summary: input.summary,
+            projectKey: input.projectKey,
             taskId: input.taskId,
             settleWhenAccepted: input.settleWhenAccepted,
             clientRequestId: input.clientRequestId,
@@ -1547,6 +1568,150 @@ export const make = Effect.gen(function* () {
     Effect.ignore,
   );
 
+  // ---- project board -----------------------------------------------------
+
+  const decodeSnapshot = Schema.decodeUnknownEffect(ProjectSnapshotSchema);
+  const PEER_READ_TIMEOUT = "10 seconds";
+
+  const projectSnapshot: ThreadTaskService["Service"]["projectSnapshot"] = (input) =>
+    Effect.gen(function* () {
+      const rows = yield* store
+        .listByProjectKey({
+          projectKey: input.projectKey,
+          limit: THREAD_TASK_PROJECT_LIMIT * 2 + 1,
+        })
+        .pipe(Effect.catch(unavailable));
+      // Only records this environment is the writer for; mirrors are someone else's.
+      const own = rows.filter((row) => row.workerEnvironmentId === null);
+      return {
+        environmentId: transport?.localEnvironmentId ?? EnvironmentIdSchema.make("local"),
+        generatedAt: yield* nowIso,
+        tasks: yield* Effect.forEach(own.slice(0, THREAD_TASK_PROJECT_LIMIT), view),
+        truncated: own.length > THREAD_TASK_PROJECT_LIMIT,
+      };
+    });
+
+  const board: ThreadTaskService["Service"]["board"] = (caller, input) =>
+    Effect.gen(function* () {
+      let projectKey = input.projectKey;
+      if (caller.kind === "thread") {
+        if ((yield* getTask(caller.threadId)) !== undefined) {
+          return yield* fail(
+            "scope_denied",
+            "Managed workers read their own task with t3_task_read; the project board is for Captains.",
+          );
+        }
+        projectKey ??= yield* projectKeyFor((yield* requireShell(caller.threadId)).projectId);
+      }
+      if (projectKey === undefined) {
+        return yield* fail("thread_not_found", "projectKey is required without a calling chat.");
+      }
+      const key = projectKey;
+      const local = yield* projectSnapshot({ projectKey: key });
+      const peers = transport?.peers() ?? [];
+      const answers = yield* Effect.forEach(
+        peers,
+        (peer) =>
+          callPeer(peer, { action: "projectSnapshot", input: { projectKey: key } }).pipe(
+            Effect.flatMap((reply) =>
+              decodeSnapshot(reply).pipe(Effect.mapError(invalidPeerReply(peer))),
+            ),
+            Effect.timeoutOrElse({
+              duration: PEER_READ_TIMEOUT,
+              orElse: () => Effect.fail(unreachable(peer, "It did not answer in time.")),
+            }),
+            Effect.result,
+            Effect.map((result) => ({ peer, result })),
+          ),
+        { concurrency: 4 },
+      );
+      const live = new Map<EnvironmentId, ThreadTaskProjectSnapshot>();
+      const coverage: Array<ThreadTaskBoard["coverage"][number]> = [
+        {
+          environmentId: local.environmentId,
+          state: "local",
+          tasks: local.tasks.length,
+          truncated: local.truncated,
+          error: null,
+        },
+      ];
+      for (const { peer, result } of answers) {
+        if (Result.isSuccess(result)) {
+          live.set(peer, result.success);
+          coverage.push({
+            environmentId: peer,
+            state: "live",
+            tasks: result.success.tasks.length,
+            truncated: result.success.truncated,
+            error: null,
+          });
+        } else {
+          coverage.push({
+            environmentId: peer,
+            state: "unreachable",
+            tasks: 0,
+            truncated: false,
+            error: result.failure.detail,
+          });
+        }
+      }
+      type Entry = ThreadTaskBoard["owners"][number]["tasks"][number] & {
+        readonly ownerEnvironmentId: EnvironmentId;
+      };
+      const entries: Array<Entry> = [];
+      for (const snapshot of [local, ...live.values()]) {
+        for (const taskView of snapshot.tasks) {
+          entries.push({
+            workerEnvironmentId: snapshot.environmentId,
+            ownerEnvironmentId: taskView.task.ownerEnvironmentId ?? snapshot.environmentId,
+            source: "live",
+            view: taskView,
+          });
+        }
+      }
+      // Children on environments that did not answer are shown from this
+      // environment's mirror, marked as such, so the board is never silently partial.
+      const mirrors = (yield* store
+        .listByProjectKey({ projectKey: key, limit: THREAD_TASK_PROJECT_LIMIT })
+        .pipe(Effect.catch(unavailable))).filter(
+        (row) => row.workerEnvironmentId !== null && !live.has(row.workerEnvironmentId),
+      );
+      for (const mirror of mirrors) {
+        const peer = mirror.workerEnvironmentId!;
+        if (!coverage.some((entry) => entry.environmentId === peer)) {
+          coverage.push({
+            environmentId: peer,
+            state: "unreachable",
+            tasks: 0,
+            truncated: false,
+            error: "No connected T3 app reaches this environment.",
+          });
+        }
+        entries.push({
+          workerEnvironmentId: peer,
+          ownerEnvironmentId: local.environmentId,
+          source: "mirror",
+          view: yield* view(mirror),
+        });
+      }
+      const owners = new Map<string, ThreadTaskBoard["owners"][number]>();
+      for (const { ownerEnvironmentId, ...entry } of entries) {
+        const ownerKey = `${ownerEnvironmentId}:${entry.view.task.ownerThreadId}`;
+        const owner = owners.get(ownerKey) ?? {
+          ownerEnvironmentId,
+          ownerThreadId: entry.view.task.ownerThreadId,
+          tasks: [],
+        };
+        owners.set(ownerKey, { ...owner, tasks: [...owner.tasks, entry] });
+      }
+      return {
+        projectKey: key,
+        generatedAt: yield* nowIso,
+        coverage,
+        owners: [...owners.values()],
+      } satisfies ThreadTaskBoard;
+    });
+
   // ---- reactions ---------------------------------------------------------
 
   const onRunEnded = (workerThreadId: ThreadId, runId: RunId, runStatus: string) =>
@@ -1745,6 +1910,8 @@ export const make = Effect.gen(function* () {
     remoteAssign,
     remoteDeliver,
     remoteOwnerAction,
+    projectSnapshot,
+    board,
     read,
     update,
     watch,

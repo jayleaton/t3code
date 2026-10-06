@@ -393,6 +393,10 @@ export const TOOL_SPECS = {
     "Wait up to timeoutMs (max 60000) for changes to tasks you own or work on after afterCursor, returning as soon as one changes. Omit afterCursor for the current tasks and cursor. Wakes already arrive as messages; use this only when this turn must wait.",
     { environmentId, ...threadTaskInputFields.watch },
   ],
+  t3_task_board: [
+    "Read-only view of a project's tasks on this environment and every environment your connected T3 app reaches, grouped by the chat that owns them, so Captains see each other's domains. coverage lists each environment as local, live, or unreachable; a child on an unreachable environment is shown from your own mirror (source mirror) and may be stale. Changes go through t3_task_update on your own tasks only. Captains and the user; workers read their own task. Requires read access.",
+    { environmentId, ...threadTaskInputFields.board },
+  ],
   t3_settle_after_turn: [
     "Settle this chat (or threadId) once its current turn ends and nothing remains: no queued wake, active descendant, or unaccepted child task. Returns the request with blockedBy while it waits; cancel=true withdraws it. Use instead of settling a chat that is still running. Requires lifecycle scope.",
     { environmentId, ...threadTaskInputFields.settleAfterTurn },

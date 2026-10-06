@@ -9,7 +9,7 @@ import { McpGatewayBroker } from "../mcp/McpGatewayBroker.ts";
 
 /** A call between a task's owner and worker environments. Inputs are encoded contracts. */
 export interface ThreadTaskRemoteRequest {
-  readonly action: "remoteAssign" | "remoteDeliver" | "remoteOwnerAction";
+  readonly action: "remoteAssign" | "remoteDeliver" | "remoteOwnerAction" | "projectSnapshot";
   readonly input: unknown;
 }
 
@@ -26,6 +26,8 @@ export class ThreadTaskTransport extends Context.Service<
       environmentId: EnvironmentId,
       request: ThreadTaskRemoteRequest,
     ) => Effect.Effect<unknown, string>;
+    /** Environments a connected app currently reaches. */
+    readonly peers: () => ReadonlyArray<EnvironmentId>;
     /** Emits when a path to other environments may have opened. */
     readonly connected: Stream.Stream<void>;
   }
@@ -42,6 +44,10 @@ export const layerFromBroker = Layer.effect(
         broker
           .invoke("threadTask", [environmentId, request], [environmentId])
           .pipe(Effect.mapError((error) => error.message)),
+      peers: () =>
+        Object.keys(broker.grants())
+          .filter((id) => id !== descriptor.environmentId)
+          .map((id) => EnvironmentId.make(id)),
       connected: broker.hostConnected,
     });
   }),

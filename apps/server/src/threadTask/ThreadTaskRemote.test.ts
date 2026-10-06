@@ -12,6 +12,8 @@ import {
   ThreadTaskRemoteDeliverInput,
   ThreadTaskRemoteDeliverResult,
   ThreadTaskRemoteOwnerActionInput,
+  ThreadTaskProjectSnapshot,
+  ThreadTaskProjectSnapshotInput,
   ThreadTaskView,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -107,6 +109,12 @@ const makeNetwork = Effect.gen(function* () {
                 yield* roundTrip(ThreadTaskRemoteDeliverInput, request.input),
               ),
             ).pipe(Effect.orDie);
+          case "projectSnapshot":
+            return yield* Schema.encodeEffect(ThreadTaskProjectSnapshot)(
+              yield* target.projectSnapshot(
+                yield* roundTrip(ThreadTaskProjectSnapshotInput, request.input),
+              ),
+            ).pipe(Effect.orDie);
           case "remoteOwnerAction":
             return yield* Schema.encodeEffect(ThreadTaskView)(
               yield* target.remoteOwnerAction(
@@ -127,6 +135,7 @@ const makeNetwork = Effect.gen(function* () {
     ThreadTaskTransport.of({
       localEnvironmentId,
       call,
+      peers: () => [...services.keys()].filter((id) => id !== localEnvironmentId),
       connected: Stream.fromPubSub(reconnected),
     });
   return {
@@ -511,6 +520,89 @@ it.effect("a Captain's deferred settlement waits for its accepted remote child t
       yield* drain;
       assert.isTrue(yield* envA.settled(captain));
       assert.equal((yield* tasksA.settleAfterTurn(asCaptain, {})).state, "settled");
+    }),
+  ),
+);
+
+it.effect("Captains on two environments read one project board with explicit coverage", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const network = yield* makeNetwork;
+      const envA = yield* environment(network, A);
+      const envB = yield* environment(network, B);
+      const tasksA = yield* envA.startService;
+      const tasksB = yield* envB.startService;
+      const captainB = ThreadId.make("captain-b");
+      const remoteChild = ThreadId.make("remote-child");
+      const localChild = ThreadId.make("local-child");
+      const projectKey = "repo:github.com/example/shared";
+      yield* envA.create(captain);
+      yield* envB.create(captainB);
+      yield* envB.create(remoteChild, { thread: captain, environment: A });
+      yield* envB.create(localChild, { thread: captainB });
+      yield* envB.send(remoteChild, 1);
+      yield* envB.send(localChild, 1);
+      // The Captain on A lives in its own project; its child's work is in the shared one.
+      yield* tasksA.assign(asCaptain, { threadId: remoteChild, summary: "API", projectKey }, B);
+      yield* tasksB.assign(
+        { kind: "thread", threadId: captainB },
+        { threadId: localChild, summary: "Docs", projectKey },
+      );
+
+      const owners = (board: {
+        readonly owners: ReadonlyArray<{
+          readonly ownerThreadId: string;
+          readonly tasks: ReadonlyArray<{
+            readonly source: string;
+            readonly view: { readonly task: { readonly workerThreadId: string } };
+          }>;
+        }>;
+      }) =>
+        Object.fromEntries(
+          board.owners.map((owner) => [
+            owner.ownerThreadId,
+            owner.tasks.map((entry) => `${entry.view.task.workerThreadId}:${entry.source}`),
+          ]),
+        );
+
+      // Each Captain sees both domains, each child under its own owner.
+      const fromA = yield* tasksA.board(asCaptain, { projectKey });
+      assert.deepEqual(owners(fromA), {
+        captain: ["remote-child:live"],
+        "captain-b": ["local-child:live"],
+      });
+      assert.deepEqual(
+        fromA.coverage.map((entry) => `${entry.environmentId}:${entry.state}`),
+        [`${A}:local`, `${B}:live`],
+      );
+      const fromB = yield* tasksB.board({ kind: "thread", threadId: captainB }, { projectKey });
+      assert.deepEqual(owners(fromB), owners(fromA));
+
+      // Visibility is read-only: a Captain cannot change the other's child.
+      const foreign = yield* tasksB
+        .update(
+          { kind: "thread", threadId: captainB },
+          {
+            threadId: remoteChild,
+            expectedRevision: 1,
+            summary: "Mine now",
+          },
+        )
+        .pipe(Effect.flip);
+      assert.equal(foreign.code, "scope_denied");
+      // Workers read their own task, not the board.
+      const worker = yield* tasksB
+        .board({ kind: "thread", threadId: localChild }, { projectKey })
+        .pipe(Effect.flip);
+      assert.equal(worker.code, "scope_denied");
+
+      // Disconnected, B is reported unreachable and A's own child comes from its mirror.
+      network.state.connected = false;
+      const offline = yield* tasksA.board(asCaptain, { projectKey });
+      assert.deepEqual(owners(offline), { captain: ["remote-child:mirror"] });
+      const bCoverage = offline.coverage.find((entry) => entry.environmentId === B)!;
+      assert.equal(bCoverage.state, "unreachable");
+      assert.isNotNull(bCoverage.error);
     }),
   ),
 );

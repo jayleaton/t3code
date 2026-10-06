@@ -157,7 +157,7 @@ describe("MCP gateway server", () => {
 
     const listedTools = await client.listTools();
     const toolNames = listedTools.tools.map((tool) => tool.name);
-    expect(toolNames).toHaveLength(80);
+    expect(toolNames).toHaveLength(81);
     expect(
       listedTools.tools.find((tool) => tool.name === "t3_reclaim_worktree")?.inputSchema,
     ).toMatchObject({
@@ -256,6 +256,7 @@ describe("MCP gateway server", () => {
         "t3_task_read",
         "t3_task_update",
         "t3_task_watch",
+        "t3_task_board",
         "t3_settle_after_turn",
         "t3_get_pending_questions",
         "t3_answer_question",

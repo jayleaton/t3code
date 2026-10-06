@@ -6,6 +6,7 @@ import {
   ThreadId,
   ThreadSettleAfterTurnInput,
   ThreadTaskError,
+  ThreadTaskBoardInput,
   ThreadTaskAssignInput,
   ThreadTaskReadInput,
   ThreadTaskUpdateInput,
@@ -78,6 +79,7 @@ const makeThreadTask = (
   const decodeUpdate = Schema.decodeUnknownEffect(ThreadTaskUpdateInput);
   const decodeWatch = Schema.decodeUnknownEffect(ThreadTaskWatchInput);
   const decodeSettle = Schema.decodeUnknownEffect(ThreadSettleAfterTurnInput);
+  const decodeBoard = Schema.decodeUnknownEffect(ThreadTaskBoardInput);
   return (target, request, caller) => {
     // A call without an authenticated chat (a client acting as the user) or a
     // peer call between environments goes through this environment's RPC.
@@ -86,7 +88,8 @@ const makeThreadTask = (
       caller.environmentId !== environmentId ||
       request.action === "remoteAssign" ||
       request.action === "remoteDeliver" ||
-      request.action === "remoteOwnerAction"
+      request.action === "remoteOwnerAction" ||
+      request.action === "projectSnapshot"
     ) {
       if (fallback === undefined) throw new Error("Thread tasks are unavailable here.");
       return fallback(target, request);
@@ -119,6 +122,8 @@ const makeThreadTask = (
             return remote === undefined
               ? yield* tasks.watch(actor, yield* decodeWatch(request.input))
               : yield* localOnly("t3_task_watch");
+          case "board":
+            return yield* tasks.board(actor, yield* decodeBoard(request.input));
           case "settleAfterTurn":
             return remote === undefined
               ? yield* tasks.settleAfterTurn(actor, yield* decodeSettle(request.input))

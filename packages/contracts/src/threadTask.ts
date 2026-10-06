@@ -346,3 +346,62 @@ export type ThreadTaskRemoteOwnerActionInput = typeof ThreadTaskRemoteOwnerActio
 
 export const ThreadTaskRemoteDeliverResult = Schema.Struct({ applied: Schema.Boolean });
 export type ThreadTaskRemoteDeliverResult = typeof ThreadTaskRemoteDeliverResult.Type;
+
+export const THREAD_TASK_PROJECT_LIMIT = 200;
+
+export const ThreadTaskProjectSnapshotInput = Schema.Struct({
+  projectKey: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+});
+export type ThreadTaskProjectSnapshotInput = typeof ThreadTaskProjectSnapshotInput.Type;
+
+/** One environment's own task records for a project key, newest first, bounded. */
+export const ThreadTaskProjectSnapshot = Schema.Struct({
+  environmentId: EnvironmentId,
+  generatedAt: IsoDateTime,
+  tasks: Schema.Array(ThreadTaskView),
+  truncated: Schema.Boolean,
+});
+export type ThreadTaskProjectSnapshot = typeof ThreadTaskProjectSnapshot.Type;
+
+export const ThreadTaskBoardInput = Schema.Struct({
+  projectKey: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(256)).annotate({
+      description: "Omit for your own chat's project.",
+    }),
+  ),
+});
+export type ThreadTaskBoardInput = typeof ThreadTaskBoardInput.Type;
+
+/**
+ * A read-only view of one project's tasks across this environment and every
+ * environment a connected app reaches, grouped by owning chat. `coverage`
+ * says which environments answered; a task seen only through this
+ * environment's mirror is marked `mirror` and may be stale.
+ */
+export const ThreadTaskBoard = Schema.Struct({
+  projectKey: TrimmedNonEmptyString,
+  generatedAt: IsoDateTime,
+  coverage: Schema.Array(
+    Schema.Struct({
+      environmentId: EnvironmentId,
+      state: Schema.Literals(["local", "live", "unreachable"]),
+      tasks: NonNegativeInt,
+      truncated: Schema.Boolean,
+      error: Schema.NullOr(Schema.String),
+    }),
+  ),
+  owners: Schema.Array(
+    Schema.Struct({
+      ownerEnvironmentId: EnvironmentId,
+      ownerThreadId: ThreadId,
+      tasks: Schema.Array(
+        Schema.Struct({
+          workerEnvironmentId: EnvironmentId,
+          source: Schema.Literals(["live", "mirror"]),
+          view: ThreadTaskView,
+        }),
+      ),
+    }),
+  ),
+});
+export type ThreadTaskBoard = typeof ThreadTaskBoard.Type;

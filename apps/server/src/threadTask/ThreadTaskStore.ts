@@ -71,6 +71,11 @@ export class ThreadTaskStore extends Context.Service<
       readonly threadId: ThreadId | null;
       readonly afterCursor: number;
     }) => Effect.Effect<ReadonlyArray<ThreadTask>, ThreadTaskStoreError>;
+    /** Tasks with this project key, newest change first, at most `limit`. */
+    readonly listByProjectKey: (input: {
+      readonly projectKey: string;
+      readonly limit: number;
+    }) => Effect.Effect<ReadonlyArray<ThreadTask>, ThreadTaskStoreError>;
     readonly listByOwner: (
       ownerThreadId: ThreadId,
     ) => Effect.Effect<ReadonlyArray<ThreadTask>, ThreadTaskStoreError>;
@@ -229,6 +234,16 @@ const make = Effect.gen(function* () {
             ORDER BY cursor
           `
       ).pipe(Effect.mapError(fail("list-visible")), Effect.flatMap(decodeRows("list-visible"))),
+    listByProjectKey: ({ projectKey, limit }) =>
+      sql<{ readonly payload: string }>`
+        SELECT payload_json AS payload FROM thread_tasks
+        WHERE json_extract(payload_json, '$.projectKey') = ${projectKey}
+        ORDER BY cursor DESC
+        LIMIT ${limit}
+      `.pipe(
+        Effect.mapError(fail("list-by-project-key")),
+        Effect.flatMap(decodeRows("list-by-project-key")),
+      ),
     listByOwner: (ownerThreadId) =>
       sql<{ readonly payload: string }>`
         SELECT payload_json AS payload FROM thread_tasks

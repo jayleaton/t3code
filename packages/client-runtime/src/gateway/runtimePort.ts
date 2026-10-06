@@ -901,6 +901,10 @@ export function createGatewayRuntimePort(
               return yield* call(request(WS_METHODS.threadTasksRemoteAssign, task.input));
             case "remoteDeliver":
               return yield* call(request(WS_METHODS.threadTasksRemoteDeliver, task.input));
+            case "projectSnapshot":
+              return yield* call(request(WS_METHODS.threadTasksProjectSnapshot, task.input));
+            case "board":
+              return yield* call(request(WS_METHODS.threadTasksBoard, task.input));
             case "remoteOwnerAction":
               return yield* call(request(WS_METHODS.threadTasksRemoteOwnerAction, task.input));
           }

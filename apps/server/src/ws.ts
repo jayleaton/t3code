@@ -2236,6 +2236,16 @@ const layerWsRpc = (
             threadTasks.remoteOwnerAction(input),
             { "rpc.aggregate": "threadTasks" },
           ),
+        [WS_METHODS.threadTasksProjectSnapshot]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.threadTasksProjectSnapshot,
+            threadTasks.projectSnapshot(input),
+            { "rpc.aggregate": "threadTasks" },
+          ),
+        [WS_METHODS.threadTasksBoard]: (input) =>
+          observeRpcEffect(WS_METHODS.threadTasksBoard, threadTasks.board(userCaller, input), {
+            "rpc.aggregate": "threadTasks",
+          }),
         [WS_METHODS.threadTasksSettleAfterTurn]: (input) =>
           observeRpcEffect(
             WS_METHODS.threadTasksSettleAfterTurn,
