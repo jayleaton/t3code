@@ -3,7 +3,7 @@ import {
   GATEWAY_SCOPE_VALUES,
   type GatewayScope,
 } from "@t3tools/client-runtime/gateway";
-import type { GatewayToolContext } from "@t3tools/mcp-gateway";
+import { GatewayError, type GatewayToolContext } from "@t3tools/mcp-gateway";
 import {
   failure,
   GATEWAY_ONLY_TOOLS,
@@ -137,7 +137,16 @@ const registerAgentsTools = Effect.gen(function* () {
               Effect.matchEffect({
                 onFailure: (error) =>
                   Effect.succeed(
-                    toCallToolResult(failure(new Error(error.detail), requestContext(args))),
+                    toCallToolResult(
+                      failure(
+                        new GatewayError({
+                          code: "scope_required",
+                          message: error.detail,
+                          retryable: false,
+                        }),
+                        requestContext(args),
+                      ),
+                    ),
                   ),
                 onSuccess: () => run,
               }),
