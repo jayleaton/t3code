@@ -1055,9 +1055,23 @@ export const make = Effect.gen(function* () {
   const authorizeMessage: ThreadTaskService["Service"]["authorizeMessage"] = (input) =>
     Effect.gen(function* () {
       if (input.targetThreadId === input.senderThreadId) return;
-      // A named child is a managed worker even before it has a task (a chat
-      // launched before tasks existed); it gets one here so it can report.
-      if ((yield* ensureTask(input.senderThreadId)) === undefined) return;
+      // The role comes from durable facts, never from whether registration
+      // worked: a chat with a task, or a named child, is a managed worker. If
+      // the sender cannot be read, nothing is sent.
+      const unverified = () =>
+        fail(
+          "scope_denied",
+          "This chat's role could not be confirmed, so nothing was sent. Retry shortly, or report through t3_task_update.",
+        );
+      const senderTask = yield* getTask(input.senderThreadId).pipe(Effect.mapError(unverified));
+      if (senderTask === undefined) {
+        const sender = yield* getShell(input.senderThreadId).pipe(Effect.mapError(unverified));
+        if (sender === undefined) return yield* unverified();
+        if (!isNamedChild(sender)) return;
+        // A named child launched before tasks existed gets one so it can
+        // report; it stays a managed worker even if that fails.
+        yield* ensureTask(input.senderThreadId);
+      }
       const target =
         input.targetThreadId === null ? undefined : yield* getShell(input.targetThreadId);
       if (target?.parentThreadId === input.senderThreadId && target.parentEnvironmentId == null) {

@@ -943,3 +943,76 @@ it.effect(
       }),
     ).pipe(Effect.provide(testLayer)),
 );
+
+it.effect("a named child cannot send when its task cannot be stored or read", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const real = yield* ThreadTaskStore.ThreadTaskStore;
+      const broken = (operation: string) =>
+        Effect.fail(new ThreadTaskStore.ThreadTaskStoreError({ operation, cause: "injected" }));
+      /** A service over the same database whose store fails the given operations. */
+      const serviceWith = (faults: { readonly put?: true; readonly get?: true }) =>
+        ThreadTaskService.make.pipe(
+          Effect.provideService(ThreadTaskStore.ThreadTaskStore, {
+            ...real,
+            ...(faults.put ? { put: () => broken("put") } : {}),
+            ...(faults.get ? { get: () => broken("get") } : {}),
+          }),
+        );
+      yield* f.create("captain");
+      yield* f.create("helper", "captain");
+      yield* f.orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("create:legacy"),
+        threadId: ThreadId.make("legacy"),
+        projectId: ProjectId.make("project:tasks"),
+        title: "Legacy",
+        modelSelection: { instanceId, model: "gpt-5.1-codex" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "agent",
+        creationSource: "mcp",
+        parentThreadId: ThreadId.make("captain"),
+        profileSnapshot: {
+          profileId: "cody",
+          profileName: "Cody",
+          revision: 1,
+          effectiveSource: {
+            modelSelection: "profile",
+            runtimeMode: "profile",
+            interactionMode: "profile",
+            reasoningEffort: "profile",
+          },
+        },
+      });
+      const send = (
+        tasks: ThreadTaskService.ThreadTaskService["Service"],
+        from: string,
+        to: string,
+      ) =>
+        tasks.authorizeMessage({
+          senderThreadId: ThreadId.make(from),
+          targetThreadId: ThreadId.make(to),
+        });
+
+      // Adoption cannot be stored: still a managed worker, still refused.
+      const noWrites = yield* serviceWith({ put: true });
+      const refused = yield* send(noWrites, "legacy", "captain").pipe(Effect.flip);
+      assert.equal(refused.code, "scope_denied");
+      assert.include(refused.detail, "t3_task_update");
+      assert.isTrue(Option.isNone(yield* real.get(ThreadId.make("legacy"))));
+      // Captains and profile-less chats keep messaging.
+      yield* send(noWrites, "captain", "legacy");
+      yield* send(noWrites, "helper", "captain");
+
+      // The sender cannot be looked up at all: nothing is sent.
+      const noReads = yield* serviceWith({ get: true });
+      const unverified = yield* send(noReads, "legacy", "captain").pipe(Effect.flip);
+      assert.equal(unverified.code, "scope_denied");
+      assert.include(unverified.detail, "could not be confirmed");
+    }),
+  ).pipe(Effect.provide(testLayer)),
+);
