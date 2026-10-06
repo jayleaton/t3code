@@ -7,7 +7,8 @@ interface Props {
 }
 
 /**
- * Hit target for resizing a right-anchored panel via its left edge.
+ * Hit target for resizing a panel by dragging a vertical edge. Right-anchored panels
+ * place it on their left edge; zero-width rails place it between side-by-side panes.
  *
  * - Sits on top of the panel's border with a 4px overlap on each side so the
  *   user can grab a few pixels off the edge without aiming.

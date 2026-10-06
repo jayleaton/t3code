@@ -864,7 +864,7 @@
 .agents-filters {
   display: flex;
   flex-direction: column;
-  width: 280px;
+  width: var(--agents-profiles-width, 280px);
   flex-shrink: 0;
   overflow-y: auto;
   border-right: 1px solid var(--border);
@@ -975,7 +975,7 @@
   margin: 4px 2px 0 0;
 }
 .agents-threads {
-  width: 360px;
+  width: var(--agents-threads-width, 360px);
   flex-shrink: 0;
   min-height: 0;
   display: flex;
@@ -1086,6 +1086,12 @@
   min-height: 0;
   overscroll-behavior: contain;
 }
+/* Zero-width rail between panes; the handle straddles the border before it. */
+.agents-pane-resize {
+  position: relative;
+  flex-shrink: 0;
+  width: 0;
+}
 .agents-chat-pane {
   flex: 1;
   min-width: 0;
@@ -1139,22 +1145,15 @@
 .agent-mobile-filters {
   display: none;
 }
-@media (max-width: 1100px) and (min-width: 1024px) {
-  .agents-filters {
-    width: 236px;
-  }
-  .agents-threads {
-    width: 300px;
-  }
-}
 /* Narrow windows fold the agent filters behind the Agents button; the chat
    list stays beside the chat so a selected chat always keeps a sidebar. */
 @media (max-width: 1023px) {
-  .agents-filters,
-  .agents-threads {
-    width: 300px;
-  }
+  /* The folded filters take the chat list's slot and width. */
   .agents-filters {
+    display: none;
+    width: var(--agents-threads-width, 360px);
+  }
+  .agents-pane-resize[data-pane="profiles"] {
     display: none;
   }
   .agent-mobile-filters {
@@ -1181,7 +1180,8 @@
     width: 100%;
     border-right: 0;
   }
-  .agents-chat-pane {
+  .agents-chat-pane,
+  .agents-pane-resize {
     display: none;
   }
   .agents-page[data-thread-selected="true"] .agents-filters,
