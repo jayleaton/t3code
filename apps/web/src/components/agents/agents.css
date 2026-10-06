@@ -694,6 +694,41 @@
   display: block;
   padding: 11px 12px;
 }
+.agent-thread-actions {
+  position: absolute;
+  top: 9px;
+  right: 10px;
+  z-index: 6;
+}
+.agent-thread-settle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--muted) 65%, var(--background));
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition:
+    color 0.12s,
+    border-color 0.12s,
+    background 0.12s;
+}
+.agent-thread-settle:hover {
+  color: var(--foreground);
+  border-color: var(--agent-color, var(--foreground));
+}
+.agent-thread-settle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+/* Room for the overlaid action so the title's timestamp never sits under it. */
+.agent-thread-container[data-has-card-actions="true"] .agent-thread-title {
+  padding-right: 28px;
+}
 .agent-thread-prs {
   display: flex;
   flex-wrap: wrap;

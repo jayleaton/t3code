@@ -3,7 +3,7 @@ import { AgentRunDragArea, LinkableAgentCard, SortableAgentThreads } from "./Sor
 import { useClientSettings } from "../../hooks/useSettings";
 import { visibleAgentProviders } from "./agentModelCatalog";
 import { ThreadCard } from "./ThreadCard";
-import { useAgentThreadContextMenu } from "./useAgentThreadContextMenu";
+import { useAgentThreadContextMenu, useAgentThreadSettleAction } from "./useAgentThreadContextMenu";
 import * as Schema from "effect/Schema";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { Menu, MenuTrigger, MenuPopup, MenuItem } from "../ui/menu";
@@ -32,7 +32,10 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import { useAgentLibrary } from "../../hooks/useAgentLibrary";
 import { useScheduledTasks, useScheduledTasksSupported } from "../../state/scheduledTasks";
 import { useEnvironments } from "../../state/environments";
-import { useAllEnvironmentShellsBootstrapped } from "../../state/entities";
+import {
+  useAllEnvironmentShellsBootstrapped,
+  readEnvironmentSupportsSettlement,
+} from "../../state/entities";
 import { useAgentThreadShells } from "./useAgentRunParenting";
 import { AgentSkillsEditor } from "./AgentSkillsEditor";
 import { AgentEditor } from "./AgentEditor";
@@ -67,6 +70,7 @@ function AgentThreadList({
   threads,
   pinned,
   onContextMenu,
+  onSettleAction,
   profiles,
   childrenByKey,
   workingKeys,
@@ -79,6 +83,7 @@ function AgentThreadList({
   workingKeys: ReadonlySet<string>;
   runByKey: ReadonlyMap<string, EnvironmentThreadShell>;
   onContextMenu: AgentRunContextMenu;
+  onSettleAction: (thread: EnvironmentThreadShell) => void;
 }) {
   const [settledOpen, setSettledOpen] = useState(false);
   const active = threads.filter((thread) => thread.settledAt === null);
@@ -102,6 +107,8 @@ function AgentThreadList({
           const parentKey = agentRunParentKey(thread);
           return parentKey === null ? null : runByKey.get(parentKey);
         })()}
+        settleSupported={readEnvironmentSupportsSettlement(thread.environmentId)}
+        onSettleAction={onSettleAction}
         onContextMenu={onContextMenu}
       />
     );
@@ -232,6 +239,7 @@ export function AgentsBoard() {
     [threads],
   );
   const onThreadContextMenu = useAgentThreadContextMenu(visible);
+  const onSettleAction = useAgentThreadSettleAction();
   const activeCount = (items: readonly EnvironmentThreadShell[]) =>
     items.filter((thread) => thread.settledAt === null).length;
   const online = environments.filter((env) => env.connection.phase === "connected");
@@ -510,6 +518,7 @@ export function AgentsBoard() {
             workingKeys={workingKeys}
             runByKey={runByKey}
             onContextMenu={onThreadContextMenu}
+            onSettleAction={onSettleAction}
           />
         </section>
         <div className="agents-pane-resize" data-pane="threads">
