@@ -365,11 +365,10 @@ export const make = Effect.gen(function* () {
         .getPullRequestWatchFingerprint(input)
         .pipe(Effect.mapError(fail("getChangeRequestWatchFingerprint"))),
 
-    // Like `isRequired`, only github.com is asked: an older Enterprise server may lack rulesets.
+    // Enterprise is asked too; a server without rulesets fails the read, which a watch treats as
+    // unknown rather than guessing from the checks it has.
     getRequiredChecks: (input) =>
-      input.host.toLowerCase() === "github.com"
-        ? cli.getRequiredChecks(input).pipe(Effect.mapError(fail("getRequiredChecks")))
-        : Effect.succeed(null),
+      cli.getRequiredChecks(input).pipe(Effect.mapError(fail("getRequiredChecks"))),
 
     getChangeRequestPreview: (input) =>
       cli.getPullRequestPreview(input).pipe(Effect.mapError(fail("getChangeRequestPreview"))),

@@ -543,11 +543,13 @@ export const make = Effect.gen(function* () {
       status: fingerprint?.status ?? null,
       remarks: fingerprint?.remarks ?? null,
     });
-    // Read only with checks to judge. A failed read is "unknown", which never reports "passed".
-    const requiredChecks =
+    // Read only with checks to judge. A host that cannot list them, or a failed read, is
+    // "unknown", which never reports "passed".
+    const requiredChecks: RequiredChecks =
       detail.checks.length === 0
-        ? null
+        ? "unknown"
         : yield* pullRequests.requiredChecks({ ...reference, baseBranch: detail.baseBranch }).pipe(
+            Effect.map((names): RequiredChecks => names ?? "unknown"),
             Effect.catchCause((cause): Effect.Effect<RequiredChecks> =>
               Cause.hasInterruptsOnly(cause)
                 ? Effect.interrupt

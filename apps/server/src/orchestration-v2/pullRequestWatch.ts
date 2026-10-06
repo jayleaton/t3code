@@ -34,10 +34,11 @@ const isFailedCheck = (check: PullRequestCheck) =>
   check.status === "failure" || check.status === "cancelled" || check.status === "action-required";
 
 /**
- * What the base branch requires: the check names, null where the host cannot list them (the
- * checks' own required flags decide), or "unknown" when the list could not be read this pass.
+ * What the base branch requires: the check names read from the host, where an empty list means
+ * it requires none, or "unknown" when the host cannot list them or the read failed this pass.
+ * A check's own required flag is never enough: a required check with no run yet has no flag.
  */
-export type RequiredChecks = ReadonlyArray<string> | null | "unknown";
+export type RequiredChecks = ReadonlyArray<string> | "unknown";
 
 // Two workflows naming a job alike are told apart as `workflow / name`; a rule names the job.
 const isCheckNamed = (check: PullRequestCheck, context: string) =>
@@ -57,7 +58,7 @@ export function evaluatePullRequestWatch(
   watch: ThreadPullRequestWatch,
   detail: Pick<PullRequestDetail, "headSha" | "checks" | "mergeability" | "viewer" | "author">,
   remarks: ReadonlyArray<PullRequestComment> | null,
-  requiredChecks: RequiredChecks = null,
+  requiredChecks: RequiredChecks,
 ): PullRequestWatchReport {
   const changes: Array<PullRequestWatchChange> = [];
   const headSha = detail.headSha ?? null;
@@ -75,7 +76,7 @@ export function evaluatePullRequestWatch(
     failedChecks = failed.map((check) => check.name);
 
     if (requiredChecks !== "unknown") {
-      const expected = requiredChecks ?? [];
+      const expected = requiredChecks;
       const required = detail.checks.filter(
         (check) =>
           check.required === true || expected.some((context) => isCheckNamed(check, context)),

@@ -245,7 +245,8 @@ export class PullRequestService extends Context.Service<
     ) => Effect.Effect<ProviderChangeRequestWatchFingerprint | null, PullRequestError>;
     /**
      * Every check name the base branch requires, including ones not created yet, so a watch
-     * cannot call a partial gate passed. Null when the host cannot list them.
+     * cannot call a partial gate passed. Empty when it requires none; null when the host cannot
+     * list them, which a watch treats as unknown.
      */
     readonly requiredChecks: (
       input: PullRequestRef & { readonly baseBranch: string },
