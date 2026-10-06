@@ -1059,6 +1059,103 @@ describe("orchestration v2 provider switching", () => {
       ),
   );
 
+  // A long agent chat sits past 75% of its window. Its measured occupancy
+  // already includes instructions and tools, so a missed request must still
+  // reach the same native thread instead of failing every later turn.
+  it.live("delivers a missed request to a measured native thread past three quarters full", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* checkpointWorkspace("handoff-measured-occupancy");
+        const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+        const failStartOnce = yield* Ref.make(false);
+        const layerRegistry = ProviderAdapterRegistry.layerFromAdapters([
+          makeTestAdapter({
+            instanceId: CODEX_MODEL_SELECTION.instanceId,
+            driver: CODEX_DRIVER,
+            capabilities: CodexProviderCapabilitiesV2,
+            modelSelection: CODEX_MODEL_SELECTION,
+            responseByRunOrdinal: {},
+            capturedTurns,
+            failStartOnce,
+            tokenUsageByRunOrdinal: { 1: { usedTokens: 208_395, maxTokens: 258_400 } },
+          }),
+        ]);
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const dispatch = (ordinal: number, text: string) =>
+            orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make(`occupancy:${ordinal}`),
+              threadId,
+              messageId: MessageId.make(`occupancy:${ordinal}`),
+              createdBy: "user",
+              creationSource: "web",
+              text,
+              attachments: [],
+              modelSelection: CODEX_MODEL_SELECTION,
+              dispatchMode: { type: "start_immediately" },
+            });
+          const wait = (ordinal: number) =>
+            orchestrator.streamStoredEvents.pipe(
+              Stream.filter(
+                ({ event }) =>
+                  event.type === "run.updated" &&
+                  event.payload.ordinal === ordinal &&
+                  (event.payload.status === "completed" || event.payload.status === "failed"),
+              ),
+              Stream.runHead,
+              Effect.andThen(worker.drain()),
+              Effect.andThen(orchestrator.getThreadProjection(threadId)),
+              Effect.map((projection) => projection.runs.at(-1)!),
+            );
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make("occupancy:create"),
+            threadId,
+            projectId,
+            createdBy: "user",
+            creationSource: "web",
+            title: "Measured occupancy",
+            modelSelection: CODEX_MODEL_SELECTION,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+          });
+          yield* dispatch(1, "Coordinate the workers");
+          assert.equal((yield* wait(1)).status, "completed");
+          yield* Ref.set(failStartOnce, true);
+          yield* dispatch(2, "Hand the image work to the designer");
+          assert.equal((yield* wait(2)).status, "failed");
+          // Agent instructions and skills travel with every request.
+          const followup = `Then just do it in a new chat.\n${"x".repeat(6_000)}`;
+          yield* dispatch(3, followup);
+          assert.equal((yield* wait(3)).status, "completed");
+          const lastTurn = (yield* Ref.get(capturedTurns)).at(-1)!;
+          assert.include(lastTurn.text, "Context handoff (delta_since_target_last_seen):");
+          assert.include(lastTurn.text, "Hand the image work to the designer");
+          assert.isTrue(lastTurn.text.endsWith(followup));
+          assert.equal(lastTurn.nativeThreadId, `${CODEX_DRIVER}:${threadId}`);
+        }).pipe(
+          Effect.provide(
+            ProviderReplayHarness.layerWithRegistry(
+              {
+                name: "handoff-measured-occupancy",
+                runtimePolicyOverride: {
+                  cwd,
+                  approvalPolicy: "never",
+                  sandboxPolicy: { type: "readOnly" },
+                },
+              },
+              layerRegistry,
+            ),
+          ),
+        );
+      }),
+    ),
+  );
+
   it.live.each(["native", "legacy"] as const)(
     "starts a replacement native thread as new after the resume fallback with %s attempts",
     (attempts) =>
