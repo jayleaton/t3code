@@ -45,6 +45,7 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TxRef from "effect/TxRef";
 
+import * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
@@ -147,6 +148,7 @@ export const make = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const eventSink = yield* EventSink.EventSinkV2;
+  const effectOutbox = yield* EffectOutbox.EffectOutboxV2;
   const writes = yield* Semaphore.make(1);
   const changes = yield* PubSub.unbounded<void>();
 
@@ -1058,8 +1060,19 @@ export const make = Effect.gen(function* () {
       if (isAccepted(task) || task.settlement.state === "settled") continue;
       const records = yield* projections.getThreadRecords(task.workerThreadId, ["runs"]);
       const latest = records.runs.at(-1);
+      // A run restart reconciliation cut and will continue is not news; the
+      // continuation's own run reports when it ends.
+      const continues =
+        latest !== undefined &&
+        Option.exists(
+          yield* effectOutbox
+            .get(`effect:restart-continuation:${latest.id}`)
+            .pipe(Effect.orElseSucceed(() => Option.none())),
+          (effect) => effect.status === "pending" || effect.status === "running",
+        );
       if (
         latest !== undefined &&
+        !continues &&
         latest.id !== task.observedRunId &&
         TERMINAL_RUN_STATUSES.has(latest.status)
       ) {

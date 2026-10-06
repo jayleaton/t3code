@@ -19,6 +19,7 @@ import * as Layer from "effect/Layer";
 
 import * as Sqlite from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
 import { EventSinkV2 } from "../orchestration-v2/EventSink.ts";
 import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
 import {
@@ -49,13 +50,20 @@ const runtime = Layer.mergeAll(
     { databaseLayer: database, runEffectWorker: false },
   ),
 );
-const testLayer = Layer.mergeAll(runtime, ThreadTaskStore.layer.pipe(Layer.provide(database))).pipe(
-  Layer.provideMerge(runtime),
-);
+const testLayer = Layer.mergeAll(
+  runtime,
+  ThreadTaskStore.layer.pipe(Layer.provide(database)),
+  EffectOutbox.layer.pipe(Layer.provide(database)),
+).pipe(Layer.provideMerge(runtime));
 
 /** A fresh service over the same database, as after a server restart. */
 const makeService = ThreadTaskService.make.pipe(
-  Effect.provide(ThreadTaskStore.layer.pipe(Layer.provide(database))),
+  Effect.provide(
+    Layer.mergeAll(
+      ThreadTaskStore.layer.pipe(Layer.provide(database)),
+      EffectOutbox.layer.pipe(Layer.provide(database)),
+    ),
+  ),
 );
 
 const owner = { kind: "thread", threadId: ThreadId.make("captain") } as const;
@@ -669,6 +677,43 @@ it.effect("a pull request watch counts only while its thread is live", () =>
       const archived = (yield* tasks.read(worker, {})).tasks[0]!;
       assert.equal(archived.task.waitingOn?.kind, "pull_request");
       assert.isFalse(archived.continuationLive);
+    }),
+  ).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("restart recovery leaves a run that its restart continuation resumes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const tasks = yield* makeService;
+      yield* f.create("captain");
+      yield* f.create("worker", "captain");
+      yield* f.send("worker", 1);
+      yield* tasks.assign(owner, { threadId: worker.threadId, summary: "Survive an update" });
+
+      // An update cut the worker's turn and recorded that it will continue.
+      const runId = yield* f.endLatestRun("worker", "failed");
+      const commandId = CommandId.make(`command:restart-prepare:${runId}`);
+      yield* f.sink.writeWithEffects({
+        commandId,
+        events: [],
+        effects: [
+          {
+            id: `effect:restart-continuation:${runId}`,
+            commandId,
+            threadId: worker.threadId,
+            request: { type: "provider-runtime.continue", sourceRunId: runId },
+          },
+        ],
+      });
+      yield* (yield* makeService).recover;
+      assert.equal((yield* f.wakes("captain")).length, 0);
+
+      // Without a continuation the same cut turn is reported once.
+      yield* f.send("worker", 2);
+      yield* f.endLatestRun("worker", "failed");
+      yield* (yield* makeService).recover;
+      assert.equal((yield* f.wakes("captain")).length, 1);
     }),
   ).pipe(Effect.provide(testLayer)),
 );

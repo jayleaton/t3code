@@ -267,7 +267,12 @@ const layerSecretRequestsProvided = SecretRequests.layer.pipe(
 const layerTodoServiceProvided = TodoService.layer.pipe(Layer.provide(ProjectStore.layer));
 const layerThreadTaskProvided = ThreadTaskService.layer.pipe(
   Layer.provide(
-    Layer.mergeAll(layerOrchestratorProvided, ProjectionStore.layer, layerEventSinkProvided),
+    Layer.mergeAll(
+      layerOrchestratorProvided,
+      ProjectionStore.layer,
+      layerEventSinkProvided,
+      EffectOutbox.layer,
+    ),
   ),
 );
 const layerScheduledTaskProvided = ScheduledTaskService.layer.pipe(
