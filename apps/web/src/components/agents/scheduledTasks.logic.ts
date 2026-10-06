@@ -91,6 +91,8 @@ export function describeSchedule(
           : days.map((day) => WEEKDAY_NAMES[day]).join(", ");
       return `${on} at ${schedule.timeOfDay}`;
     }
+    case "webhook":
+      return "On webhook";
     case "cron":
       break;
   }

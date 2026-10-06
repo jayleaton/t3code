@@ -297,7 +297,8 @@ export function ScheduledTaskEditor({
                   <option value="cron">On a schedule</option>
                   <option value="once">Once</option>
                   {(existing?.schedule.type === "interval" ||
-                    existing?.schedule.type === "fixed_time") && (
+                    existing?.schedule.type === "fixed_time" ||
+                    existing?.schedule.type === "webhook") && (
                     <option value={existing.schedule.type}>
                       {describeSchedule(existing.schedule, (iso) =>
                         formatUpcomingTimestamp(iso, timestampFormat),

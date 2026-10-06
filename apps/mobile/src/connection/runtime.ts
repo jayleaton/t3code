@@ -1,61 +1,56 @@
 import { Connection } from "@t3tools/client-runtime/connection";
 import { ShellSnapshotLoader } from "@t3tools/client-runtime/state/shell";
 import {
-  boundedThreadSnapshotLoaderLayer,
+  BoundedThreadSnapshotLoader,
   ThreadHistoryController,
 } from "@t3tools/client-runtime/state/threads";
 import * as Layer from "effect/Layer";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 
 import type { FoundationHotModule } from "../lib/foundation-fast-refresh";
 import { hotSwappableAtomRuntime } from "../lib/hot-swappable-atom-runtime";
-import { runtimeContextLayer } from "../lib/runtime";
+import * as Runtime from "../lib/runtime";
 import { appAtomRegistry } from "../state/atom-registry";
-import {
-  mobileBackgroundActivityObserverLayer,
-  mobileBackgroundActivityReporterLayer,
-} from "./background-activity";
+import * as BackgroundActivity from "./background-activity";
 import { mobileClientFocusLayer } from "./client-focus";
-import { connectionPlatformLayer } from "./platform";
+import * as ConnectionPlatform from "./platform";
 
 declare const module: { readonly hot?: FoundationHotModule } | undefined;
 
-const providedConnectionPlatformLayer = connectionPlatformLayer.pipe(
-  Layer.provide(runtimeContextLayer),
-);
+const layerProvidedConnectionPlatform = ConnectionPlatform.layer.pipe(Layer.provide(Runtime.layer));
 
-const snapshotLoaderLayer = Layer.mergeAll(
-  boundedThreadSnapshotLoaderLayer,
+const layerSnapshotLoader = Layer.mergeAll(
+  BoundedThreadSnapshotLoader.layer,
   ShellSnapshotLoader.layer,
   ThreadHistoryController.layer,
 );
 
 type ConnectionLayerSource =
   | typeof Connection.layer
-  | typeof snapshotLoaderLayer
-  | typeof runtimeContextLayer
-  | typeof connectionPlatformLayer
-  | typeof mobileBackgroundActivityObserverLayer
-  | typeof mobileBackgroundActivityReporterLayer
+  | typeof layerSnapshotLoader
+  | typeof Runtime.layer
+  | typeof ConnectionPlatform.layer
+  | typeof BackgroundActivity.layerObserver
+  | typeof BackgroundActivity.layerReporter
   | typeof mobileClientFocusLayer;
 
-const providedClientConnectionLayer = snapshotLoaderLayer.pipe(
+const layerProvidedClientConnection = layerSnapshotLoader.pipe(
   Layer.provideMerge(
     Connection.layerWithOptions({ usageLimitSources: true, usageLimitsCommand: true }),
   ),
   Layer.provideMerge(
     Layer.mergeAll(
-      runtimeContextLayer,
-      providedConnectionPlatformLayer,
-      mobileBackgroundActivityObserverLayer,
+      Runtime.layer,
+      layerProvidedConnectionPlatform,
+      BackgroundActivity.layerObserver,
     ),
   ),
 );
 
-const connectionLayer = Layer.mergeAll(
-  mobileBackgroundActivityReporterLayer,
+const layerConnection = Layer.mergeAll(
+  BackgroundActivity.layerReporter,
   mobileClientFocusLayer,
-).pipe(Layer.provideMerge(providedClientConnectionLayer));
+).pipe(Layer.provideMerge(layerProvidedClientConnection));
 
 export const connectionAtomRuntime: Atom.AtomRuntime<
   Layer.Success<ConnectionLayerSource>,
@@ -64,5 +59,5 @@ export const connectionAtomRuntime: Atom.AtomRuntime<
   id: "t3.mobile.connection-runtime",
   hotModule: typeof module === "undefined" ? undefined : module.hot,
   registry: appAtomRegistry,
-  layer: connectionLayer,
+  layer: layerConnection,
 });

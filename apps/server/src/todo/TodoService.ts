@@ -11,6 +11,7 @@ import {
   type TodoTargetInput,
   type TodoUpdateInput,
 } from "@t3tools/contracts";
+import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -20,13 +21,12 @@ import * as PubSub from "effect/PubSub";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
-import { makeKeyedSerialExecutor } from "../orchestration-v2/KeyedSerialExecutor.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import { randomUuidV4 } from "../orchestration-v2/RandomUuid.ts";
-import * as OrchestrationCommandReceipts from "../persistence/Services/OrchestrationCommandReceipts.ts";
-import * as OrchestrationEventStore from "../persistence/Services/OrchestrationEventStore.ts";
+import * as OrchestrationCommandReceipts from "../persistence/OrchestrationCommandReceipts.ts";
+import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import {
   decodeTodoCommandRejection,
@@ -109,7 +109,7 @@ const make = Effect.gen(function* () {
   const store = yield* TodoStore.TodoStore;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
-  const todoLocks = yield* makeKeyedSerialExecutor<TodoId>();
+  const todoLocks = yield* KeyedLock.make<TodoId>();
   /** Scope keys whose list changed. */
   const changes = yield* PubSub.unbounded<string>();
 

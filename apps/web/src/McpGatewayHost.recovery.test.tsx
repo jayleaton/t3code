@@ -1,7 +1,7 @@
 import { act } from "react";
 import { create } from "react-test-renderer";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { McpGatewayHost } from "./McpGatewayHost";
 import { restartMcpGateway, getMcpGatewayStatus } from "./mcpGatewayState";
 import type { AppRouter } from "./router";

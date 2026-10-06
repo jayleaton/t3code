@@ -3,7 +3,7 @@ import { formatRelativeTime } from "../../timestampFormat";
 import { PROVIDER_ICON_BY_PROVIDER } from "../chat/providerIconUtils";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
-import { CornerLeftUpIcon, PinIcon } from "lucide-react";
+import { CheckIcon, CornerLeftUpIcon, PinIcon, Undo2Icon } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import {
   memo,
@@ -208,6 +208,8 @@ export const ThreadCard = memo(function ThreadCard({
   childWorking = false,
   workingKeys,
   dragging = false,
+  settleSupported = false,
+  onSettleAction,
   onContextMenu,
 }: {
   profile?: McpGatewayProfile | undefined;
@@ -222,6 +224,10 @@ export const ThreadCard = memo(function ThreadCard({
   /** Statuses of `childRuns` rows; only cards with children need it. */
   workingKeys?: ReadonlySet<string> | undefined;
   dragging?: boolean;
+  /** The surface's server supports thread.settle/unsettle (version-skew guard). */
+  settleSupported?: boolean;
+  /** Runs the shared settle lifecycle for a parent/top-level card. */
+  onSettleAction?: (thread: EnvironmentThreadShell) => void;
   thread: EnvironmentThreadShell;
   onContextMenu: AgentRunContextMenu;
 }) {
@@ -270,6 +276,11 @@ export const ThreadCard = memo(function ThreadCard({
   // render on every keystroke typed into the chat pane.
   const showPreview = !dragging && !contextMenuOpen && !isCurrent && previewOpen;
   const status = agentThreadStatus(thread, childWorking);
+  // Only parent/top-level cards get the inline action; a chat that stands on its
+  // own card but is somebody's child keeps the right-click menu alone.
+  const settled = thread.settledAt !== null;
+  const showSettleAction =
+    onSettleAction != null && settleSupported && thread.parentThreadId == null;
   const popupRef = useRef<HTMLDivElement>(null);
   const editing = useRef(false);
   const closePreview = () => {
@@ -294,6 +305,7 @@ export const ThreadCard = memo(function ThreadCard({
     <div
       className="agent-thread-container"
       data-current={isCurrent}
+      data-has-card-actions={showSettleAction || undefined}
       style={{ "--agent-color": profile?.color ?? "var(--muted-foreground)" } as CSSProperties}
     >
       <PreviewCard
@@ -411,6 +423,36 @@ export const ThreadCard = memo(function ThreadCard({
           )}
         </PreviewCardPopup>
       </PreviewCard>
+      {showSettleAction && (
+        <div className="agent-thread-actions">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  className="agent-thread-settle"
+                  aria-label={settled ? "Un-settle chat" : "Settle chat"}
+                  onClick={(event) => {
+                    // The card is a link inside a drag source: keep the click
+                    // from navigating or starting a drag.
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void onSettleAction(thread);
+                  }}
+                  onPointerDown={(event) => event.stopPropagation()}
+                />
+              }
+            >
+              {settled ? (
+                <Undo2Icon size={13} aria-hidden="true" />
+              ) : (
+                <CheckIcon size={13} aria-hidden="true" />
+              )}
+            </TooltipTrigger>
+            <TooltipPopup side="left">{settled ? "Un-settle chat" : "Settle chat"}</TooltipPopup>
+          </Tooltip>
+        </div>
+      )}
       {parentRun && (
         <div className="agent-thread-prs">
           <Link

@@ -80,7 +80,9 @@ describe("mobile connection catalog storage", () => {
         expect(restored.targets).toEqual([target]);
         expect(restored.profiles).toEqual([profile]);
         expect(restored.credentials).toEqual([{ connectionId: target.connectionId, credential }]);
-        yield* coldStart.update((document) => removeConnectionFromCatalog(document, target));
+        yield* coldStart.update((document) =>
+          removeConnectionFromCatalog(document, target.environmentId),
+        );
         const afterRemoval = yield* (yield* open()).read;
         expect(afterRemoval.targets).toEqual([]);
         expect(afterRemoval.credentials).toEqual([]);

@@ -3,7 +3,7 @@ import { AgentRunDragArea, LinkableAgentCard, SortableAgentThreads } from "./Sor
 import { useClientSettings } from "../../hooks/useSettings";
 import { visibleAgentProviders } from "./agentModelCatalog";
 import { ThreadCard } from "./ThreadCard";
-import { useAgentThreadContextMenu } from "./useAgentThreadContextMenu";
+import { useAgentThreadContextMenu, useAgentThreadSettleAction } from "./useAgentThreadContextMenu";
 import * as Schema from "effect/Schema";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { Menu, MenuTrigger, MenuPopup, MenuItem } from "../ui/menu";
@@ -32,12 +32,17 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import { useAgentLibrary } from "../../hooks/useAgentLibrary";
 import { useScheduledTasks, useScheduledTasksSupported } from "../../state/scheduledTasks";
 import { useEnvironments } from "../../state/environments";
-import { useAllEnvironmentShellsBootstrapped } from "../../state/entities";
+import {
+  useAllEnvironmentShellsBootstrapped,
+  readEnvironmentSupportsSettlement,
+} from "../../state/entities";
 import { useAgentThreadShells } from "./useAgentRunParenting";
 import { AgentSkillsEditor } from "./AgentSkillsEditor";
 import { AgentEditor } from "./AgentEditor";
 import { AgentTaskDialog } from "./AgentTaskDialog";
 import { AgentsLoadingNotice } from "./AgentsLoadingNotice";
+import { useAgentsPaneWidths } from "./useAgentsPaneWidths";
+import { RightPanelResizeHandle } from "../preview/RightPanelResizeHandle";
 import {
   agentColorFor,
   agentRunParentKey,
@@ -65,6 +70,7 @@ function AgentThreadList({
   threads,
   pinned,
   onContextMenu,
+  onSettleAction,
   profiles,
   childrenByKey,
   workingKeys,
@@ -77,6 +83,7 @@ function AgentThreadList({
   workingKeys: ReadonlySet<string>;
   runByKey: ReadonlyMap<string, EnvironmentThreadShell>;
   onContextMenu: AgentRunContextMenu;
+  onSettleAction: (thread: EnvironmentThreadShell) => void;
 }) {
   const [settledOpen, setSettledOpen] = useState(false);
   const active = threads.filter((thread) => thread.settledAt === null);
@@ -100,6 +107,8 @@ function AgentThreadList({
           const parentKey = agentRunParentKey(thread);
           return parentKey === null ? null : runByKey.get(parentKey);
         })()}
+        settleSupported={readEnvironmentSupportsSettlement(thread.environmentId)}
+        onSettleAction={onSettleAction}
         onContextMenu={onContextMenu}
       />
     );
@@ -191,6 +200,7 @@ export function AgentsBoard() {
   const [savedFilter, setFilter] = useLocalStorage("t3code:agents:filter", null, agentFilterSchema);
   const filter = profiles.some((profile) => profile.profileId === savedFilter) ? savedFilter : null;
   const [showFilters, setShowFilters] = useState(false);
+  const { attachWorkspace, paneStyle, profilesHandlers, threadsHandlers } = useAgentsPaneWidths();
   const selected = useLocation({
     select: (location) => location.pathname.split("/").filter(Boolean).length > 1,
   });
@@ -229,6 +239,7 @@ export function AgentsBoard() {
     [threads],
   );
   const onThreadContextMenu = useAgentThreadContextMenu(visible);
+  const onSettleAction = useAgentThreadSettleAction();
   const activeCount = (items: readonly EnvironmentThreadShell[]) =>
     items.filter((thread) => thread.settledAt === null).length;
   const online = environments.filter((env) => env.connection.phase === "connected");
@@ -320,7 +331,12 @@ export function AgentsBoard() {
         </p>
       )}
       <AgentsLoadingNotice ready={ready} />
-      <main className="agents-workspace" aria-label="Agents workspace">
+      <main
+        ref={attachWorkspace}
+        className="agents-workspace"
+        aria-label="Agents workspace"
+        style={paneStyle}
+      >
         <aside className="agents-filters" aria-label="Agent filters">
           <header className="agents-filters-heading">
             <h2>Agents</h2>
@@ -453,6 +469,9 @@ export function AgentsBoard() {
             </footer>
           )}
         </aside>
+        <div className="agents-pane-resize" data-pane="profiles">
+          <RightPanelResizeHandle handlers={profilesHandlers} />
+        </div>
         <section className="agents-threads" aria-label="Threads">
           <header>
             <button
@@ -499,8 +518,12 @@ export function AgentsBoard() {
             workingKeys={workingKeys}
             runByKey={runByKey}
             onContextMenu={onThreadContextMenu}
+            onSettleAction={onSettleAction}
           />
         </section>
+        <div className="agents-pane-resize" data-pane="threads">
+          <RightPanelResizeHandle handlers={threadsHandlers} />
+        </div>
         <section className="agents-chat-pane">
           <Outlet />
         </section>

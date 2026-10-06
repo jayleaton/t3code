@@ -194,6 +194,18 @@ describe("panel resize cleanup", () => {
 });
 
 describe("panel width storage changes", () => {
+  it("restores the saved width once bounds that were provisionally too narrow widen", async () => {
+    savedWidths.set("measured-panel", "650");
+    await act(() => renderer.unmount());
+    await act(() => {
+      renderer = create(<Panel storageKey="measured-panel" maxWidth={200} />);
+    });
+    expect(result.width).toBe(200);
+    await act(() => renderer.update(<Panel storageKey="measured-panel" maxWidth={800} />));
+    expect(result.width).toBe(650);
+    expect(setItem).not.toHaveBeenCalled();
+  });
+
   it("restores separate thread widths without remounting and retains them after reload", async () => {
     await act(() => {
       result.handlers.onPointerDown(pointer());

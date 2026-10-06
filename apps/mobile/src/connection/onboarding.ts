@@ -15,11 +15,21 @@ const onboardingScheduler = createAtomCommandScheduler();
 export const connectPairingUrl = createRuntimeCommand(connectionAtomRuntime, {
   label: "mobile:connection:connect-pairing-url",
   scheduler: onboardingScheduler,
-  concurrency: { mode: "singleFlight", key: (pairingUrl: string) => pairingUrl },
-  execute: (pairingUrl: string) =>
+  concurrency: {
+    mode: "singleFlight",
+    // Adding a route to a different machine with the same link is its own
+    // operation: it must check its own expected machine.
+    key: (input: { readonly pairingUrl: string; readonly expectedEnvironmentId?: EnvironmentId }) =>
+      JSON.stringify([input.pairingUrl, input.expectedEnvironmentId ?? null]),
+  },
+  execute: (input: {
+    readonly pairingUrl: string;
+    /** Set when adding a route to this saved machine. */
+    readonly expectedEnvironmentId?: EnvironmentId;
+  }) =>
     Effect.gen(function* () {
       yield* Effect.try({
-        try: () => validateMobilePairingUrl(pairingUrl),
+        try: () => validateMobilePairingUrl(input.pairingUrl),
         catch: (cause) =>
           new ConnectionBlockedError({
             reason: "configuration",
@@ -27,7 +37,7 @@ export const connectPairingUrl = createRuntimeCommand(connectionAtomRuntime, {
           }),
       });
       const onboarding = yield* ConnectionOnboarding.ConnectionOnboarding;
-      return yield* onboarding.registerPairing({ pairingUrl });
+      return yield* onboarding.registerPairing(input);
     }),
 });
 

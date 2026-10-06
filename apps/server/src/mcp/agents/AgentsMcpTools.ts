@@ -18,7 +18,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { McpSchema, McpServer } from "effect/unstable/ai";
+import { McpSchema, McpServer } from "effect/ai";
 
 import { McpGatewayBroker } from "../McpGatewayBroker.ts";
 import * as McpInvocationContext from "../McpInvocationContext.ts";
@@ -107,7 +107,11 @@ const registerAgentsTools = Effect.gen(function* () {
               ),
             );
           }
-          const caller = { environmentId: local.environmentId, threadId: invocation.threadId };
+          // An OAuth client has no calling thread; the gateway then needs explicit targets.
+          const caller =
+            invocation.thread === undefined
+              ? undefined
+              : { environmentId: local.environmentId, threadId: invocation.thread.threadId };
           return Effect.promise(() => runGatewayTool(context, name, args, { caller })).pipe(
             Effect.map((run) => toCallToolResult(run.result)),
           );

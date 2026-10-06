@@ -4,13 +4,12 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
-import { OrchestrationCommandReceiptRepositoryLive } from "../persistence/Layers/OrchestrationCommandReceipts.ts";
-import { OrchestrationEventStoreLive } from "../persistence/Layers/OrchestrationEventStore.ts";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
-import * as OrchestrationEventStore from "../persistence/Services/OrchestrationEventStore.ts";
+import * as OrchestrationCommandReceipts from "../persistence/OrchestrationCommandReceipts.ts";
+import * as Sqlite from "../persistence/Sqlite.ts";
+import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as TodoService from "./TodoService.ts";
 
@@ -42,10 +41,10 @@ const identities = Layer.succeed(
 
 const layer = TodoService.layer.pipe(
   Layer.provideMerge(ProjectStore.layer),
-  Layer.provideMerge(OrchestrationEventStoreLive),
-  Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
+  Layer.provideMerge(OrchestrationEventStore.layer),
+  Layer.provideMerge(OrchestrationCommandReceipts.layer),
   Layer.provide(identities),
-  Layer.provideMerge(SqlitePersistenceMemory),
+  Layer.provideMerge(Sqlite.layerMemory),
 );
 
 const seedProject = (projectId: ProjectId, workspaceRoot: string) =>

@@ -289,6 +289,47 @@ describe("Agents new chat workspace", () => {
     });
     expect(projectCards()).toEqual(["a", "b", "c", "d", "e", "f"]);
   });
+  it("searches every project by name or path, keeping the selection", async () => {
+    state.projects = ["alpha", "bravo", "charlie", "delta", "echo", "Foxtrot"].map((title) =>
+      makeProject(mac, ProjectId.make(title.toLowerCase()), title),
+    );
+    const search = (value: string) =>
+      act(async () => {
+        const input = container.querySelector<HTMLInputElement>(
+          'input[aria-label="Search projects"]',
+        )!;
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+          input,
+          value,
+        );
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    const showMore = () =>
+      Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.startsWith("Show "),
+      );
+    await render();
+    await choose("project", "bravo");
+    expect(projectCards()).toEqual(["alpha", "bravo", "charlie", "delta"]);
+
+    // A project collapsed behind Show more is reachable, ignoring case.
+    await search("FOX");
+    expect(projectCards()).toEqual(["Foxtrot"]);
+    expect(showMore()).toBeUndefined();
+    // The selection is kept while it is filtered out of view.
+    expect(checkedProject()).toBeUndefined();
+    await search(`/projects/${mac}/e`);
+    expect(projectCards()).toEqual(["echo"]);
+
+    await search("zulu");
+    expect(projectCards()).toEqual([]);
+    expect(container.querySelector('[role="status"]')!.textContent).toContain("match “zulu”");
+
+    await search("");
+    expect(projectCards()).toEqual(["alpha", "bravo", "charlie", "delta"]);
+    expect(checkedProject()).toBe("bravo");
+    expect(showMore()!.textContent).toBe("Show 2 more");
+  });
   it("starts the chat with whichever agent card is chosen", async () => {
     await render();
     await choose("agent", "cody");

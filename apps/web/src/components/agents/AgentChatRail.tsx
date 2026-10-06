@@ -12,7 +12,8 @@ import {
 } from "./agents.logic";
 import { useAgentThreadShells } from "./useAgentRunParenting";
 import { ThreadCard } from "./ThreadCard";
-import { useAgentThreadContextMenu } from "./useAgentThreadContextMenu";
+import { useAgentThreadContextMenu, useAgentThreadSettleAction } from "./useAgentThreadContextMenu";
+import { readEnvironmentSupportsSettlement } from "../../state/entities";
 
 export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
   const allThreads = useAgentThreadShells();
@@ -44,6 +45,7 @@ export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
     ]),
   );
   const onContextMenu = useAgentThreadContextMenu(visible);
+  const onSettleAction = useAgentThreadSettleAction();
   return (
     <nav className="agent-chat-rail" aria-label="Active and unread agent chats">
       <div className="agent-chat-rail-label">Active & unread</div>
@@ -74,6 +76,8 @@ export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
                       )
                 }
                 onContextMenu={onContextMenu}
+                settleSupported={readEnvironmentSupportsSettlement(thread.environmentId)}
+                onSettleAction={onSettleAction}
               />
             )}
           </SortableAgentThreads>

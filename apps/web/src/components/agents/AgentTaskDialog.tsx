@@ -23,6 +23,7 @@ import { useComposerDraftStore } from "../../composerDraftStore";
 import ChatView from "../ChatView";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialog";
 import { agentMachineUnavailableReason } from "./agentMachineAvailability";
 import { agentColorFor, resolveAgentTaskProject } from "./agents.logic";
@@ -32,6 +33,7 @@ import {
   defaultNewChatMachine,
   defaultNewChatProfile,
   emptyNewChatHistory,
+  filterNewChatProjects,
   NewChatHistory,
   recordNewChat,
   sortProfilesByNewChatPick,
@@ -190,6 +192,7 @@ function AgentTaskForm({
   const projects = useProjects();
   const [history, setHistory] = useNewChatHistory();
   const [showAllProjects, setShowAllProjects] = useState(false);
+  const [projectQuery, setProjectQuery] = useState("");
   const [initialDraft] = useState(() =>
     useComposerDraftStore
       .getState()
@@ -230,9 +233,21 @@ function AgentTaskForm({
     [projects, history, machine],
   );
   const project = resolveAgentTaskProject(projects, machine, projectId);
-  const visibleProjects = showAllProjects
-    ? targetProjects
-    : collapsedNewChatChoices(targetProjects, (item) => item.id === project?.id, COLLAPSED_CHOICES);
+  // A search covers every project on the machine, including those collapsed behind Show more.
+  const searchingProjects = projectQuery.trim() !== "";
+  const matchingProjects = useMemo(
+    () => filterNewChatProjects(targetProjects, projectQuery),
+    [targetProjects, projectQuery],
+  );
+  const visibleProjects = searchingProjects
+    ? matchingProjects
+    : showAllProjects
+      ? targetProjects
+      : collapsedNewChatChoices(
+          targetProjects,
+          (item) => item.id === project?.id,
+          COLLAPSED_CHOICES,
+        );
   const modelSelection = target
     ? resolveGatewayProfileModelSelection(profile, target.serverConfig?.providers ?? [])
     : undefined;
@@ -370,7 +385,25 @@ function AgentTaskForm({
         )}
         {target && targetProjects.length > 0 && (
           <fieldset className="agent-choice-group" disabled={busy || hasContent}>
-            <legend>Project</legend>
+            <legend className="flex w-full items-center justify-between gap-3">
+              Project
+              <span className="w-56 max-w-[55%]">
+                <Input
+                  type="search"
+                  size="compact"
+                  aria-label="Search projects"
+                  placeholder="Search projects"
+                  value={projectQuery}
+                  onChange={(event) => setProjectQuery(event.target.value)}
+                />
+              </span>
+            </legend>
+            {searchingProjects && matchingProjects.length === 0 && (
+              <p role="status" className="text-xs text-muted-foreground">
+                No projects on {target.label} match &ldquo;{projectQuery.trim()}&rdquo;. Search
+                covers project names and paths.
+              </p>
+            )}
             <div className="agent-choice-grid">
               {visibleProjects.map((item) => (
                 <label key={item.id} className="agent-choice-card" title={item.workspaceRoot}>
@@ -390,11 +423,13 @@ function AgentTaskForm({
                 </label>
               ))}
             </div>
-            <ShowMoreChoices
-              total={targetProjects.length}
-              expanded={showAllProjects}
-              onToggle={() => setShowAllProjects((value) => !value)}
-            />
+            {!searchingProjects && (
+              <ShowMoreChoices
+                total={targetProjects.length}
+                expanded={showAllProjects}
+                onToggle={() => setShowAllProjects((value) => !value)}
+              />
+            )}
           </fieldset>
         )}
         {hasContent && (

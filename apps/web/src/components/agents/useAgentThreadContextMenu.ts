@@ -316,3 +316,28 @@ export function useAgentThreadContextMenu(
     ],
   );
 }
+
+/**
+ * The Agents board's inline settle action, called by a card's own control.
+ * Settling a settled chat un-settles it, exactly like the right-click menu, so
+ * the card button reuses one lifecycle and one version-skew guard instead of a
+ * parallel path. Failures surface through the same toast the menu uses.
+ */
+export function useAgentThreadSettleAction(): (thread: EnvironmentThreadShell) => void {
+  const { settleThread, unsettleThread } = useThreadActions();
+  return useCallback(
+    async (thread: EnvironmentThreadShell) => {
+      const ref = scopeThreadRef(thread.environmentId, thread.id);
+      const current = readThreadShell(ref) ?? thread;
+      const settled = current.settledAt !== null;
+      const result = await (settled ? unsettleThread(ref) : settleThread(ref));
+      if (result._tag === "Failure") {
+        failureToast(
+          settled ? "Failed to un-settle chat" : "Failed to settle chat",
+          squashAtomCommandFailure(result),
+        );
+      }
+    },
+    [settleThread, unsettleThread],
+  );
+}

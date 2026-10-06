@@ -12,7 +12,7 @@ import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as ProjectFaviconResolver from "./ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./T3ProjectFileLoader.ts";
 
-const TestLayer = Layer.empty.pipe(
+const layerTest = Layer.empty.pipe(
   Layer.provideMerge(
     ProjectFaviconResolver.layer.pipe(
       Layer.provide(WorkspacePaths.layer),
@@ -49,7 +49,7 @@ const makeResolverWithFileSystem = (fileSystem: FileSystem.FileSystem) =>
     Effect.provideService(FileSystem.FileSystem, fileSystem),
   );
 
-it.layer(TestLayer)("ProjectFaviconResolverLive", (it) => {
+it.layer(layerTest)("ProjectFaviconResolverLive", (it) => {
   describe("resolvePath", () => {
     it.effect("serves repeated resolves from cache instead of re-walking candidates", () =>
       Effect.gen(function* () {
@@ -120,6 +120,48 @@ it.layer(TestLayer)("ProjectFaviconResolverLive", (it) => {
 
         expect(resolved).not.toBeNull();
         expect(resolved).toContain("favicon.svg");
+      }),
+    );
+
+    it.effect("finds the best app icon in a monorepo without a root icon", () =>
+      Effect.gen(function* () {
+        const resolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        // An Expo app sorts first, but a web app's favicon is a better match.
+        yield* writeTextFile(cwd, "apps/mobile-app/assets/images/icon.png", "png");
+        yield* writeTextFile(cwd, "apps/web-app/public/favicon.svg", "<svg>web</svg>");
+        yield* writeTextFile(cwd, "apps/.hidden/favicon.svg", "<svg>hidden</svg>");
+
+        expect(yield* resolver.resolvePath(cwd)).toBe(
+          path.join(cwd, "apps", "web-app", "public", "favicon.svg"),
+        );
+      }),
+    );
+
+    it.effect("finds an Expo app icon when it is the only app icon", () =>
+      Effect.gen(function* () {
+        const resolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "apps/mobile-app/assets/images/icon.png", "png");
+        yield* writeTextFile(cwd, "apps/README.md", "not an app");
+
+        expect(yield* resolver.resolvePath(cwd)).toBe(
+          path.join(cwd, "apps", "mobile-app", "assets", "images", "icon.png"),
+        );
+      }),
+    );
+
+    it.effect("prefers a root icon over app icons", () =>
+      Effect.gen(function* () {
+        const resolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "apps/web/favicon.svg", "<svg>app</svg>");
+        yield* writeTextFile(cwd, "app/favicon.ico", "ico");
+
+        expect(yield* resolver.resolvePath(cwd)).toBe(path.join(cwd, "app", "favicon.ico"));
       }),
     );
 

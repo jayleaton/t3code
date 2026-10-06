@@ -5,7 +5,7 @@ import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts"
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
-import { McpSchema, McpServer } from "effect/unstable/ai";
+import { McpSchema, McpServer } from "effect/ai";
 
 import * as McpInvocationContext from "../McpInvocationContext.ts";
 import * as McpGatewayBrokerModule from "../McpGatewayBroker.ts";
@@ -18,9 +18,13 @@ const threadId = ThreadId.make("thread-agents-mcp-test");
 
 const makeInvocation = (capabilities: ReadonlyArray<"orchestration" | "preview">) => ({
   environmentId: localId,
-  threadId,
-  providerSessionId: "provider-session-agents-test",
-  providerInstanceId: ProviderInstanceId.make("codex"),
+  thread: {
+    threadId,
+    providerSessionId: "provider-session-agents-test",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+  },
+  client: undefined,
+  requestNamespace: `thread:${threadId}`,
   capabilities: new Set(capabilities),
   issuedAt: 1,
 });

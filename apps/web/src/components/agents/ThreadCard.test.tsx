@@ -157,3 +157,84 @@ describe("agent card linked chats", () => {
     expect(container.textContent).not.toContain("Settled worker");
   });
 });
+
+describe("agent card settle action", () => {
+  const topLevel = {
+    ...presentThreadShell(EnvironmentId.make("remote"), v2ThreadShell),
+    id: ThreadId.make("chat"),
+    environmentId: EnvironmentId.make("remote"),
+    title: "Agent chat",
+    updatedAt: "2026-09-10T00:00:00Z",
+    settledAt: null,
+  } satisfies EnvironmentThreadShell;
+
+  it("renders the settle control on the card, not inside its link", async () => {
+    await act(async () =>
+      root.render(
+        <ThreadCard
+          thread={topLevel}
+          settleSupported
+          onSettleAction={vi.fn()}
+          onContextMenu={vi.fn()}
+        />,
+      ),
+    );
+    const actions = container.querySelector(".agent-thread-container > .agent-thread-actions");
+    expect(actions?.querySelector('button[aria-label="Settle chat"]')).not.toBeNull();
+    // A button nested in the card's link would be invalid and steal its click.
+    expect(container.querySelector("a button")).toBeNull();
+  });
+
+  it("settles through the shared action when the control is clicked", async () => {
+    const onSettleAction = vi.fn();
+    await act(async () =>
+      root.render(
+        <ThreadCard
+          thread={topLevel}
+          settleSupported
+          onSettleAction={onSettleAction}
+          onContextMenu={vi.fn()}
+        />,
+      ),
+    );
+    const button = container.querySelector<HTMLButtonElement>('button[aria-label="Settle chat"]')!;
+    await act(async () => button.click());
+    expect(onSettleAction).toHaveBeenCalledWith(topLevel);
+  });
+
+  it("offers un-settle for a settled card", async () => {
+    await act(async () =>
+      root.render(
+        <ThreadCard
+          thread={{ ...topLevel, settledAt: "2026-09-10T00:05:00Z" }}
+          settleSupported
+          onSettleAction={vi.fn()}
+          onContextMenu={vi.fn()}
+        />,
+      ),
+    );
+    expect(container.querySelector('button[aria-label="Un-settle chat"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Settle chat"]')).toBeNull();
+  });
+
+  it("never renders the action for a child card or an unsupported server", async () => {
+    await act(async () =>
+      root.render(
+        <ThreadCard
+          thread={{ ...topLevel, parentThreadId: ThreadId.make("parent") }}
+          settleSupported
+          onSettleAction={vi.fn()}
+          onContextMenu={vi.fn()}
+        />,
+      ),
+    );
+    expect(container.querySelector(".agent-thread-settle")).toBeNull();
+
+    await act(async () =>
+      root.render(
+        <ThreadCard thread={topLevel} onSettleAction={vi.fn()} onContextMenu={vi.fn()} />,
+      ),
+    );
+    expect(container.querySelector(".agent-thread-settle")).toBeNull();
+  });
+});

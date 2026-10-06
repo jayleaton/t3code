@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import activeOrderKey from "./049_ProjectionThreadsActiveOrderKey.ts";
 import branchPullRequest from "./048_ProjectionThreadBranchPullRequest.ts";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 export default Effect.gen(function* () {
   yield* branchPullRequest;

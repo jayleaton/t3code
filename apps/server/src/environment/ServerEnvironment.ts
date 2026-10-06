@@ -15,6 +15,7 @@ import * as Schema from "effect/Schema";
 
 import { serverBuildVersion } from "../buildVersion.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { resolveServerInstallation } from "../cli/invocation.ts";
 import { readAgentActivityPublishingActive } from "../cloud/config.ts";
 import { resolveServerSelfUpdateCapability } from "../cloud/selfUpdate.ts";
 import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
@@ -196,6 +197,7 @@ export const make = Effect.gen(function* () {
     desktopManaged: serverConfig.mode === "desktop",
     launcherManaged: launcher.managed,
   });
+  const serverInstallation = serverSelfUpdate === null ? yield* resolveServerInstallation : null;
   // Static is correct: the control fd is known at bootstrap, and the desktop
   // app and its bundled server ship in one artifact, so a present fd means
   // the app speaks the requestDesktopUpdate protocol. WSL backends never get
@@ -231,6 +233,7 @@ export const make = Effect.gen(function* () {
       agentSkillResources: true,
       storageCleanup: true,
       projectWorktreeCleanup: true,
+      worktreesDirectory: true,
       threadRestartContinuation: true,
       projectSettingsOverrides: true,
       threadSnooze: true,
@@ -255,6 +258,7 @@ export const make = Effect.gen(function* () {
       scheduledTasks: true,
       workspaceTodos: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
+      ...(serverInstallation === null ? {} : { serverInstallation }),
       // V2 restart recovery uses the environment-owned opt-in. The old
       // per-update request flag is not wired into the V2 update RPC path.
       ...(serverSelfUpdate === "boot-service" || desktopAppUpdate
@@ -278,7 +282,7 @@ export const make = Effect.gen(function* () {
   });
 });
 
-export const identityLayer = Layer.effect(ServerEnvironmentIdentity, makeIdentity);
+export const layerIdentity = Layer.effect(ServerEnvironmentIdentity, makeIdentity);
 
 /**
  * ServerEnvironment is acquired from persisted filesystem and host-process
@@ -287,6 +291,6 @@ export const identityLayer = Layer.effect(ServerEnvironmentIdentity, makeIdentit
  * ServerSecretStore backing the descriptor's publishing capability.
  */
 export const layer = Layer.effect(ServerEnvironment, make).pipe(
-  Layer.provideMerge(identityLayer),
+  Layer.provideMerge(layerIdentity),
   Layer.provide(ProcessRunner.layer),
 );

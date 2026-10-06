@@ -11,12 +11,13 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
+import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 
@@ -47,6 +48,7 @@ it.effect(
       const launches: Array<ThreadLaunchService.ThreadLaunchInput> = [];
       const sends: Array<ThreadManagementService.ThreadManagementSendInput> = [];
       const dependencies = Layer.mergeAll(
+        Layer.mock(SecretRequests.SecretRequests)({}),
         NodeCrypto.layer,
         Scheduler.layer,
         settingsLayer,
@@ -140,6 +142,7 @@ it.effect("imports fork V1 scheduled tasks into the V2 table and drops the legac
     yield* runMigrations();
 
     const dependencies = Layer.mergeAll(
+      Layer.mock(SecretRequests.SecretRequests)({}),
       NodeCrypto.layer,
       Scheduler.layer,
       settingsLayer,

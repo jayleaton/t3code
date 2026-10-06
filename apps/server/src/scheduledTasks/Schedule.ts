@@ -45,6 +45,7 @@ export function nextScheduledRunAt(
     if (Result.isFailure(parsed)) return null;
     return DateTime.makeUnsafe(Cron.next(parsed.success, DateTime.toEpochMillis(from)));
   }
+  if (schedule.type === "webhook") return null;
   if (schedule.type === "interval") {
     // Persisted rows created before the one-minute floor remain readable, but
     // they must not retain their old high-frequency execution rate.
@@ -101,6 +102,8 @@ export function isSameSchedule(a: ScheduledTaskSchedule, b: ScheduledTaskSchedul
         DateTime.toEpochMillis(DateTime.makeUnsafe(b.runAt))
     );
   }
+  // Webhook tasks never have a next run, whatever their signature settings.
+  if (a.type === "webhook") return b.type === "webhook";
   if (b.type !== "fixed_time") return false;
   // The contract accepts padded and unpadded hours ("9:00" and "09:00"), so
   // compare the parsed time — string equality would treat a format-only edit
@@ -141,6 +144,7 @@ export function isMissedFixedTimeRun(
 function describeSchedule(schedule: ScheduledTaskSchedule): string {
   if (schedule.type === "cron") return `Cron ${schedule.expression} (${schedule.timezone})`;
   if (schedule.type === "once") return `Once at ${schedule.runAt}`;
+  if (schedule.type === "webhook") return "On webhook";
   if (schedule.type === "interval") {
     const minutes = schedule.everyMs / MINUTE_MS;
     if (Number.isInteger(minutes)) {
