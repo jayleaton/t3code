@@ -38,6 +38,7 @@ export const GATEWAY_PORT_METHODS: ReadonlySet<keyof GatewayRuntimePort> = new S
   "focusDevice",
   "scheduledTask",
   "todo",
+  "threadTask",
   "handoffThread",
   "settleThread",
   "unsettleThread",

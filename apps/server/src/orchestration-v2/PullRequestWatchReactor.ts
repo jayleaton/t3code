@@ -35,7 +35,11 @@ import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
-import { evaluatePullRequestWatch, pullRequestWatchMessage } from "./pullRequestWatch.ts";
+import {
+  evaluatePullRequestWatch,
+  pullRequestWatchMessage,
+  type RequiredChecks,
+} from "./pullRequestWatch.ts";
 
 /**
  * Minutes between passes. Checks take minutes, so a faster pass mostly spends the host's rate
@@ -539,8 +543,24 @@ export const make = Effect.gen(function* () {
       status: fingerprint?.status ?? null,
       remarks: fingerprint?.remarks ?? null,
     });
+    // Read only with checks to judge. A host that cannot list them, or a failed read, is
+    // "unknown", which never reports "passed".
+    const requiredChecks: RequiredChecks =
+      detail.checks.length === 0
+        ? "unknown"
+        : yield* pullRequests.requiredChecks({ ...reference, baseBranch: detail.baseBranch }).pipe(
+            Effect.map((names): RequiredChecks => names ?? "unknown"),
+            Effect.catchCause((cause): Effect.Effect<RequiredChecks> =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.interrupt
+                : Effect.logDebug("pull request watch required checks failed", {
+                    pullRequest: group.key,
+                    cause,
+                  }).pipe(Effect.as("unknown" as const)),
+            ),
+          );
     yield* eachTarget(group, (target) => {
-      const report = evaluatePullRequestWatch(target.watch, detail, remarks);
+      const report = evaluatePullRequestWatch(target.watch, detail, remarks, requiredChecks);
       if (report.changes.length > 0) {
         return record(
           target,

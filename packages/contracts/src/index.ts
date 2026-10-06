@@ -35,6 +35,7 @@ export * from "./sourceControl.ts";
 export * from "./projectClone.ts";
 export * from "./scheduledTask.ts";
 export * from "./todo.ts";
+export * from "./threadTask.ts";
 export * from "./pullRequest.ts";
 export * from "./orchestrationDispatch.ts";
 export * from "./agentProfile.ts";

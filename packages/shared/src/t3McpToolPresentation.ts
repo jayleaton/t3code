@@ -114,6 +114,12 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   ),
   delegate_task: tool(["Delegate", "Delegating", "Delegated", "a child task"], "delegate"),
   task_status: tool(["Get", "Getting", "Got", "delegated task status"], "task-status"),
+  t3_task_assign: tool(["Assign", "Assigning", "Assigned", "a task"], "thread-update"),
+  t3_task_read: tool(["Read", "Reading", "Read", "tasks"], "task-status"),
+  t3_task_update: tool(["Update", "Updating", "Updated", "a task"], "thread-update"),
+  t3_task_watch: tool(["Watch", "Watching", "Watched", "tasks"], "task-status"),
+  t3_task_board: tool(["Read", "Reading", "Read", "the project's tasks"], "task-status"),
+  t3_settle_after_turn: tool(["Settle", "Settling", "Settled", "this chat"], "thread-organize"),
   task_cancel: tool(
     ["Cancel", "Canceling", "Requested cancellation of", "delegated task"],
     "task-cancel",

@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
 
 import {
+  assertMayMessage,
   newCommandId,
   readCaller,
   readFullAccessCaller,
@@ -211,6 +212,7 @@ export const layer = ThreadToolkit.toLayer({
   t3_pending_request_respond: (input) =>
     Effect.gen(function* () {
       const { threads, projection } = yield* readQuestion(input, true);
+      yield* assertMayMessage((yield* readCaller()).caller?.id, projection.thread.id);
       const result = yield* threads
         .dispatch({
           type: "runtime-request.respond",

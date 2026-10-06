@@ -10,8 +10,10 @@ import {
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as ThreadTaskService from "../threadTask/ThreadTaskService.ts";
 import * as OrchestrationMcp from "./OrchestratorMcpService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
@@ -203,4 +205,25 @@ export const readWritableThread = Effect.fn("mcp.readWritableThread")(function* 
 export const newCommandId = Effect.fn("mcp.newCommandId")(function* () {
   const crypto = yield* Crypto.Crypto;
   return CommandId.make(`mcp:${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}`);
+});
+
+/**
+ * Managed workers report through their task, not by messaging other chats; see
+ * ThreadTaskService.authorizeMessage. A client without a calling chat acts as
+ * the user and is not limited here.
+ */
+export const assertMayMessage = Effect.fn("mcp.assertMayMessage")(function* (
+  callerThreadId: ThreadId | undefined,
+  targetThreadId: ThreadId,
+) {
+  if (callerThreadId === undefined) return;
+  const tasks = yield* Effect.serviceOption(ThreadTaskService.ThreadTaskService);
+  if (Option.isNone(tasks)) return;
+  yield* tasks.value
+    .authorizeMessage({ senderThreadId: callerThreadId, targetThreadId })
+    .pipe(
+      Effect.mapError(
+        (error) => new OrchestratorMcpFailure({ code: "capability_denied", message: error.detail }),
+      ),
+    );
 });

@@ -4,6 +4,22 @@ import type {
   ScheduledTaskSchedule,
   Todo,
   TodoListResult,
+  ThreadSettleAfterTurnInput,
+  ThreadTaskRemoteAssignInput,
+  ThreadTaskRemoteDeliverInput,
+  ThreadTaskRemoteDeliverResult,
+  ThreadTaskBoard,
+  ThreadTaskBoardInput,
+  ThreadTaskProjectSnapshot,
+  ThreadTaskProjectSnapshotInput,
+  ThreadTaskRemoteOwnerActionInput,
+  ThreadSettleRequest,
+  ThreadTaskAssignInput,
+  ThreadTaskListResult,
+  ThreadTaskReadInput,
+  ThreadTaskUpdateInput,
+  ThreadTaskView,
+  ThreadTaskWatchInput,
 } from "@t3tools/contracts";
 import type { AgentHandoffInput, AgentHandoffResult } from "./handoff.ts";
 export const GATEWAY_SCOPE_VALUES = [
@@ -181,6 +197,29 @@ export type GatewayTodoRequest =
   | { readonly action: "add"; readonly projectId: string; readonly text: string }
   | { readonly action: "update"; readonly todoId: string; readonly text: string }
   | { readonly action: "remove" | "settle" | "unsettle"; readonly todoId: string };
+
+export type GatewayThreadTaskRequest =
+  | { readonly action: "assign"; readonly input: ThreadTaskAssignInput }
+  | { readonly action: "read"; readonly input: ThreadTaskReadInput }
+  | { readonly action: "update"; readonly input: ThreadTaskUpdateInput }
+  | { readonly action: "watch"; readonly input: ThreadTaskWatchInput }
+  | { readonly action: "settleAfterTurn"; readonly input: ThreadSettleAfterTurnInput }
+  // Environment-to-environment calls for a task split across machines (servers only).
+  | { readonly action: "remoteAssign"; readonly input: ThreadTaskRemoteAssignInput }
+  | { readonly action: "remoteDeliver"; readonly input: ThreadTaskRemoteDeliverInput }
+  | { readonly action: "remoteOwnerAction"; readonly input: ThreadTaskRemoteOwnerActionInput }
+  | { readonly action: "projectSnapshot"; readonly input: ThreadTaskProjectSnapshotInput }
+  | { readonly action: "board"; readonly input: ThreadTaskBoardInput };
+
+/**
+ * The chat whose agent made a tool call, from the server's authenticated MCP credential.
+ * Only a port hosted by the server for its own environment may act on it; every other
+ * port ignores it and acts with the connected user's authority.
+ */
+export interface GatewayThreadTaskCaller {
+  readonly environmentId: string;
+  readonly threadId: string;
+}
 
 export interface GatewayPage<T> {
   readonly items: ReadonlyArray<T>;
@@ -442,6 +481,19 @@ export interface GatewayRuntimePort {
     environmentId: string,
     request: GatewayTodoRequest,
   ): Promise<TodoListResult | Todo | { readonly removed: string }>;
+  /** Assign, read, update, or watch thread tasks, or ask a chat to settle once its turn ends. */
+  threadTask?(
+    environmentId: string,
+    request: GatewayThreadTaskRequest,
+    caller?: GatewayThreadTaskCaller,
+  ): Promise<
+    | ThreadTaskView
+    | ThreadTaskListResult
+    | ThreadSettleRequest
+    | ThreadTaskRemoteDeliverResult
+    | ThreadTaskProjectSnapshot
+    | ThreadTaskBoard
+  >;
   getEnvironmentStatus(environmentId: string): Promise<Record<string, unknown>>;
   listProfiles?(environmentId: string): Promise<ReadonlyArray<GatewayProfile>>;
   /** Resolve readable profile labels against the environment's live provider catalog. */

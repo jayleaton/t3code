@@ -2454,6 +2454,98 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("never reports checks passed where the host cannot list required checks", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("runtime-pull-request-watch-unlisted");
+      const projectId = ProjectId.make("pr-watch-unlisted-project");
+      yield* seedProject({
+        projectId,
+        title: "Watch unlisted",
+        workspaceRoot: "/workspace/watch-unlisted",
+        defaultModelSelection: null,
+        createdAt: "2026-10-01T00:00:00.000Z",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-watch-unlisted-create"),
+        threadId,
+        projectId,
+        title: "Watch unlisted",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("pr-watch-unlisted-start"),
+        threadId,
+        host: "ghe.example.com",
+        repository: "acme/app",
+        number: 12,
+        watching: true,
+        link: { url: "https://ghe.example.com/acme/app/pull/12", source: "agent" },
+      });
+      // Every check present is green and flagged required, which once read as passed.
+      let lint: "success" | "failure" = "success";
+      let headSha = "aaaaaaa";
+      const reactor = yield* PullRequestWatchReactor.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            Layer.mock(PullRequestService.PullRequestService)({
+              requiredChecks: () => Effect.succeed(null),
+              detail: () =>
+                Effect.sync(() => ({
+                  ...watchedPullRequestDetail({ projectId, number: 12, at: "2026-10-02" }),
+                  headSha,
+                  checks: [
+                    { name: "lint", status: lint, description: null, url: null, required: true },
+                  ],
+                })),
+              activity: () =>
+                Effect.succeed({
+                  comments: [],
+                  commentCount: 0,
+                  commentsTruncated: false,
+                  reviewThreads: [],
+                  commits: [],
+                }),
+            }),
+          ),
+        ),
+      );
+      const summaries = Effect.map(
+        orchestrator.getThreadRecords(threadId, ["messages"]),
+        ({ messages }) => messages.flatMap((message) => message.notification?.summary ?? []),
+      );
+
+      yield* reactor.sweep;
+      assert.deepEqual(yield* summaries, []);
+
+      // A failure is still news without the list.
+      lint = "failure";
+      headSha = "bbbbbbb";
+      yield* TestClock.adjust("10 minutes");
+      yield* reactor.sweep;
+      assert.deepEqual(yield* summaries, ["#12: checks failed"]);
+      // Later tests share this orchestrator, so the watch must not outlive this one.
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("pr-watch-unlisted-stop"),
+        threadId,
+        host: "ghe.example.com",
+        repository: "acme/app",
+        number: 12,
+        watching: false,
+      });
+    }),
+  );
+
   it.effect(
     "reads a watched pull request once a pass, waits out rate limits, and skips quiet passes",
     () =>
@@ -2515,6 +2607,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
             Layer.mergeAll(
               NodeServices.layer,
               Layer.mock(PullRequestService.PullRequestService)({
+                requiredChecks: () => Effect.succeed([]),
                 detail: () =>
                   Effect.suspend(() => {
                     reads += 1;
@@ -2651,6 +2744,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           Layer.mergeAll(
             NodeServices.layer,
             Layer.mock(PullRequestService.PullRequestService)({
+              requiredChecks: () => Effect.succeed([]),
               detail: () =>
                 Effect.sync(() => ({
                   ...watchedPullRequestDetail({ projectId, number: key.number, at: "2026-10-02" }),
@@ -2753,6 +2847,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           Layer.mergeAll(
             NodeServices.layer,
             Layer.mock(PullRequestService.PullRequestService)({
+              requiredChecks: () => Effect.succeed([]),
               watchFingerprint: () =>
                 Effect.suspend(() =>
                   fingerprint === "rate-limited"
@@ -2962,6 +3057,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           Layer.mergeAll(
             NodeServices.layer,
             Layer.mock(PullRequestService.PullRequestService)({
+              requiredChecks: () => Effect.succeed([]),
               detail: () => Effect.succeed(detail),
               activity: () =>
                 Effect.succeed({

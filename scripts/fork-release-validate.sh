@@ -12,6 +12,8 @@ NODE_ENV=test vp test run \
   apps/server/src/mcp/agents \
   apps/server/src/mcp/McpGatewayBroker.test.ts \
   apps/server/src/orchestration-v2/Orchestrator.parentThread.test.ts \
+  apps/server/src/orchestration-v2/pullRequestWatch.test.ts \
+  apps/server/src/threadTask \
   apps/server/src/scheduledTasks \
   apps/server/src/clients \
   scripts/build-desktop-artifact.test.ts

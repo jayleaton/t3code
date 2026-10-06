@@ -455,6 +455,15 @@ export interface PullRequestProviderApi {
   ) => Effect.Effect<ProviderChangeRequestWatchFingerprint | null, PullRequestProviderError>;
 
   /**
+   * Every check name the base branch requires to merge, including ones not created yet for the
+   * head commit; empty when it requires none. Optional: without it a watch never reports checks
+   * passed, since it cannot tell which ones the merge waits for.
+   */
+  readonly getRequiredChecks?: (
+    input: ProviderRepositoryRef & { readonly baseBranch: string },
+  ) => Effect.Effect<ReadonlyArray<string>, PullRequestProviderError>;
+
+  /**
    * The host-native stack a change request belongs to, or null when it is not stacked. Optional
    * because most hosts have no such object; the service derives chains from base branches there.
    */

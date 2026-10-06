@@ -123,6 +123,7 @@ import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts"
 import * as IdAllocator from "./orchestration-v2/IdAllocator.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as TodoService from "./todo/TodoService.ts";
+import * as ThreadTaskService from "./threadTask/ThreadTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import {
   archivedShellStreamItemFromThreadShell,
@@ -1224,6 +1225,9 @@ const layerWsRpc = (
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const todos = yield* TodoService.TodoService;
+      const threadTasks = yield* ThreadTaskService.ThreadTaskService;
+      // A WebSocket client is the user: chat identity only ever comes from an MCP credential.
+      const userCaller: ThreadTaskService.ThreadTaskCaller = { kind: "user" };
       const toTodoError = (cause: TodoService.TodoServiceError) =>
         new TodoError({
           message: cause.message,
@@ -1849,7 +1853,15 @@ const layerWsRpc = (
                   ? threadLaunch.retryPreparation(command)
                   : ThreadMessageIntake.dispatchCommand(
                       ThreadManagementService.withCreationProvenance(command, {
-                        createdBy: "user",
+                        // A client may mark text it relays from an agent (T3 gateway
+                        // tools) as agent-sent; that only lowers its authority, so it
+                        // never reads as the user's and never counts as user input.
+                        createdBy:
+                          command.type === "message.dispatch" &&
+                          command.createdBy === "agent" &&
+                          command.creationSource === "mcp"
+                            ? "agent"
+                            : "user",
                         creationSource:
                           "creationSource" in command ? command.creationSource : "web",
                       }),
@@ -2193,6 +2205,52 @@ const layerWsRpc = (
             WS_METHODS.todosRemove,
             todos.remove(input).pipe(Effect.mapError(toTodoError)),
             { "rpc.aggregate": "todos" },
+          ),
+        [WS_METHODS.threadTasksAssign]: (input) =>
+          observeRpcEffect(WS_METHODS.threadTasksAssign, threadTasks.assign(userCaller, input), {
+            "rpc.aggregate": "threadTasks",
+          }),
+        [WS_METHODS.threadTasksRead]: (input) =>
+          observeRpcEffect(WS_METHODS.threadTasksRead, threadTasks.read(userCaller, input), {
+            "rpc.aggregate": "threadTasks",
+          }),
+        [WS_METHODS.threadTasksUpdate]: (input) =>
+          observeRpcEffect(WS_METHODS.threadTasksUpdate, threadTasks.update(userCaller, input), {
+            "rpc.aggregate": "threadTasks",
+          }),
+        [WS_METHODS.threadTasksWatch]: (input) =>
+          observeRpcEffect(WS_METHODS.threadTasksWatch, threadTasks.watch(userCaller, input), {
+            "rpc.aggregate": "threadTasks",
+          }),
+        [WS_METHODS.threadTasksRemoteAssign]: (input) =>
+          observeRpcEffect(WS_METHODS.threadTasksRemoteAssign, threadTasks.remoteAssign(input), {
+            "rpc.aggregate": "threadTasks",
+          }),
+        [WS_METHODS.threadTasksRemoteDeliver]: (input) =>
+          observeRpcEffect(WS_METHODS.threadTasksRemoteDeliver, threadTasks.remoteDeliver(input), {
+            "rpc.aggregate": "threadTasks",
+          }),
+        [WS_METHODS.threadTasksRemoteOwnerAction]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.threadTasksRemoteOwnerAction,
+            threadTasks.remoteOwnerAction(input),
+            { "rpc.aggregate": "threadTasks" },
+          ),
+        [WS_METHODS.threadTasksProjectSnapshot]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.threadTasksProjectSnapshot,
+            threadTasks.projectSnapshot(input),
+            { "rpc.aggregate": "threadTasks" },
+          ),
+        [WS_METHODS.threadTasksBoard]: (input) =>
+          observeRpcEffect(WS_METHODS.threadTasksBoard, threadTasks.board(userCaller, input), {
+            "rpc.aggregate": "threadTasks",
+          }),
+        [WS_METHODS.threadTasksSettleAfterTurn]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.threadTasksSettleAfterTurn,
+            threadTasks.settleAfterTurn(userCaller, input),
+            { "rpc.aggregate": "threadTasks" },
           ),
         [WS_METHODS.scheduledTasksRotateWebhookToken]: (input) =>
           observeRpcEffect(

@@ -365,6 +365,11 @@ export const make = Effect.gen(function* () {
         .getPullRequestWatchFingerprint(input)
         .pipe(Effect.mapError(fail("getChangeRequestWatchFingerprint"))),
 
+    // Enterprise is asked too; a server without rulesets fails the read, which a watch treats as
+    // unknown rather than guessing from the checks it has.
+    getRequiredChecks: (input) =>
+      cli.getRequiredChecks(input).pipe(Effect.mapError(fail("getRequiredChecks"))),
+
     getChangeRequestPreview: (input) =>
       cli.getPullRequestPreview(input).pipe(Effect.mapError(fail("getChangeRequestPreview"))),
 

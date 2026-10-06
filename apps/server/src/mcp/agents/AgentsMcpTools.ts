@@ -3,7 +3,7 @@ import {
   GATEWAY_SCOPE_VALUES,
   type GatewayScope,
 } from "@t3tools/client-runtime/gateway";
-import type { GatewayToolContext } from "@t3tools/mcp-gateway";
+import { GatewayError, type GatewayToolContext } from "@t3tools/mcp-gateway";
 import {
   failure,
   GATEWAY_ONLY_TOOLS,
@@ -20,6 +20,9 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { McpSchema, McpServer } from "effect/ai";
 
+import { ThreadId } from "@t3tools/contracts";
+
+import * as ThreadTaskService from "../../threadTask/ThreadTaskService.ts";
 import { McpGatewayBroker } from "../McpGatewayBroker.ts";
 import * as McpInvocationContext from "../McpInvocationContext.ts";
 import { LocalGatewayPort } from "./LocalGatewayPort.ts";
@@ -52,8 +55,14 @@ const toCallToolResult = (result: ToolResult) => {
   });
 };
 
+/** Tools that deliver text to another chat; managed workers report through their task instead. */
+const MESSAGE_TOOLS: ReadonlySet<string> = new Set(["t3_send_message", "t3_answer_question"]);
+
 const registerAgentsTools = Effect.gen(function* () {
   const server = yield* McpServer.McpServer;
+  const tasks = Option.getOrUndefined(
+    yield* Effect.serviceOption(ThreadTaskService.ThreadTaskService),
+  );
   const localOption = yield* Effect.serviceOption(LocalGatewayPort);
   // Servers composed without the in-process port (for example MCP tests) host no agent tools.
   if (Option.isNone(localOption)) return;
@@ -112,9 +121,36 @@ const registerAgentsTools = Effect.gen(function* () {
             invocation.thread === undefined
               ? undefined
               : { environmentId: local.environmentId, threadId: invocation.thread.threadId };
-          return Effect.promise(() => runGatewayTool(context, name, args, { caller })).pipe(
+          const run = Effect.promise(() => runGatewayTool(context, name, args, { caller })).pipe(
             Effect.map((run) => toCallToolResult(run.result)),
           );
+          // Task tools stay with this server as the calling chat (see createRoutedGatewayPort).
+          if (caller === undefined || !MESSAGE_TOOLS.has(name) || tasks === undefined) return run;
+          // A worker on another environment cannot be messaging its own child.
+          const targetThreadId =
+            args.environmentId === local.environmentId && typeof args.threadId === "string"
+              ? ThreadId.make(args.threadId)
+              : null;
+          return tasks
+            .authorizeMessage({ senderThreadId: ThreadId.make(caller.threadId), targetThreadId })
+            .pipe(
+              Effect.matchEffect({
+                onFailure: (error) =>
+                  Effect.succeed(
+                    toCallToolResult(
+                      failure(
+                        new GatewayError({
+                          code: "scope_required",
+                          message: error.detail,
+                          retryable: false,
+                        }),
+                        requestContext(args),
+                      ),
+                    ),
+                  ),
+                onSuccess: () => run,
+              }),
+            );
         }),
     });
   }

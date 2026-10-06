@@ -50,7 +50,11 @@ export function createRoutedGatewayPort(
       }
       const environmentIds = gatewayPortEnvironmentIds(args);
       const elsewhere = environmentIds.find((id) => id !== localEnvironmentId);
-      if (elsewhere === undefined) {
+      // An authenticated chat's task call stays with the server that knows the
+      // chat; that server reaches other environments as the task's peer, so the
+      // agent is never relayed as the user.
+      const agentTaskCall = method === "threadTask" && args[2] !== undefined;
+      if (elsewhere === undefined || agentTaskCall) {
         const run = local[method] as
           | ((...input: ReadonlyArray<unknown>) => Promise<unknown>)
           | undefined;
@@ -62,7 +66,12 @@ export function createRoutedGatewayPort(
           `Environment ${elsewhere} is not reachable from this chat. Open T3 Code on a device connected to it and grant it T3 Agents access.`,
         );
       }
-      return remote.invoke(method, args, environmentIds);
+      // The calling chat is only meaningful to the local server that authenticated it.
+      return remote.invoke(
+        method,
+        method === "threadTask" ? args.slice(0, 2) : args,
+        environmentIds,
+      );
     };
   }
   return routed as unknown as GatewayRuntimePort;

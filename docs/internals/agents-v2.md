@@ -131,3 +131,43 @@ Lineage.
 Parent links may point at a chat on another machine through `parentEnvironmentId`. A server
 cannot check a parent it does not host, so it validates existence and cycles only for local
 parents; clients resolve parents by both IDs.
+
+### Child tasks
+
+An ordinary child has no `task_status` delivery, so a parent learns about it through its task
+record (`apps/server/src/threadTask/`). Three distinctions are easy to collapse and must not be:
+
+- **A finished turn is not a finished task.** Run state is read, never stored on the task. A turn
+  ending wakes the owner with "turn ended", not DONE; only the worker's own DONE update reports a
+  deliverable, and the turn that raised it does not wake the owner a second time.
+- **Consent is not acceptance.** `settleWhenAccepted` is the owner's standing permission to settle;
+  the owner's `accept` names one DONE revision after its gates pass. Any content change bumps the
+  revision and drops acceptance. Settlement waits for both, then for the worker's turn and every
+  descendant task and run.
+- **Wakes are keyed by the transition, not by time.** Each wake id derives from the worker, revision,
+  run, or question that caused it, and its message and command ids reuse that key, so the
+  orchestrator's command receipts make a replayed wake a no-op. Restart recovery replays only a
+  wake still marked pending and a worker run that ended unobserved; quiet open tasks stay quiet.
+
+A chat may also ask to settle itself after its turn (`t3_settle_after_turn`). The request is
+stored, so it survives the turn that made it, and it never discards a queued wake: it waits for the
+run, queued wakes, unaccepted child tasks, and active descendants, and a later user message
+withdraws it.
+
+Callers are never input fields. An agent's task call always runs on its own server as the MCP
+credential's thread (`LocalGatewayPort`, kept local by `createRoutedGatewayPort`); it is never relayed
+as the user. Calls without a calling chat act as the session's user under its RPC scopes.
+
+A child on another machine keeps its task on its own environment, the single writer. The owner's
+environment holds a read-only mirror. At assignment the owner's server mints a capability that only
+the two servers store, and every later call between them (`threadTasks.remoteDeliver`,
+`remoteOwnerAction`) presents it, so the receiver acts as that task's peer and never as the
+relaying app's user. Calls travel through a connected app (`McpGatewayBroker`), which is live only:
+the worker side keeps a delivery cursor per task, retries when an app connects or the server
+starts, and the owner side ignores a cursor it has already applied. Wakes are created where the
+facts are and queued on the owner's environment under an environment-prefixed id. With no app
+connected, owner actions fail and the mirror's `sync` shows the last delivery.
+
+Workers (any chat with a task) may message only their own children, on every send path; Captains
+coordinate freely. Gateway-originated turns are stored as agent messages, so a relay never counts
+as the user writing.

@@ -19,6 +19,7 @@ import Migration0061 from "./Migrations/061_ProjectionTodos.ts";
 import Migration0062 from "./Migrations/062_ThreadSettlementActivityIndexes.ts";
 import Migration0063 from "./Migrations/057_ScheduledTaskWebhooks.ts";
 import Migration0064 from "./Migrations/058_WebhookRelayDeliveries.ts";
+import Migration0065 from "./Migrations/065_ThreadTasks.ts";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -156,6 +157,7 @@ export const migrationEntries = [
   // Upstream ships these as 57 and 58; the fork ledger had already used those ids.
   [63, "ScheduledTaskWebhooks", Migration0063],
   [64, "WebhookRelayDeliveries", Migration0064],
+  [65, "ThreadTasks", Migration0065],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

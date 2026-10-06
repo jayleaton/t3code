@@ -173,6 +173,8 @@ interface StartThreadBootstrap {
 }
 
 export interface StartThreadTurnInput extends ThreadCommandInput {
+  /** `agent` marks text an agent sent through T3 tools, so it never reads as the user's. */
+  readonly createdBy?: "agent";
   readonly manualContinuationOfRunId?: RunId;
   readonly message: {
     readonly messageId: MessageId;
@@ -720,7 +722,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
     return yield* dispatch({
       type: "message.dispatch",
       commandId,
-      createdBy: "user",
+      createdBy: input.createdBy ?? "user",
       creationSource: input.creationSource ?? "web",
       threadId: input.threadId,
       messageId: input.message.messageId,
@@ -784,7 +786,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
   return yield* dispatch({
     type: "message.dispatch",
     commandId,
-    createdBy: "user",
+    createdBy: input.createdBy ?? "user",
     creationSource: input.creationSource ?? "web",
     threadId: input.threadId,
     messageId: input.message.messageId,
