@@ -2,6 +2,7 @@ import {
   CommandId,
   MessageId,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  type ProjectId,
   ScheduledTask,
   ScheduledTaskError,
   ScheduledTaskId,
@@ -43,6 +44,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as Metrics from "../observability/Metrics.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
@@ -404,6 +406,7 @@ export const layer = Layer.effect(
     const crypto = yield* Crypto.Crypto;
     const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+    const projects = yield* ProjectService.ProjectService;
     const secretRequests = yield* SecretRequests.SecretRequests;
     const scheduler = yield* Scheduler.Scheduler;
     const settings = yield* Effect.serviceOption(ServerSettingsService);
@@ -1077,6 +1080,44 @@ export const layer = Layer.effect(
         }),
       );
 
+    const requireLocalProject = (projectId: ProjectId, taskId: ScheduledTaskId) =>
+      projects.getById(projectId).pipe(
+        Effect.mapError((cause) =>
+          taskError("Could not read the scheduled task's project.", { taskId, cause }),
+        ),
+        Effect.flatMap((project) =>
+          Option.isSome(project)
+            ? Effect.void
+            : Effect.fail(
+                taskError(
+                  `Project ${projectId} is not on this environment. Schedule the task on the environment that hosts the project.`,
+                  { taskId },
+                ),
+              ),
+        ),
+      );
+
+    const requireLocalThread = (
+      threadId: ThreadId,
+      projectId: ProjectId,
+      taskId: ScheduledTaskId,
+    ) =>
+      threadManagement.getThreadShell(threadId).pipe(
+        Effect.mapError((cause) =>
+          taskError("Could not read the scheduled task's thread.", { taskId, cause }),
+        ),
+        Effect.flatMap((shell) =>
+          shell !== null && shell.projectId === projectId
+            ? Effect.void
+            : Effect.fail(
+                taskError(
+                  `Thread ${threadId} is not in project ${projectId} on this environment. Schedule the task on the environment that hosts the thread.`,
+                  { taskId },
+                ),
+              ),
+        ),
+      );
+
     const upsert: ScheduledTaskService["Service"]["upsert"] = (input) =>
       Effect.gen(function* () {
         const now = yield* localNow;
@@ -1128,6 +1169,16 @@ export const layer = Layer.effect(
         const problem = scheduleProblem(schedule);
         if (problem !== null) {
           return yield* taskError(problem, { taskId: id });
+        }
+        // Tasks run on the environment that stores them, so a task may only name this
+        // environment's project and threads. Otherwise a client or agent on another machine
+        // would park the schedule here, where it can never run. Unchanged references are
+        // not re-checked, so an existing task stays editable.
+        if (existingTask?.projectId !== input.projectId) {
+          yield* requireLocalProject(input.projectId, id);
+        }
+        if (threadId !== null && existingTask?.threadId !== threadId) {
+          yield* requireLocalThread(threadId, input.projectId, id);
         }
         const webhook =
           input.schedule.type === "webhook"

@@ -13,6 +13,7 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
+import * as ScheduledTaskTestkit from "./ScheduledTaskService.testkit.ts";
 
 const decodeUpsertInput = Schema.decodeUnknownEffect(ScheduledTaskUpsertInput);
 
@@ -23,6 +24,7 @@ it.effect("rejects a stale form save after deletion while preserving explicit-id
       Scheduler.layer,
       Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
       Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+      ScheduledTaskTestkit.layerLocalProjects(),
       Layer.mock(SecretRequests.SecretRequests)({}),
     );
     yield* Effect.gen(function* () {
@@ -66,6 +68,7 @@ it.effect("preserves a due run when a save only pads the scheduled hour", () =>
       Scheduler.layer,
       Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
       Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+      ScheduledTaskTestkit.layerLocalProjects(),
       Layer.mock(SecretRequests.SecretRequests)({}),
     );
     yield* Effect.gen(function* () {

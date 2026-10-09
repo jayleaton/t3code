@@ -47,8 +47,13 @@ const remoteId = "environment-remote";
 const makeLayer = (
   listedFor: Array<string>,
   relayed?: Array<{ method: string; args: unknown }>,
+  scheduledOn: Array<string> = [],
 ) => {
   const port = {
+    scheduledTask: async (environmentId: string) => {
+      scheduledOn.push(environmentId);
+      return { id: "scheduled-task:local" };
+    },
     listEnvironments: async () => [
       {
         environmentId: localId,
@@ -94,7 +99,7 @@ const makeLayer = (
     McpGatewayBroker,
     Effect.gen(function* () {
       const broker = yield* McpGatewayBrokerModule.make;
-      yield* broker.connect("desktop", { [remoteId]: ["read"] }).pipe(
+      yield* broker.connect("desktop", { [remoteId]: ["read", "create"] }).pipe(
         Stream.runForEach((event) => {
           relayed.push({ method: event.method, args: event.args });
           return broker.respond("desktop", {
@@ -189,4 +194,21 @@ it.effect("reaches granted environments through the connected app", () => {
     expect(text!.text).toContain("kaizen");
     expect(text!.text).toContain("remote-app");
   }).pipe(Effect.provide(makeLayer(listedFor, relayed)));
+});
+
+it.effect("schedules on this chat's environment while another device's app is connected", () => {
+  const relayed: Array<{ method: string; args: unknown }> = [];
+  const scheduledOn: Array<string> = [];
+  return Effect.gen(function* () {
+    const result = yield* callTool("t3_create_scheduled_task", {
+      prompt: "Review what the agents did today.",
+      profileId: "reviewer",
+      projectId: "project-1",
+      cron: "0 4 * * *",
+      timezone: "Asia/Bangkok",
+    });
+    expect(result.isError).toBe(false);
+    expect(scheduledOn).toEqual([localId]);
+    expect(relayed).toEqual([]);
+  }).pipe(Effect.provide(makeLayer([], relayed, scheduledOn)));
 });
