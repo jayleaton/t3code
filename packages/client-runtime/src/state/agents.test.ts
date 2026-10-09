@@ -21,7 +21,8 @@ import {
   applyAgentParentOverrides,
   agentRunLinkBlockedReason,
   withAgentRunAncestors,
-  selectWorkingParentKeys,
+  selectAgentRunPendingWork,
+  selectScheduledWakeThreadKeys,
   agentColorFor,
   agentColors,
   agentIconKey,
@@ -117,7 +118,7 @@ describe("agent chat focus", () => {
         { taskId: "watch", description: "Watch CI", kind: "monitor" as const },
       ],
     };
-    expect(agentThreadStatus(watching)).toBe("monitoring");
+    expect(agentThreadStatus(watching)).toBe("waiting");
     expect(isAgentChatInFocus(watching, "2026-09-06T00:03:00.000Z", false)).toBe(true);
     const delegating = {
       ...completed(),
@@ -531,37 +532,117 @@ describe("rolled-up status", () => {
   const github = withRun(thread("github-chat", "doug"), "completed");
   const glm = { ...withRun(thread("glm-chat", "doug"), "running"), parentThreadId: github.id };
 
+  const glmDone = { ...glm, latestRun: { ...glm.latestRun, status: "completed" as const } };
+  const watchingPr = {
+    ...glmDone,
+    pendingBackgroundTasks: [
+      {
+        taskId: "pull-request-watch:93",
+        description: "Watching pull request #93",
+        kind: "monitor" as const,
+      },
+    ],
+  };
+  const work = (...threads: ReturnType<typeof thread>[]) =>
+    Object.fromEntries(selectAgentRunPendingWork(threads));
+
   it("keeps a parent in progress while a chat under it works, at any depth", () => {
     expect(agentThreadStatus(github)).toBe("done");
-    expect(selectWorkingParentKeys([github, glm])).toEqual(new Set(["local:github-chat"]));
-    expect(agentThreadStatus(github, true)).toBe("running");
-    const glmDone = { ...glm, latestRun: { ...glm.latestRun, status: "completed" as const } };
+    expect(work(github, glm)).toEqual({ "local:github-chat": "working" });
+    expect(agentThreadStatus(github, "working")).toBe("running");
     const review = { ...withRun(thread("review", "cody"), "running"), parentThreadId: glm.id };
-    expect(selectWorkingParentKeys([github, glmDone, review])).toEqual(
-      new Set(["local:glm-chat", "local:github-chat"]),
+    expect(work(github, glmDone, review)).toEqual({
+      "local:glm-chat": "working",
+      "local:github-chat": "working",
+    });
+    expect(work(github, glmDone)).toEqual({});
+    expect(work(github, { ...glm, archivedAt: "2026-10-04T06:00:00Z" })).toEqual({});
+    expect(agentThreadStatus({ ...github, settledAt: "2026-10-04T06:00:00Z" }, "working")).toBe(
+      "done",
     );
-    const monitoring = {
-      ...glmDone,
-      pendingBackgroundTasks: [{ taskId: "watch", kind: "monitor" as const }],
-    };
-    expect(agentThreadStatus(monitoring)).toBe("monitoring");
-    expect(selectWorkingParentKeys([github, monitoring])).toEqual(new Set(["local:github-chat"]));
-    expect(selectWorkingParentKeys([github, glmDone])).toEqual(new Set());
-    // Its turn ended but a command it started runs on in the background.
-    const glmMonitoring = {
-      ...glmDone,
+  });
+
+  it("shows a parent Waiting, not In progress, while chats under it only wait", () => {
+    // The reported case: a finished worker watches its pull request for checks.
+    expect(agentThreadStatus(watchingPr)).toBe("waiting");
+    expect(work(github, watchingPr)).toEqual({ "local:github-chat": "waiting" });
+    expect(agentThreadStatus(github, "waiting")).toBe("waiting");
+    // A command left running in the background also waits, at any depth.
+    const sleeping = {
+      ...withRun(thread("sleep", "cody"), "completed"),
+      parentThreadId: glm.id,
       pendingBackgroundTasks: [
         { taskId: "sleep", description: "sleep 90", kind: "command" as const },
       ],
     };
-    expect(agentThreadStatus(glmMonitoring)).toBe("monitoring");
-    expect(selectWorkingParentKeys([github, glmMonitoring])).toEqual(
-      new Set(["local:github-chat"]),
+    expect(work(github, glmDone, sleeping)).toEqual({
+      "local:glm-chat": "waiting",
+      "local:github-chat": "waiting",
+    });
+  });
+
+  it("lets live work below a parent outrank a sibling that only waits", () => {
+    const review = { ...withRun(thread("review", "cody"), "running"), parentThreadId: github.id };
+    expect(work(github, watchingPr, review)).toEqual({ "local:github-chat": "working" });
+    expect(work(review, watchingPr, github)).toEqual({ "local:github-chat": "working" });
+    // A question below still needs the user, so it keeps the parent live as before.
+    const asking = { ...glmDone, hasPendingUserInput: true };
+    expect(work(github, asking)).toEqual({ "local:github-chat": "working" });
+  });
+
+  it("shows a chat Waiting while a scheduled run will wake it, then live when it fires", () => {
+    const tasks = [
+      {
+        environmentId: "local",
+        task: { enabled: true, threadId: github.id, nextRunAt: "2026-10-09T21:00:00.000Z" },
+      },
+      {
+        environmentId: "local",
+        task: { enabled: false, threadId: glm.id, nextRunAt: "2026-10-09T21:00:00.000Z" },
+      },
+      { environmentId: "local", task: { enabled: true, threadId: glm.id, nextRunAt: null } },
+      {
+        environmentId: "local",
+        task: { enabled: true, threadId: null, nextRunAt: "2026-10-09T21:00:00.000Z" },
+      },
+    ];
+    const scheduled = selectScheduledWakeThreadKeys(tasks);
+    expect(scheduled).toEqual(new Set(["local:github-chat"]));
+    const parent = { ...withRun(thread("captain", "captain"), "completed") };
+    const child = { ...github, parentThreadId: parent.id };
+    const pending = selectAgentRunPendingWork([parent, child], scheduled);
+    expect(Object.fromEntries(pending)).toEqual({
+      "local:github-chat": "waiting",
+      "local:captain": "waiting",
+    });
+    expect(agentThreadStatus(child, pending.get("local:github-chat"))).toBe("waiting");
+    // When the timer fires the run is live again, and so is its parent.
+    const fired = {
+      ...withRun(thread("github-chat", "doug"), "running"),
+      parentThreadId: parent.id,
+    };
+    const firing = selectAgentRunPendingWork([parent, fired], scheduled);
+    expect(agentThreadStatus(fired, firing.get("local:github-chat"))).toBe("running");
+    expect(firing.get("local:captain")).toBe("working");
+    // A failed run stays visible, and a settled one stays done, despite a pending timer.
+    const failed = { ...github, latestRun: { ...github.latestRun, status: "failed" as const } };
+    expect(agentThreadStatus(failed, "waiting")).toBe("error");
+    expect(agentThreadStatus({ ...github, settledAt: "2026-10-04T06:00:00Z" }, "waiting")).toBe(
+      "done",
     );
-    expect(
-      selectWorkingParentKeys([github, { ...glm, archivedAt: "2026-10-04T06:00:00Z" }]),
-    ).toEqual(new Set());
-    expect(agentThreadStatus({ ...github, settledAt: "2026-10-04T06:00:00Z" }, true)).toBe("done");
+  });
+
+  it("keeps a queued turn live, even with a scheduled run pending", () => {
+    const queued = presentThreadShell(EnvironmentId.make("local"), {
+      ...v2ThreadShell,
+      id: ThreadId.make("queued"),
+      latestRunId: RunId.make("queued-run"),
+      status: "queued",
+    });
+    expect(agentThreadStatus(queued)).toBe("queued");
+    expect(agentThreadStatus(queued, "waiting")).toBe("queued");
+    const child = { ...queued, parentThreadId: github.id };
+    expect(work(github, child)).toEqual({ "local:github-chat": "working" });
   });
 
   it("keeps an owner in progress while its own subagent works", () => {
@@ -570,7 +651,7 @@ describe("rolled-up status", () => {
       parentThreadId: github.id,
       parentRelationship: "subagent" as const,
     };
-    expect(selectWorkingParentKeys([github, helper])).toEqual(new Set(["local:github-chat"]));
+    expect(work(github, helper)).toEqual({ "local:github-chat": "working" });
   });
 });
 

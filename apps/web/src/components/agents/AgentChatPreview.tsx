@@ -7,18 +7,22 @@ import { useProject, useThreadProjection, useThreadStatus } from "../../state/en
 import { stripInlineContextReferences } from "../../lib/composerContextReferences";
 import ChatMarkdown from "../ChatMarkdown";
 import { shouldPreserveAssistantLineBreaks } from "../chat/MessagesTimeline.logic";
-import { agentThreadStatus, agentThreadStatusLabel } from "./agents.logic";
+import {
+  agentThreadStatus,
+  agentThreadStatusLabel,
+  type AgentRunPendingWork,
+} from "./agents.logic";
 
 export function AgentChatPreview({
   thread,
   project,
-  childWorking = false,
+  pendingWork = null,
   onClose,
 }: {
   thread: EnvironmentThreadShell;
   project: string;
-  /** A run under this one is still working, so the chat is not done. */
-  childWorking?: boolean;
+  /** Work outside the chat's own turn (see selectAgentRunPendingWork). */
+  pendingWork?: AgentRunPendingWork | null;
   onClose: () => void;
 }) {
   const ref = scopeThreadRef(thread.environmentId, thread.id);
@@ -54,7 +58,7 @@ export function AgentChatPreview({
           </button>
         </div>
         <span>
-          {project} · {agentThreadStatusLabel(agentThreadStatus(thread, childWorking))}
+          {project} · {agentThreadStatusLabel(agentThreadStatus(thread, pendingWork))}
         </span>
       </header>
       <div

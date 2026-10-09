@@ -15,9 +15,11 @@ import {
   agentRunLinkTargets,
   agentRunParentKey,
   nestAgentRuns,
+  selectAgentRunPendingWork,
   selectAgentSidebarThreads,
   selectAgentWorkspaceThreads,
   selectPinnedAgentThreads,
+  type AgentRunPendingWork,
 } from "@t3tools/client-runtime/state/agents";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { resolveGatewayProfileModelSelection } from "@t3tools/client-runtime/gateway";
@@ -33,6 +35,7 @@ import {
   agentModelLabel,
   threadAgentAppearance,
   useAgentProfiles,
+  useScheduledWakeThreadKeys,
   type AgentAppearance,
 } from "../../state/agents";
 import { useThreadShells } from "../../state/entities";
@@ -114,7 +117,7 @@ const STATUS_DOT_CLASS: Record<AgentChatStatus, string> = {
   attention: "bg-warning-foreground",
   error: "bg-danger",
   running: "bg-primary",
-  monitoring: "bg-primary",
+  waiting: "bg-foreground-tertiary",
   queued: "bg-foreground-tertiary",
   idle: "bg-foreground-tertiary",
   done: "bg-foreground-tertiary",
@@ -131,6 +134,7 @@ type BoardRow =
       readonly thread: EnvironmentThreadShell;
       readonly depth: number;
       readonly rollup: ChildRollup | null;
+      readonly pendingWork: AgentRunPendingWork | null;
     }
   | {
       readonly kind: "settled" | "card-settled";
@@ -143,13 +147,15 @@ function childRollup(
   children: readonly { readonly thread: EnvironmentThreadShell }[],
 ): ChildRollup {
   let working = 0;
+  let waiting = 0;
   let attention = 0;
   for (const { thread } of children) {
     const status = agentThreadStatus(thread);
-    if (status === "running" || status === "queued" || status === "monitoring") working += 1;
+    if (status === "running" || status === "queued") working += 1;
+    if (status === "waiting") waiting += 1;
     if (status === "attention" || status === "error") attention += 1;
   }
-  return { total: children.length, working, attention };
+  return { total: children.length, working, waiting, attention };
 }
 
 const NO_ACTIVITY: AgentActivity = { active: 0, working: 0, attention: 0 };
@@ -214,13 +220,18 @@ export function AgentsBoard(props: {
       const entry = activity.get(id) ?? { active: 0, working: 0, attention: 0 };
       const status = agentThreadStatus(thread);
       entry.active += 1;
-      if (status === "running" || status === "queued" || status === "monitoring")
-        entry.working += 1;
+      if (status === "running" || status === "queued") entry.working += 1;
       if (status === "attention" || status === "error") entry.attention += 1;
       activity.set(id, entry);
     }
     return activity;
   }, [scoped]);
+  const scheduledWakeKeys = useScheduledWakeThreadKeys();
+  // Every chat, subagents included: children and subagents both keep a parent busy.
+  const pendingWork = useMemo(
+    () => selectAgentRunPendingWork(threads, scheduledWakeKeys),
+    [threads, scheduledWakeKeys],
+  );
   const board = useMemo(() => {
     const pinned = selectPinnedAgentThreads(
       scoped.filter(
@@ -249,6 +260,8 @@ export function AgentsBoard(props: {
     [],
   );
   const rows = useMemo((): BoardRow[] => {
+    const workOf = (thread: EnvironmentThreadShell) =>
+      pendingWork.get(`${thread.environmentId}:${thread.id}`) ?? null;
     const append = (items: readonly EnvironmentThreadShell[]): BoardRow[] =>
       items.flatMap((thread) => {
         const key = `${thread.environmentId}:${thread.id}`;
@@ -257,8 +270,18 @@ export function AgentsBoard(props: {
         const open = expandedCards.has(key);
         const live = children?.live ?? [];
         return [
-          { thread, depth: 0, rollup: live.length > 0 ? childRollup(live) : null },
-          ...live.map((child) => ({ thread: child.thread, depth: child.depth + 1, rollup: null })),
+          {
+            thread,
+            depth: 0,
+            rollup: live.length > 0 ? childRollup(live) : null,
+            pendingWork: workOf(thread),
+          },
+          ...live.map((child) => ({
+            thread: child.thread,
+            depth: child.depth + 1,
+            rollup: null,
+            pendingWork: workOf(child.thread),
+          })),
           ...(settledChildren.length > 0
             ? [{ kind: "card-settled" as const, key, count: settledChildren.length, open }]
             : []),
@@ -267,6 +290,7 @@ export function AgentsBoard(props: {
                 thread: child.thread,
                 depth: child.depth + 1,
                 rollup: null,
+                pendingWork: workOf(child.thread),
               }))
             : []),
         ];
@@ -281,7 +305,7 @@ export function AgentsBoard(props: {
         : []),
       ...(settledOpen ? append(board.lists.settled) : []),
     ];
-  }, [board, settledOpen, expandedCards]);
+  }, [board, settledOpen, expandedCards, pendingWork]);
   const jumpItems = useMemo(
     () =>
       rows.flatMap((row) =>
@@ -902,6 +926,7 @@ function PendingAgentTaskRow(props: {
 export interface ChildRollup {
   readonly total: number;
   readonly working: number;
+  readonly waiting: number;
   readonly attention: number;
 }
 
@@ -913,6 +938,8 @@ type AgentChatCardProps = Pick<
   readonly agent: AgentAppearance | null;
   readonly depth: number;
   readonly rollup: ChildRollup | null;
+  /** Work outside this chat's own turn (see selectAgentRunPendingWork). */
+  readonly pendingWork: AgentRunPendingWork | null;
   readonly connected: boolean;
   readonly environmentLabel: string | undefined;
   readonly canSettle: boolean;
@@ -931,14 +958,10 @@ const AgentChatCard = memo(function AgentChatCard(props: AgentChatCardProps) {
   const key = `${thread.environmentId}:${thread.id}`;
   const parentKey = agentRunParentKey(thread);
   const dragState = useAgentCardDragState(key);
-  const ownStatus = agentThreadStatus(thread);
-  // A parent is not "Done" while one of its child agents is still working.
+  // A parent is not "Done" while a chat under it works or waits on a later wake.
+  const ownStatus = agentThreadStatus(thread, props.pendingWork);
   const status: AgentChatStatus =
-    rollup && rollup.attention > 0 && ownStatus !== "running"
-      ? "attention"
-      : rollup && rollup.working > 0 && (ownStatus === "done" || ownStatus === "idle")
-        ? "running"
-        : ownStatus;
+    rollup && rollup.attention > 0 && ownStatus !== "running" ? "attention" : ownStatus;
   const nested = props.depth > 0;
   const onMenuAction = (action: string) => {
     if (action.startsWith(MOVE_UNDER_PREFIX)) {
@@ -1083,6 +1106,7 @@ const AgentChatCard = memo(function AgentChatCard(props: AgentChatCardProps) {
 function childRollupLabel(rollup: ChildRollup) {
   const parts = [`${rollup.total} child${rollup.total === 1 ? "" : "ren"}`];
   if (rollup.working > 0) parts.push(`${rollup.working} working`);
+  if (rollup.waiting > 0) parts.push(`${rollup.waiting} waiting`);
   if (rollup.attention > 0) parts.push(`${rollup.attention} need input`);
   return parts.join(", ");
 }

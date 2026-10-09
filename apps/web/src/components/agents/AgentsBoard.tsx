@@ -30,7 +30,11 @@ import {
 import type { McpGatewayProfile } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { useAgentLibrary } from "../../hooks/useAgentLibrary";
-import { useScheduledTasks, useScheduledTasksSupported } from "../../state/scheduledTasks";
+import {
+  useScheduledTasks,
+  useScheduledTasksSupported,
+  useScheduledWakeThreadKeys,
+} from "../../state/scheduledTasks";
 import { useEnvironments } from "../../state/environments";
 import {
   useAllEnvironmentShellsBootstrapped,
@@ -52,9 +56,10 @@ import {
   selectAgentSidebarThreads,
   selectAgentWorkspaceThreads,
   selectPinnedAgentThreads,
-  selectWorkingParentKeys,
+  selectAgentRunPendingWork,
   type AgentCardChildren,
   type AgentRunContextMenu,
+  type AgentRunPendingWork,
 } from "./agents.logic";
 import { DesktopUpdateButton } from "../sidebar/SidebarUpdatePill";
 import { useToggleWorkspaceView } from "../sidebar/mainAppLocation";
@@ -73,14 +78,14 @@ function AgentThreadList({
   onSettleAction,
   profiles,
   childrenByKey,
-  workingKeys,
+  pendingWork,
   runByKey,
 }: {
   profiles: readonly McpGatewayProfile[];
   threads: readonly EnvironmentThreadShell[];
   pinned: readonly EnvironmentThreadShell[];
   childrenByKey: ReadonlyMap<string, AgentCardChildren<EnvironmentThreadShell>>;
-  workingKeys: ReadonlySet<string>;
+  pendingWork: ReadonlyMap<string, AgentRunPendingWork>;
   runByKey: ReadonlyMap<string, EnvironmentThreadShell>;
   onContextMenu: AgentRunContextMenu;
   onSettleAction: (thread: EnvironmentThreadShell) => void;
@@ -101,8 +106,8 @@ function AgentThreadList({
         )}
         profiles={profiles}
         childRuns={childRuns}
-        childWorking={workingKeys.has(key)}
-        workingKeys={childRuns ? workingKeys : undefined}
+        pendingWork={pendingWork.get(key) ?? null}
+        childPendingWork={childRuns ? pendingWork : undefined}
         parentRun={(() => {
           const parentKey = agentRunParentKey(thread);
           return parentKey === null ? null : runByKey.get(parentKey);
@@ -188,6 +193,7 @@ export function AgentsBoard() {
   const toggleWorkspaceView = useToggleWorkspaceView();
   const scheduledSupported = useScheduledTasksSupported();
   const scheduledTasks = useScheduledTasks();
+  const scheduledWakeKeys = useScheduledWakeThreadKeys();
   const modelPreferences = useClientSettings((settings) => settings.providerModelPreferences);
   // Pending parent changes show at once (see useSetAgentRunParent).
   const threads = useAgentThreadShells();
@@ -228,7 +234,10 @@ export function AgentsBoard() {
     });
   }, [sidebarThreads, filter, query, allPinned]);
   // Every chat, subagents included: children and subagents both keep a parent busy.
-  const workingKeys = useMemo(() => selectWorkingParentKeys(threads), [threads]);
+  const pendingWork = useMemo(
+    () => selectAgentRunPendingWork(threads, scheduledWakeKeys),
+    [threads, scheduledWakeKeys],
+  );
   const pinned = nestedLists.pinned;
   const visible = useMemo(
     () => [...nestedLists.active, ...nestedLists.settled],
@@ -515,7 +524,7 @@ export function AgentsBoard() {
             pinned={pinned}
             profiles={profiles}
             childrenByKey={childrenByKey}
-            workingKeys={workingKeys}
+            pendingWork={pendingWork}
             runByKey={runByKey}
             onContextMenu={onThreadContextMenu}
             onSettleAction={onSettleAction}

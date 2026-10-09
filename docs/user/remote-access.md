@@ -377,7 +377,9 @@ it into its parent's collapsed **Settled** group. A live child chat whose parent
 own card, which names its parent's agent and chat; click that name to open the parent.
 
 A card reads **In progress** while any child chat or subagent below it is still working, even
-after its own turn finishes. A child chat starts with a **Child of** link to its parent, and a
+after its own turn finishes. It reads **Waiting** when nothing is working but something will
+wake it or a chat below it later, such as a watched pull request, a background monitor, or a
+scheduled task bound to the chat. A child chat starts with a **Child of** link to its parent, and a
 parent's details list its **Children** with their status.
 
 Manually settling a parent card also settles its child chats through the existing cascade.
