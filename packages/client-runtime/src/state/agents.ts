@@ -58,22 +58,39 @@ export function groupAgentThreads(
   return { groups, orphaned };
 }
 
-/** `childWorking`: a run under this one (see selectWorkingParentKeys) is still doing its work. */
-export function agentThreadStatus(thread: EnvironmentThreadShell, childWorking = false) {
+/**
+ * Work outside a run's own turn: "working" while a run under it is doing its
+ * work, "waiting" while the only thing left is a future wake, such as a
+ * scheduled run or a child waiting on checks. See selectAgentRunPendingWork.
+ */
+export type AgentRunPendingWork = "working" | "waiting";
+
+/** `pendingWork`: work outside the run's own turn (see selectAgentRunPendingWork). */
+export function agentThreadStatus(
+  thread: EnvironmentThreadShell,
+  pendingWork: AgentRunPendingWork | null = null,
+) {
   if (thread.settledAt !== null) return "done";
   // Questions and approvals arrive mid-turn, so they outrank the running turn.
   if (thread.hasPendingApprovals || thread.hasPendingUserInput) return "attention";
   if (thread.runtime?.status === "running" || thread.latestRun?.status === "running")
     return "running";
-  if (thread.runtime?.status === "starting" || thread.runtime?.status === "preparing")
+  if (
+    thread.runtime?.status === "queued" ||
+    thread.runtime?.status === "starting" ||
+    thread.runtime?.status === "preparing"
+  )
     return "queued";
   if (thread.runtime?.status === "failed" || thread.latestRun?.status === "failed") return "error";
   // A turn can settle while native background work runs on: sub-agents are
   // still doing the work, while commands, monitors, and other tasks watch or wait.
   // Chats this one launched or delegated to are its work too.
-  if (childWorking || thread.pendingBackgroundTasks.some((task) => task.kind === "subagent"))
+  if (
+    pendingWork === "working" ||
+    thread.pendingBackgroundTasks.some((task) => task.kind === "subagent")
+  )
     return "running";
-  if (thread.pendingBackgroundTasks.length > 0) return "monitoring";
+  if (pendingWork === "waiting" || thread.pendingBackgroundTasks.length > 0) return "waiting";
   if (thread.latestRun?.status === "completed") return "done";
   return "idle";
 }
@@ -82,7 +99,7 @@ export function agentThreadStatusLabel(status: ReturnType<typeof agentThreadStat
   return {
     done: "Done",
     running: "In progress",
-    monitoring: "Monitoring",
+    waiting: "Waiting",
     queued: "Queued",
     idle: "Idle",
     error: "Error",
@@ -228,18 +245,21 @@ export interface AgentCardChildren<T> {
 export function agentChildRunsSummary(runs: AgentCardChildren<EnvironmentThreadShell>) {
   let total = 0;
   let running = 0;
+  let waiting = 0;
   let attention = 0;
   for (const group of [runs.live, runs.settled]) {
     for (const { thread } of group) {
       total += 1;
       const status = agentThreadStatus(thread);
-      if (status === "running" || status === "queued" || status === "monitoring") running += 1;
+      if (status === "running" || status === "queued") running += 1;
+      if (status === "waiting") waiting += 1;
       if (status === "attention" || status === "error") attention += 1;
     }
   }
   return [
     `${total} child${total === 1 ? "" : "ren"}`,
     ...(running > 0 ? [`${running} running`] : []),
+    ...(waiting > 0 ? [`${waiting} waiting`] : []),
     ...(attention > 0 ? [`${attention} need${attention === 1 ? "s" : ""} attention`] : []),
   ].join(" · ");
 }
@@ -375,31 +395,74 @@ export function agentRunParentKey(
   return threadKey({ environmentId, id: run.parentThreadId });
 }
 
-// "monitoring": the child's turn ended but work it started runs on in the background.
-const WORKING_STATUSES = new Set(["running", "queued", "attention", "monitoring"]);
+const WORKING_STATUSES = new Set(["running", "queued", "attention"]);
+
+/** The fields of a scheduled task that tell whether it will wake a thread. */
+export interface AgentScheduledWake {
+  readonly environmentId: string;
+  readonly task: {
+    readonly enabled: boolean;
+    readonly threadId: string | null;
+    readonly nextRunAt: string | null;
+  };
+}
+
+/** Keys of threads an enabled scheduled task will run in at a known future time. */
+export function selectScheduledWakeThreadKeys(
+  tasks: readonly AgentScheduledWake[],
+): ReadonlySet<string> {
+  const keys = new Set<string>();
+  for (const { environmentId, task } of tasks) {
+    if (task.enabled && task.threadId !== null && task.nextRunAt !== null)
+      keys.add(threadKey({ environmentId, id: task.threadId }));
+  }
+  return keys;
+}
 
 /**
- * Keys of runs with work still going on below them, at any depth, so a parent
- * whose own turn finished does not read Done while its children or subagents work on.
+ * Work outside each run's own turn, by key. A run is "working" while a run
+ * below it, at any depth, is running, queued, or needs input, so a parent whose
+ * own turn finished does not read Done. It is "waiting" when nothing below it
+ * works but something will wake it or a run below it later: a scheduled run
+ * (`scheduledWakeKeys`), a pull request watch, or other background waits.
+ * Waiting never reads as In progress.
  */
-export function selectWorkingParentKeys(
+export function selectAgentRunPendingWork(
   threads: readonly EnvironmentThreadShell[],
-): ReadonlySet<string> {
+  scheduledWakeKeys: ReadonlySet<string> = new Set(),
+): ReadonlyMap<string, AgentRunPendingWork> {
   const parentKeyByKey = new Map<string, string | null>();
   for (const thread of threads) {
     if (thread.archivedAt === null)
       parentKeyByKey.set(threadKey(thread), agentRunParentKey(thread));
   }
-  const working = new Set<string>();
+  const pending = new Map<string, AgentRunPendingWork>();
+  const waitingKeys: string[] = [];
   for (const thread of threads) {
-    if (thread.archivedAt !== null || !WORKING_STATUSES.has(agentThreadStatus(thread))) continue;
-    let parentKey = parentKeyByKey.get(threadKey(thread)) ?? null;
-    while (parentKey !== null && !working.has(parentKey)) {
-      working.add(parentKey);
+    if (thread.archivedAt !== null) continue;
+    const key = threadKey(thread);
+    const status = agentThreadStatus(thread, scheduledWakeKeys.has(key) ? "waiting" : null);
+    if (status === "waiting") waitingKeys.push(key);
+    if (!WORKING_STATUSES.has(status)) continue;
+    let parentKey = parentKeyByKey.get(key) ?? null;
+    while (parentKey !== null && pending.get(parentKey) !== "working") {
+      pending.set(parentKey, "working");
       parentKey = parentKeyByKey.get(parentKey) ?? null;
     }
   }
-  return working;
+  // Working outranks waiting, so waits fill in only where nothing works. A key
+  // set here has every ancestor set too, which is what lets each walk stop early.
+  for (const key of waitingKeys) {
+    let parentKey = parentKeyByKey.get(key) ?? null;
+    while (parentKey !== null && !pending.has(parentKey)) {
+      pending.set(parentKey, "waiting");
+      parentKey = parentKeyByKey.get(parentKey) ?? null;
+    }
+  }
+  for (const key of scheduledWakeKeys) {
+    if (parentKeyByKey.has(key) && !pending.has(key)) pending.set(key, "waiting");
+  }
+  return pending;
 }
 
 /** A parent change the board shows before the server confirms it. */

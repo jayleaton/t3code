@@ -7,16 +7,18 @@ import {
   isAgentChatInFocus,
   nestAgentRuns,
   selectAgentSidebarThreads,
-  selectWorkingParentKeys,
+  selectAgentRunPendingWork,
   withAgentRunAncestors,
 } from "./agents.logic";
 import { useAgentThreadShells } from "./useAgentRunParenting";
 import { ThreadCard } from "./ThreadCard";
 import { useAgentThreadContextMenu, useAgentThreadSettleAction } from "./useAgentThreadContextMenu";
 import { readEnvironmentSupportsSettlement } from "../../state/entities";
+import { useScheduledWakeThreadKeys } from "../../state/scheduledTasks";
 
 export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
   const allThreads = useAgentThreadShells();
+  const scheduledWakeKeys = useScheduledWakeThreadKeys();
   const threads = selectAgentSidebarThreads(allThreads);
   const visited = useUiStateStore((state) => state.threadLastVisitedAtById);
   const currentKey = scopedThreadKey(current);
@@ -36,7 +38,7 @@ export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
     },
     all: threads,
   });
-  const workingKeys = selectWorkingParentKeys(allThreads);
+  const pendingWork = selectAgentRunPendingWork(allThreads, scheduledWakeKeys);
   const visible = lists.active;
   const runByKey = new Map(
     threads.map((thread) => [
@@ -59,10 +61,12 @@ export function AgentChatRail({ current }: { current: ScopedThreadRef }) {
                 childRuns={childrenByKey.get(
                   scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
                 )}
-                workingKeys={workingKeys}
-                childWorking={workingKeys.has(
-                  scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-                )}
+                childPendingWork={pendingWork}
+                pendingWork={
+                  pendingWork.get(
+                    scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                  ) ?? null
+                }
                 parentRun={
                   thread.parentThreadId == null
                     ? null

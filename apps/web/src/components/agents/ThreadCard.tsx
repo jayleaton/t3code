@@ -32,6 +32,7 @@ import {
   type AgentCardChildren,
   type AgentChildRun,
   type AgentRunContextMenu,
+  type AgentRunPendingWork,
 } from "./agents.logic";
 import {
   useLinkedThreadPullRequest,
@@ -57,15 +58,15 @@ function runAgentName(
 interface ChildRunRowProps {
   child: AgentChildRun<EnvironmentThreadShell>;
   profiles: readonly McpGatewayProfile[] | undefined;
-  /** Runs with work still going on below them (see selectWorkingParentKeys). */
-  workingKeys: ReadonlySet<string> | undefined;
+  /** Work outside each run's own turn (see selectAgentRunPendingWork). */
+  childPendingWork: ReadonlyMap<string, AgentRunPendingWork> | undefined;
   onContextMenu: AgentRunContextMenu;
 }
 
 function AgentChildRunLink({
   child: { thread: run, depth, siblings },
   profiles,
-  workingKeys,
+  childPendingWork,
   onContextMenu,
   onPointerDown,
 }: ChildRunRowProps & {
@@ -76,7 +77,7 @@ function AgentChildRunLink({
   });
   const status = agentThreadStatus(
     run,
-    workingKeys?.has(`${run.environmentId}:${run.id}`) ?? false,
+    childPendingWork?.get(`${run.environmentId}:${run.id}`) ?? null,
   );
   const agent = runAgentName(run, profiles);
   return (
@@ -141,13 +142,13 @@ function AgentChildRuns({
   runs,
   anchorKey,
   profiles,
-  workingKeys,
+  childPendingWork,
   onContextMenu,
 }: {
   runs: AgentCardChildren<EnvironmentThreadShell>;
   anchorKey: string;
   profiles: readonly McpGatewayProfile[] | undefined;
-  workingKeys: ReadonlySet<string> | undefined;
+  childPendingWork: ReadonlyMap<string, AgentRunPendingWork> | undefined;
   onContextMenu: AgentRunContextMenu;
 }) {
   const { childDragEnabled } = useContext(AgentRunDragContext);
@@ -160,7 +161,7 @@ function AgentChildRuns({
         child={child}
         anchorKey={anchorKey}
         profiles={profiles}
-        workingKeys={workingKeys}
+        childPendingWork={childPendingWork}
         onContextMenu={onContextMenu}
       />
     ) : (
@@ -168,7 +169,7 @@ function AgentChildRuns({
         <AgentChildRunLink
           child={child}
           profiles={profiles}
-          workingKeys={workingKeys}
+          childPendingWork={childPendingWork}
           onContextMenu={onContextMenu}
         />
       </li>
@@ -205,8 +206,8 @@ export const ThreadCard = memo(function ThreadCard({
   profiles,
   childRuns,
   parentRun,
-  childWorking = false,
-  workingKeys,
+  pendingWork = null,
+  childPendingWork,
   dragging = false,
   settleSupported = false,
   onSettleAction,
@@ -219,10 +220,10 @@ export const ThreadCard = memo(function ThreadCard({
   childRuns?: AgentCardChildren<EnvironmentThreadShell> | undefined;
   /** The run that created this one, when this card stands on its own. */
   parentRun?: EnvironmentThreadShell | null | undefined;
-  /** A run under this one is still working (see selectWorkingParentKeys). */
-  childWorking?: boolean;
+  /** Work outside this run's own turn (see selectAgentRunPendingWork). */
+  pendingWork?: AgentRunPendingWork | null;
   /** Statuses of `childRuns` rows; only cards with children need it. */
-  workingKeys?: ReadonlySet<string> | undefined;
+  childPendingWork?: ReadonlyMap<string, AgentRunPendingWork> | undefined;
   dragging?: boolean;
   /** The surface's server supports thread.settle/unsettle (version-skew guard). */
   settleSupported?: boolean;
@@ -275,7 +276,7 @@ export const ThreadCard = memo(function ThreadCard({
   // The open chat needs no preview, and a second composer on its draft would
   // render on every keystroke typed into the chat pane.
   const showPreview = !dragging && !contextMenuOpen && !isCurrent && previewOpen;
-  const status = agentThreadStatus(thread, childWorking);
+  const status = agentThreadStatus(thread, pendingWork);
   // Only parent/top-level cards get the inline action; a chat that stands on its
   // own card but is somebody's child keeps the right-click menu alone.
   const settled = thread.settledAt !== null;
@@ -417,7 +418,7 @@ export const ThreadCard = memo(function ThreadCard({
             <AgentChatPreview
               thread={thread}
               project={project?.title ?? "Project unavailable"}
-              childWorking={childWorking}
+              pendingWork={pendingWork}
               onClose={closePreview}
             />
           )}
@@ -473,7 +474,7 @@ export const ThreadCard = memo(function ThreadCard({
           runs={childRuns}
           anchorKey={`${thread.environmentId}:${thread.id}`}
           profiles={profiles}
-          workingKeys={workingKeys}
+          childPendingWork={childPendingWork}
           onContextMenu={onContextMenu}
         />
       )}

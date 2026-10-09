@@ -2,17 +2,20 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   agentColorFor,
   agentIconKey,
+  selectScheduledWakeThreadKeys,
   type AgentIconKey,
+  type AgentScheduledWake,
 } from "@t3tools/client-runtime/state/agents";
 import {
   mergeAgentLibraries,
   type McpGatewayProfile,
   type ThreadProfileSnapshot,
 } from "@t3tools/contracts";
-import { Atom } from "effect/reactivity";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { useMemo } from "react";
 
-import { environmentServerConfigsAtom } from "./server";
+import { environmentServerConfigsAtom, serverEnvironment } from "./server";
 
 /** Every connected environment's agents, merged into one library as web does. */
 export const agentProfilesAtom = Atom.make(
@@ -24,6 +27,22 @@ export const agentProfilesAtom = Atom.make(
 
 export function useAgentProfiles(): ReadonlyArray<McpGatewayProfile> {
   return useAtomValue(agentProfilesAtom);
+}
+
+/** Keys of threads a scheduled task will wake later, so the board reads them as Waiting. */
+const scheduledWakeThreadKeysAtom = Atom.make((get): ReadonlySet<string> => {
+  const tasks: AgentScheduledWake[] = [];
+  for (const [environmentId, config] of get(environmentServerConfigsAtom)) {
+    if (config.environment.capabilities.scheduledTasks !== true) continue;
+    const result = get(serverEnvironment.scheduledTasksLive({ environmentId, input: {} }));
+    const snapshot = Option.getOrUndefined(AsyncResult.value(result));
+    for (const task of snapshot?.tasks ?? []) tasks.push({ environmentId, task });
+  }
+  return selectScheduledWakeThreadKeys(tasks);
+});
+
+export function useScheduledWakeThreadKeys(): ReadonlySet<string> {
+  return useAtomValue(scheduledWakeThreadKeysAtom);
 }
 
 export interface AgentAppearance {

@@ -258,7 +258,7 @@
   color: #f5d577;
   background: #3b3421;
 }
-.agent-status-monitoring {
+.agent-status-waiting {
   color: var(--foreground);
   background: color-mix(in srgb, #a8cfff 18%, transparent);
 }
