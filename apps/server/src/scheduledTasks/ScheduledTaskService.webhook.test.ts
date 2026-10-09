@@ -20,6 +20,7 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
+import * as ScheduledTaskTestkit from "./ScheduledTaskService.testkit.ts";
 
 const decodeUpsertInput = Schema.decodeUnknownEffect(ScheduledTaskUpsertInput);
 
@@ -86,6 +87,7 @@ const withService = <A, E>(
           ),
       }),
       Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+      ScheduledTaskTestkit.layerLocalProjects(),
       Layer.mock(SecretRequests.SecretRequests)({
         consume: ({ ref }) => {
           const value = secretsByRef.get(ref);

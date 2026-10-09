@@ -334,7 +334,7 @@ export const TOOL_SPECS = {
     { environmentId },
   ],
   t3_create_scheduled_task: [
-    "Schedule a prompt to run on an agent, once (runAt) or repeatedly (cron + timezone). The first run creates the task's thread from the agent profile in the project; later runs post into the same thread. Tasks run only while the environment's server is up; a run missed while it was down fires once when it returns. Runs use the agent's permission mode, so an agent that needs approvals will wait for them. Requires create or admin access.",
+    "Schedule a prompt to run on an agent, once (runAt) or repeatedly (cron + timezone). The first run creates the task's thread from the agent profile in the project; later runs post into the same thread. The task is stored on and runs on the environment that hosts the project, so pass that environment (omit it for this chat's own machine), not the device you are talking through. Tasks run only while that environment's server is up; a run missed while it was down fires once when it returns. Runs use the agent's permission mode, so an agent that needs approvals will wait for them. Requires create or admin access.",
     { environmentId, ...scheduledTaskFields },
   ],
   t3_update_scheduled_task: [

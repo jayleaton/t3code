@@ -63,6 +63,7 @@ import { useSettingsScope } from "./SettingsScopeContext";
 import {
   WEBHOOK_SIGNATURE_DEFAULTS,
   matchesScheduledTaskScope,
+  newScheduledTaskEnvironment,
   scheduleFromDraft,
   scheduledTaskDefaultModel,
   taskToDraft,
@@ -248,7 +249,11 @@ export function ScheduledTasksSettings(target: {
   const openForEdit = useCallback((environmentId: EnvironmentId, task: ScheduledTask) => {
     setEditor({ environmentId, task });
   }, []);
-  const defaultEnvironment = environment ?? connectedEnvironments[0];
+  const defaultEnvironment = newScheduledTaskEnvironment(
+    target.environmentId,
+    connectedEnvironments,
+    environment,
+  );
   return (
     <SettingsPageContainer>
       <SettingsSection

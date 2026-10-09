@@ -20,6 +20,7 @@ import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
+import * as ScheduledTaskTestkit from "./ScheduledTaskService.testkit.ts";
 
 const decodeUpsertInput = Schema.decodeUnknownEffect(ScheduledTaskUpsertInput);
 
@@ -48,6 +49,7 @@ it.effect(
       const launches: Array<ThreadLaunchService.ThreadLaunchInput> = [];
       const sends: Array<ThreadManagementService.ThreadManagementSendInput> = [];
       const dependencies = Layer.mergeAll(
+        ScheduledTaskTestkit.layerLocalProjects(),
         Layer.mock(SecretRequests.SecretRequests)({}),
         NodeCrypto.layer,
         Scheduler.layer,
@@ -142,6 +144,7 @@ it.effect("imports fork V1 scheduled tasks into the V2 table and drops the legac
     yield* runMigrations();
 
     const dependencies = Layer.mergeAll(
+      ScheduledTaskTestkit.layerLocalProjects(),
       Layer.mock(SecretRequests.SecretRequests)({}),
       NodeCrypto.layer,
       Scheduler.layer,

@@ -35,6 +35,22 @@ export function matchesScheduledTaskScope(
   return true;
 }
 
+/**
+ * The environment a new task starts on. A link from a thread names the thread's environment,
+ * which owns and runs its schedules, so it wins over this device's own environment. While that
+ * environment is offline there is none: a task made on this device would never reach the thread.
+ */
+export function newScheduledTaskEnvironment<T extends { readonly environmentId: EnvironmentId }>(
+  requested: EnvironmentId | undefined,
+  connected: readonly T[],
+  scopeDefault: T | null,
+): T | null {
+  if (requested !== undefined) {
+    return connected.find((environment) => environment.environmentId === requested) ?? null;
+  }
+  return scopeDefault ?? connected[0] ?? null;
+}
+
 export function validateScheduledTasksSearch(raw: Record<string, unknown>) {
   return {
     ...(typeof raw.environmentId === "string" && raw.environmentId.trim()

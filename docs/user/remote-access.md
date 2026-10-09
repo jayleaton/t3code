@@ -406,7 +406,9 @@ an agent a prompt at a set time (for example a deploy tonight) or on repeat (for
 the latest changes every weekday at 7:00). Each task has one thread: the first run creates it and
 every later run posts into it. Pause, resume, run now, edit, or delete a task from the same list.
 
-Tasks run on the machine you pick, and only while its T3 server is up and the machine is awake;
+A task is kept on, and runs on, the machine that hosts its project. When you ask an agent in a chat
+to schedule something, that is the chat's machine, not the device you are typing on, so the task
+still runs after that device shuts down. Tasks run only while that machine's T3 server is up and it is awake;
 T3 does not wake a sleeping machine or keep it awake. A run missed while it was off or asleep
 happens once when it is back. For unattended runs, set the machine not to sleep and keep T3 running
 with the desktop app open or as a [background service](./background-service.md). Runs use the agent's permission mode, so an agent that

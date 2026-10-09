@@ -20,6 +20,7 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
+import * as ScheduledTaskTestkit from "./ScheduledTaskService.testkit.ts";
 
 const isScheduledTaskError = Schema.is(ScheduledTaskError);
 
@@ -212,6 +213,7 @@ it.effect(
                     ),
                 }),
                 Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+                ScheduledTaskTestkit.layerLocalProjects(),
                 Layer.mock(SecretRequests.SecretRequests)({}),
                 NodeCrypto.layer,
                 Scheduler.layer,
@@ -318,6 +320,7 @@ it.effect(
                     ),
                 }),
                 Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+                ScheduledTaskTestkit.layerLocalProjects(),
                 Layer.mock(SecretRequests.SecretRequests)({}),
                 NodeCrypto.layer,
                 Scheduler.layer,
