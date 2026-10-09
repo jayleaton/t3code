@@ -19,6 +19,7 @@ import { deriveProviderInstanceEntries } from "../../providerInstances";
 import {
   scheduledTaskDefaultModel,
   matchesScheduledTaskScope,
+  newScheduledTaskEnvironment,
   scheduleFromDraft,
   taskToDraft,
 } from "./scheduledTasksSettings.logic";
@@ -314,5 +315,27 @@ describe("scheduled task model defaults", () => {
         null,
       ),
     ).toBeNull();
+  });
+});
+
+describe("new scheduled task environment", () => {
+  const thisDevice = { environmentId: laptopId };
+  const threadHost = { environmentId: serverId };
+
+  it("starts on the thread's environment, not this device's, when opened from a thread", () => {
+    expect(newScheduledTaskEnvironment(serverId, [thisDevice, threadHost], thisDevice)).toBe(
+      threadHost,
+    );
+  });
+
+  it("offers no environment while the thread's is offline instead of using this device", () => {
+    expect(newScheduledTaskEnvironment(serverId, [thisDevice], thisDevice)).toBeNull();
+  });
+
+  it("uses the settings scope when no thread names an environment", () => {
+    expect(newScheduledTaskEnvironment(undefined, [thisDevice, threadHost], thisDevice)).toBe(
+      thisDevice,
+    );
+    expect(newScheduledTaskEnvironment(undefined, [threadHost], null)).toBe(threadHost);
   });
 });

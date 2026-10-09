@@ -1174,10 +1174,11 @@ export const layer = Layer.effect(
         // environment's project and threads. Otherwise a client or agent on another machine
         // would park the schedule here, where it can never run. Unchanged references are
         // not re-checked, so an existing task stays editable.
-        if (existingTask?.projectId !== input.projectId) {
+        const projectChanged = existingTask?.projectId !== input.projectId;
+        if (projectChanged) {
           yield* requireLocalProject(input.projectId, id);
         }
-        if (threadId !== null && existingTask?.threadId !== threadId) {
+        if (threadId !== null && (projectChanged || existingTask?.threadId !== threadId)) {
           yield* requireLocalThread(threadId, input.projectId, id);
         }
         const webhook =

@@ -18,9 +18,10 @@ import * as ScheduledTaskTestkit from "./ScheduledTaskService.testkit.ts";
 
 const decodeUpsertInput = Schema.decodeUnknownEffect(ScheduledTaskUpsertInput);
 
-// The Mac hosts the project and its thread; the Windows client hosts neither.
+// The Mac hosts both projects and the thread; the Windows client hosts none of them.
 const macProject = ProjectId.make("project-mac");
 const macThread = ThreadId.make("thread-mac");
+const otherProject = ProjectId.make("project-mac-other");
 
 /** One environment's scheduler, hosting the given project and thread. */
 const environmentLayer = (
@@ -35,7 +36,9 @@ const environmentLayer = (
         Scheduler.layer,
         Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
         Layer.mock(SecretRequests.SecretRequests)({}),
-        ScheduledTaskTestkit.layerLocalProjects((id) => id === hosted?.projectId),
+        ScheduledTaskTestkit.layerLocalProjects(
+          (id) => hosted !== null && (id === hosted.projectId || id === otherProject),
+        ),
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           getThreadShell: (threadId) =>
             Effect.succeed(
@@ -93,6 +96,13 @@ it.effect("refuses a project or thread another environment hosts", () =>
     });
     assert.equal((yield* service.upsert(own)).task.id, task.id);
     assert.equal((yield* service.list()).tasks.length, 1);
+
+    // Moving the task to another local project cannot keep a thread from the old one.
+    const rebound = yield* service
+      .upsert(yield* nightlyInput({ id: task.id, requireExisting: true, projectId: otherProject }))
+      .pipe(Effect.flip);
+    assert.include(rebound.message, "Thread thread-mac is not in project project-mac-other");
+    assert.equal((yield* service.list()).tasks[0]?.projectId, macProject);
 
     // A task stored before this check stays editable where it is; nothing migrates it.
     yield* sql`UPDATE scheduled_tasks SET project_id = 'project-elsewhere', thread_id = NULL`;
