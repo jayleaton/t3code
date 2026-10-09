@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Tests use Node's glob matcher to verify electron-builder exclusions.
 import * as NodeCrypto from "node:crypto";
 import * as NodePath from "node:path";
-import { createRequire } from "node:module";
+import * as NodeModule from "node:module";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -97,8 +97,10 @@ import {
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 
 it("gives NSIS different default folders for official T3 and T3 Agents", () => {
-  const desktopRequire = createRequire(new URL("../apps/desktop/package.json", import.meta.url));
-  const builderRequire = createRequire(desktopRequire.resolve("electron-builder"));
+  const desktopRequire = NodeModule.createRequire(
+    new URL("../apps/desktop/package.json", import.meta.url),
+  );
+  const builderRequire = NodeModule.createRequire(desktopRequire.resolve("electron-builder"));
   const { AppInfo } = builderRequire("app-builder-lib/out/appInfo.js");
   const { getWindowsInstallationDirName } = builderRequire(
     "app-builder-lib/out/targets/targetUtil.js",
@@ -761,6 +763,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual((linux.linux as Record<string, unknown>).protocols, [
         { name: "T3 Code", schemes: ["t3code", "t3code-dev"] },
       ]);
+      assert.deepStrictEqual(linux.toolsets, { appimage: "1.0.3" });
+      assert.notProperty(mac, "toolsets");
+      assert.notProperty(win, "toolsets");
       assert.deepStrictEqual(mac.files, [...DESKTOP_FILE_EXCLUSIONS, ...MAC_FILE_EXCLUSIONS]);
       assert.deepStrictEqual(linux.files, [...DESKTOP_FILE_EXCLUSIONS, ...LINUX_FILE_EXCLUSIONS]);
       assert.deepStrictEqual(win.files, DESKTOP_FILE_EXCLUSIONS);

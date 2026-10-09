@@ -10,6 +10,8 @@ import {
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
@@ -20,7 +22,10 @@ import * as ServerConfig from "../../../config.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
+import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
+import * as VcsProcess from "../../../vcs/VcsProcess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as ProjectHandlers from "./handlers.ts";
 import { ProjectToolkit } from "./tools.ts";
 
@@ -76,6 +81,7 @@ it.effect("parents a launched thread to the calling thread and attributes its fi
       }),
       Layer.mock(Project.ProjectService)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
+      Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       NodeServices.layer,
       ServerSettings.layerTest(),
       ServerConfig.layerTest(process.cwd(), { prefix: "t3-source-link-" }).pipe(
@@ -83,7 +89,11 @@ it.effect("parents a launched thread to the calling thread and attributes its fi
       ),
     );
     const toolkit = yield* ProjectToolkit.pipe(
-      Effect.provide(ProjectHandlers.layer.pipe(Layer.provide(layerDependencies))),
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(
+          Layer.provide(layerDependencies),
+        ),
+      ),
     );
     const result = yield* toolkit
       .handle("t3_thread_launch", { title: "Audit", message: "Review the change" })
@@ -147,6 +157,7 @@ it.effect("launches a scratch thread into the Scratch project", () =>
         namedProjectsRoot: "/projects",
         ensureScratchProject: Effect.succeed({ projectId: scratchProjectId }),
       }),
+      Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       NodeServices.layer,
       ServerSettings.layerTest(),
       ServerConfig.layerTest(process.cwd(), { prefix: "t3-scratch-launch-" }).pipe(
@@ -154,7 +165,11 @@ it.effect("launches a scratch thread into the Scratch project", () =>
       ),
     );
     const toolkit = yield* ProjectToolkit.pipe(
-      Effect.provide(ProjectHandlers.layer.pipe(Layer.provide(layerDependencies))),
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(
+          Layer.provide(layerDependencies),
+        ),
+      ),
     );
     const handle = (params: Parameters<typeof toolkit.handle<"t3_thread_launch">>[1]) =>
       toolkit
@@ -224,6 +239,7 @@ it.effect("launches an agent thread from profileId and rejects unknown agents", 
       }),
       Layer.mock(Project.ProjectService)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
+      Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       NodeServices.layer,
       ServerSettings.layerTest({
         mcpGatewayProfiles: [
@@ -243,7 +259,11 @@ it.effect("launches an agent thread from profileId and rejects unknown agents", 
       ),
     );
     const toolkit = yield* ProjectToolkit.pipe(
-      Effect.provide(ProjectHandlers.layer.pipe(Layer.provide(layerDependencies))),
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(
+          Layer.provide(layerDependencies),
+        ),
+      ),
     );
     const handle = (params: Parameters<typeof toolkit.handle<"t3_thread_launch">>[1]) =>
       toolkit
@@ -330,13 +350,18 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
             };
           }),
       }),
+      Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       NodeServices.layer,
       ServerConfig.layerTest(process.cwd(), { prefix: "t3-named-project-" }).pipe(
         Layer.provide(NodeServices.layer),
       ),
     );
     const toolkit = yield* ProjectToolkit.pipe(
-      Effect.provide(ProjectHandlers.layer.pipe(Layer.provide(layerDependencies))),
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(
+          Layer.provide(layerDependencies),
+        ),
+      ),
     );
     const handle = (params: Parameters<typeof toolkit.handle<"t3_project_create">>[1]) =>
       toolkit
@@ -370,6 +395,7 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
 const clientLaunchHarness = (input: {
   readonly runtimeModeCeiling: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
   readonly launched: Array<ThreadLaunch.ThreadLaunchInput>;
+  readonly workspaceRoot?: string;
 }) => {
   const projectId = ProjectId.make("project:client-target");
   const modelSelection = { instanceId: ProviderInstanceId.make("claude"), model: "claude-opus" };
@@ -382,7 +408,7 @@ const clientLaunchHarness = (input: {
       client: {
         sessionId: "session-1",
         label: "Claude Code",
-        runtimeModeCeiling: input.runtimeModeCeiling,
+        access: input.runtimeModeCeiling,
       },
       issuedAt: 0,
       capabilities: new Set(["orchestration" as const]),
@@ -409,16 +435,26 @@ const clientLaunchHarness = (input: {
       getById: (id) =>
         Effect.succeed(
           id === projectId
-            ? Option.some({ id, defaultModelSelection: modelSelection } as unknown as ProjectRecord)
+            ? Option.some({
+                id,
+                workspaceRoot: input.workspaceRoot ?? "/projects/client-target",
+                defaultModelSelection: modelSelection,
+              } as unknown as ProjectRecord)
             : Option.none(),
         ),
     }),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
     ServerSettings.layerTest(),
     NodeServices.layer,
-    ServerConfig.layerTest(process.cwd(), { prefix: "t3-client-launch-" }).pipe(
-      Layer.provide(NodeServices.layer),
+  ).pipe(
+    Layer.provideMerge(GitVcsDriver.layer),
+    Layer.provideMerge(VcsProcess.layer),
+    Layer.provideMerge(
+      ServerConfig.layerTest(process.cwd(), { prefix: "t3-client-launch-" }).pipe(
+        Layer.provide(NodeServices.layer),
+      ),
     ),
+    Layer.provideMerge(NodeServices.layer),
   );
   return { projectId, modelSelection, dependencies: layerDependencies };
 };
@@ -431,7 +467,9 @@ it.effect("a client launches at its ceiling with the project's default model", (
       launched,
     });
     const toolkit = yield* ProjectToolkit.pipe(
-      Effect.provide(ProjectHandlers.layer.pipe(Layer.provide(dependencies))),
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(dependencies)),
+      ),
     );
     const handle = (params: Parameters<typeof toolkit.handle<"t3_thread_launch">>[1]) =>
       toolkit
@@ -450,4 +488,65 @@ it.effect("a client launches at its ceiling with the project's default model", (
     expect(untargeted.at(-1)?.result).toMatchObject({ code: "target_required" });
     expect(launched).toHaveLength(1);
   }),
+);
+
+it.effect("a launch binds only an existing checkout that is one of the project's worktrees", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-launch-worktree-" });
+    const repo = path.join(root, "repo");
+    const worktree = path.join(root, "feature");
+    const outside = path.join(root, "outside");
+    yield* fileSystem.makeDirectory(repo);
+    yield* fileSystem.makeDirectory(outside);
+
+    const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+    const { projectId, dependencies } = clientLaunchHarness({
+      runtimeModeCeiling: "auto",
+      launched,
+      workspaceRoot: repo,
+    });
+    const git = yield* GitVcsDriver.GitVcsDriver.pipe(Effect.provide(dependencies));
+    for (const args of [
+      ["init", "-b", "main"],
+      ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init"],
+      ["worktree", "add", "-b", "feature", worktree],
+    ]) {
+      yield* git.execute({ operation: "test.setupRepo", cwd: repo, args });
+    }
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(dependencies)),
+      ),
+    );
+    const launchInto = (worktreePath: string) =>
+      toolkit
+        .handle("t3_thread_launch", {
+          title: "Fix",
+          projectId,
+          workspaceStrategy: { type: "existing_worktree", worktreePath },
+        })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+
+    expect((yield* launchInto(worktree)).at(-1)?.result).toMatchObject({ projectId });
+    expect((yield* launchInto(repo)).at(-1)?.result).toMatchObject({ projectId });
+    for (const elsewhere of [outside, path.join(worktree, "..", "outside"), "/"]) {
+      expect((yield* launchInto(elsewhere)).at(-1)?.result).toMatchObject({
+        code: "invalid_request",
+      });
+    }
+    expect(launched.map((launch) => launch.workspaceStrategy)).toEqual([
+      { type: "existing_worktree", worktreePath: worktree },
+      { type: "existing_worktree", worktreePath: repo },
+    ]);
+
+    // A removed worktree stays listed as prunable until `git worktree prune`;
+    // whatever directory is later made at its path is not one of the project's.
+    yield* fileSystem.remove(worktree, { recursive: true });
+    yield* fileSystem.makeDirectory(worktree);
+    expect((yield* launchInto(worktree)).at(-1)?.result).toMatchObject({
+      code: "invalid_request",
+    });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

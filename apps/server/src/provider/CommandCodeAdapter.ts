@@ -18,16 +18,16 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
-import { IdAllocatorV2 } from "../orchestration-v2/IdAllocator.ts";
+import { IdAllocatorV2 } from "@t3tools/provider-core/server/IdAllocator";
 import {
   ProviderAdapterProtocolError,
   type ProviderAdapterV2Shape,
   type ProviderAdapterV2SessionRuntime,
   type ProviderAdapterV2Event,
   type ProviderAdapterV2TurnInput,
-} from "../orchestration-v2/ProviderAdapter.ts";
-import { makeProviderFailure } from "../orchestration-v2/ProviderFailure.ts";
-import { turnScopedSelectionTransition } from "../orchestration-v2/ProviderSelectionTransition.ts";
+} from "@t3tools/provider-core/server/ProviderAdapter";
+import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
+import { turnScopedSelectionTransition } from "@t3tools/provider-core/server/selectionTransition";
 import {
   commandCodePermissionArgs,
   commandCodeTokenUsage,
@@ -35,11 +35,11 @@ import {
   decodeCommandCodeFrame,
   type CommandCodeFrame,
 } from "./commandCodeProtocol.ts";
-import * as McpProviderSession from "../mcp/McpProviderSession.ts";
+import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import { COMMAND_CODE_MCP_MOD } from "./commandCodeMcp.ts";
 import { spawnCommandCode } from "./commandCodeProcess.ts";
-import { collectStreamAsString } from "./providerSnapshot.ts";
-import { buildRuntimeInstructions } from "./RuntimeInstructions.ts";
+import { collectStreamAsString } from "@t3tools/provider-core/server/snapshotProbe";
+import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 
 const encodeMcpServers = Schema.encodeEffect(

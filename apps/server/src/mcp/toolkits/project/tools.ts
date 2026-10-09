@@ -29,6 +29,7 @@ import * as ProjectService from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as SourceControlRepositoryService from "../../../sourceControl/SourceControlRepositoryService.ts";
+import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const shared = {
@@ -104,7 +105,7 @@ const ProjectCloneTool = Tool.make("t3_project_clone", {
 const ThreadLaunchTool = Tool.make("t3_thread_launch", {
   ...shared,
   description:
-    'Launch a CHILD chat of this thread with an explicit workspace binding before its agent starts. A child is a full, separate agent chat with its own context for a separate part of a larger task (independent implementation, a review, a PR stack in its own worktree): it shows inside this thread\'s card on the Agents board and in the sidebar, keeps its own status, settles on its own, and manages its own subagents. To save your own context instead, use native subagent tools or delegate_task without a profileId. Set workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} for a new worktree based on local commits, or {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to use an existing checkout. For upstream commits, set startFromOrigin:true. Omitted workspaceStrategy means the project root, NOT the caller\'s worktree. For an agent\'s work, pass profileId from t3_list_agents: the thread runs as that agent with its instructions, skills, model, and modes. Omit projectId/modelSelection/modes to inherit those settings from the calling thread (a caller outside a T3 thread must pass projectId and gets the project\'s default model); with profileId, explicit modelSelection/modes override the agent\'s. Set scratch:true instead of projectId for a thread without a project: it runs in a fresh folder of its own, outside any repository. Put the task in message. Do not ask the agent to create its own worktree via shell: that does not update the thread binding. Each call creates a new launch with no retry key; retain threadId and use t3_thread_read/t3_thread_wait to follow preparation. After errors or lost responses, inspect t3_thread_list before retrying. Attachments must be pending uploads. Requires a full-access/default calling thread; a caller outside a T3 thread launches up to its approved permission mode.',
+    'Launch a CHILD chat of this thread with an explicit workspace binding before its agent starts. A child is a full, separate agent chat with its own context for a separate part of a larger task (independent implementation, a review, a PR stack in its own worktree): it shows inside this thread\'s card on the Agents board and in the sidebar, keeps its own status, settles on its own, and manages its own subagents. To save your own context instead, use native subagent tools or delegate_task without a profileId. Set workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} for a new worktree based on local commits, or {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to use an existing checkout. For upstream commits, set startFromOrigin:true. Omitted workspaceStrategy means the project root, NOT the caller\'s worktree. For an agent\'s work, pass profileId from t3_list_agents: the thread runs as that agent with its instructions, skills, model, and modes. Omit projectId/modelSelection/modes to inherit those settings from the calling thread (a caller outside a T3 thread must pass projectId and gets the project\'s default model); with profileId, explicit modelSelection/modes override the agent\'s. Set scratch:true instead of projectId for a thread without a project: it runs in a fresh folder of its own, outside any repository. Put the task in message. Do not ask the agent to create its own worktree via shell: that does not update the thread binding. Each call creates a new launch with no retry key; retain threadId and use t3_thread_read/t3_thread_wait to follow preparation. To link a thread for the user, write `[title](t3-thread://v1/<threadId>)` with the threadId exactly as returned, not URL-encoded; T3 Code shows the thread\'s current title. After errors or lost responses, inspect t3_thread_list before retrying. Attachments must be pending uploads. The new thread may not run with broader runtime or interaction modes than the caller: the calling T3 thread\'s own modes, or the permission mode an outside agent was approved with.',
   parameters: Schema.Struct({
     projectId: Schema.optional(ProjectId),
     scratch: Schema.optional(
@@ -121,7 +122,7 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
     workspaceStrategy: Schema.optional(
       OrchestrationV2ThreadLaunchWorkspaceStrategy.annotate({
         description:
-          "Choose where this thread runs before starting its agent: worktree creates and binds a new checkout from baseRef; existing_worktree binds worktreePath; root uses the project checkout. Omitted means root, not the caller's worktree. For a PR stack use the parent branch as baseRef and startFromOrigin:false. Uncommitted changes are not copied.",
+          "Choose where this thread runs before starting its agent: worktree creates and binds a new checkout from baseRef; existing_worktree binds worktreePath, which must be one of the project's git worktrees; root uses the project checkout. Omitted means root, not the caller's worktree. For a PR stack use the parent branch as baseRef and startFromOrigin:false. Uncommitted changes are not copied.",
       }),
     ),
     message: Schema.optional(
@@ -144,6 +145,7 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
     ThreadLaunchService.ThreadLaunchService,
     ServerSettings.ServerSettingsService,
     ManagedProjectFolders.ManagedProjectFolders,
+    GitVcsDriver.GitVcsDriver,
     FileSystem.FileSystem,
     ServerConfig.ServerConfig,
   ],

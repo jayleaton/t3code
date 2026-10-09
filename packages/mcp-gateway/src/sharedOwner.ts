@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - the gateway is a plain Node process outside the Effect runtime.
 import * as NodeCrypto from "node:crypto";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - The owner creates its state directory only after acquiring the bridge port.
 import * as NodeFS from "node:fs";

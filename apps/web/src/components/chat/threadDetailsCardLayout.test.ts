@@ -4,7 +4,7 @@ import {
   resolveThreadDetailsCardLayout,
 } from "./threadDetailsCardLayout";
 
-const lane = { padding: 20, minChatWidth: 640 };
+const lane = { padding: 48, minChatWidth: 640 };
 const resolve = (width: number, height: number, previewY: number | null = null) =>
   resolveThreadDetailsCardLayout({
     container: { width, height },
@@ -32,15 +32,25 @@ describe("workspace card", () => {
       });
     expect(layout(1600, 440)).toMatchObject({ x: 1148, width: 440 });
     expect(layout(1600, 900)).toMatchObject({ x: 1028, width: 560 });
-    expect(layout(1100, 440)).toMatchObject({ x: 692, width: 396 });
-    expect(layout(984, 440)).toMatchObject({ x: 692, width: 280 });
-    expect(layout(983, 440)).toBeNull();
+    expect(layout(1100, 440)).toMatchObject({ x: 720, width: 368 });
+    expect(layout(1012, 440)).toMatchObject({ x: 720, width: 280 });
+    expect(layout(1011, 440)).toBeNull();
     expect(layout(1600, 200)).toMatchObject({ x: 1308, width: 280 });
     expect(layout(1600, 440)).toMatchObject({ width: 440 });
   });
+  it("starts below the open find bar, keeping the bottom inset", () => {
+    expect(
+      resolveThreadDetailsCardLayout({
+        container: { width: 1600, height: 900 },
+        lane,
+        frame: null,
+        topInset: 48,
+      }),
+    ).toEqual({ x: 1308, y: 60, width: 280, height: 828 });
+  });
   it("hides when a readable chat lane cannot fit beside it", () => {
-    expect(resolve(984, 900)).toMatchObject({ x: 692 });
-    expect(resolve(983, 900)).toBeNull();
+    expect(resolve(1012, 900)).toMatchObject({ x: 720 });
+    expect(resolve(1011, 900)).toBeNull();
   });
   it("keeps the card at the top right while the preview is freely dragged vertically", () => {
     for (const y of [12, 170, 250, 400, 648]) {

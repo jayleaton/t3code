@@ -80,6 +80,8 @@ import Migration0055 from "./Migrations/055_PullRequestFilesViewed.ts";
 import Migration0056 from "./Migrations/056_ScheduledTasks.ts";
 import Migration0057 from "./Migrations/057_ProjectionThreadsAutoSettleDisabledAt.ts";
 import Migration0058 from "./Migrations/058_ProjectionThreadsParentThreadId.ts";
+import Migration0066 from "./Migrations/059_McpAppModelContext.ts";
+import Migration0067 from "./Migrations/060_ThreadSnapshotWindowIndexes.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -158,6 +160,9 @@ export const migrationEntries = [
   [63, "ScheduledTaskWebhooks", Migration0063],
   [64, "WebhookRelayDeliveries", Migration0064],
   [65, "ThreadTasks", Migration0065],
+  // Upstream ships these as 59 and 60; the fork ledger had already used those ids.
+  [66, "McpAppModelContext", Migration0066],
+  [67, "ThreadSnapshotWindowIndexes", Migration0067],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

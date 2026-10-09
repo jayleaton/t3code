@@ -1,4 +1,5 @@
 import { AgentLibrarySync } from "./state/AgentLibrarySync";
+import { PermissionUpdateNotice } from "./components/PermissionUpdateNotice";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
@@ -23,6 +24,7 @@ import { appAtomRegistry } from "./state/atom-registry";
 import { OverlayPortalHost } from "./components/OverlayPortal";
 import { shouldHandleAppLink } from "./lib/appLinking";
 import { useMobileNavigationTheme } from "./lib/useMobileNavigationTheme";
+import { useUiRuntimeMemoryWarningGc } from "./lib/useUiRuntimeMemoryWarningGc";
 import { SubscriptionUsageCoordinator } from "./widgets/SubscriptionUsageCoordinator";
 import { VoiceInputProvider } from "./features/voice-input/VoiceInputProvider";
 import { GlobalVoiceInputControl } from "./features/voice-input/GlobalVoiceInputControl";
@@ -62,6 +64,8 @@ function SplashScreenCoordinator() {
 }
 
 export default function App() {
+  useUiRuntimeMemoryWarningGc();
+
   return (
     <RegistryContext.Provider value={appAtomRegistry}>
       <CloudAuthProvider>
@@ -82,6 +86,7 @@ function AppContent() {
       <SplashScreenCoordinator />
       <SubscriptionUsageCoordinator />
       <AgentLibrarySync />
+      <PermissionUpdateNotice />
       <GestureHandlerRootView className="flex-1">
         <KeyboardProvider statusBarTranslucent>
           <SafeAreaProvider>

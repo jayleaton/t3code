@@ -219,7 +219,6 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
       yield* fs.writeFileString(
         keybindingsConfigPath,
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         JSON.stringify([
           { key: "mod+j", command: "terminal.toggle" },
           { key: "mod+shift+d+o", command: "terminal.new" },
@@ -257,7 +256,7 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       Effect.gen(function* () {
         const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
         yield* writeKeybindingsConfig(keybindingsConfigPath, [
-          { key: "mod+shift+t", command: "terminal.toggle" },
+          { key: "mod+shift+y", command: "terminal.toggle" },
           { key: "mod+shift+r", command: "script.run-tests.run" },
         ]);
 
@@ -271,7 +270,7 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
 
         const persistedToggle = byCommand.get("terminal.toggle");
         assert.isNotNull(persistedToggle);
-        assert.equal(persistedToggle?.key, "mod+shift+t");
+        assert.equal(persistedToggle?.key, "mod+shift+y");
         assert.isFalse(
           persisted.some((entry) => entry.command === "terminal.toggle" && entry.key === "mod+j"),
         );
@@ -598,6 +597,28 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
 
       assert.deepEqual(first, second);
       assert.isTrue(second.some((entry) => entry.command === "terminal.toggle"));
+    }).pipe(Effect.provide(layerKeybindings())),
+  );
+
+  it.effect("retries a failed config read instead of keeping the failure", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      // A directory where the file should be makes the read itself fail.
+      yield* fileSystem.makeDirectory(keybindingsConfigPath, { recursive: true });
+
+      const keybindings = yield* Keybindings.Keybindings;
+      const failed = yield* toDetailResult(keybindings.loadConfigState);
+      assertFailure(failed, "failed to read keybindings config");
+
+      yield* fileSystem.remove(keybindingsConfigPath, { recursive: true });
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        { key: "mod+j", command: "terminal.toggle" },
+      ]);
+
+      const configState = yield* keybindings.loadConfigState;
+      assert.deepEqual(configState.issues, []);
+      assert.isTrue(configState.keybindings.some((entry) => entry.command === "terminal.toggle"));
     }).pipe(Effect.provide(layerKeybindings())),
   );
 

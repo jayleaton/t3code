@@ -27,7 +27,7 @@ import {
   ProjectionStoreV2,
   layer as projectionLayer,
 } from "../orchestration-v2/ProjectionStore.ts";
-import type { ProviderAdapterV2Shape } from "../orchestration-v2/ProviderAdapter.ts";
+import type { ProviderAdapterV2Shape } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import * as ThreadTaskService from "./ThreadTaskService.ts";

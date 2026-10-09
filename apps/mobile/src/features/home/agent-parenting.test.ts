@@ -87,6 +87,6 @@ describe("parentRejection", () => {
   it("rejects self-parenting, the current parent, and cycles with the shared wording", () => {
     expect(parentRejection(all[0]!, all[0]!, all)).toBe("A chat cannot be its own parent");
     expect(parentRejection(all[2]!, all[1]!, all)).toBe("Already under chat b");
-    expect(parentRejection(all[0]!, all[2]!, all)).toBe("Can't move under its own sub-run");
+    expect(parentRejection(all[0]!, all[2]!, all)).toBe("Can't move under its own child");
   });
 });

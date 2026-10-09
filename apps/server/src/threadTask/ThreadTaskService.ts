@@ -66,7 +66,7 @@ import * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
-import { randomUuidV4 } from "../orchestration-v2/RandomUuid.ts";
+import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import { forkParked } from "../serverActivation.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";

@@ -2,7 +2,7 @@ import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { collectStreamAsString } from "./providerSnapshot.ts";
+import { collectStreamAsString } from "@t3tools/provider-core/server/snapshotProbe";
 
 export const spawnCommandCode = Effect.fn("spawnCommandCode")(function* (input: {
   binaryPath: string;

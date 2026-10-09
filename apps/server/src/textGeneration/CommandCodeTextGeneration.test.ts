@@ -4,7 +4,7 @@ import { CommandCodeSettings, ProviderInstanceId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
-import { writeFakeCli } from "../testUtils/fakeCli.ts";
+import { writeFakeCli } from "@t3tools/provider-testing/fakeCli";
 import { makeCommandCodeTextGeneration } from "./CommandCodeTextGeneration.ts";
 
 const decodeSettings = Schema.decodeUnknownEffect(CommandCodeSettings);

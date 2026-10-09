@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - the gateway is a plain Node process outside the Effect runtime.
 import { skillFields } from "./skillInput.ts";
 import { z } from "zod";
 import * as NodeCrypto from "node:crypto";
