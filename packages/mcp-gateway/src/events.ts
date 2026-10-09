@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - the gateway is a plain Node process outside the Effect runtime.
 import * as DateTime from "effect/DateTime";
 
 import * as NodeCrypto from "node:crypto";

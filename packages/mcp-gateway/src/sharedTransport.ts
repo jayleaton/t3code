@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - the gateway is a plain Node process outside the Effect runtime.
 import * as NodeCrypto from "node:crypto";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { JSONRPCMessageSchema } from "@modelcontextprotocol/sdk/types.js";

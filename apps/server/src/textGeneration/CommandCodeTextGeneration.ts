@@ -14,12 +14,12 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
-} from "./TextGenerationPrompts.ts";
+} from "@t3tools/provider-core/server/textGenerationPrompts";
 import {
   sanitizeCommitSubject,
   sanitizePrTitle,
   sanitizeThreadTitle,
-} from "./TextGenerationUtils.ts";
+} from "@t3tools/provider-core/server/textGenerationUtils";
 import { collectCommandCode } from "../provider/commandCodeProcess.ts";
 
 export const makeCommandCodeTextGeneration = Effect.fn("makeCommandCodeTextGeneration")(function* (

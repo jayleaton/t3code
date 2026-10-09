@@ -24,7 +24,7 @@ import {
   probeClaudeCapabilities,
   probeClaudeWorkspaceSnapshot,
 } from "./ClaudeProvider.ts";
-import { COMPACT_SLASH_COMMAND } from "./providerSnapshot.ts";
+import { COMPACT_SLASH_COMMAND } from "@t3tools/provider-core/server/snapshotProbe";
 
 vi.mock("@anthropic-ai/claude-agent-sdk", { spy: true });
 
@@ -279,6 +279,7 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
         email: "dev@example.com",
         subscriptionType: "pro",
         tokenSource: "oauth",
+        apiKeySource: undefined,
         apiProvider: undefined,
         slashCommands: [
           {
@@ -293,7 +294,6 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
         },
       });
 
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       const invocation = JSON.parse(yield* fs.readFileString(invocationPath)) as {
         readonly args: ReadonlyArray<string>;
         readonly cwd: string;
@@ -310,7 +310,6 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
 
       const settingsFlagIndex = invocation.args.indexOf("--settings");
       assert.notEqual(settingsFlagIndex, -1);
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       const flagSettings = JSON.parse(invocation.args[settingsFlagIndex + 1] ?? "{}") as {
         readonly disableAllHooks?: boolean;
       };
@@ -351,5 +350,27 @@ it.effect("preserves initialized capabilities when optional usage times out", ()
     ]);
     assert.equal(capabilities?.usage, undefined);
     assert.equal(abortSignal?.aborted, true);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("asks for usage without the local transcript scan", () =>
+  Effect.gen(function* () {
+    let usageOptions: unknown;
+    const query = vi.spyOn(ClaudeSdk, "query").mockImplementation(
+      () =>
+        ({
+          initializationResult: async () => ({
+            account: { email: "dev@example.com", subscriptionType: "max", tokenSource: "oauth" },
+            commands: [],
+          }),
+          usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async (options?: unknown) => {
+            usageOptions = options;
+            return { rate_limits_available: true, rate_limits: null };
+          },
+        }) as unknown as ReturnType<typeof ClaudeSdk.query>,
+    );
+    yield* Effect.addFinalizer(() => Effect.sync(() => query.mockRestore()));
+    yield* probeClaudeCapabilities(decodeClaudeSettings({ binaryPath: "claude" }));
+    assert.deepEqual(usageOptions, { skipBehaviors: true });
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

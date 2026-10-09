@@ -1,22 +1,12 @@
 import { TerminalIcon } from "lucide-react";
 import { ProviderDriverKind } from "@t3tools/contracts";
-import {
-  AntigravityIcon,
-  ClaudeAI,
-  CursorIcon,
-  GrokIcon,
-  Icon,
-  OpenAI,
-  OpenCodeIcon,
-} from "../Icons";
+import { AntigravityIcon, ClaudeAI, Icon, OpenAI } from "../Icons";
 
+/** Drivers without a provider package glyph; packaged drivers draw `providerClients` icons. */
 export const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>> = {
   [ProviderDriverKind.make("commandcode")]: TerminalIcon,
   [ProviderDriverKind.make("codex")]: OpenAI,
   [ProviderDriverKind.make("claudeAgent")]: ClaudeAI,
-  [ProviderDriverKind.make("opencode")]: OpenCodeIcon,
-  [ProviderDriverKind.make("cursor")]: CursorIcon,
-  [ProviderDriverKind.make("grok")]: GrokIcon,
   [ProviderDriverKind.make("antigravity")]: AntigravityIcon,
 };
 

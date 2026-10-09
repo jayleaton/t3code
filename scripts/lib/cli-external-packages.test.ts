@@ -44,7 +44,7 @@ describe("shouldBundleCliDependency", () => {
     assert.strictEqual(isRuntimeExternalCliDependency("zod"), true);
   });
 
-    it("never bundles node: builtins", () => {
+  it("never bundles node: builtins", () => {
     assert.strictEqual(shouldBundleCliDependency("node:fs"), false);
   });
 
@@ -88,7 +88,7 @@ describe("selectCliRuntimeExternalDependencies", () => {
   it("selects every external root declared by the server", () => {
     assert.deepStrictEqual(
       Object.keys(selectCliRuntimeExternalDependencies(serverPackageJson.dependencies)).sort(),
-      ["@cursor/sdk", "@ff-labs/fff-node", "@napi-rs/keyring", "node-pty"],
+      ["@cursor/sdk", "@ff-labs/fff-node", "@napi-rs/keyring", "node-pty", "playwright-core"],
     );
   });
 });

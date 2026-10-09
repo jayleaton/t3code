@@ -1,34 +1,35 @@
 import { CommandCodeSettings, ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
-import { IdAllocatorV2 } from "../../orchestration-v2/IdAllocator.ts";
+import { IdAllocatorV2 } from "@t3tools/provider-core/server/IdAllocator";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/process";
-import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
-import { ServerConfig } from "../../config.ts";
-import { ServerSettingsService } from "../../serverSettings.ts";
+import { ProviderHost } from "@t3tools/provider-core/server/ProviderHost";
 import { makeCommandCodeTextGeneration } from "../../textGeneration/CommandCodeTextGeneration.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeCommandCodeAdapter } from "../CommandCodeAdapter.ts";
-import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
-import { defaultProviderContinuationIdentity, type ProviderDriver } from "../ProviderDriver.ts";
-import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
-import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
+import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
+import {
+  defaultProviderContinuationIdentity,
+  type ProviderDriver,
+} from "@t3tools/provider-core/server/driver";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
+import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
 import {
   buildServerProvider,
   isCommandMissingCause,
   parseGenericCliVersion,
   providerModelsFromSettings,
-} from "../providerSnapshot.ts";
+} from "@t3tools/provider-core/server/snapshotProbe";
 import { collectCommandCode } from "../commandCodeProcess.ts";
 import { COMMAND_CODE_MODEL_CAPABILITIES, parseCommandCodeModels } from "../commandCodeProtocol.ts";
-import { withInstanceIdentity } from "./instanceIdentity.ts";
+import { withInstanceIdentity } from "@t3tools/provider-core/server/instanceIdentity";
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
   type ProviderSnapshotSettings,
-} from "../providerUpdateSettings.ts";
+} from "@t3tools/provider-core/server/snapshotSettings";
 
 const DRIVER = ProviderDriverKind.make("commandcode");
 const decodeSettings = Schema.decodeSync(CommandCodeSettings);
@@ -47,12 +48,10 @@ const maintenance = makeManualOnlyProviderMaintenanceCapabilities({
   packageName: "command-code",
 });
 export type CommandCodeDriverEnv =
-  | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
   | IdAllocatorV2
   | FileSystem.FileSystem
-  | ServerConfig
-  | ServerSettingsService;
+  | ProviderHost;
 
 export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeDriverEnv> = {
   driverKind: DRIVER,
@@ -62,8 +61,7 @@ export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeD
   create: (input) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const serverConfig = yield* ServerConfig;
-      const serverSettings = yield* ServerSettingsService;
+      const host = yield* ProviderHost;
       const environment = { ...mergeProviderInstanceEnvironment(input.environment), NO_COLOR: "1" };
       const config = { ...input.config, enabled: input.enabled };
       const continuationIdentity = defaultProviderContinuationIdentity({
@@ -103,7 +101,7 @@ export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeD
         collectCommandCode({
           binaryPath: config.binaryPath,
           args: [...args, "--no-auto-update"],
-          cwd: serverConfig.cwd,
+          cwd: host.paths.cwd,
           environment,
         }).pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -168,7 +166,7 @@ export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeD
           ),
         ),
       );
-      const source = makeProviderSnapshotSettingsSource(config, serverSettings);
+      const source = makeProviderSnapshotSettingsSource(config, host.settings);
       const snapshot = yield* makeManagedServerProvider<
         ProviderSnapshotSettings<CommandCodeSettings>
       >({
@@ -191,8 +189,8 @@ export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeD
       const adapter = yield* makeCommandCodeAdapter(config, {
         instanceId: input.instanceId,
         environment,
-        cwd: serverConfig.cwd,
-        attachmentsDir: serverConfig.attachmentsDir,
+        cwd: host.paths.cwd,
+        attachmentsDir: host.paths.attachmentsDir,
       });
       const textGeneration = yield* makeCommandCodeTextGeneration(config, environment);
       return {

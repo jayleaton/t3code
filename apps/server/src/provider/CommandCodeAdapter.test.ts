@@ -23,10 +23,13 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { writeFakeCli } from "../testUtils/fakeCli.ts";
-import * as McpProviderSession from "../mcp/McpProviderSession.ts";
-import { IdAllocatorV2, layer as idAllocatorLayer } from "../orchestration-v2/IdAllocator.ts";
-import { ProviderAdapterV2Event } from "../orchestration-v2/ProviderAdapter.ts";
+import { writeFakeCli } from "@t3tools/provider-testing/fakeCli";
+import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
+import {
+  IdAllocatorV2,
+  layer as idAllocatorLayer,
+} from "@t3tools/provider-core/server/IdAllocator";
+import { ProviderAdapterV2Event } from "@t3tools/provider-core/server/ProviderAdapter";
 import { makeCommandCodeAdapter } from "./CommandCodeAdapter.ts";
 const decodeSettings = Schema.decodeSync(CommandCodeSettings);
 const decodeEvent = Schema.decodeUnknownEffect(ProviderAdapterV2Event);

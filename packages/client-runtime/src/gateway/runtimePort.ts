@@ -44,7 +44,17 @@ import {
   unsettleThread,
   updateThreadMetadata,
 } from "../operations/commands.ts";
-import { request, runStream, subscribe } from "../rpc/client.ts";
+import {
+  request,
+  requestGuarded,
+  RpcPermissionGuard,
+  runStream,
+  runStreamGuarded,
+  subscribe,
+  type EnvironmentRpcInput,
+  type EnvironmentStreamCommandRpcTag,
+  type EnvironmentUnaryRpcTag,
+} from "../rpc/client.ts";
 import { derivePendingThreadRequests } from "../state/threadRequests.ts";
 import type {
   GatewayDevice,
@@ -55,6 +65,29 @@ import type {
   GatewayRuntimePort,
   GatewayThreadExecutionState,
 } from "./port.ts";
+
+/**
+ * Agent tools act on an environment this gateway already connected to, so the
+ * server's own scope check decides protected writes and its authorization
+ * error is what the tool reports.
+ */
+const serverCheckedPermissions = { authorize: () => Effect.void };
+
+const gatewayRequest = <TTag extends EnvironmentUnaryRpcTag>(
+  tag: TTag,
+  input: EnvironmentRpcInput<TTag>,
+) =>
+  requestGuarded(tag, input).pipe(
+    Effect.provideService(RpcPermissionGuard, serverCheckedPermissions),
+  );
+
+const gatewayRunStream = <TTag extends EnvironmentStreamCommandRpcTag>(
+  tag: TTag,
+  input: EnvironmentRpcInput<TTag>,
+) =>
+  runStreamGuarded(tag, input).pipe(
+    Stream.provideService(RpcPermissionGuard, serverCheckedPermissions),
+  );
 
 export interface GatewayEffectRuntime {
   runPromise<A, E>(effect: Effect.Effect<A, E, EnvironmentRegistry | Crypto.Crypto>): Promise<A>;
@@ -772,7 +805,7 @@ export function createGatewayRuntimePort(
               const { input } = scheduled;
               const routing = yield* profileRouting(input.profileId);
               const { task } = yield* call(
-                request(WS_METHODS.scheduledTasksUpsert, {
+                gatewayRequest(WS_METHODS.scheduledTasksUpsert, {
                   title: input.title ?? defaultScheduledTaskTitle(input.prompt),
                   prompt: input.prompt,
                   enabled: input.enabled ?? true,
@@ -800,7 +833,7 @@ export function createGatewayRuntimePort(
                   ? yield* profileRouting(patch.profileId)
                   : {};
               const { task } = yield* call(
-                request(WS_METHODS.scheduledTasksUpsert, {
+                gatewayRequest(WS_METHODS.scheduledTasksUpsert, {
                   id: existing.id,
                   requireExisting: true,
                   title: patch.title ?? existing.title,
@@ -824,14 +857,14 @@ export function createGatewayRuntimePort(
             }
             case "delete":
               yield* call(
-                request(WS_METHODS.scheduledTasksDelete, {
+                gatewayRequest(WS_METHODS.scheduledTasksDelete, {
                   id: ScheduledTaskId.make(scheduled.taskId),
                 }),
               );
               return { deleted: scheduled.taskId };
             case "run": {
               const { task } = yield* call(
-                request(WS_METHODS.scheduledTasksRunNow, {
+                gatewayRequest(WS_METHODS.scheduledTasksRunNow, {
                   id: ScheduledTaskId.make(scheduled.taskId),
                 }),
               );
@@ -1353,7 +1386,7 @@ export function createGatewayRuntimePort(
           if (input.operation === "pr.update") {
             yield* registry.run(
               environmentId,
-              request(WS_METHODS.pullRequestsUpdate, {
+              gatewayRequest(WS_METHODS.pullRequestsUpdate, {
                 ...prRef,
                 ...(typeof payload.title === "string" ? { title: payload.title } : {}),
                 ...(typeof payload.body === "string" ? { body: payload.body } : {}),
@@ -1364,7 +1397,7 @@ export function createGatewayRuntimePort(
           if (input.operation === "pr.reply") {
             yield* registry.run(
               environmentId,
-              request(WS_METHODS.pullRequestsReplyToThread, {
+              gatewayRequest(WS_METHODS.pullRequestsReplyToThread, {
                 ...prRef,
                 threadId: String(payload.commentId ?? ""),
                 body: String(payload.body ?? ""),
@@ -1375,7 +1408,7 @@ export function createGatewayRuntimePort(
           if (input.operation === "pr.publish") {
             yield* registry.run(
               environmentId,
-              request(WS_METHODS.pullRequestsRunAction, { ...prRef, action: "ready" }),
+              gatewayRequest(WS_METHODS.pullRequestsRunAction, { ...prRef, action: "ready" }),
             );
             return { published: true };
           }
@@ -1396,7 +1429,7 @@ export function createGatewayRuntimePort(
               throw new Error(`Project ${String(payload.projectId)} was not found.`);
             return (yield* registry.run(
               environmentId,
-              request(WS_METHODS.vcsCreateRef, {
+              gatewayRequest(WS_METHODS.vcsCreateRef, {
                 cwd,
                 refName: String(payload.branch ?? ""),
                 switchRef: true,
@@ -1433,7 +1466,7 @@ export function createGatewayRuntimePort(
             }
             const progress = yield* registry.run(
               environmentId,
-              runStream(WS_METHODS.gitRunStackedAction, {
+              gatewayRunStream(WS_METHODS.gitRunStackedAction, {
                 actionId: input.requestId ?? `gateway-${input.operation}`,
                 cwd,
                 action,
@@ -1466,7 +1499,7 @@ export function createGatewayRuntimePort(
             ) {
               yield* registry.run(
                 environmentId,
-                request(WS_METHODS.pullRequestsUpdate, {
+                gatewayRequest(WS_METHODS.pullRequestsUpdate, {
                   projectId: ProjectId.make(String(payload.projectId)),
                   repository: payload.repository,
                   number: result.pr.number,

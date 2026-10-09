@@ -6,7 +6,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import { useProject, useThreadProjection, useThreadStatus } from "../../state/entities";
 import { stripInlineContextReferences } from "../../lib/composerContextReferences";
 import ChatMarkdown from "../ChatMarkdown";
-import { shouldPreserveAssistantLineBreaks } from "../chat/MessagesTimeline.logic";
+import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
 import {
   agentThreadStatus,
   agentThreadStatusLabel,

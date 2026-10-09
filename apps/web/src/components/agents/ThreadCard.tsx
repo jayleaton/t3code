@@ -1,6 +1,8 @@
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { formatRelativeTime } from "../../timestampFormat";
+import { ProviderPackageIcon } from "../chat/ProviderPackageIcon";
 import { PROVIDER_ICON_BY_PROVIDER } from "../chat/providerIconUtils";
+import { providerClients } from "../settings/providerDriverMeta";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { CheckIcon, CornerLeftUpIcon, PinIcon, Undo2Icon } from "lucide-react";
@@ -243,6 +245,7 @@ export const ThreadCard = memo(function ThreadCard({
     (candidate) => candidate.instanceId === thread.modelSelection.instanceId,
   );
   const ModelProviderIcon = provider ? PROVIDER_ICON_BY_PROVIDER[provider.driver] : undefined;
+  const modelPackageIcon = provider ? providerClients.get(provider.driver)?.icon : undefined;
   const model = provider?.models.find(
     (candidate) => candidate.slug === thread.modelSelection.model,
   );
@@ -378,14 +381,22 @@ export const ThreadCard = memo(function ThreadCard({
                   </span>
                 </span>
               )}
-              {ModelProviderIcon && (
+              {(ModelProviderIcon || modelPackageIcon) && (
                 <Tooltip>
                   <TooltipTrigger
                     render={
                       <span className="agent-thread-model" aria-label={`Model: ${modelLabel}`} />
                     }
                   >
-                    <ModelProviderIcon className="size-3.5" aria-hidden="true" />
+                    {ModelProviderIcon ? (
+                      <ModelProviderIcon className="size-3.5" aria-hidden="true" />
+                    ) : modelPackageIcon ? (
+                      <ProviderPackageIcon
+                        icon={modelPackageIcon}
+                        className="size-3.5"
+                        aria-hidden="true"
+                      />
+                    ) : null}
                   </TooltipTrigger>
                   <TooltipPopup>{modelLabel}</TooltipPopup>
                 </Tooltip>

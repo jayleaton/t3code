@@ -1,4 +1,3 @@
-import * as NodeCrypto from "node:crypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { describe, expect, it } from "@effect/vitest";
@@ -221,6 +220,7 @@ function makeAllocations(calls: AllocationCall[] = []) {
           origin: null,
           updatedAt: `generation-${++generation}`,
           generation: 0,
+          tunnelReleasedAt: null,
         };
         allocations.set(allocationKey(input), allocation);
         return allocation;
@@ -364,20 +364,26 @@ function layerProvider(
   );
 }
 
+// First 16 hex chars of SHA-256(`dev_julius:${userId}:${environmentId}`), pinned so a
+// change to the endpoint naming scheme fails here instead of silently matching.
+const MANAGED_ENDPOINT_HASHES: Record<string, string> = {
+  "user_ABC:env_ABC": "d101ac68108a423e",
+  "user_ABC:env_shared": "d7e6356aaf8863aa",
+  "user_DEF:env_shared": "a2fc84ac1b8c1c35",
+};
+
+function expectedManagedEndpointHash(environmentId: string, userId: string): string {
+  const hash = MANAGED_ENDPOINT_HASHES[`${userId}:${environmentId}`];
+  if (hash === undefined) throw new Error(`No pinned hash for ${userId}:${environmentId}`);
+  return hash;
+}
+
 function expectedManagedHostname(environmentId: string, userId = "user_ABC"): string {
-  const hash = NodeCrypto.createHash("sha256")
-    .update(`dev_julius:${userId}:${environmentId}`)
-    .digest("hex")
-    .slice(0, 16);
-  return `dev-julius-${hash}.t3code.test`;
+  return `dev-julius-${expectedManagedEndpointHash(environmentId, userId)}.t3code.test`;
 }
 
 function expectedManagedTunnelName(environmentId: string, userId = "user_ABC"): string {
-  const hash = NodeCrypto.createHash("sha256")
-    .update(`dev_julius:${userId}:${environmentId}`)
-    .digest("hex")
-    .slice(0, 16);
-  return `t3coderelay-managedendpoint-dev-julius-${hash}`;
+  return `t3coderelay-managedendpoint-dev-julius-${expectedManagedEndpointHash(environmentId, userId)}`;
 }
 
 describe("ManagedEndpointProvider", () => {
@@ -968,6 +974,38 @@ describe("ManagedEndpointProvider", () => {
         "updateRecord",
       ]);
       expect(allocationCalls.map((call) => call.operation)).not.toContain("remove");
+      // An ordinary release, such as a host shutting down, must not tell the
+      // user to update: that host gets a new tunnel when it starts again.
+      const claims = allocationCalls.filter((call) => call.operation === "claimRelease");
+      expect(claims.map((call) => (call.input as { markReleased?: boolean }).markReleased)).toEqual(
+        [undefined, undefined],
+      );
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("marks the release on the claim that deletes the tunnel when asked", () => {
+    const allocationCalls: AllocationCall[] = [];
+    const layer = layerProvider(
+      makePersistentTunnelClient(),
+      makeDnsClient(),
+      makeAllocations(allocationCalls),
+    );
+
+    return Effect.gen(function* () {
+      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      const key = { userId: "user_ABC", environmentId: "env_ABC" } as const;
+      yield* provider.provision({
+        ...key,
+        origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
+      });
+      expect(yield* provider.release({ ...key, markReleased: true })).toBe(true);
+
+      // The first claim only reserves the release; the second, taken with the
+      // row locked right before the delete, is the one that records it.
+      const claims = allocationCalls.filter((call) => call.operation === "claimRelease");
+      expect(claims.map((call) => (call.input as { markReleased?: boolean }).markReleased)).toEqual(
+        [undefined, true],
+      );
     }).pipe(Effect.provide(layer));
   });
 
@@ -1080,7 +1118,7 @@ describe("ManagedEndpointProvider", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("does no Cloudflare work when the registered origin is unchanged", () => {
+  it.effect("only confirms the tunnel exists when the registered origin is unchanged", () => {
     const tunnelCalls: TunnelCall[] = [];
     const layer = layerProvider(makePersistentTunnelClient(tunnelCalls));
 
@@ -1099,7 +1137,31 @@ describe("ManagedEndpointProvider", () => {
           endpoint: provisioned.endpoint,
         }),
       ).toBe("ready");
-      expect(tunnelCalls).toEqual([]);
+      expect(tunnelCalls).toEqual([{ operation: "get", input: "tunnel-id" }]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("asks for recovery when the recorded tunnel was deleted", () => {
+    const tunnelCalls: TunnelCall[] = [];
+    const layer = layerProvider(makePersistentTunnelClient(tunnelCalls));
+
+    return Effect.gen(function* () {
+      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      const key = { userId: "user_ABC", environmentId: "env_ABC" } as const;
+      const origin = { localHttpHost: "127.0.0.1", localHttpPort: 3773 } as const;
+      const provisioned = yield* provider.provision({ ...key, origin });
+      // A shutdown release deletes the tunnel but keeps the recorded id; the
+      // host was killed before it dropped its stored config.
+      expect(yield* provider.release(key)).toBe(true);
+
+      expect(
+        yield* provider.reconcileOrigin({
+          ...key,
+          tunnelId: provisioned.runtime.tunnelId!,
+          origin,
+          endpoint: provisioned.endpoint,
+        }),
+      ).toBe("recovery_required");
     }).pipe(Effect.provide(layer));
   });
 
@@ -1125,6 +1187,7 @@ describe("ManagedEndpointProvider", () => {
         }),
       ).toBe("ready");
       expect(tunnelCalls).toEqual([
+        { operation: "get", input: "tunnel-id" },
         {
           operation: "putConfiguration",
           input: {
@@ -1501,6 +1564,53 @@ describe("ManagedEndpointProvider", () => {
       yield* provider.release(key);
     }).pipe(Effect.provide(layer));
   });
+
+  it.effect.each([
+    { name: "the tunnel is gone", tunnelRemoved: true, released: true },
+    { name: "the tunnel still exists", tunnelRemoved: false, released: false },
+  ] as const)(
+    "resolves a delete whose response was lost by checking whether $name",
+    ({ tunnelRemoved, released }) => {
+      const persistent = makePersistentTunnelClient();
+      const lostResponse = new ManagedEndpointProvider.ManagedEndpointTunnelClientError({
+        operation: "delete",
+        tunnelId: "tunnel-id",
+        cause: { _tag: "TimeoutError" },
+      });
+      // Cloudflare may or may not have applied the delete before the
+      // response was lost; the client only sees the timeout.
+      const tunnelClient = ManagedEndpointProvider.ManagedEndpointTunnelClient.of({
+        ...persistent,
+        delete: (tunnelId) =>
+          (tunnelRemoved ? persistent.delete(tunnelId) : Effect.void).pipe(
+            Effect.andThen(Effect.fail(lostResponse)),
+          ),
+      });
+      const allocationCalls: AllocationCall[] = [];
+      const layer = layerProvider(tunnelClient, makeDnsClient(), makeAllocations(allocationCalls));
+
+      return Effect.gen(function* () {
+        const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+        const key = { userId: "user_ABC", environmentId: "env_ABC" } as const;
+        yield* provider.provision({
+          ...key,
+          origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
+        });
+        const result = yield* Effect.result(provider.release({ ...key, markReleased: true }));
+
+        if (released) {
+          // Succeeding commits the marked claim, so status can explain it.
+          expect(result).toMatchObject({ _tag: "Success", success: true });
+        } else {
+          // Failing rolls the claim back; the tunnel is still there to retry.
+          expect(result).toMatchObject({
+            _tag: "Failure",
+            failure: { stage: "delete-tunnel", cause: lostResponse },
+          });
+        }
+      }).pipe(Effect.provide(layer));
+    },
+  );
 
   it.effect("surfaces non-not-found tunnel deletion failures when releasing", () => {
     const failure = new ManagedEndpointProvider.ManagedEndpointTunnelClientError({

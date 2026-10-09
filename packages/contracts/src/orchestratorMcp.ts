@@ -302,6 +302,7 @@ export const OrchestratorMcpThreadListInput = Schema.Struct({
   ),
   titleContains: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
   settled: Schema.optional(Schema.Boolean),
+  snoozed: Schema.optional(Schema.Boolean),
   includeSubagents: Schema.optional(Schema.Boolean),
   cursor: Schema.optional(NonNegativeInt),
   limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(100))),
@@ -322,6 +323,9 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   linkedPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
   settled: Schema.Boolean,
   settledAt: Schema.NullOr(IsoDateTime),
+  snoozed: Schema.Boolean,
+  /** When a snoozed thread wakes; null when it is not snoozed. */
+  snoozedUntil: Schema.NullOr(IsoDateTime),
   /**
    * The chat this one belongs to. `relationshipToParent` says how: `"child"` is
    * a separate agent chat with its own context that a parent launched or nested
@@ -389,6 +393,9 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   archived: Schema.Boolean,
   settled: Schema.Boolean,
   settledAt: Schema.NullOr(IsoDateTime),
+  snoozed: Schema.Boolean,
+  /** When a snoozed thread wakes; null when it is not snoozed. */
+  snoozedUntil: Schema.NullOr(IsoDateTime),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

@@ -17,12 +17,14 @@ import {
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 
+import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ServerActivation from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
@@ -343,12 +345,17 @@ const makeHarness = Effect.fn(function* (input: {
   threads: ReadonlyArray<SettlementShell>;
   settings?: ContractServerSettings;
   activeDescendants?: ReadonlySet<string>;
+  existingWorktreePaths?: ReadonlyArray<string>;
 }) {
   const candidates = yield* Ref.make(input.threads);
   const reads = yield* Queue.unbounded<ThreadId | undefined>();
   const events = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
   const commands = yield* Ref.make<ReadonlyArray<OrchestrationV2ServerCommand>>([]);
   const closedIdle = yield* Queue.unbounded<string>();
+  const scriptRuns =
+    yield* Queue.unbounded<
+      Parameters<ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"]>[0]
+    >();
   const activation = yield* Deferred.make<void>();
   const settings = yield* Ref.make(input.settings ?? DEFAULT_SERVER_SETTINGS);
   const settingsChanges = yield* Queue.unbounded<ContractServerSettings>();
@@ -383,6 +390,13 @@ const makeHarness = Effect.fn(function* (input: {
       closeIdle: ({ threadId }) =>
         Queue.offer(closedIdle, ThreadId.make(threadId)).pipe(Effect.asVoid),
     }),
+    Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
+      runForThread: (runInput) =>
+        Queue.offer(scriptRuns, runInput).pipe(Effect.as({ status: "no-script" } as const)),
+    }),
+    FileSystem.layerNoop({
+      exists: (path) => Effect.succeed(input.existingWorktreePaths?.includes(path) ?? false),
+    }),
     Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
     Layer.succeed(
       Crypto.Crypto,
@@ -398,6 +412,7 @@ const makeHarness = Effect.fn(function* (input: {
     events,
     commands,
     closedIdle,
+    scriptRuns,
     layer: ThreadSettlementService.layer.pipe(Layer.provide(layerDependencies)),
     start: (service: ThreadSettlementService.ThreadSettlementServiceV2["Service"]) =>
       Effect.gen(function* () {
@@ -558,6 +573,48 @@ it.effect("keeps terminals when a settled card was re-engaged before the event w
         }
         // The stream handles events in order; only the later card should close.
         assert.equal(yield* Queue.take(fixture.closedIdle), marker.id);
+      }).pipe(Effect.provide(fixture.layer));
+    }),
+  ),
+);
+
+it.effect("runs the settle script once per settlement, only in the thread's own worktree", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const settled = { settledOverride: "settled" as const, settledAt: at(0) };
+      const shared = shell({ id: ThreadId.make("shared"), ...settled });
+      const removed = shell({ id: ThreadId.make("removed"), ...settled, worktreePath: "/wt/gone" });
+      const worktree = shell({
+        id: ThreadId.make("worktree"),
+        ...settled,
+        worktreePath: "/wt/live",
+      });
+      const marker = shell({ id: ThreadId.make("marker"), ...settled, worktreePath: "/wt/marker" });
+      const fixture = yield* makeHarness({
+        threads: [shared, removed, worktree, marker],
+        existingWorktreePaths: ["/wt/live", "/wt/marker"],
+      });
+      yield* Effect.gen(function* () {
+        const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+        yield* fixture.start(service);
+        // Settling a settled thread re-emits the same settlement; it runs once.
+        for (const thread of [shared, removed, worktree, worktree, marker]) {
+          yield* Queue.offer(fixture.events, {
+            type: "thread.settled",
+            id: EventId.make(`settled:${thread.id}`),
+            threadId: thread.id,
+            occurredAt: at(0),
+            payload: { ...thread, lastVisitedAt: thread.lastVisitedAt ?? null },
+          });
+        }
+        // Events run in order, so the marker's run comes next only if the shared
+        // checkout, the removed worktree, and the repeat were all skipped.
+        const run = yield* Queue.take(fixture.scriptRuns);
+        assert.equal(run.threadId, worktree.id);
+        assert.equal(run.worktreePath, "/wt/live");
+        assert.equal(run.trigger, "settle");
+        assert.equal((yield* Queue.take(fixture.scriptRuns)).threadId, marker.id);
       }).pipe(Effect.provide(fixture.layer));
     }),
   ),

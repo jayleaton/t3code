@@ -5,22 +5,14 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import { ChildProcessSpawner } from "effect/process";
-import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
-import { ServerConfig } from "../../config.ts";
-import { ServerSettingsService } from "../../serverSettings.ts";
-import { writeFakeCli } from "../../testUtils/fakeCli.ts";
-import { layer as idAllocatorLayer } from "../../orchestration-v2/IdAllocator.ts";
+import { layerTestProviderHost } from "@t3tools/provider-testing/host";
+import { writeFakeCli } from "@t3tools/provider-testing/fakeCli";
+import { layer as idAllocatorLayer } from "@t3tools/provider-core/server/IdAllocator";
 import { CommandCodeDriver } from "./CommandCodeDriver.ts";
 
-const layer = ServerConfig.layerTest(process.cwd(), { prefix: "t3-commandcode-driver-" }).pipe(
+const layer = layerTestProviderHost({ runBackgroundWork: false }).pipe(
   Layer.provideMerge(NodeServices.layer),
   Layer.provideMerge(idAllocatorLayer),
-  Layer.provideMerge(ServerSettingsService.layerTest()),
-  Layer.provideMerge(
-    Layer.mock(BackgroundPolicy.BackgroundPolicy)({
-      shouldRunScopeWork: () => Effect.succeed(false),
-    }),
-  ),
 );
 const input = {
   instanceId: ProviderInstanceId.make("commandcode-test"),
