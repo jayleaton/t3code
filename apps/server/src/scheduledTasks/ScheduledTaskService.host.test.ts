@@ -23,34 +23,36 @@ const macProject = ProjectId.make("project-mac");
 const macThread = ThreadId.make("thread-mac");
 const otherProject = ProjectId.make("project-mac-other");
 
-/** One environment's scheduler, hosting the given project and thread. */
+/** One environment's scheduler and its own database, hosting the given project and thread. */
 const environmentLayer = (
   hosted: { readonly projectId: ProjectId; readonly threadId: ThreadId } | null,
   onSend: (input: ThreadManagementService.ThreadManagementSendInput) => Effect.Effect<void> = () =>
     Effect.void,
 ) =>
-  ScheduledTaskService.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        NodeCrypto.layer,
-        Scheduler.layer,
-        Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
-        Layer.mock(SecretRequests.SecretRequests)({}),
-        ScheduledTaskTestkit.layerLocalProjects(
-          (id) => hosted !== null && (id === hosted.projectId || id === otherProject),
+  ScheduledTaskService.layer
+    .pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          NodeCrypto.layer,
+          Scheduler.layer,
+          Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+          ScheduledTaskTestkit.layerLocalProjects(
+            (id) => hosted !== null && (id === hosted.projectId || id === otherProject),
+          ),
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            getThreadShell: (threadId) =>
+              Effect.succeed(
+                threadId === hosted?.threadId
+                  ? ({ id: threadId, projectId: hosted.projectId, archivedAt: null } as never)
+                  : null,
+              ),
+            sendToThread: (input) => onSend(input).pipe(Effect.as({} as never)),
+          }),
         ),
-        Layer.mock(ThreadManagementService.ThreadManagementService)({
-          getThreadShell: (threadId) =>
-            Effect.succeed(
-              threadId === hosted?.threadId
-                ? ({ id: threadId, projectId: hosted.projectId, archivedAt: null } as never)
-                : null,
-            ),
-          sendToThread: (input) => onSend(input).pipe(Effect.as({} as never)),
-        }),
       ),
-    ),
-  );
+    )
+    .pipe(Layer.provideMerge(SqlitePersistence.layerMemory));
 
 const nightlyInput = (overrides: Record<string, unknown> = {}) =>
   decodeUpsertInput({
@@ -116,10 +118,7 @@ it.effect("refuses a project or thread another environment hosts", () =>
       }),
     );
     assert.isFalse(paused.task.enabled);
-  }).pipe(
-    Effect.provide(environmentLayer({ projectId: macProject, threadId: macThread })),
-    Effect.provide(SqlitePersistence.layerMemory),
-  ),
+  }).pipe(Effect.provide(environmentLayer({ projectId: macProject, threadId: macThread }))),
 );
 
 it.effect("a schedule for the Mac's thread runs on the Mac after the Windows client is gone", () =>
@@ -133,11 +132,7 @@ it.effect("a schedule for the Mac's thread runs on the Mac after the Windows cli
       const refused = yield* windows.upsert(yield* nightlyInput()).pipe(Effect.flip);
       assert.include(refused.message, "is not on this environment");
       assert.deepEqual((yield* windows.list()).tasks, []);
-    }).pipe(
-      Effect.provide(environmentLayer(null)),
-      Effect.provide(SqlitePersistence.layerMemory),
-      Effect.scoped,
-    );
+    }).pipe(Effect.provide(environmentLayer(null)), Effect.scoped);
 
     // The Windows runtime is closed. The Mac owns the task and fires it on its own.
     const sent = yield* Deferred.make<ThreadManagementService.ThreadManagementSendInput>();
@@ -157,7 +152,6 @@ it.effect("a schedule for the Mac's thread runs on the Mac after the Windows cli
           Deferred.succeed(sent, input).pipe(Effect.asVoid),
         ),
       ),
-      Effect.provide(SqlitePersistence.layerMemory),
       Effect.scoped,
     );
   }),
