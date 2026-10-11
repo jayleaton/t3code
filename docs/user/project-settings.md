@@ -154,6 +154,13 @@ Run `t3 watch config.json --once` from a scheduler, or `t3 watch config.json
 --interval 30` under any supervisor. Use `npx t3 watch ...` where `t3` is not on
 the `PATH`. Progress is kept in `config.json.state.json`.
 
+Each state file is one watcher: it holds a single-writer lock while a run is in
+progress, so overlapping scheduled runs skip safely instead of sending twice or
+failing. A crashed run's lock is reclaimed automatically. The state file also
+carries the watcher's identity, which is part of every `Idempotency-Key`. Don't
+copy a state file to another host or machine; give each its own. To start fresh,
+delete the state file.
+
 - Linux: a cron line such as `* * * * * t3 watch /path/config.json --once`, or a systemd user timer.
 - macOS: a launchd agent with `ProgramArguments` of `t3`, `watch`, `/path/config.json`, `--once` and `StartInterval` `60`.
 - Windows: `schtasks /Create /TN t3-watch /SC MINUTE /TR "t3 watch C:\path\config.json --once"`.

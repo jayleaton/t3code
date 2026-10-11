@@ -911,6 +911,10 @@ it.effect("counts each handled request by what happened to it", () =>
 
 const keyed = (key: string) => ({ "content-type": "application/json", "idempotency-key": key });
 
+/** The claim id a caller key takes for a task, as a stopped server would have left it. */
+const keyHash = (taskId: string, key: string) =>
+  NodeCrypto.createHash("sha256").update(`${taskId}\n${key}`).digest("hex");
+
 const claimCount = (sql: SqlClient.SqlClient) =>
   sql<{ n: number }>`SELECT COUNT(*) AS n FROM scheduled_task_webhook_relay_deliveries`.pipe(
     Effect.map((rows) => Number(rows[0]?.n ?? 0)),
@@ -994,6 +998,7 @@ it.effect("a caller key stays claimed across a restart and is trimmed after 48 h
         const { task } = yield* service.upsert(yield* webhookTaskInput());
         const result = yield* service.triggerWebhook(requestFor(task, { headers: keyed("boot") }));
         yield* Queue.take(launches);
+        yield* service.awaitWebhookDeliveries;
         return { task, result };
       }),
     );
@@ -1012,7 +1017,9 @@ it.effect("a caller key stays claimed across a restart and is trimmed after 48 h
         );
         assert.equal(later._tag === "accepted" ? later.outcome : "", "accepted");
         yield* Queue.take(launches);
-        assert.equal(yield* claimCount(sql), 1);
+        yield* service.awaitWebhookDeliveries;
+        // Only the new key's claim and its finished marker remain.
+        assert.equal(yield* claimCount(sql), 2);
       }),
     );
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
@@ -1149,4 +1156,69 @@ it.effect("a caller key dedupes retries that arrive with new relay delivery ids"
       assert.equal(yield* Queue.size(launches), 0);
     }),
   ),
+);
+
+it.effect("a keyed delivery a stopped server claimed but never ran runs on the next retry", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const task = yield* withServiceOn(sql, ({ service }) =>
+      Effect.map(Effect.flatMap(webhookTaskInput(), service.upsert), (upserted) => upserted.task),
+    );
+    // The previous server committed the claim, then exited before the run started.
+    const hash = keyHash(task.id, "lost");
+    yield* sql`
+      INSERT INTO scheduled_task_webhook_relay_deliveries (relay_delivery_id, task_id, seen_at)
+      VALUES (${`idempotency:${hash}`}, ${task.id}, ${"1970-01-01T00:00:00.000Z"})
+    `;
+    yield* withServiceOn(sql, ({ service, launches }) =>
+      Effect.gen(function* () {
+        const retried = yield* service.triggerWebhook(requestFor(task, { headers: keyed("lost") }));
+        assert.deepEqual(retried, {
+          _tag: "accepted",
+          deliveryId: `delivery:key:${hash}`,
+          outcome: "accepted",
+        } as typeof retried);
+        const launch = yield* Queue.take(launches);
+        assert.equal(launch.commandId, `scheduled-task:${task.id}:webhook:delivery:key:${hash}`);
+        yield* service.awaitWebhookDeliveries;
+
+        // Finished now: the next retry is a duplicate and starts nothing.
+        const again = yield* service.triggerWebhook(requestFor(task, { headers: keyed("lost") }));
+        assert.equal(again._tag === "accepted" ? again.outcome : "", "duplicate");
+        assert.equal(yield* Queue.size(launches), 0);
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect(
+  "a keyed run dispatched just before the server stopped is retried under the same command id",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const first = yield* withServiceOn(sql, ({ service, launches }) =>
+        Effect.gen(function* () {
+          const { task } = yield* service.upsert(yield* webhookTaskInput());
+          yield* service.triggerWebhook(requestFor(task, { headers: keyed("edge") }));
+          const launch = yield* Queue.take(launches);
+          yield* service.awaitWebhookDeliveries;
+          return { task, launch };
+        }),
+      );
+      // The run was dispatched, but the server stopped before marking it finished.
+      yield* sql`
+        DELETE FROM scheduled_task_webhook_relay_deliveries
+        WHERE relay_delivery_id = ${`idempotency-done:${keyHash(first.task.id, "edge")}`}
+      `;
+      yield* withServiceOn(sql, ({ service, launches }) =>
+        Effect.gen(function* () {
+          yield* service.triggerWebhook(requestFor(first.task, { headers: keyed("edge") }));
+          // The same command id, which the orchestrator's receipts turn into a no-op.
+          const replay = yield* Queue.take(launches);
+          assert.equal(replay.commandId, first.launch.commandId);
+          assert.equal(replay.initialMessage?.messageId, first.launch.initialMessage?.messageId);
+          yield* service.awaitWebhookDeliveries;
+        }),
+      );
+    }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );

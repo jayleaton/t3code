@@ -1,7 +1,14 @@
+// @effect-diagnostics nodeBuiltinImport:off - the cross-process proof needs a real HTTP server and real child processes.
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeHttp from "node:http";
+import * as NodeOS from "node:os";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
+import * as Console from "effect/Console";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -9,7 +16,14 @@ import * as Path from "effect/Path";
 import { TestClock } from "effect/testing";
 import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 
-import { decodeWatchConfig, redactWebhookUrl, watchOnce, type WatchConfig } from "./watch.ts";
+import {
+  decodeWatchConfig,
+  redactWebhookUrl,
+  runWatch,
+  watchLocked,
+  watchOnce,
+  type WatchConfig,
+} from "./watch.ts";
 
 interface RecordedRequest {
   readonly url: string;
@@ -20,8 +34,18 @@ interface RecordedRequest {
 /** Fake webhook endpoint: `statuses` is consumed per POST; 0 means a network error. */
 const makeHarness = (statuses: Array<number> = []) => {
   const requests: Array<RecordedRequest> = [];
+  // The fake server dedupes by Idempotency-Key like the real one: a repeat is dropped.
+  const seen = new Set<string>();
+  const fresh: Array<string> = [];
+  const duplicates: Array<string> = [];
   const client = HttpClient.make((request) => {
     if (request.body._tag !== "Uint8Array") return Effect.die("unexpected body");
+    const idempotencyKey = request.headers["idempotency-key"] ?? "";
+    if (seen.has(idempotencyKey)) duplicates.push(idempotencyKey);
+    else {
+      seen.add(idempotencyKey);
+      fresh.push(idempotencyKey);
+    }
     requests.push({
       url: request.url,
       key: request.headers["idempotency-key"],
@@ -36,7 +60,7 @@ const makeHarness = (statuses: Array<number> = []) => {
         )
       : Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status })));
   });
-  return { requests, layer: Layer.succeed(HttpClient.HttpClient, client) };
+  return { requests, fresh, duplicates, layer: Layer.succeed(HttpClient.HttpClient, client) };
 };
 
 const withDir = <A, E, R>(body: (dir: string) => Effect.Effect<A, E, R>) =>
@@ -66,11 +90,19 @@ const readCursor = (path: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     return JSON.parse(yield* fs.readFileString(path)) as {
+      instanceId: string;
       seq: number;
       state: Record<string, string>;
       sentDeadlines: Array<string>;
       pending: { key: string } | null;
     };
+  });
+
+const listNames = (dir: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    return (yield* fs.readDirectory(dir)).map((entry) => path.basename(entry)).toSorted();
   });
 
 describe("t3 watch", () => {
@@ -93,12 +125,15 @@ describe("t3 watch", () => {
           assert.isTrue(Option.isNone(stuck));
           assert.strictEqual(harness.requests.length, 1);
           const [request] = harness.requests;
-          assert.strictEqual(request!.key, "lease:1");
+          const { instanceId } = yield* readCursor(statePath);
+          assert.match(instanceId, /^[0-9a-f-]{36}$/);
+          assert.strictEqual(request!.key, `lease:${instanceId}:1`);
           assert.strictEqual(request!.url, WEBHOOK);
           assert.deepStrictEqual(
             { ...request!.body, at: undefined },
             {
               watch: "lease",
+              instance: instanceId,
               event: "lease:absent->present",
               probe: "lease",
               from: "absent",
@@ -143,9 +178,10 @@ describe("t3 watch", () => {
           yield* run;
           yield* fs.writeFileString(`${dir}/lease`, "x");
           yield* run;
+          const { instanceId } = yield* readCursor(statePath);
           assert.deepStrictEqual(
             harness.requests.map((request) => request.key),
-            ["lease:1", "lease:2"],
+            [`lease:${instanceId}:1`, `lease:${instanceId}:2`],
           );
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
@@ -190,10 +226,11 @@ describe("t3 watch", () => {
 
         const down = makeHarness([503, 0, 429]);
         const stuck = yield* pass(config, statePath).pipe(Effect.provide(down.layer));
-        assert.deepStrictEqual(stuck, Option.some("lease:1"));
-        assert.strictEqual(down.requests.length, 3);
         const failed = yield* readCursor(statePath);
-        assert.strictEqual(failed.pending?.key, "lease:1");
+        const key = `lease:${failed.instanceId}:1`;
+        assert.deepStrictEqual(stuck, Option.some(key));
+        assert.strictEqual(down.requests.length, 3);
+        assert.strictEqual(failed.pending?.key, key);
         assert.deepStrictEqual(failed.state, { lease: "absent" });
 
         const up = makeHarness();
@@ -201,7 +238,7 @@ describe("t3 watch", () => {
         assert.isTrue(Option.isNone(done));
         assert.deepStrictEqual(
           up.requests.map((request) => request.key),
-          ["lease:1"],
+          [key],
         );
         const cleared = yield* readCursor(statePath);
         assert.isNull(cleared.pending);
@@ -221,11 +258,12 @@ describe("t3 watch", () => {
         const harness = makeHarness([500, 200]);
         const stuck = yield* pass(config, statePath).pipe(Effect.provide(harness.layer));
         assert.isTrue(Option.isNone(stuck));
+        const cursor = yield* readCursor(statePath);
+        const key = `lease:${cursor.instanceId}:1`;
         assert.deepStrictEqual(
           harness.requests.map((request) => request.key),
-          ["lease:1", "lease:1"],
+          [key, key],
         );
-        const cursor = yield* readCursor(statePath);
         assert.isNull(cursor.pending);
         assert.strictEqual(cursor.seq, 1);
       }),
@@ -290,7 +328,6 @@ describe("t3 watch", () => {
     withDir((dir) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
         yield* fs.writeFileString(`${dir}/lease`, "x");
         const config = makeConfig(dir, {
           probes: [
@@ -304,12 +341,352 @@ describe("t3 watch", () => {
           ],
         });
         yield* pass(config, `${dir}/state.json`).pipe(Effect.provide(makeHarness().layer));
-        const names = (yield* fs.readDirectory(dir))
-          .map((entry) => path.basename(entry))
-          .toSorted();
-        assert.deepStrictEqual(names, ["lease", "state.json"]);
+        assert.deepStrictEqual(yield* listNames(dir), ["lease", "state.json"]);
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("gives each state file its own identity even when config names collide", () =>
+    withDir((dir) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const harness = makeHarness();
+        const config = makeConfig(dir);
+        const hostA = `${dir}/a.json`;
+        const hostB = `${dir}/b.json`;
+        yield* pass(config, hostA).pipe(Effect.provide(harness.layer));
+        yield* pass(config, hostB).pipe(Effect.provide(harness.layer));
+        yield* fs.writeFileString(`${dir}/lease`, "x");
+        yield* pass(config, hostA).pipe(Effect.provide(harness.layer));
+        yield* pass(config, hostB).pipe(Effect.provide(harness.layer));
+
+        assert.strictEqual(harness.requests.length, 2);
+        assert.strictEqual(harness.fresh.length, 2);
+        assert.deepStrictEqual(harness.duplicates, []);
+        const [a, b] = [yield* readCursor(hostA), yield* readCursor(hostB)];
+        assert.notStrictEqual(a.instanceId, b.instanceId);
+        assert.deepStrictEqual(
+          new Set(harness.fresh),
+          new Set([`lease:${a.instanceId}:1`, `lease:${b.instanceId}:1`]),
+        );
+        assert.deepStrictEqual(
+          new Set(harness.requests.map((request) => request.body.instance)),
+          new Set([a.instanceId, b.instanceId]),
+        );
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps the instance for the cursor's life and mints a new one when recreated", () =>
+    withDir((dir) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const harness = makeHarness();
+        const statePath = `${dir}/state.json`;
+        const config = makeConfig(dir);
+        const run = pass(config, statePath).pipe(Effect.provide(harness.layer));
+
+        yield* run;
+        const first = yield* readCursor(statePath);
+        yield* fs.writeFileString(`${dir}/lease`, "x");
+        yield* run;
+        yield* fs.remove(`${dir}/lease`);
+        yield* run;
+        assert.strictEqual((yield* readCursor(statePath)).instanceId, first.instanceId);
+
+        yield* fs.remove(statePath);
+        yield* run; // fresh baseline: absent
+        const second = yield* readCursor(statePath);
+        assert.notStrictEqual(second.instanceId, first.instanceId);
+        yield* fs.writeFileString(`${dir}/lease`, "x");
+        yield* run;
+
+        // seq restarted at 1 but the keys differ, so the server accepts both as new.
+        assert.deepStrictEqual(harness.fresh, [
+          `lease:${first.instanceId}:1`,
+          `lease:${second.instanceId}:1`,
+        ]);
+        assert.deepStrictEqual(harness.duplicates, []);
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("lets only one of two concurrent in-process passes probe and send", () =>
+    withDir((dir) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const harness = makeHarness();
+        const statePath = `${dir}/state.json`;
+        const config = makeConfig(dir);
+        yield* pass(config, statePath).pipe(Effect.provide(harness.layer)); // baseline
+        yield* fs.writeFileString(`${dir}/lease`, "x");
+
+        const results = yield* Effect.all(
+          [watchLocked(config, statePath), watchLocked(config, statePath)],
+          { concurrency: "unbounded" },
+        ).pipe(Effect.provide(harness.layer));
+
+        assert.strictEqual(harness.requests.length, 1);
+        assert.strictEqual(results.filter(Option.isSome).length >= 1, true);
+        const cursor = yield* readCursor(statePath);
+        assert.strictEqual(cursor.seq, 1);
+        assert.isNull(cursor.pending);
+        assert.deepStrictEqual(yield* listNames(dir), ["lease", "state.json"]);
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("re-sends the exact stored key once after a crash left a dead holder's lock", () =>
+    withDir((dir) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const statePath = `${dir}/state.json`;
+        const config = makeConfig(dir);
+        yield* pass(config, statePath).pipe(Effect.provide(makeHarness().layer)); // baseline
+        yield* fs.writeFileString(`${dir}/lease`, "x");
+        yield* pass(config, statePath).pipe(Effect.provide(makeHarness([503, 503, 503]).layer));
+        const crashed = yield* readCursor(statePath);
+        const storedKey = crashed.pending?.key;
+        assert.strictEqual(storedKey, `lease:${crashed.instanceId}:1`);
+
+        // A pid far above any real pid on this host stands in for the dead holder.
+        yield* fs.writeFileString(
+          `${statePath}.lock`,
+          JSON.stringify({
+            token: "dead-holder",
+            pid: 2 ** 22 + 12345,
+            hostname: NodeOS.hostname(),
+            acquiredAt: 0,
+            heartbeatAt: 0,
+            staleAfterMs: 120_000,
+          }),
+        );
+        const harness = makeHarness();
+        const stuck = yield* pass(config, statePath).pipe(Effect.provide(harness.layer));
+        assert.isTrue(Option.isNone(stuck));
+        assert.deepStrictEqual(
+          harness.requests.map((request) => request.key),
+          [storedKey],
+        );
+        assert.isNull((yield* readCursor(statePath)).pending);
+        assert.deepStrictEqual(yield* listNames(dir), ["lease", "state.json"]);
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("reclaims a lock whose heartbeat is older than its staleness bound", () =>
+    withDir((dir) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const statePath = `${dir}/state.json`;
+        yield* TestClock.adjust(Duration.hours(1));
+        // Another host, so only the heartbeat age can mark it stale.
+        yield* fs.writeFileString(
+          `${statePath}.lock`,
+          JSON.stringify({
+            token: "gone",
+            pid: process.pid,
+            hostname: `${NodeOS.hostname()}-elsewhere`,
+            acquiredAt: 0,
+            heartbeatAt: 0,
+            staleAfterMs: 120_000,
+          }),
+        );
+        const harness = makeHarness();
+        const result = yield* watchLocked(makeConfig(dir), statePath).pipe(
+          Effect.provide(harness.layer),
+        );
+        assert.isTrue(Option.isSome(result));
+        assert.deepStrictEqual(yield* listNames(dir), ["state.json"]);
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("skips without probing or touching the cursor while a live holder owns the lock", () =>
+    withDir((dir) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const statePath = `${dir}/state.json`;
+        const config = makeConfig(dir);
+        yield* pass(config, statePath).pipe(Effect.provide(makeHarness().layer)); // baseline
+        yield* fs.writeFileString(`${dir}/lease`, "x");
+        const before = yield* fs.readFileString(statePath);
+        const lock = JSON.stringify({
+          token: "someone-else",
+          pid: process.pid,
+          hostname: NodeOS.hostname(),
+          acquiredAt: 0,
+          heartbeatAt: yield* Effect.clockWith((clock) => clock.currentTimeMillis),
+          staleAfterMs: 120_000,
+        });
+        yield* fs.writeFileString(`${statePath}.lock`, lock);
+
+        const harness = makeHarness();
+        const result = yield* watchLocked(config, statePath).pipe(Effect.provide(harness.layer));
+        assert.isTrue(Option.isNone(result));
+        assert.strictEqual(harness.requests.length, 0);
+        assert.strictEqual(yield* fs.readFileString(statePath), before);
+        assert.strictEqual(yield* fs.readFileString(`${statePath}.lock`), lock);
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("stops a looping watcher from writing once another process took its lock", () =>
+    withDir((dir) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const statePath = `${dir}/state.json`;
+        const configPath = `${dir}/watch.json`;
+        yield* fs.writeFileString(`${dir}/lease`, "x");
+        yield* fs.writeFileString(
+          configPath,
+          JSON.stringify({
+            ...makeConfig(dir, { retry: { attempts: 1, baseDelayMs: 0 } }),
+            probes: [
+              {
+                kind: "file",
+                name: "lease",
+                path: `${dir}/lease`,
+                notify: ["*"],
+                notifyInitial: true,
+              },
+            ],
+            statePath,
+          }),
+        );
+        // While the first POST is in flight, a process on another host takes the lock,
+        // as if this watcher had been suspended past its staleness bound.
+        const harness = makeHarness([0]);
+        const client = HttpClient.make((request) => {
+          NodeFS.writeFileSync(
+            `${statePath}.lock`,
+            JSON.stringify({
+              token: "taker",
+              pid: 1,
+              hostname: "another-host",
+              acquiredAt: 0,
+              heartbeatAt: Number.MAX_SAFE_INTEGER,
+              staleAfterMs: 120_000,
+            }),
+          );
+          return Effect.flatMap(HttpClient.HttpClient, (inner) => inner.execute(request)).pipe(
+            Effect.provide(harness.layer),
+          );
+        });
+        const stuck = Promise.withResolvers<void>();
+        const skipped = Promise.withResolvers<void>();
+        const testConsole = {
+          ...globalThis.console,
+          log: (...args: ReadonlyArray<unknown>) => {
+            if (String(args[0]).includes("another watcher holds")) skipped.resolve();
+          },
+          error: (...args: ReadonlyArray<unknown>) => {
+            if (String(args[0]).includes("still pending")) stuck.resolve();
+          },
+        } satisfies Console.Console;
+
+        const fiber = yield* runWatch({
+          configPath,
+          once: false,
+          intervalSeconds: Option.none(),
+        }).pipe(
+          Effect.provideService(HttpClient.HttpClient, client),
+          Effect.provideService(Console.Console, testConsole),
+          Effect.forkChild,
+        );
+        // The failed first POST leaves its event pending, logged just before the loop sleeps.
+        yield* Effect.promise(() => stuck.promise);
+        const before = yield* fs.readFileString(statePath);
+        yield* fs.remove(`${dir}/lease`);
+        yield* TestClock.adjust(Duration.seconds(30));
+        yield* Effect.promise(() => skipped.promise);
+        yield* Fiber.interrupt(fiber);
+
+        // No retry of the pending event and no new transition: the cursor is untouched.
+        assert.strictEqual(harness.requests.length, 1);
+        assert.strictEqual(yield* fs.readFileString(statePath), before);
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  // Real processes: the winner holds the lock while its POST is parked, so the
+  // loser can only ever see a held lock. The server answers once a process exits.
+  it.effect(
+    "lets exactly one of two real concurrent --once processes send",
+    () =>
+      withDir((dir) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const statePath = `${dir}/state.json`;
+          const posts: Array<string> = [];
+          let release = () => {};
+          const parked = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          const server = NodeHttp.createServer((request, response) => {
+            posts.push(String(request.headers["idempotency-key"]));
+            void parked.then(() => response.writeHead(200).end());
+          });
+          yield* Effect.promise(
+            () => new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve)),
+          );
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              release();
+              server.closeAllConnections();
+              server.close();
+            }),
+          ).pipe(Effect.ignore);
+          const address = server.address();
+          const port = typeof address === "object" && address !== null ? address.port : 0;
+          const configPath = `${dir}/config.json`;
+          const config = makeConfig(dir, {
+            webhookUrl: `http://127.0.0.1:${String(port)}/hooks/x`,
+            statePath,
+            retry: { attempts: 1, baseDelayMs: 0 },
+          });
+          yield* fs.writeFileString(configPath, JSON.stringify(config));
+          yield* pass(config, statePath).pipe(Effect.provide(makeHarness().layer)); // baseline
+          yield* fs.writeFileString(`${dir}/lease`, "x");
+
+          const spawn = () =>
+            new Promise<{ code: number | null; out: string }>((resolve, reject) => {
+              const child = NodeChildProcess.spawn(
+                process.execPath,
+                [new URL("../bin.ts", import.meta.url).pathname, "watch", configPath, "--once"],
+                {
+                  env: { ...process.env, T3CODE_HOME: `${dir}/home` },
+                  stdio: ["ignore", "pipe", "pipe"],
+                },
+              );
+              let out = "";
+              child.stdout.on("data", (chunk: Buffer) => (out += chunk.toString()));
+              child.stderr.on("data", (chunk: Buffer) => (out += chunk.toString()));
+              child.on("error", reject);
+              child.on("exit", (code) => {
+                release(); // whichever exits first is the skipper; unpark the winner's POST
+                resolve({ code, out });
+              });
+            });
+          const runs = yield* Effect.promise(() => Promise.all([spawn(), spawn()]));
+
+          assert.deepStrictEqual(
+            runs.map((run) => run.code),
+            [0, 0],
+          );
+          assert.strictEqual(posts.length, 1);
+          assert.strictEqual(runs.filter((run) => /another watcher holds/.test(run.out)).length, 1);
+          const cursor = yield* readCursor(statePath);
+          assert.strictEqual(posts[0], `lease:${cursor.instanceId}:1`);
+          assert.strictEqual(cursor.seq, 1);
+          assert.isNull(cursor.pending);
+          assert.deepStrictEqual(
+            (yield* listNames(dir)).filter((name) => name !== "home"),
+            ["config.json", "lease", "state.json"],
+          );
+        }).pipe(Effect.scoped),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    60_000,
   );
 
   it.effect("turns a command's exit status into a transition without a shell", () =>

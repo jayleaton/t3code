@@ -9,11 +9,17 @@
  * directly, without a shell.
  *
  * Delivery is crash safe: the event is persisted to the cursor as `pending`
- * before the POST, keyed `<name>:<seq>` in an `Idempotency-Key` header, and a
- * leftover pending event is re-sent with the same key on the next start.
+ * before the POST, keyed `<name>:<instanceId>:<seq>` in an `Idempotency-Key`
+ * header, and a leftover pending event is re-sent with the same key on the next
+ * start. `instanceId` is minted once when the cursor is created, so two hosts (or
+ * a deleted and recreated cursor) never share keys. A per-state-file lock makes
+ * overlapping runs skip instead of interleaving.
  */
+import * as NodeOS from "node:os";
+
 import * as Clock from "effect/Clock";
 import * as Console from "effect/Console";
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -91,6 +97,7 @@ export type WatchConfig = typeof WatchConfig.Type;
 
 const EventBody = Schema.Struct({
   watch: Schema.String,
+  instance: Schema.String,
   event: Schema.String,
   probe: Schema.String,
   from: Schema.NullOr(Schema.String),
@@ -103,6 +110,7 @@ type EventBody = typeof EventBody.Type;
 
 const Cursor = Schema.Struct({
   version: Schema.Literal(1),
+  instanceId: Schema.String,
   seq: Schema.Number,
   state: Schema.Record(Schema.String, Schema.String),
   sentDeadlines: Schema.Array(Schema.String),
@@ -196,11 +204,27 @@ const sameState = (left: Record<string, string>, right: Record<string, string>) 
   Object.keys(left).length === Object.keys(right).length &&
   Object.entries(left).every(([key, value]) => right[key] === value);
 
-const emptyCursor: Cursor = { version: 1, seq: 0, state: {}, sentDeadlines: [], pending: null };
+/** A brand new cursor is a new watcher identity: it gets its own `instanceId`. */
+const randomId = Effect.gen(function* () {
+  const crypto = yield* Crypto.Crypto;
+  return yield* crypto.randomUUIDv4;
+}).pipe(Effect.orDie);
+
+const newCursor = Effect.fn("watch.newCursor")(function* () {
+  const cursor: Cursor = {
+    version: 1,
+    instanceId: yield* randomId,
+    seq: 0,
+    state: {},
+    sentDeadlines: [],
+    pending: null,
+  };
+  return cursor;
+});
 
 const loadCursor = Effect.fn("watch.loadCursor")(function* (path: string) {
   const fs = yield* FileSystem.FileSystem;
-  if (!(yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false)))) return emptyCursor;
+  if (!(yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false)))) return yield* newCursor();
   const text = yield* fs
     .readFileString(path)
     .pipe(Effect.mapError((error) => new WatchStateError({ path, detail: String(error) })));
@@ -211,17 +235,207 @@ const loadCursor = Effect.fn("watch.loadCursor")(function* (path: string) {
   );
 });
 
-/** Writes next to the target, then renames, so readers never see a partial cursor. */
-const saveCursor = Effect.fn("watch.saveCursor")(function* (path: string, cursor: Cursor) {
+/** Every writer gets its own temp name, so no two writers can share or clobber one. */
+const uniqueTempPath = (path: string) =>
+  randomId.pipe(Effect.map((id) => `${path}.${String(process.pid)}.${id.slice(0, 8)}.tmp`));
+
+/** Writes to a unique temp, then renames, so readers never see a partial file. */
+const writeFileAtomic = Effect.fn("watch.writeFileAtomic")(function* (path: string, text: string) {
   const fs = yield* FileSystem.FileSystem;
-  const temp = `${path}.tmp`;
+  const temp = yield* uniqueTempPath(path);
+  yield* fs.writeFileString(temp, text).pipe(
+    Effect.andThen(fs.rename(temp, path)),
+    Effect.ensuring(fs.remove(temp, { force: true }).pipe(Effect.ignore)),
+    Effect.mapError((error) => new WatchStateError({ path, detail: String(error) })),
+  );
+});
+
+const saveCursor = Effect.fn("watch.saveCursor")(function* (path: string, cursor: Cursor) {
   const text = yield* encodeCursor(cursor).pipe(
     Effect.mapError((error) => new WatchStateError({ path, detail: String(error) })),
   );
-  yield* fs.writeFileString(temp, `${text}\n`).pipe(
-    Effect.andThen(fs.rename(temp, path)),
-    Effect.mapError((error) => new WatchStateError({ path, detail: String(error) })),
+  yield* writeFileAtomic(path, `${text}\n`);
+});
+
+/**
+ * Single-writer lock, one per state file: `${statePath}.lock`.
+ *
+ * Created with an atomic exclusive hard link of a fully written temp file, so a
+ * racer never reads a half-written lock. It is stale when the holder stopped
+ * refreshing `heartbeatAt` for longer than the `staleAfterMs` it recorded, or when
+ * the holder is a dead pid on this same host. A stale lock is renamed aside, then
+ * the exclusive create is retried; losing that race means backing off.
+ */
+const LockInfo = Schema.Struct({
+  token: Schema.String,
+  pid: Schema.Number,
+  hostname: Schema.String,
+  acquiredAt: Schema.Number,
+  heartbeatAt: Schema.Number,
+  staleAfterMs: Schema.Number,
+});
+type LockInfo = typeof LockInfo.Type;
+
+const MIN_STALE_AFTER_MS = 120_000;
+/** Heartbeat lapse after which another process may take over: max(2 x interval, 2 minutes). */
+export const lockStaleAfterMs = (intervalSeconds: number) =>
+  Math.max(2 * intervalSeconds * 1_000, MIN_STALE_AFTER_MS);
+
+const decodeLock = Schema.decodeUnknownEffect(Schema.fromJsonString(LockInfo));
+const encodeLock = Schema.encodeEffect(Schema.fromJsonString(LockInfo));
+
+const pidAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+};
+
+const lockIsStale = (info: LockInfo, nowMs: number) =>
+  nowMs - info.heartbeatAt > info.staleAfterMs ||
+  (info.hostname === NodeOS.hostname() && !pidAlive(info.pid));
+
+type LockRead =
+  | { readonly _tag: "missing" }
+  | { readonly _tag: "corrupt"; readonly mtimeMs: number }
+  | { readonly _tag: "info"; readonly info: LockInfo };
+
+const readLock = Effect.fn("watch.readLock")(function* (lockPath: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const text = yield* fs.readFileString(lockPath).pipe(Effect.option);
+  if (Option.isNone(text)) return { _tag: "missing" } as LockRead;
+  const info = yield* decodeLock(text.value).pipe(Effect.option);
+  if (Option.isSome(info)) return { _tag: "info", info: info.value } as LockRead;
+  const stat = yield* fs.stat(lockPath).pipe(Effect.option);
+  const mtimeMs = Option.flatMap(stat, (value) => value.mtime).pipe(
+    Option.map((date) => date.getTime()),
+    Option.getOrElse(() => 0),
   );
+  return { _tag: "corrupt", mtimeMs } as LockRead;
+});
+
+/** True when we created the lock; false when it already exists. */
+const createLockExclusive = Effect.fn("watch.createLockExclusive")(function* (
+  lockPath: string,
+  info: LockInfo,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const temp = yield* uniqueTempPath(lockPath);
+  const text = yield* encodeLock(info).pipe(Effect.orDie);
+  return yield* fs.writeFileString(temp, `${text}\n`).pipe(
+    Effect.andThen(fs.link(temp, lockPath)),
+    Effect.as(true),
+    Effect.catchTags({
+      PlatformError: (error) =>
+        error.reason._tag === "AlreadyExists" ? Effect.succeed(false) : Effect.fail(error),
+    }),
+    Effect.ensuring(fs.remove(temp, { force: true }).pipe(Effect.ignore)),
+    Effect.mapError((error) => new WatchStateError({ path: lockPath, detail: String(error) })),
+  );
+});
+
+/** Some(lock) when acquired; None when a live other watcher holds this state file. */
+const tryAcquireLock = Effect.fn("watch.tryAcquireLock")(function* (
+  statePath: string,
+  staleAfterMs: number,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const lockPath = `${statePath}.lock`;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const now = yield* Clock.currentTimeMillis;
+    const mine: LockInfo = {
+      token: yield* randomId,
+      pid: process.pid,
+      hostname: NodeOS.hostname(),
+      acquiredAt: now,
+      heartbeatAt: now,
+      staleAfterMs,
+    };
+    if (yield* createLockExclusive(lockPath, mine)) {
+      const verified = yield* readLock(lockPath);
+      if (verified._tag === "info" && verified.info.token === mine.token) {
+        return Option.some({ lockPath, info: mine });
+      }
+      return Option.none();
+    }
+    const existing = yield* readLock(lockPath);
+    if (existing._tag === "missing") continue;
+    const stale =
+      existing._tag === "info"
+        ? lockIsStale(existing.info, now)
+        : now - existing.mtimeMs > MIN_STALE_AFTER_MS;
+    if (!stale) return Option.none();
+    const aside = yield* uniqueTempPath(lockPath);
+    const moved = yield* fs.rename(lockPath, aside).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    );
+    if (!moved) return Option.none(); // another reclaimer won; back off
+    // We may have moved a fresh lock a faster reclaimer just created; put it back if so.
+    const taken = yield* readLock(aside);
+    const sameLock =
+      taken._tag === existing._tag &&
+      (taken._tag !== "info" ||
+        (existing._tag === "info" && taken.info.token === existing.info.token));
+    if (!sameLock) yield* fs.link(aside, lockPath).pipe(Effect.ignore);
+    yield* fs.remove(aside, { force: true }).pipe(Effect.ignore);
+    if (!sameLock) return Option.none();
+  }
+  return Option.none();
+});
+
+const releaseLock = Effect.fn("watch.releaseLock")(function* (held: {
+  readonly lockPath: string;
+  readonly info: LockInfo;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const current = yield* readLock(held.lockPath);
+  if (current._tag === "info" && current.info.token === held.info.token) {
+    yield* fs.remove(held.lockPath, { force: true }).pipe(Effect.ignore);
+  }
+});
+
+/** False once another process reclaimed the lock, e.g. after this one was suspended past `staleAfterMs`. */
+const ownsLock = (held: { readonly lockPath: string; readonly info: LockInfo }) =>
+  readLock(held.lockPath).pipe(
+    Effect.map((current) => current._tag === "info" && current.info.token === held.info.token),
+  );
+
+const refreshLock = Effect.fn("watch.refreshLock")(function* (held: {
+  readonly lockPath: string;
+  readonly info: LockInfo;
+}) {
+  const current = yield* readLock(held.lockPath);
+  if (current._tag !== "info" || current.info.token !== held.info.token) return;
+  const heartbeatAt = yield* Clock.currentTimeMillis;
+  const text = yield* encodeLock({ ...held.info, heartbeatAt }).pipe(Effect.orDie);
+  yield* writeFileAtomic(held.lockPath, `${text}\n`);
+});
+
+/**
+ * Scoped acquire: Some while we hold the lock (heartbeat running), released on
+ * normal exit, failure, or interruption. None when another live watcher holds it.
+ */
+const acquireStateLock = Effect.fn("watch.acquireStateLock")(function* (
+  statePath: string,
+  intervalSeconds: number,
+) {
+  const staleAfterMs = lockStaleAfterMs(intervalSeconds);
+  const held = yield* Effect.acquireRelease(tryAcquireLock(statePath, staleAfterMs), (lock) =>
+    Option.isSome(lock) ? releaseLock(lock.value) : Effect.void,
+  );
+  if (Option.isSome(held)) {
+    // Uninterruptible write: closing the scope waits for an in-flight heartbeat, so
+    // none can land after the release and resurrect the lock or leave a temp file.
+    yield* Effect.sleep(Duration.millis(staleAfterMs / 4)).pipe(
+      Effect.andThen(Effect.uninterruptible(refreshLock(held.value).pipe(Effect.ignore))),
+      Effect.forever,
+      Effect.forkScoped,
+    );
+  }
+  return held;
 });
 
 const runProbe = Effect.fn("watch.runProbe")(function* (probe: Probe) {
@@ -307,10 +521,7 @@ const deliver = Effect.fn("watch.deliver")(function* (config: WatchConfig, pendi
  * One probe pass. Returns the key of an event still pending delivery, if any.
  * Probes are skipped while an earlier event is stuck, so order is preserved.
  */
-export const watchOnce = Effect.fn("watch.once")(function* (
-  config: WatchConfig,
-  statePath: string,
-) {
+const watchPass = Effect.fn("watch.pass")(function* (config: WatchConfig, statePath: string) {
   let cursor = yield* loadCursor(statePath);
 
   // Commits a delivered/dropped pending event into the cursor.
@@ -353,8 +564,18 @@ export const watchOnce = Effect.fn("watch.once")(function* (
   const makeEvent = (event: string, probe: string, from: string | null, to: string, at: string) => {
     seq += 1;
     return {
-      key: `${config.name}:${String(seq)}`,
-      body: { watch: config.name, event, probe, from, to, state: { ...running }, seq, at },
+      key: `${config.name}:${cursor.instanceId}:${String(seq)}`,
+      body: {
+        watch: config.name,
+        instance: cursor.instanceId,
+        event,
+        probe,
+        from,
+        to,
+        state: { ...running },
+        seq,
+        at,
+      },
     } satisfies Pending;
   };
 
@@ -404,6 +625,29 @@ export const watchOnce = Effect.fn("watch.once")(function* (
   return Option.none<string>();
 });
 
+/**
+ * One locked probe pass. None means another live watcher holds this state file
+ * and nothing was probed or sent; Some carries the key still pending, if any.
+ */
+export const watchLocked = (config: WatchConfig, statePath: string, intervalSeconds?: number) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const held = yield* acquireStateLock(
+        statePath,
+        intervalSeconds ?? config.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS,
+      );
+      if (Option.isNone(held)) return Option.none<Option.Option<string>>();
+      return Option.some(yield* watchPass(config, statePath));
+    }),
+  );
+
+/** `watchLocked` with a skipped pass reported as nothing pending. */
+export const watchOnce = (config: WatchConfig, statePath: string, intervalSeconds?: number) =>
+  watchLocked(config, statePath, intervalSeconds).pipe(Effect.map(Option.flatten));
+
+const skippedMessage = (statePath: string) =>
+  `watch: another watcher holds ${statePath}; skipping this run.`;
+
 export const defaultStatePath = (configPath: string) => `${configPath}.state.json`;
 
 /** Runs `watchOnce` once, or forever every `intervalSeconds`. */
@@ -429,18 +673,32 @@ export const runWatch = Effect.fn("watch.run")(function* (input: {
   }
 
   if (input.once) {
-    const stuck = yield* watchOnce(config, statePath);
-    if (Option.isSome(stuck)) return yield* new WatchDeliveryPendingError({ key: stuck.value });
+    const result = yield* watchLocked(config, statePath, intervalSeconds);
+    if (Option.isNone(result)) return yield* Console.log(skippedMessage(statePath));
+    if (Option.isSome(result.value)) {
+      return yield* new WatchDeliveryPendingError({ key: result.value.value });
+    }
     return;
   }
+  // Loop mode holds the lock for its whole life; a held lock just waits an interval.
+  // Ownership is re-checked before every pass, so a holder that lost the lock while
+  // suspended stops writing and goes back to acquiring.
   return yield* Effect.forever(
-    watchOnce(config, statePath).pipe(
-      Effect.flatMap((stuck) =>
-        Option.isSome(stuck)
-          ? Console.error(`watch: ${stuck.value} still pending; retrying next interval.`)
-          : Effect.void,
-      ),
-      Effect.andThen(Effect.sleep(Duration.seconds(intervalSeconds))),
+    Effect.scoped(
+      Effect.gen(function* () {
+        const held = yield* acquireStateLock(statePath, intervalSeconds);
+        if (Option.isNone(held)) {
+          yield* Console.log(skippedMessage(statePath));
+          return yield* Effect.sleep(Duration.seconds(intervalSeconds));
+        }
+        while (yield* ownsLock(held.value)) {
+          const stuck = yield* watchPass(config, statePath);
+          if (Option.isSome(stuck)) {
+            yield* Console.error(`watch: ${stuck.value} still pending; retrying next interval.`);
+          }
+          yield* Effect.sleep(Duration.seconds(intervalSeconds));
+        }
+      }),
     ),
   );
 });
