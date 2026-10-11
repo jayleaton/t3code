@@ -19,7 +19,6 @@ import type {
 import type {
   EnvironmentProject,
   EnvironmentThreadShell,
-  ThreadRunSummary,
   ThreadRuntimeSummary,
 } from "@t3tools/client-runtime/state/shell";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
@@ -79,15 +78,6 @@ export function isFileAttachment(attachment: ChatAttachment): attachment is Chat
 
 export function isVideoAttachment(attachment: ChatFileAttachment): boolean {
   return videoMimeType(attachment) !== null;
-}
-
-export function isBrowserPreviewAttachment(attachment: ChatFileAttachment): boolean {
-  const mimeType = attachment.mimeType.split(";", 1)[0]?.trim().toLowerCase();
-  return (
-    /\.(?:html?|pdf)$/i.test(attachment.name) ||
-    mimeType === "application/pdf" ||
-    mimeType === "text/html"
-  );
 }
 
 export interface ChatMessage {

@@ -533,7 +533,7 @@ export function applyClaudePromptEffortPrefix(
 const REASONING_EFFORT_OPTION_IDS = new Set(["reasoningEffort", "effort", "reasoning", "variant"]);
 
 /** Reads a thinking level regardless of which driver's option id carries it. */
-export function getReasoningEffortOptionValue(
+function getReasoningEffortOptionValue(
   options: ReadonlyArray<ProviderOptionSelection> | undefined,
 ): string | undefined {
   const value = options?.findLast((option) => REASONING_EFFORT_OPTION_IDS.has(option.id))?.value;

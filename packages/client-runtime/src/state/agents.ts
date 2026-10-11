@@ -241,34 +241,11 @@ export interface AgentCardChildren<T> {
   readonly settled: readonly AgentChildRun<T>[];
 }
 
-/** Sidebar cards summarize the whole fleet without mounting individual run rows. */
-export function agentChildRunsSummary(runs: AgentCardChildren<EnvironmentThreadShell>) {
-  let total = 0;
-  let running = 0;
-  let waiting = 0;
-  let attention = 0;
-  for (const group of [runs.live, runs.settled]) {
-    for (const { thread } of group) {
-      total += 1;
-      const status = agentThreadStatus(thread);
-      if (status === "running" || status === "queued") running += 1;
-      if (status === "waiting") waiting += 1;
-      if (status === "attention" || status === "error") attention += 1;
-    }
-  }
-  return [
-    `${total} child${total === 1 ? "" : "ren"}`,
-    ...(running > 0 ? [`${running} running`] : []),
-    ...(waiting > 0 ? [`${waiting} waiting`] : []),
-    ...(attention > 0 ? [`${attention} need${attention === 1 ? "s" : ""} attention`] : []),
-  ].join(" · ");
-}
-
 /**
  * A helper inside another agent's run. Subagents are never cards: they show
  * only in their owner's Lineage panel. Child chats are cards of their own.
  */
-export function isAgentSubagentThread(
+function isAgentSubagentThread(
   run: Pick<AgentRun, "lineage" | "parentThreadId" | "parentRelationship">,
 ) {
   return isSubagentThread(run);

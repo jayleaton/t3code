@@ -17,10 +17,8 @@ export type NewChatHistory = typeof NewChatHistory.Type;
 
 export const emptyNewChatHistory: NewChatHistory = { machine: null, agents: {}, projects: {} };
 
-export const newChatProjectKey = (project: {
-  readonly environmentId: string;
-  readonly id: string;
-}) => `${project.environmentId}:${project.id}`;
+const newChatProjectKey = (project: { readonly environmentId: string; readonly id: string }) =>
+  `${project.environmentId}:${project.id}`;
 
 /** Records a created chat's agent, machine and project as the latest picks. */
 export function recordNewChat(

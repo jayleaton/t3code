@@ -11553,7 +11553,7 @@ export default function ChatView(props: ChatViewProps) {
                   <Link
                     to="/agents"
                     aria-label="Back to agents"
-                    className="no-drag inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                    className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground [-webkit-app-region:no-drag]"
                   />
                 }
               >

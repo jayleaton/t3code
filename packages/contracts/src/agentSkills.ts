@@ -2,7 +2,7 @@ import * as Schema from "effect/Schema";
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const MAX_SKILL_RESOURCE_BYTES = 1024 * 1024;
-export const MAX_SKILL_BUNDLE_BYTES = 2 * 1024 * 1024;
+const MAX_SKILL_BUNDLE_BYTES = 2 * 1024 * 1024;
 export const MAX_SKILL_LIBRARY_BYTES = 8 * 1024 * 1024;
 
 /** Size of a validated base64 resource without allocating a decoded buffer. */

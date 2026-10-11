@@ -236,7 +236,7 @@ export function WelcomeWizard({
           identity={
             <div className="flex items-center gap-1.5" role="img" aria-label="T3 Agents">
               <BrandMark className="size-5" />
-              <span className="text-[1.4rem] font-medium tracking-tight text-muted-foreground">
+              <span className="text-2xl font-medium tracking-tight text-muted-foreground">
                 Agents
               </span>
             </div>

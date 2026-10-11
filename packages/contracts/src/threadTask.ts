@@ -49,7 +49,7 @@ export const ThreadTaskContinuation = Schema.Union([
 export type ThreadTaskContinuation = typeof ThreadTaskContinuation.Type;
 
 /** Longest check-back a worker may declare for its own watcher. */
-export const THREAD_TASK_CHECK_BACK_MAX_MINUTES = 24 * 60;
+const THREAD_TASK_CHECK_BACK_MAX_MINUTES = 24 * 60;
 
 export const ThreadTaskCheckBackNote = TrimmedNonEmptyString.check(Schema.isMaxLength(500));
 

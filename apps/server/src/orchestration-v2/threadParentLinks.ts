@@ -26,7 +26,7 @@ export interface ThreadParentRepair {
  * thread. A cycle is broken once, at its smallest thread id, so the rest of
  * the chain keeps its parents.
  */
-export function findBrokenThreadParentLinks(
+function findBrokenThreadParentLinks(
   links: ReadonlyArray<ThreadParentLink>,
 ): ReadonlyArray<ThreadId> {
   const parentById = new Map<ThreadId, ThreadId | null>();

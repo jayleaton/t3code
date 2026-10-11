@@ -32,7 +32,7 @@ import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
-export const MIN_INTERVAL_SECONDS = 5;
+const MIN_INTERVAL_SECONDS = 5;
 const DEFAULT_INTERVAL_SECONDS = 30;
 const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
 const POST_TIMEOUT = Duration.seconds(15);
@@ -278,7 +278,7 @@ type LockInfo = typeof LockInfo.Type;
 
 const MIN_STALE_AFTER_MS = 120_000;
 /** Heartbeat lapse after which another process may take over: max(2 x interval, 2 minutes). */
-export const lockStaleAfterMs = (intervalSeconds: number) =>
+const lockStaleAfterMs = (intervalSeconds: number) =>
   Math.max(2 * intervalSeconds * 1_000, MIN_STALE_AFTER_MS);
 
 const decodeLock = Schema.decodeUnknownEffect(Schema.fromJsonString(LockInfo));
@@ -648,7 +648,7 @@ export const watchOnce = (config: WatchConfig, statePath: string, intervalSecond
 const skippedMessage = (statePath: string) =>
   `watch: another watcher holds ${statePath}; skipping this run.`;
 
-export const defaultStatePath = (configPath: string) => `${configPath}.state.json`;
+const defaultStatePath = (configPath: string) => `${configPath}.state.json`;
 
 /** Runs `watchOnce` once, or forever every `intervalSeconds`. */
 export const runWatch = Effect.fn("watch.run")(function* (input: {

@@ -1,7 +1,7 @@
 import { GATEWAY_SCOPE_VALUES } from "@t3tools/client-runtime/gateway";
 import type { GatewayScope, GatewayStatusSnapshot } from "@t3tools/client-runtime/gateway";
 
-export const MCP_GATEWAY_PORT_KEY = "t3code:mcp-gateway-port";
+const MCP_GATEWAY_PORT_KEY = "t3code:mcp-gateway-port";
 export const MCP_GATEWAY_ENABLED_KEY = "t3code:mcp-gateway-enabled";
 export const MCP_GATEWAY_TOKEN_KEY = "t3code:mcp-gateway-bridge-token";
 export const MCP_GATEWAY_GRANTS_KEY = "t3code:mcp-gateway-grants";

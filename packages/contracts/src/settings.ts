@@ -1006,22 +1006,6 @@ export const MCP_GATEWAY_RUNTIME_MODE_LABELS: Record<McpGatewayProfile["runtimeM
 };
 
 /**
- * One-sentence readable summary of a gateway profile. Built from the
- * readable labels only — never falls back to instance/model IDs.
- */
-export const formatMcpGatewayProfileSummary = (
-  profile: McpGatewayProfile,
-  unavailable = false,
-): string => {
-  const selection =
-    profile.providerLabel !== undefined && profile.modelLabel !== undefined
-      ? `${profile.providerLabel} ${profile.modelLabel}`
-      : "unselected provider/model";
-  const reasoning = profile.reasoningEffort === undefined ? "default" : profile.reasoningEffort;
-  const availability = unavailable ? " (provider or model currently unavailable — re-select)" : "";
-  return `${profile.name} — ${selection}, ${reasoning} reasoning, ${MCP_GATEWAY_RUNTIME_MODE_LABELS[profile.runtimeMode]}${availability}`;
-};
-/**
  * How assistant text reaches clients while a turn runs.
  * - `turn`: hold the whole message until the turn finishes or pauses.
  * - `paragraph`: deliver each finished paragraph or closed code block.
