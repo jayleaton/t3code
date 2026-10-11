@@ -47,7 +47,7 @@ import {
 } from "./toolkits/preview/tools.ts";
 import * as WorktreeHandlers from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
-import { AgentsToolsRegistrationLive } from "./agents/AgentsMcpTools.ts";
+import * as AgentsTools from "./agents/AgentsMcpTools.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import * as PullRequestsHandlers from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
@@ -736,6 +736,55 @@ const registerDeviceScreenshot = Effect.fn("McpHttpServer.registerDeviceScreensh
 });
 
 const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
+const isCallToolResult = Schema.is(McpSchema.CallToolResult);
+
+/**
+ * Fork: the T3 Agents tools (see mcp/agents). Registered by hand because each tool keeps the
+ * gateway catalog's input schema and returns the gateway's own envelope as its result.
+ */
+const registerAgentsTools = Effect.fn("McpHttpServer.registerAgentsTools")(function* () {
+  if (!(yield* AgentsTools.hostsAgentsTools)) return;
+  const server = yield* McpServer.McpServer;
+  const threads = yield* ThreadManagementService.ThreadManagementService;
+  const built = yield* AgentsTools.AgentsToolkit;
+  for (const tool of Object.values(AgentsTools.AgentsToolkit.tools)) {
+    yield* server.addTool({
+      tool: new McpSchema.Tool({
+        name: tool.name,
+        description: Tool.getDescription(tool),
+        inputSchema: AgentsTools.agentsToolInputSchema(tool.name),
+      }),
+      annotations: Context.empty(),
+      handle: (payload) =>
+        Effect.withFiber((fiber) => {
+          const invocation = Context.getUnsafe(
+            fiber.context,
+            McpInvocationContext.McpInvocationContext,
+          );
+          const args = { ...(payload as Record<string, unknown> | undefined) };
+          return built.handle(tool.name, args).pipe(
+            Stream.unwrap,
+            Stream.run(Sink.last()),
+            Effect.flatMap(Effect.fromOption),
+            Effect.map((output) =>
+              !output.isFailure && isCallToolResult(output.result)
+                ? output.result
+                : AgentsTools.agentsToolRefusal(output.result, args),
+            ),
+            Effect.catchCause((cause) =>
+              Effect.succeed(AgentsTools.agentsToolRefusal(Cause.squash(cause), args)),
+            ),
+            Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+            Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
+          );
+        }),
+    });
+  }
+});
+
+export const layerAgentsToolkit = Layer.effectDiscard(registerAgentsTools()).pipe(
+  Layer.provide(McpToolAccess.HandlersLayer.layer(AgentsTools.layer)),
+);
 
 const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(function* () {
   const htmlRender = yield* HtmlRender.HtmlRender;
@@ -869,7 +918,7 @@ export const layerMcpTransport = McpServer.layerHttp({
 
 export const layer = Layer.mergeAll(
   // Fork: T3 Agents tools join this server's `t3-code` MCP (see mcp/agents).
-  AgentsToolsRegistrationLive,
+  layerAgentsToolkit,
   layerPreviewToolkit,
   layerOrchestratorToolkit,
   layerThreadToolkit,
