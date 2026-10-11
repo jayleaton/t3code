@@ -13,6 +13,7 @@ import {
   type ThreadTask,
   type ThreadTaskActor,
   type ThreadTaskAssignInput,
+  type ThreadTaskCheckBack,
   type ThreadTaskContinuation,
   type ThreadTaskListResult,
   type ThreadTaskReadInput,
@@ -52,6 +53,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FiberMap from "effect/FiberMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -239,6 +241,7 @@ export const make = Effect.gen(function* () {
   const put = (task: ThreadTask): Effect.Effect<ThreadTask, ThreadTaskError> =>
     store.put(task).pipe(
       Effect.tap(() => PubSub.publish(changes, undefined)),
+      Effect.tap(scheduleCheckBack),
       // The owner is on another environment: record what it has not seen and send it.
       Effect.tap((stored) =>
         stored.ownerEnvironmentId === null
@@ -322,6 +325,14 @@ export const make = Effect.gen(function* () {
       }
     });
 
+  /** A declared check-back still in the future covers the task like a live continuation. */
+  const checkBackLive = (task: ThreadTask, nowMs: number) =>
+    task.status === "WAITING" &&
+    task.checkBack != null &&
+    DateTime.toEpochMillis(DateTime.makeUnsafe(task.checkBack.at)) > nowMs;
+
+  const nowMillis = DateTime.now.pipe(Effect.map(DateTime.toEpochMillis));
+
   const view = (task: ThreadTask) =>
     Effect.gen(function* () {
       const link = Option.getOrUndefined(
@@ -355,9 +366,9 @@ export const make = Effect.gen(function* () {
             : "idle";
       const continuationLive =
         task.status === "WAITING" &&
-        task.waitingOn !== null &&
         task.wake?.state !== "skipped" &&
-        (yield* continuationExists(task, task.waitingOn));
+        (checkBackLive(task, yield* nowMillis) ||
+          (task.waitingOn !== null && (yield* continuationExists(task, task.waitingOn))));
       return {
         task,
         sync,
@@ -394,16 +405,23 @@ export const make = Effect.gen(function* () {
     return "updated";
   };
 
-  const wakeMessage = (task: ThreadTask, reason: ThreadTaskWakeReason, runStatus?: string) => {
+  const wakeMessage = (
+    task: ThreadTask,
+    reason: ThreadTaskWakeReason,
+    runStatus?: string,
+    checkBack?: ThreadTaskCheckBack,
+  ) => {
     const short = task.summary.split("\n")[0]!.slice(0, 80);
     const headline =
-      reason === "done"
-        ? `Task "${short}" reports DONE`
-        : reason === "input" || reason === "question"
-          ? `Task "${short}" needs input`
-          : reason === "gate"
-            ? `Task "${short}" is waiting on a new gate`
-            : `Task "${short}" turn ${runStatus ?? "ended"}`;
+      checkBack !== undefined
+        ? `Task "${short}" passed its check-back time without a change`
+        : reason === "done"
+          ? `Task "${short}" reports DONE`
+          : reason === "input" || reason === "question"
+            ? `Task "${short}" needs input`
+            : reason === "gate"
+              ? `Task "${short}" is waiting on a new gate`
+              : `Task "${short}" turn ${runStatus ?? "ended"}`;
     const lines = [
       `${headline}. Worker chat ${task.workerThreadId}, task ${task.taskId}, status ${task.status}, revision ${task.revision}.`,
       ...(task.needs === null ? [] : [`Needs: ${task.needs}`]),
@@ -413,9 +431,14 @@ export const make = Effect.gen(function* () {
             "Verify its gates, then accept this revision with t3_task_update accept=true.",
           ]
         : []),
-      ...(reason === "run_ended"
-        ? ["A finished turn is not a finished task: read it with t3_task_read and follow up."]
-        : []),
+      ...(checkBack !== undefined
+        ? [
+            `The worker's own watcher was due by ${checkBack.at}: ${checkBack.note}`,
+            "Read it with t3_task_read and follow up.",
+          ]
+        : reason === "run_ended"
+          ? ["A finished turn is not a finished task: read it with t3_task_read and follow up."]
+          : []),
     ];
     const notification: OrchestrationV2Notification = {
       source: { kind: "subagent", childThreadId: task.workerThreadId },
@@ -443,7 +466,7 @@ export const make = Effect.gen(function* () {
               ? "owner_settled"
               : null;
       if (skipReason === null) {
-        const message = wakeMessage(task, wake.reason, runStatus);
+        const message = wakeMessage(task, wake.reason, runStatus, wake.checkBack);
         yield* orchestrator.dispatch({
           type: "message.dispatch",
           commandId: CommandId.make(`server:thread-task-wake:${wake.id}`),
@@ -492,6 +515,7 @@ export const make = Effect.gen(function* () {
     readonly revision: number;
     readonly runId: RunId | null;
     readonly createdAt: string;
+    readonly checkBack?: ThreadTaskCheckBack;
   }): ThreadTaskWake => ({ ...input, state: "pending", skipReason: null });
 
   // ---- settlement --------------------------------------------------------
@@ -751,7 +775,10 @@ export const make = Effect.gen(function* () {
           if (task.waitingOn === null) {
             return yield* fail("invalid_transition", "WAITING needs waitingOn.");
           }
-          if (!(yield* continuationExists(task, task.waitingOn))) {
+          if (
+            !checkBackLive(task, yield* nowMillis) &&
+            !(yield* continuationExists(task, task.waitingOn))
+          ) {
             return yield* fail(
               "continuation_missing",
               `Nothing registered resumes this task (waitingOn ${task.waitingOn.kind}).`,
@@ -882,9 +909,28 @@ export const make = Effect.gen(function* () {
               "Accept a revision as it is; send changes in a separate update.",
             );
           }
+          // A check-back belongs to the revision it was declared at: any content
+          // change clears it unless the same update declares a new one.
+          const checkBack: ThreadTaskCheckBack | null =
+            input.checkBack === undefined
+              ? contentChanged
+                ? null
+                : (task.checkBack ?? null)
+              : input.checkBack === null
+                ? null
+                : {
+                    at: DateTime.formatIso(
+                      DateTime.add(DateTime.makeUnsafe(now), { minutes: input.checkBack.minutes }),
+                    ),
+                    note: input.checkBack.note,
+                  };
+          if (checkBack !== null && content.status !== "WAITING") {
+            return yield* fail("invalid_transition", "checkBack is for a WAITING task.");
+          }
           let next: ThreadTask = {
             ...task,
             ...content,
+            checkBack,
             revision: contentChanged ? task.revision + 1 : task.revision,
             acceptance: contentChanged ? null : task.acceptance,
             settlement: contentChanged ? { state: "none", blockedBy: null } : task.settlement,
@@ -1819,6 +1865,27 @@ export const make = Effect.gen(function* () {
 
   // ---- reactions ---------------------------------------------------------
 
+  /**
+   * A completed turn is not news when the owner already holds this revision
+   * and something other than the ended turn carries the task: an INPUT or DONE
+   * the owner must act on, a live non-run continuation, or the worker's own
+   * check-back. Failed and cancelled turns, a WAITING-on-run stall, and the
+   * first turn end after an unreported revision still wake.
+   */
+  const turnEndCovered = (task: ThreadTask, runStatus: string) =>
+    Effect.gen(function* () {
+      if (runStatus !== "completed") return false;
+      if (task.wake === null || task.wake.revision !== task.revision) return false;
+      if (task.wake.state === "skipped") return false;
+      if (task.status !== "WAITING") return true;
+      if (checkBackLive(task, yield* nowMillis)) return true;
+      return (
+        task.waitingOn !== null &&
+        task.waitingOn.kind !== "run" &&
+        (yield* continuationExists(task, task.waitingOn))
+      );
+    });
+
   const onRunEnded = (workerThreadId: ThreadId, runId: RunId, runStatus: string) =>
     Effect.gen(function* () {
       yield* ensureTask(workerThreadId);
@@ -1829,7 +1896,17 @@ export const make = Effect.gen(function* () {
           // A DONE/INPUT/gate wake raised during this run already told the owner.
           const reported =
             task.wake !== null && task.wake.runId === runId && task.wake.reason !== "run_ended";
-          const quiet = reported || isAccepted(task) || task.settlement.state === "settled";
+          const covered = !reported && (yield* turnEndCovered(task, runStatus));
+          const quiet =
+            reported || covered || isAccepted(task) || task.settlement.state === "settled";
+          if (covered) {
+            yield* record(
+              workerThreadId,
+              "wake_suppressed",
+              task.revision,
+              `run_ended:${workerThreadId}:run:${runId}:rev:${task.revision}`,
+            );
+          }
           yield* put({
             ...task,
             observedRunId: runId,
@@ -1850,6 +1927,84 @@ export const make = Effect.gen(function* () {
       );
       if (wakeNow) yield* deliverWake(workerThreadId, runStatus);
     });
+
+  /** Raises the single wake for a check-back that passed without a change. */
+  const onCheckBackDue = (item: { readonly workerThreadId: ThreadId; readonly at: string }) =>
+    Effect.gen(function* () {
+      const wakeNow = yield* writes.withPermits(1)(
+        Effect.gen(function* () {
+          const task = yield* getTask(item.workerThreadId);
+          const checkBack = task?.checkBack;
+          if (
+            task === undefined ||
+            checkBack == null ||
+            checkBack.at !== item.at ||
+            !checkBackDue(task, yield* nowMillis)
+          )
+            return false;
+          yield* put({
+            ...task,
+            checkBack: null,
+            wake: pendingWake({
+              id: `${task.workerThreadId}:deadline:${task.revision}:${checkBack.at}`,
+              reason: "run_ended",
+              revision: task.revision,
+              runId: null,
+              createdAt: yield* nowIso,
+              checkBack,
+            }),
+          });
+          return true;
+        }),
+      );
+      if (wakeNow) yield* deliverWake(item.workerThreadId);
+    }).pipe(
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) =>
+          Effect.logWarning("thread task check-back failed", {
+            workerThreadId: item.workerThreadId,
+            cause: Cause.pretty(cause),
+          }),
+      ),
+    );
+
+  const checkBackDue = (task: ThreadTask, nowMs: number) =>
+    task.workerEnvironmentId === null &&
+    task.status === "WAITING" &&
+    task.checkBack != null &&
+    !checkBackLive(task, nowMs) &&
+    !isAccepted(task) &&
+    task.settlement.state !== "settled";
+
+  const dueCheckBacks = yield* makeDrainableWorker(onCheckBackDue);
+  const checkBackTimers = yield* FiberMap.make<ThreadId>();
+
+  /**
+   * Keeps one timer per authoritative task with a check-back; any write that
+   * clears or replaces the check-back replaces the timer. The timer only
+   * enqueues, so the write it causes never interrupts itself.
+   */
+  const scheduleCheckBack = (task: ThreadTask) => {
+    const checkBack = task.checkBack;
+    if (task.workerEnvironmentId !== null || task.status !== "WAITING" || checkBack == null) {
+      return FiberMap.remove(checkBackTimers, task.workerThreadId);
+    }
+    return Effect.gen(function* () {
+      const item = { workerThreadId: task.workerThreadId, at: checkBack.at };
+      const delay = DateTime.toEpochMillis(DateTime.makeUnsafe(checkBack.at)) - (yield* nowMillis);
+      // Already due (a restart after the time): queue it now, so a drain covers it.
+      if (delay <= 0) {
+        yield* FiberMap.remove(checkBackTimers, task.workerThreadId);
+        return yield* dueCheckBacks.enqueue(item);
+      }
+      yield* FiberMap.run(
+        checkBackTimers,
+        task.workerThreadId,
+        Effect.sleep(Duration.millis(delay)).pipe(Effect.andThen(dueCheckBacks.enqueue(item))),
+      );
+    });
+  };
 
   const onQuestion = (workerThreadId: ThreadId, requestId: RuntimeRequestId, pending: boolean) =>
     Effect.gen(function* () {
@@ -1943,6 +2098,8 @@ export const make = Effect.gen(function* () {
     for (const task of open) {
       if (task.workerEnvironmentId !== null) continue;
       if (isAccepted(task) || task.settlement.state === "settled") continue;
+      // A check-back that passed while the server was down wakes once now.
+      yield* scheduleCheckBack(task);
       const records = yield* projections.getThreadRecords(task.workerThreadId, ["runs"]);
       const latest = records.runs.at(-1);
       // A run restart reconciliation cut and will continue is not news; the
@@ -2020,6 +2177,7 @@ export const make = Effect.gen(function* () {
       Effect.tx,
     );
     yield* worker.drain;
+    yield* dueCheckBacks.drain;
     yield* syncs.drain;
   });
 

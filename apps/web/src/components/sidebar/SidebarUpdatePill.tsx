@@ -322,7 +322,7 @@ function DesktopUpdateControl({ className }: { className?: string | undefined } 
       className={
         className ??
         cn(
-          "inline-flex size-8 items-center justify-center rounded-full outline-hidden ring-ring transition-colors focus-visible:ring-2",
+          "inline-flex size-8 items-center justify-center rounded-full outline-hidden ring-ring transition-colors focus-visible:ring-2 focus-visible:ring-inset",
           isInteractionDisabled ? "cursor-not-allowed" : "cursor-pointer",
           showUpdateIconState
             ? cn(

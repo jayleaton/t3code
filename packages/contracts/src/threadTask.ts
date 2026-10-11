@@ -48,6 +48,23 @@ export const ThreadTaskContinuation = Schema.Union([
 ]);
 export type ThreadTaskContinuation = typeof ThreadTaskContinuation.Type;
 
+/** Longest check-back a worker may declare for its own watcher. */
+export const THREAD_TASK_CHECK_BACK_MAX_MINUTES = 24 * 60;
+
+export const ThreadTaskCheckBackNote = TrimmedNonEmptyString.check(Schema.isMaxLength(500));
+
+/**
+ * A worker's own watcher (a background command, a monitor, an external
+ * script) that T3 cannot see. Until `at`, the task's turn ends are not
+ * reported; if nothing changed by then, the owner is woken once. Any content
+ * change clears it.
+ */
+export const ThreadTaskCheckBack = Schema.Struct({
+  at: IsoDateTime,
+  note: ThreadTaskCheckBackNote,
+});
+export type ThreadTaskCheckBack = typeof ThreadTaskCheckBack.Type;
+
 export const ThreadTaskActor = Schema.Literals(["owner", "worker", "self", "user", "server"]);
 export type ThreadTaskActor = typeof ThreadTaskActor.Type;
 
@@ -81,6 +98,11 @@ export const ThreadTaskWake = Schema.Struct({
   state: Schema.Literals(["pending", "delivered", "skipped"]),
   skipReason: Schema.NullOr(ThreadTaskWakeSkipReason),
   createdAt: IsoDateTime,
+  /**
+   * Set on a `run_ended` wake raised because this check-back passed without a
+   * change. Older environments ignore it and read the wake as a turn end.
+   */
+  checkBack: Schema.optionalKey(ThreadTaskCheckBack),
 });
 export type ThreadTaskWake = typeof ThreadTaskWake.Type;
 
@@ -136,6 +158,8 @@ export const ThreadTask = Schema.Struct({
   questionRequestId: Schema.NullOr(RuntimeRequestId),
   evidence: ThreadTaskEvidence,
   waitingOn: Schema.NullOr(ThreadTaskContinuation),
+  /** WAITING only: the worker's own watcher and when to check back. Absent on older records. */
+  checkBack: Schema.optionalKey(Schema.NullOr(ThreadTaskCheckBack)),
   settleWhenAccepted: Schema.NullOr(ThreadTaskSettleConsent),
   acceptance: Schema.NullOr(ThreadTaskAcceptance),
   settlement: ThreadTaskSettlement,
@@ -221,6 +245,17 @@ export const ThreadTaskUpdateInput = Schema.Struct({
   questionRequestId: Schema.optional(Schema.NullOr(RuntimeRequestId)),
   evidence: Schema.optional(ThreadTaskEvidence),
   waitingOn: Schema.optional(Schema.NullOr(ThreadTaskContinuation)),
+  checkBack: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        minutes: PositiveInt.check(Schema.isLessThanOrEqualTo(THREAD_TASK_CHECK_BACK_MAX_MINUTES)),
+        note: ThreadTaskCheckBackNote,
+      }),
+    ).annotate({
+      description:
+        "WAITING only: your own watcher covers this task. Turn ends are not reported for `minutes`; if nothing changed by then your owner is woken once. null clears it; any content change also clears it.",
+    }),
+  ),
   settleWhenAccepted: Schema.optional(Schema.Boolean.annotate({ description: "Owner only." })),
   accept: Schema.optional(
     Schema.Literal(true).annotate({

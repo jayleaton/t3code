@@ -21,7 +21,7 @@ import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { IdAllocatorV2 } from "@t3tools/provider-core/server/IdAllocator";
 import {
   ProviderAdapterProtocolError,
-  type ProviderAdapterV2Shape,
+  type ProviderAdapterV2,
   type ProviderAdapterV2SessionRuntime,
   type ProviderAdapterV2Event,
   type ProviderAdapterV2TurnInput,
@@ -36,6 +36,7 @@ import {
   type CommandCodeFrame,
 } from "./commandCodeProtocol.ts";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { COMMAND_CODE_MCP_MOD } from "./commandCodeMcp.ts";
 import { spawnCommandCode } from "./commandCodeProcess.ts";
 import { collectStreamAsString } from "@t3tools/provider-core/server/snapshotProbe";
@@ -167,6 +168,7 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
   const fs = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const ids = yield* IdAllocatorV2;
+  const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const unsupported = (detail: string) =>
     Effect.fail(new ProviderAdapterProtocolError({ driver: DRIVER, detail }));
   return {
@@ -209,7 +211,7 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
             let hasSubagents = false;
             let result: Extract<CommandCodeFrame, { type: "result" }> | undefined;
             const items = new Map<string, OrchestrationV2TurnItem>();
-            const mcpSession = McpProviderSession.readMcpProviderSession(turn.threadId);
+            const mcpSession = yield* mcpSessions.read(turn.threadId);
             let mcpReady = mcpSession === undefined;
             const captureSession = (nativeId: string) =>
               Effect.gen(function* () {
@@ -580,5 +582,5 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
         };
         return runtime;
       }),
-  } satisfies ProviderAdapterV2Shape;
+  } satisfies ProviderAdapterV2["Service"];
 });

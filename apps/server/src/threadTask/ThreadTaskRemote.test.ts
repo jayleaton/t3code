@@ -14,7 +14,9 @@ import {
   ThreadTaskRemoteOwnerActionInput,
   ThreadTaskProjectSnapshot,
   ThreadTaskProjectSnapshotInput,
+  ThreadTask,
   ThreadTaskView,
+  ThreadTaskWake,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -23,6 +25,7 @@ import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
@@ -32,7 +35,7 @@ import {
   ProjectionStoreV2,
   layer as projectionLayer,
 } from "../orchestration-v2/ProjectionStore.ts";
-import type { ProviderAdapterV2Shape } from "@t3tools/provider-core/server/ProviderAdapter";
+import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
@@ -47,7 +50,7 @@ const adapter = {
   getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
   planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
   openSession: () => Effect.die("No provider process needed for thread tasks"),
-} as ProviderAdapterV2Shape;
+} as ProviderAdapter.ProviderAdapterV2["Service"];
 
 const A = EnvironmentId.make("env-captain");
 const B = EnvironmentId.make("env-worker");
@@ -73,6 +76,25 @@ const environmentLayer = () => {
   ).pipe(Layer.provideMerge(runtime));
 };
 
+/** A task view as an environment or relaying app from before check-backs decodes it. */
+const { checkBack: _wakeCheckBack, ...legacyWakeFields } = ThreadTaskWake.fields;
+const { checkBack: _taskCheckBack, ...legacyTaskFields } = ThreadTask.fields;
+const LegacyThreadTaskRemoteDeliverInput = Schema.Struct({
+  ...ThreadTaskRemoteDeliverInput.fields,
+  view: Schema.Struct({
+    ...ThreadTaskView.fields,
+    task: Schema.Struct({
+      ...legacyTaskFields,
+      wake: Schema.NullOr(Schema.Struct(legacyWakeFields)),
+    }),
+  }),
+});
+
+const encodeView = Schema.encodeEffect(ThreadTaskView);
+const encodeLegacyDeliver = Schema.encodeEffect(LegacyThreadTaskRemoteDeliverInput);
+const encodeDeliverResult = Schema.encodeEffect(ThreadTaskRemoteDeliverResult);
+const encodeSnapshot = Schema.encodeEffect(ThreadTaskProjectSnapshot);
+
 /**
  * The connected app between two environments: each call is encoded and
  * decoded with the RPC contracts, and `connected` can be switched off.
@@ -80,9 +102,16 @@ const environmentLayer = () => {
 const makeNetwork = Effect.gen(function* () {
   const services = new Map<EnvironmentId, ThreadTaskService.ThreadTaskService["Service"]>();
   const reconnected = yield* PubSub.unbounded<void>();
-  const state: { connected: boolean; calls: number; loseReplyFor: string | null } = {
+  const state: {
+    connected: boolean;
+    calls: number;
+    loseReplyFor: string | null;
+    legacyRelay: boolean;
+  } = {
     connected: true,
     calls: 0,
+    // The relaying app predates check-backs: deliveries pass through its older contract.
+    legacyRelay: false,
     // The next call of this action is applied by the receiver, but its reply is lost.
     loseReplyFor: null,
   };
@@ -98,25 +127,29 @@ const makeNetwork = Effect.gen(function* () {
       const run = Effect.gen(function* () {
         switch (request.action) {
           case "remoteAssign":
-            return yield* Schema.encodeEffect(ThreadTaskView)(
+            return yield* encodeView(
               yield* target.remoteAssign(
                 yield* roundTrip(ThreadTaskRemoteAssignInput, request.input),
               ),
             ).pipe(Effect.orDie);
-          case "remoteDeliver":
-            return yield* Schema.encodeEffect(ThreadTaskRemoteDeliverResult)(
-              yield* target.remoteDeliver(
-                yield* roundTrip(ThreadTaskRemoteDeliverInput, request.input),
-              ),
+          case "remoteDeliver": {
+            const relayed = state.legacyRelay
+              ? yield* encodeLegacyDeliver(
+                  yield* roundTrip(LegacyThreadTaskRemoteDeliverInput, request.input),
+                ).pipe(Effect.orDie)
+              : request.input;
+            return yield* encodeDeliverResult(
+              yield* target.remoteDeliver(yield* roundTrip(ThreadTaskRemoteDeliverInput, relayed)),
             ).pipe(Effect.orDie);
+          }
           case "projectSnapshot":
-            return yield* Schema.encodeEffect(ThreadTaskProjectSnapshot)(
+            return yield* encodeSnapshot(
               yield* target.projectSnapshot(
                 yield* roundTrip(ThreadTaskProjectSnapshotInput, request.input),
               ),
             ).pipe(Effect.orDie);
           case "remoteOwnerAction":
-            return yield* Schema.encodeEffect(ThreadTaskView)(
+            return yield* encodeView(
               yield* target.remoteOwnerAction(
                 yield* roundTrip(ThreadTaskRemoteOwnerActionInput, request.input),
               ),
@@ -676,6 +709,95 @@ it.effect(
         });
         assert.isTrue(accepted.accepted);
         assert.equal((yield* envA.wakes(captain)).length, 2);
+      }),
+    ),
+);
+
+it.effect(
+  "the worker's environment filters covered turn ends; a passed check-back reaches the Captain once, also through an older relay",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const network = yield* makeNetwork;
+        const envA = yield* environment(network, A);
+        const envB = yield* environment(network, B);
+        const tasksA = yield* envA.startService;
+        const tasksB = yield* envB.startService;
+        const drain = Effect.gen(function* () {
+          yield* tasksB.drain;
+          yield* tasksA.drain;
+        });
+        yield* envA.create(captain);
+        yield* envB.create(worker, { thread: captain, environment: A });
+        yield* envB.send(worker, 1);
+        yield* tasksA.assign(asCaptain, { threadId: worker, summary: "Remote copy" }, B);
+
+        // INPUT wakes the Captain once; acknowledgement turns on B start nothing on A.
+        yield* tasksB.update(asWorker, { expectedRevision: 1, status: "INPUT", needs: "Region?" });
+        yield* envB.endOpenRuns(worker);
+        yield* drain;
+        assert.equal((yield* envA.wakes(captain)).length, 1);
+        for (const turn of [2, 3]) {
+          yield* envB.send(worker, turn);
+          yield* envB.endOpenRuns(worker);
+        }
+        yield* drain;
+        assert.equal((yield* envA.wakes(captain)).length, 1);
+
+        // Back to WAITING with its own watcher, relayed by an app that predates
+        // check-backs: the Captain's mirror still decodes every delivery.
+        network.state.legacyRelay = true;
+        yield* envB.send(worker, 4);
+        yield* tasksB.update(asWorker, {
+          expectedRevision: 2,
+          status: "WAITING",
+          checkBack: { minutes: 20, note: "transfer monitor" },
+        });
+        yield* drain;
+        const mirror = (yield* tasksA.read(asCaptain, { threadId: worker })).tasks[0]!;
+        assert.equal(mirror.task.status, "WAITING");
+        assert.equal(mirror.sync?.state, "synced");
+        // The first turn end reports revision 3; later covered ones do not.
+        yield* envB.endOpenRuns(worker);
+        yield* envB.send(worker, 5);
+        yield* envB.endOpenRuns(worker);
+        yield* drain;
+        assert.equal((yield* envA.wakes(captain)).length, 2);
+
+        // The check-back passes: B raises one wake and A queues it once, even
+        // when the same view is delivered again.
+        yield* TestClock.adjust("20 minutes");
+        yield* drain;
+        let wakes = yield* envA.wakes(captain);
+        assert.equal(wakes.length, 3);
+        assert.include(wakes[2]!.id, ":deadline:3:");
+        // Through the older relay the Captain reads it as a turn end, never lost.
+        assert.include(wakes[2]!.text, "A finished turn is not a finished task");
+        const current = (yield* tasksB.read(asWorker, {})).tasks[0]!;
+        const { capability } = (yield* envB.link(worker)).pipe((l) =>
+          l._tag === "Some" ? l.value : assert.fail("worker link"),
+        );
+        assert.isFalse(
+          (yield* tasksA.remoteDeliver({ workerEnvironmentId: B, capability, view: current }))
+            .applied,
+        );
+        yield* drain;
+        assert.equal((yield* envA.wakes(captain)).length, 3);
+
+        // With a current relay the Captain sees the check-back itself.
+        network.state.legacyRelay = false;
+        yield* envB.send(worker, 6);
+        yield* tasksB.update(asWorker, {
+          expectedRevision: 3,
+          checkBack: { minutes: 5, note: "second transfer" },
+        });
+        yield* envB.endOpenRuns(worker);
+        yield* TestClock.adjust("5 minutes");
+        yield* drain;
+        wakes = yield* envA.wakes(captain);
+        assert.equal(wakes.length, 4);
+        assert.include(wakes[3]!.text, "passed its check-back time");
+        assert.include(wakes[3]!.text, "second transfer");
       }),
     ),
 );

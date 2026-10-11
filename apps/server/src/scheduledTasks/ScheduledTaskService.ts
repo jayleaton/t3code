@@ -23,12 +23,16 @@ import {
   type ScheduledTaskSetEnabledInput,
   type ScheduledTaskUpsertInput,
 } from "@t3tools/contracts";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no synchronous sha256.
+import * as NodeCrypto from "node:crypto";
+
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FiberSet from "effect/FiberSet";
 import * as Duration from "effect/Duration";
 import * as Metric from "effect/Metric";
 import * as Layer from "effect/Layer";
@@ -146,6 +150,7 @@ export type WebhookDeliveryOutcome =
   | "disabled"
   | "rejected_signature"
   | "expired"
+  | "invalid_idempotency_key"
   | "not_found"
   | "error";
 
@@ -164,7 +169,23 @@ export type WebhookTriggerResult =
       /** Too many requests to this hook, or too many runs already waiting. */
       readonly outcome: "rate_limited" | "queue_full";
     }
-  | { readonly _tag: "expired" };
+  | { readonly _tag: "expired" }
+  | { readonly _tag: "invalid_idempotency_key" };
+
+/** Printable ASCII without spaces, 1 to 200 characters, after trimming. */
+const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{1,200}$/;
+
+/**
+ * The sender's `Idempotency-Key` header: `null` when absent, `undefined` when
+ * invalid. A valid key makes the delivery id depend on (task, key), so a
+ * retried request runs once.
+ */
+const readIdempotencyKey = (headers: Readonly<Record<string, string>>) => {
+  const raw = headers["idempotency-key"];
+  if (raw === undefined) return null;
+  const key = raw.trim();
+  return IDEMPOTENCY_KEY_PATTERN.test(key) ? key : undefined;
+};
 
 const decodeTask = Schema.decodeUnknownEffect(ScheduledTask);
 const decodeTaskId = Schema.decodeUnknownOption(ScheduledTaskId);
@@ -264,6 +285,8 @@ export class ScheduledTaskService extends Context.Service<
     readonly triggerWebhook: (
       request: WebhookTriggerRequest,
     ) => Effect.Effect<WebhookTriggerResult, ScheduledTaskError>;
+    /** Waits until every accepted webhook delivery has reached an outcome. */
+    readonly awaitWebhookDeliveries: Effect.Effect<void>;
   }
 >()("t3/scheduledTasks/ScheduledTaskService") {}
 
@@ -421,6 +444,8 @@ export const layer = Layer.effect(
     const webhookQueued = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
     const webhookRateWindows = yield* Ref.make<ReadonlyMap<ScheduledTaskId, RateWindow>>(new Map());
     const activeRuns = yield* Ref.make<ReadonlySet<ScheduledTaskId>>(new Set());
+    /** Caller-key claims this process is still carrying from request to finished run. */
+    const keyedInFlight = yield* Ref.make<ReadonlySet<string>>(new Set());
     // Sliding(1) coalesces the dirty-signal: every notification triggers a
     // full list() re-emit anyway, so a slow subscriber only ever needs the
     // latest signal — an unbounded backlog would just grow memory.
@@ -1517,7 +1542,7 @@ export const layer = Layer.effect(
 
     // Detached from the request so the HTTP response does not wait for the
     // run; scoped to the service so shutdown interrupts it.
-    const serviceScope = yield* Effect.scope;
+    const webhookDeliveries = yield* FiberSet.make();
 
     /**
      * Records one handled request on the span and in metrics. `outcome` is
@@ -1601,25 +1626,89 @@ export const layer = Layer.effect(
               );
         const observe = (outcome: WebhookDeliveryOutcome) =>
           observeDelivery(request, outcome, receivedAt, now);
+        const idempotencyKey = readIdempotencyKey(request.headers);
+        if (idempotencyKey === undefined) {
+          yield* observe("invalid_idempotency_key");
+          return { _tag: "invalid_idempotency_key" as const };
+        }
+        // Scoped to the task so two hooks never share a key's claim. A keyed
+        // delivery has one id however it arrives, so a retry through the relay
+        // (which mints a new relay id per request) answers with the first id.
+        const keyHash =
+          idempotencyKey === null
+            ? null
+            : NodeCrypto.createHash("sha256").update(`${task.id}\n${idempotencyKey}`).digest("hex");
         const deliveryId = ScheduledTaskWebhookDeliveryId.make(
-          request.relayDeliveryId === undefined
-            ? `delivery:${yield* crypto.randomUUIDv4.pipe(
-                Effect.mapError((cause) => taskError("Could not generate delivery id.", { cause })),
-              )}`
-            : `delivery:relay:${request.relayDeliveryId}`,
+          keyHash !== null
+            ? `delivery:key:${keyHash}`
+            : request.relayDeliveryId === undefined
+              ? `delivery:${yield* crypto.randomUUIDv4.pipe(
+                  Effect.mapError((cause) =>
+                    taskError("Could not generate delivery id.", { cause }),
+                  ),
+                )}`
+              : `delivery:relay:${request.relayDeliveryId}`,
         );
+        // Caller keys share the relay claim table under their own prefix. A
+        // second row marks the delivery finished (run started, or refused for
+        // good), so a claim without it, held by no live request, is one a
+        // stopped server never carried through.
+        const keyClaimId = keyHash === null ? undefined : `idempotency:${keyHash}`;
+        const keyDoneId = keyHash === null ? undefined : `idempotency-done:${keyHash}`;
+        const dropKeyInFlight =
+          keyClaimId === undefined
+            ? Effect.void
+            : Ref.update(keyedInFlight, (keys) => {
+                const next = new Set(keys);
+                next.delete(keyClaimId);
+                return next;
+              });
+        const finishKey =
+          keyClaimId === undefined || keyDoneId === undefined
+            ? Effect.void
+            : sql`
+                INSERT INTO scheduled_task_webhook_relay_deliveries
+                  (relay_delivery_id, task_id, seen_at)
+                VALUES (${keyDoneId}, ${task.id}, ${iso(now)})
+                ON CONFLICT (relay_delivery_id) DO NOTHING
+              `.pipe(Effect.ignore, Effect.andThen(dropKeyInFlight));
+        const claimOnce = (claimId: string) =>
+          sql<{ relay_delivery_id: string }>`
+            INSERT INTO scheduled_task_webhook_relay_deliveries
+              (relay_delivery_id, task_id, seen_at)
+            VALUES (${claimId}, ${task.id}, ${iso(now)})
+            ON CONFLICT (relay_delivery_id) DO NOTHING
+            RETURNING relay_delivery_id
+          `.pipe(
+            Effect.mapError((cause) =>
+              taskError("Could not record webhook delivery.", { taskId: task.id, cause }),
+            ),
+            Effect.map((claimed) => claimed.length > 0),
+          );
+        // Older claims can no longer be replayed by the relay or a retrying script.
+        const trimClaims = sql`
+          DELETE FROM scheduled_task_webhook_relay_deliveries
+          WHERE seen_at < ${iso(DateTime.subtract(now, { hours: 48 }))}
+        `.pipe(Effect.ignore);
         // A held request may already have reached this environment directly
         // before a timeout; it runs once. Claimed in its own table, kept longer
         // than the relay holds a request, because the delivery log is trimmed.
         // A rate-limited delivery stays held on the relay, so it must give up
         // its claim or the next pass would treat it as already delivered.
-        const releaseClaim = <A>(result: A) =>
-          request.relayDeliveryId === undefined
+        // The caller-key claim is only taken after the rate limit, so only the
+        // paths past that point give it up.
+        const releaseClaim = <A>(result: A, options: { readonly includeKey: boolean }) => {
+          const ids = [
+            ...(request.relayDeliveryId === undefined ? [] : [request.relayDeliveryId]),
+            ...(options.includeKey && keyClaimId !== undefined ? [keyClaimId] : []),
+          ];
+          return ids.length === 0
             ? Effect.succeed(result)
             : sql`
                 DELETE FROM scheduled_task_webhook_relay_deliveries
-                WHERE relay_delivery_id = ${request.relayDeliveryId}
+                WHERE relay_delivery_id IN ${sql.in(ids)}
               `.pipe(Effect.ignore, Effect.as(result));
+        };
         // From the claim until the run is forked nothing may interrupt: a
         // request dropped in between (the relay hangs up after its timeout)
         // would leave a claimed delivery that never runs, or a queue slot
@@ -1627,27 +1716,15 @@ export const layer = Layer.effect(
         return yield* Effect.uninterruptible(
           Effect.gen(function* () {
             if (request.relayDeliveryId !== undefined) {
-              const claimed = yield* sql<{ relay_delivery_id: string }>`
-                INSERT INTO scheduled_task_webhook_relay_deliveries
-                  (relay_delivery_id, task_id, seen_at)
-                VALUES (${request.relayDeliveryId}, ${task.id}, ${iso(now)})
-                ON CONFLICT (relay_delivery_id) DO NOTHING
-                RETURNING relay_delivery_id
-              `.pipe(
-                Effect.mapError((cause) =>
-                  taskError("Could not record webhook delivery.", { taskId: task.id, cause }),
-                ),
-              );
-              if (claimed.length === 0) {
-                // A held request this environment already ran: accepted, not run twice.
+              const claimed = yield* claimOnce(request.relayDeliveryId);
+              // A held request this environment already ran: accepted, not run
+              // twice. With a caller key, the key's own claim decides instead,
+              // so a delivery a stopped server never finished is recovered.
+              if (!claimed && keyClaimId === undefined) {
                 yield* observe("duplicate");
                 return { _tag: "accepted" as const, deliveryId, outcome: "duplicate" as const };
               }
-              // Older claims can no longer be replayed by the relay.
-              yield* sql`
-                DELETE FROM scheduled_task_webhook_relay_deliveries
-                WHERE seen_at < ${iso(DateTime.subtract(now, { hours: 48 }))}
-              `.pipe(Effect.ignore);
+              yield* trimClaims;
             }
             const log = (
               outcome: ScheduledTaskWebhookDeliveryOutcome,
@@ -1676,10 +1753,10 @@ export const layer = Layer.effect(
             if (slot !== "allowed") {
               if (slot === "first_rejected") yield* log("rate_limited");
               yield* observe("rate_limited");
-              return yield* releaseClaim({
-                _tag: "rate_limited" as const,
-                outcome: "rate_limited" as const,
-              });
+              return yield* releaseClaim(
+                { _tag: "rate_limited" as const, outcome: "rate_limited" as const },
+                { includeKey: false },
+              );
             }
             if (!task.enabled) {
               yield* log("disabled");
@@ -1713,6 +1790,44 @@ export const layer = Layer.effect(
               return { _tag: "expired" as const };
             }
 
+            // Claimed once the request is known to be genuine and runnable, so
+            // an unsigned or paused-task request cannot burn a sender's key.
+            if (keyClaimId !== undefined && keyDoneId !== undefined) {
+              const fresh = yield* claimOnce(keyClaimId);
+              const carried = yield* Ref.modify(keyedInFlight, (keys) =>
+                keys.has(keyClaimId)
+                  ? ([false, keys] as const)
+                  : ([true, new Set(keys).add(keyClaimId)] as const),
+              );
+              const duplicate = Effect.gen(function* () {
+                yield* observe("duplicate");
+                return { _tag: "accepted" as const, deliveryId, outcome: "duplicate" as const };
+              });
+              // Another request is carrying this key right now.
+              if (!carried) return yield* duplicate;
+              if (!fresh) {
+                const finished = yield* sql<{ relay_delivery_id: string }>`
+                  SELECT relay_delivery_id FROM scheduled_task_webhook_relay_deliveries
+                  WHERE relay_delivery_id = ${keyDoneId}
+                `.pipe(
+                  Effect.mapError((cause) =>
+                    taskError("Could not read webhook delivery.", { taskId: task.id, cause }),
+                  ),
+                  Effect.onError(() => dropKeyInFlight),
+                );
+                if (finished.length > 0) {
+                  yield* dropKeyInFlight;
+                  return yield* duplicate;
+                }
+                // Claimed by a server that stopped before the run started: carry
+                // it now under the same delivery id. The run's command id comes
+                // from that id, so a dispatch that did commit is not repeated.
+                yield* Effect.logInfo("Recovering an unfinished keyed webhook delivery").pipe(
+                  Effect.annotateLogs({ taskId: task.id }),
+                );
+              }
+              yield* trimClaims;
+            }
             const rendered = renderWebhookPrompt(task.prompt, request);
             // A provider refuses a turn this long, so it is not started. The
             // delivery is not retryable, so the claim is kept. Providers trim
@@ -1725,6 +1840,7 @@ export const layer = Layer.effect(
                 error: "The filled-in prompt is too long.",
               });
               yield* observe("prompt_too_long");
+              yield* finishKey;
               return { _tag: "accepted" as const, deliveryId, outcome: "prompt_too_long" as const };
             }
             // Bound the deliveries one task holds, so steady traffic to a stuck
@@ -1740,10 +1856,11 @@ export const layer = Layer.effect(
             if (!queued) {
               // The task is busy with WEBHOOK_MAX_QUEUED_PER_TASK deliveries already.
               yield* observe("queue_full");
-              return yield* releaseClaim({
-                _tag: "rate_limited" as const,
-                outcome: "queue_full" as const,
-              });
+              yield* dropKeyInFlight;
+              return yield* releaseClaim(
+                { _tag: "rate_limited" as const, outcome: "queue_full" as const },
+                { includeKey: true },
+              );
             }
             // Entries leave the map when their count reaches zero, so a deleted
             // task's key does not linger once its last delivery finishes.
@@ -1758,7 +1875,7 @@ export const layer = Layer.effect(
               signatureVerified: signature !== null,
               missing: rendered.missing,
               renderedPrompt: rendered.prompt,
-            }).pipe(Effect.onError(() => release));
+            }).pipe(Effect.onError(() => Effect.andThen(release, dropKeyInFlight)));
             yield* observe("accepted");
             const permit = yield* webhookPermit(task.id);
             const runOutcome = (outcome: "started" | "skipped" | "failed") =>
@@ -1797,8 +1914,11 @@ export const layer = Layer.effect(
                   "scheduled_task.webhook.delivery_id": deliveryId,
                 },
               }),
-              Effect.ensuring(release),
-              Effect.forkIn(serviceScope),
+              // Finished only once the run reached an outcome; a server that
+              // stops first leaves the key claimed but unfinished, to recover.
+              Effect.tap(() => finishKey),
+              Effect.ensuring(Effect.andThen(release, dropKeyInFlight)),
+              FiberSet.run(webhookDeliveries),
             );
             return { _tag: "accepted" as const, deliveryId, outcome: "accepted" as const };
           }),
@@ -1816,6 +1936,7 @@ export const layer = Layer.effect(
       listWebhookDeliveries,
       getWebhookDelivery,
       triggerWebhook,
+      awaitWebhookDeliveries: FiberSet.awaitEmpty(webhookDeliveries),
     });
   }),
 );

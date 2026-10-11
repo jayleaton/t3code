@@ -13,6 +13,7 @@ import * as Metric from "effect/Metric";
 import * as Queue from "effect/Queue";
 import * as EffectScheduler from "effect/Scheduler";
 import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
@@ -65,8 +66,10 @@ const requestFor = (
  * Runs `body` against a service whose launches are pushed to `launches`;
  * `gate`, when given, holds each launch until the test releases it.
  */
-const withService = <A, E>(
+const withServiceOn = <A, E>(
+  sql: SqlClient.SqlClient,
   body: (input: {
+    readonly sql: SqlClient.SqlClient;
     readonly service: ScheduledTaskService.ScheduledTaskService["Service"];
     readonly launches: Queue.Queue<LaunchInput>;
     /** Secrets the user entered for an agent, by ref; consuming one removes it. */
@@ -105,8 +108,16 @@ const withService = <A, E>(
     );
     return yield* Effect.gen(function* () {
       const service = yield* ScheduledTaskService.ScheduledTaskService;
-      return yield* body({ service, launches, secretsByRef });
+      return yield* body({ sql, service, launches, secretsByRef });
     }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))));
+  }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+
+const withService = <A, E>(
+  body: Parameters<typeof withServiceOn<A, E>>[1],
+  options?: Parameters<typeof withServiceOn<A, E>>[2],
+) =>
+  Effect.gen(function* () {
+    return yield* withServiceOn(yield* SqlClient.SqlClient, body, options);
   }).pipe(Effect.provide(SqlitePersistence.layerMemory));
 
 it.effect("dispatches exactly the rendered prompt and logs the delivery", () =>
@@ -896,4 +907,318 @@ it.effect("counts each handled request by what happened to it", () =>
       assert.equal((yield* deliveriesCounted("duplicate", "relay")) - before.duplicate, 1);
     }),
   ),
+);
+
+const keyed = (key: string) => ({ "content-type": "application/json", "idempotency-key": key });
+
+/** The claim id a caller key takes for a task, as a stopped server would have left it. */
+const keyHash = (taskId: string, key: string) =>
+  NodeCrypto.createHash("sha256").update(`${taskId}\n${key}`).digest("hex");
+
+const claimCount = (sql: SqlClient.SqlClient) =>
+  sql<{ n: number }>`SELECT COUNT(*) AS n FROM scheduled_task_webhook_relay_deliveries`.pipe(
+    Effect.map((rows) => Number(rows[0]?.n ?? 0)),
+  );
+
+it.effect("runs a retried caller key once and a new key again", () =>
+  withService(({ service, launches }) =>
+    Effect.gen(function* () {
+      const { task } = yield* service.upsert(yield* webhookTaskInput());
+      const first = yield* service.triggerWebhook(requestFor(task, { headers: keyed("job-1") }));
+      assert.equal(first._tag, "accepted");
+      assert.equal(first._tag === "accepted" ? first.outcome : "", "accepted");
+      yield* Queue.take(launches);
+
+      const retried = yield* service.triggerWebhook(
+        requestFor(task, { headers: keyed(" job-1 ") }),
+      );
+      assert.deepEqual(retried, { ...first, outcome: "duplicate" } as typeof retried);
+      assert.equal(yield* Queue.size(launches), 0);
+
+      const other = yield* service.triggerWebhook(requestFor(task, { headers: keyed("job-2") }));
+      assert.equal(other._tag === "accepted" ? other.outcome : "", "accepted");
+      assert.notEqual(
+        other._tag === "accepted" ? other.deliveryId : "",
+        first._tag === "accepted" ? first.deliveryId : "",
+      );
+      yield* Queue.take(launches);
+      assert.equal(yield* Queue.size(launches), 0);
+      assert.equal((yield* service.listWebhookDeliveries({ id: task.id })).deliveries.length, 2);
+    }),
+  ),
+);
+
+it.effect("scopes a caller key to its task", () =>
+  withService(({ service, launches }) =>
+    Effect.gen(function* () {
+      const { task } = yield* service.upsert(yield* webhookTaskInput());
+      const { task: other } = yield* service.upsert(
+        yield* webhookTaskInput({ id: "scheduled-task:other" }),
+      );
+      const a = yield* service.triggerWebhook(requestFor(task, { headers: keyed("same") }));
+      const b = yield* service.triggerWebhook(requestFor(other, { headers: keyed("same") }));
+      assert.equal(a._tag === "accepted" ? a.outcome : "", "accepted");
+      assert.equal(b._tag === "accepted" ? b.outcome : "", "accepted");
+      yield* Queue.take(launches);
+      yield* Queue.take(launches);
+    }),
+  ),
+);
+
+it.effect("concurrent requests with one caller key start one run", () =>
+  withService(({ service, launches }) =>
+    Effect.gen(function* () {
+      const { task } = yield* service.upsert(yield* webhookTaskInput());
+      const results = yield* Effect.all(
+        Array.from({ length: 5 }, () =>
+          service.triggerWebhook(requestFor(task, { headers: keyed("race") })),
+        ),
+        { concurrency: "unbounded" },
+      );
+      const outcomes = results.map((result) => (result._tag === "accepted" ? result.outcome : ""));
+      assert.equal(outcomes.filter((outcome) => outcome === "accepted").length, 1);
+      assert.equal(outcomes.filter((outcome) => outcome === "duplicate").length, 4);
+      assert.equal(
+        new Set(results.map((result) => (result._tag === "accepted" ? result.deliveryId : "")))
+          .size,
+        1,
+      );
+      yield* Queue.take(launches);
+      assert.equal(yield* Queue.size(launches), 0);
+    }),
+  ),
+);
+
+it.effect("a caller key stays claimed across a restart and is trimmed after 48 hours", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    // Two services over one database, as before and after a restart.
+    const first = yield* withServiceOn(sql, ({ service, launches }) =>
+      Effect.gen(function* () {
+        const { task } = yield* service.upsert(yield* webhookTaskInput());
+        const result = yield* service.triggerWebhook(requestFor(task, { headers: keyed("boot") }));
+        yield* Queue.take(launches);
+        yield* service.awaitWebhookDeliveries;
+        return { task, result };
+      }),
+    );
+    yield* withServiceOn(sql, ({ service, launches }) =>
+      Effect.gen(function* () {
+        const replay = yield* service.triggerWebhook(
+          requestFor(first.task, { headers: keyed("boot") }),
+        );
+        assert.deepEqual(replay, { ...first.result, outcome: "duplicate" } as typeof replay);
+        assert.equal(yield* Queue.size(launches), 0);
+
+        // Past the retention window the next claim trims the old one.
+        yield* TestClock.adjust("49 hours");
+        const later = yield* service.triggerWebhook(
+          requestFor(first.task, { headers: keyed("other") }),
+        );
+        assert.equal(later._tag === "accepted" ? later.outcome : "", "accepted");
+        yield* Queue.take(launches);
+        yield* service.awaitWebhookDeliveries;
+        // Only the new key's claim and its finished marker remain.
+        assert.equal(yield* claimCount(sql), 2);
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("an invalid caller key is refused without running or claiming", () =>
+  withService(({ sql, service, launches }) =>
+    Effect.gen(function* () {
+      const { task } = yield* service.upsert(yield* webhookTaskInput());
+      for (const key of ["", "   ", "has space", "tab\tkey", "caf\u00e9", "x".repeat(201)]) {
+        const result = yield* service.triggerWebhook(requestFor(task, { headers: keyed(key) }));
+        assert.equal(result._tag, "invalid_idempotency_key");
+      }
+      assert.equal(yield* Queue.size(launches), 0);
+      assert.equal(yield* claimCount(sql), 0);
+      assert.equal((yield* service.listWebhookDeliveries({ id: task.id })).deliveries.length, 0);
+      const longest = yield* service.triggerWebhook(
+        requestFor(task, { headers: keyed("x".repeat(200)) }),
+      );
+      assert.equal(longest._tag, "accepted");
+    }),
+  ),
+);
+
+it.effect("a rejected or paused request does not burn the caller key", () =>
+  withService(({ sql, service, launches }) =>
+    Effect.gen(function* () {
+      const { task } = yield* service.upsert(
+        yield* webhookTaskInput({
+          schedule: {
+            type: "webhook",
+            signature: {
+              header: "x-hub-signature-256",
+              encoding: "hex",
+              prefix: "sha256=",
+              secret: "github-secret",
+            },
+          },
+        }),
+      );
+      const unsigned = yield* service.triggerWebhook(requestFor(task, { headers: keyed("burn") }));
+      assert.equal(unsigned._tag, "rejected_signature");
+      assert.equal(yield* claimCount(sql), 0);
+
+      yield* service.setEnabled({ id: task.id, enabled: false });
+      const signed = {
+        ...keyed("burn"),
+        "x-hub-signature-256": signatureFor("github-secret"),
+      };
+      const paused = yield* service.triggerWebhook(requestFor(task, { headers: signed }));
+      assert.equal(paused._tag, "disabled");
+      assert.equal(yield* claimCount(sql), 0);
+
+      yield* service.setEnabled({ id: task.id, enabled: true });
+      const ran = yield* service.triggerWebhook(requestFor(task, { headers: signed }));
+      assert.equal(ran._tag === "accepted" ? ran.outcome : "", "accepted");
+      yield* Queue.take(launches);
+    }),
+  ),
+);
+
+it.effect("a rate-limited keyed request leaves the key free for a later retry", () =>
+  withService(({ sql, service, launches }) =>
+    Effect.gen(function* () {
+      const { task } = yield* service.upsert(yield* webhookTaskInput({ enabled: false }));
+      yield* Effect.forEach(Array.from({ length: 60 }), () =>
+        service.triggerWebhook(requestFor(task)),
+      );
+      const limited = yield* service.triggerWebhook(requestFor(task, { headers: keyed("later") }));
+      assert.equal(limited._tag, "rate_limited");
+      assert.equal(yield* claimCount(sql), 0);
+      yield* service.upsert(yield* webhookTaskInput());
+      yield* TestClock.adjust("61 seconds");
+      const retried = yield* service.triggerWebhook(requestFor(task, { headers: keyed("later") }));
+      assert.equal(retried._tag === "accepted" ? retried.outcome : "", "accepted");
+      yield* Queue.take(launches);
+    }),
+  ),
+);
+
+it.effect("a full queue releases the caller key so the retry can run", () =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    yield* withService(
+      ({ service, launches }) =>
+        Effect.gen(function* () {
+          const { task } = yield* service.upsert(yield* webhookTaskInput());
+          // Fill the task's queue; the first launch holds at the gate.
+          const filled = yield* Effect.forEach(Array.from({ length: 20 }), (_, index) =>
+            service.triggerWebhook(requestFor(task, { headers: keyed(`fill-${index}`) })),
+          );
+          assert.isTrue(filled.every((result) => result._tag === "accepted"));
+          const refused = yield* service.triggerWebhook(
+            requestFor(task, { headers: keyed("overflow") }),
+          );
+          assert.equal(refused._tag === "rate_limited" ? refused.outcome : "", "queue_full");
+          yield* Queue.take(launches);
+          yield* Deferred.succeed(gate, undefined);
+          yield* Effect.forEach(Array.from({ length: 19 }), () => Queue.take(launches));
+          const retried = yield* service.triggerWebhook(
+            requestFor(task, { headers: keyed("overflow") }),
+          );
+          assert.equal(retried._tag === "accepted" ? retried.outcome : "", "accepted");
+          yield* Queue.take(launches);
+        }),
+      { gate },
+    );
+  }),
+);
+
+it.effect("a caller key dedupes retries that arrive with new relay delivery ids", () =>
+  withService(({ service, launches }) =>
+    Effect.gen(function* () {
+      const { task } = yield* service.upsert(yield* webhookTaskInput());
+      const first = yield* service.triggerWebhook(
+        requestFor(task, { headers: keyed("via-relay"), relayDeliveryId: "relay-a" }),
+      );
+      assert.equal(first._tag === "accepted" ? first.outcome : "", "accepted");
+      yield* Queue.take(launches);
+      const retried = yield* service.triggerWebhook(
+        requestFor(task, { headers: keyed("via-relay"), relayDeliveryId: "relay-b" }),
+      );
+      assert.deepEqual(retried, { ...first, outcome: "duplicate" } as typeof retried);
+      // The relay replaying its first request is still a duplicate, with the same id.
+      const replay = yield* service.triggerWebhook(
+        requestFor(task, { headers: keyed("via-relay"), relayDeliveryId: "relay-a" }),
+      );
+      assert.deepEqual(replay, { ...first, outcome: "duplicate" } as typeof replay);
+      // A direct retry of the same key is also a duplicate.
+      const direct = yield* service.triggerWebhook(
+        requestFor(task, { headers: keyed("via-relay") }),
+      );
+      assert.deepEqual(direct, { ...first, outcome: "duplicate" } as typeof direct);
+      assert.equal(yield* Queue.size(launches), 0);
+    }),
+  ),
+);
+
+it.effect("a keyed delivery a stopped server claimed but never ran runs on the next retry", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const task = yield* withServiceOn(sql, ({ service }) =>
+      Effect.map(Effect.flatMap(webhookTaskInput(), service.upsert), (upserted) => upserted.task),
+    );
+    // The previous server committed the claim, then exited before the run started.
+    const hash = keyHash(task.id, "lost");
+    yield* sql`
+      INSERT INTO scheduled_task_webhook_relay_deliveries (relay_delivery_id, task_id, seen_at)
+      VALUES (${`idempotency:${hash}`}, ${task.id}, ${"1970-01-01T00:00:00.000Z"})
+    `;
+    yield* withServiceOn(sql, ({ service, launches }) =>
+      Effect.gen(function* () {
+        const retried = yield* service.triggerWebhook(requestFor(task, { headers: keyed("lost") }));
+        assert.deepEqual(retried, {
+          _tag: "accepted",
+          deliveryId: `delivery:key:${hash}`,
+          outcome: "accepted",
+        } as typeof retried);
+        const launch = yield* Queue.take(launches);
+        assert.equal(launch.commandId, `scheduled-task:${task.id}:webhook:delivery:key:${hash}`);
+        yield* service.awaitWebhookDeliveries;
+
+        // Finished now: the next retry is a duplicate and starts nothing.
+        const again = yield* service.triggerWebhook(requestFor(task, { headers: keyed("lost") }));
+        assert.equal(again._tag === "accepted" ? again.outcome : "", "duplicate");
+        assert.equal(yield* Queue.size(launches), 0);
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect(
+  "a keyed run dispatched just before the server stopped is retried under the same command id",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const first = yield* withServiceOn(sql, ({ service, launches }) =>
+        Effect.gen(function* () {
+          const { task } = yield* service.upsert(yield* webhookTaskInput());
+          yield* service.triggerWebhook(requestFor(task, { headers: keyed("edge") }));
+          const launch = yield* Queue.take(launches);
+          yield* service.awaitWebhookDeliveries;
+          return { task, launch };
+        }),
+      );
+      // The run was dispatched, but the server stopped before marking it finished.
+      yield* sql`
+        DELETE FROM scheduled_task_webhook_relay_deliveries
+        WHERE relay_delivery_id = ${`idempotency-done:${keyHash(first.task.id, "edge")}`}
+      `;
+      yield* withServiceOn(sql, ({ service, launches }) =>
+        Effect.gen(function* () {
+          yield* service.triggerWebhook(requestFor(first.task, { headers: keyed("edge") }));
+          // The same command id, which the orchestrator's receipts turn into a no-op.
+          const replay = yield* Queue.take(launches);
+          assert.equal(replay.commandId, first.launch.commandId);
+          assert.equal(replay.initialMessage?.messageId, first.launch.initialMessage?.messageId);
+          yield* service.awaitWebhookDeliveries;
+        }),
+      );
+    }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );

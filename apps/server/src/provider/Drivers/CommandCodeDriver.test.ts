@@ -5,14 +5,16 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import { ChildProcessSpawner } from "effect/process";
-import { layerTestProviderHost } from "@t3tools/provider-testing/host";
+import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import { writeFakeCli } from "@t3tools/provider-testing/fakeCli";
 import { layer as idAllocatorLayer } from "@t3tools/provider-core/server/IdAllocator";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { CommandCodeDriver } from "./CommandCodeDriver.ts";
 
-const layer = layerTestProviderHost({ runBackgroundWork: false }).pipe(
+const layer = TestProviderHost.layer({ runBackgroundWork: false }).pipe(
   Layer.provideMerge(NodeServices.layer),
   Layer.provideMerge(idAllocatorLayer),
+  Layer.provideMerge(McpProviderSessions.layer),
 );
 const input = {
   instanceId: ProviderInstanceId.make("commandcode-test"),

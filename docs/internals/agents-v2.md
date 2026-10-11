@@ -139,7 +139,13 @@ record (`apps/server/src/threadTask/`). Three distinctions are easy to collapse 
 
 - **A finished turn is not a finished task.** Run state is read, never stored on the task. A turn
   ending wakes the owner with "turn ended", not DONE; only the worker's own DONE update reports a
-  deliverable, and the turn that raised it does not wake the owner a second time.
+  deliverable, and the turn that raised it does not wake the owner a second time. A completed turn
+  is also quiet when the owner was already told this revision and something else carries the task:
+  INPUT or DONE, a live non-run continuation, or the worker's `checkBack`. The worker's environment
+  makes that call before any message exists, because no instruction can filter a queued wake.
+  Failed or cancelled turns, WAITING on the ended run itself, and an unreported revision still
+  wake. `checkBack` is how a worker declares a watcher T3 cannot see; it is bookkeeping, not a
+  revision, any content change clears it, and its time passing raises one deadline wake.
 - **Consent is not acceptance.** `settleWhenAccepted` is the owner's standing permission to settle;
   the owner's `accept` names one DONE revision after its gates pass. Any content change bumps the
   revision and drops acceptance. Settlement waits for both, then for the worker's turn and every
@@ -167,6 +173,11 @@ the worker side keeps a delivery cursor per task, retries when an app connects o
 starts, and the owner side ignores a cursor it has already applied. Wakes are created where the
 facts are and queued on the owner's environment under an environment-prefixed id. With no app
 connected, owner actions fail and the mirror's `sync` shows the last delivery.
+
+Peers and the relaying app may run older contracts, and Schema drops unknown keys but rejects an
+unknown literal. So the task view grows only by optional fields: a new continuation or wake reason
+added as a union member would fail every delivery through an older peer. `checkBack` follows this,
+and a deadline wake travels as `run_ended` with an optional `checkBack` an older owner ignores.
 
 Workers (any chat with a task) may message only their own children, on every send path; Captains
 coordinate freely. Gateway-originated turns are stored as agent messages, so a relay never counts

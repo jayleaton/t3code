@@ -41,24 +41,6 @@ export function withAgentDeviceEnvironment(
   };
 }
 
-const sessionsByThread = new Map<ThreadId, McpProviderSessionConfig>();
-
-export function setMcpProviderSession(config: McpProviderSessionConfig): void {
-  sessionsByThread.set(config.threadId, config);
-}
-
-export function readMcpProviderSession(threadId: ThreadId): McpProviderSessionConfig | undefined {
-  return sessionsByThread.get(threadId);
-}
-
-export function clearMcpProviderSession(threadId: ThreadId): void {
-  sessionsByThread.delete(threadId);
-}
-
-function clearAllMcpProviderSessions(): void {
-  sessionsByThread.clear();
-}
-
 export function mcpHttpServers(config: McpProviderSessionConfig | undefined) {
   if (!config) return [];
   return [
