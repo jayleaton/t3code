@@ -5,6 +5,7 @@ import {
   ThreadTaskError,
   threadParentRelationship,
   type OrchestrationV2Notification,
+  type OrchestrationV2Run,
   type OrchestrationV2StoredEvent,
   type OrchestrationV2ThreadShell,
   type RunId,
@@ -1886,25 +1887,50 @@ export const make = Effect.gen(function* () {
       );
     });
 
-  const onRunEnded = (workerThreadId: ThreadId, runId: RunId, runStatus: string) =>
+  /** When a run took its turn; a thread runs one turn at a time, so later turns start later. */
+  const runOrder = (run: OrchestrationV2Run) =>
+    DateTime.toEpochMillis(run.startedAt ?? run.requestedAt);
+
+  /**
+   * Judges one run's end. Only a turn that ran ends: a queued run cancelled
+   * before it started (a disposed wake delivery, a cleared queue) is not news,
+   * and a terminal update for a run older than the one already observed (a
+   * metadata rewrite of a finished run) never moves observation back.
+   */
+  const onRunEnded = (workerThreadId: ThreadId, run: OrchestrationV2Run) =>
     Effect.gen(function* () {
+      const runId = run.id;
+      const runStatus = run.status;
+      if (runStatus === "cancelled" && run.startedAt === null) return;
       yield* ensureTask(workerThreadId);
       const wakeNow = yield* writes.withPermits(1)(
         Effect.gen(function* () {
           const task = yield* getTask(workerThreadId);
           if (task === undefined || task.observedRunId === runId) return false;
+          if (task.observedRunId !== null) {
+            const observed = (yield* projections
+              .getThreadRecords(workerThreadId, ["runs"], { runIds: [task.observedRunId] })
+              .pipe(Effect.catch(unavailable))).runs[0];
+            if (observed?.startedAt != null && runOrder(run) < runOrder(observed)) return false;
+          }
           // A DONE/INPUT/gate wake raised during this run already told the owner.
           const reported =
             task.wake !== null && task.wake.runId === runId && task.wake.reason !== "run_ended";
           const covered = !reported && (yield* turnEndCovered(task, runStatus));
+          // A settled worker is put away; its later turn ends are not news.
+          const workerSettled = (yield* getShell(workerThreadId))?.settledOverride === "settled";
           const quiet =
-            reported || covered || isAccepted(task) || task.settlement.state === "settled";
-          if (covered) {
+            reported ||
+            covered ||
+            workerSettled ||
+            isAccepted(task) ||
+            task.settlement.state === "settled";
+          if (covered || (workerSettled && !reported)) {
             yield* record(
               workerThreadId,
               "wake_suppressed",
               task.revision,
-              `run_ended:${workerThreadId}:run:${runId}:rev:${task.revision}`,
+              `run_ended:${workerThreadId}:run:${runId}:rev:${task.revision}${covered ? "" : ":worker_settled"}`,
             );
           }
           yield* put({
@@ -2065,7 +2091,7 @@ export const make = Effect.gen(function* () {
       if (event.type === "run.updated" && TERMINAL_RUN_STATUSES.has(event.payload.status)) {
         // Restart reconciliation cancels runs a continuation resumes; that is not news.
         if (!String(stored.commandId).startsWith("command:runtime-reconcile:")) {
-          yield* onRunEnded(event.threadId, event.payload.id, event.payload.status);
+          yield* onRunEnded(event.threadId, event.payload);
         }
         yield* evaluateSettlement(event.threadId);
         yield* reevaluatePendingSettlements;
@@ -2118,7 +2144,7 @@ export const make = Effect.gen(function* () {
         latest.id !== task.observedRunId &&
         TERMINAL_RUN_STATUSES.has(latest.status)
       ) {
-        yield* onRunEnded(task.workerThreadId, latest.id, latest.status);
+        yield* onRunEnded(task.workerThreadId, latest);
       }
     }
     // Named children launched before tasks existed get one, so their status
