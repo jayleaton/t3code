@@ -1959,13 +1959,13 @@ export const make = Effect.gen(function* () {
       );
       if (wakeNow) yield* deliverWake(item.workerThreadId);
     }).pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
-          : Effect.logWarning("thread task check-back failed", {
-              workerThreadId: item.workerThreadId,
-              cause: Cause.pretty(cause),
-            }),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) =>
+          Effect.logWarning("thread task check-back failed", {
+            workerThreadId: item.workerThreadId,
+            cause: Cause.pretty(cause),
+          }),
       ),
     );
 
