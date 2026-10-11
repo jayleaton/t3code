@@ -150,9 +150,20 @@ Commands run directly, without a shell. The webhook URL can be the direct,
 Tailscale, or T3 Connect URL. Failed deliveries retry, and a still-undelivered
 event is re-sent with the same `Idempotency-Key` on the next run.
 
-Run `t3 watch config.json --once` from a scheduler, or `t3 watch config.json
---interval 30` under any supervisor. Use `npx t3 watch ...` where `t3` is not on
-the `PATH`. Progress is kept in `config.json.state.json`.
+Use the `t3` command from the same T3 Code release as your server. Earlier
+releases and the `t3` package on npm don't include `watch`, so if `t3 watch`
+reports an unknown command, that `t3` is too old.
+
+- **Desktop app:** the app keeps its own launcher at `~/.t3/bin/t3`, or
+  `%USERPROFILE%\.t3\bin\t3.cmd` on Windows (under your T3 home if you changed
+  it). [The `t3` command](./install.md#the-t3-command) explains how to put it on
+  your `PATH`.
+- **Server without the desktop app:** use the standalone `t3` CLI built with
+  the same release, not one installed from npm.
+
+Run `t3 watch /path/config.json --once` from a scheduler, or `t3 watch
+/path/config.json --interval 30` under any supervisor. Progress is kept next
+to the config, in `config.json.state.json`.
 
 Each state file is one watcher: it holds a single-writer lock while a run is in
 progress, so overlapping scheduled runs skip safely instead of sending twice or
@@ -161,9 +172,23 @@ carries the watcher's identity, which is part of every `Idempotency-Key`. Don't
 copy a state file to another host or machine; give each its own. To start fresh,
 delete the state file.
 
-- Linux: a cron line such as `* * * * * t3 watch /path/config.json --once`, or a systemd user timer.
-- macOS: a launchd agent with `ProgramArguments` of `t3`, `watch`, `/path/config.json`, `--once` and `StartInterval` `60`.
-- Windows: `schtasks /Create /TN t3-watch /SC MINUTE /TR "t3 watch C:\path\config.json --once"`.
+Schedulers don't read your shell's `PATH`, so give them absolute paths for
+both the `t3` launcher and the config. These examples use the desktop app's
+launcher. Check them against your scheduler's own documentation before relying
+on them:
+
+- Linux: a cron line such as
+  `* * * * * /home/me/.t3/bin/t3 watch /home/me/watch/config.json --once`, or a
+  systemd user timer with the same command.
+- macOS: a launchd agent with `ProgramArguments` of `/Users/me/.t3/bin/t3`,
+  `watch`, `/Users/me/watch/config.json` and `--once`, and `StartInterval`
+  `60`. launchd skips runs while the Mac sleeps.
+- Windows, from Command Prompt (paths with spaces keep their inner `\"`
+  quotes):
+
+  ```bat
+  schtasks /Create /TN t3-watch /SC MINUTE /TR "\"%USERPROFILE%\.t3\bin\t3.cmd\" watch \"C:\watch\config.json\" --once"
+  ```
 
 The command exits non-zero while an event is still undelivered, so schedulers
 show the failure.
