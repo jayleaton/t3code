@@ -61,6 +61,12 @@ Install the latest version of the desktop app from this fork's [GitHub Releases]
 winget install T3Tools.T3Code
 ```
 
+#### Windows (`scoop`)
+
+```bash
+scoop install extras/t3code
+```
+
 #### macOS (Homebrew)
 
 ```bash

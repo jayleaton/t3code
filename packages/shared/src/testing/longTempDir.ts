@@ -7,7 +7,7 @@ import * as NodeOS from "node:os";
 // realpath, reports the long form, so equality checks between a temp path and
 // its canonical form fail. Node reads TEMP/TMP on every os.tmpdir() call, so
 // pointing them at the long form fixes every temp directory the suite makes.
-// Keep this setup independent of hostProcess: DOM test environments cannot load node:sea.
+// Keep this setup independent of HostProcess: DOM test environments cannot load node:sea.
 // oxlint-disable-next-line t3code/no-global-process-runtime -- host setup runs before any Effect runtime.
 if (process.platform === "win32") {
   try {

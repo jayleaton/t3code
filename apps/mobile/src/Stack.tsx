@@ -103,6 +103,7 @@ import {
 import { ScheduledTaskEditorProvider } from "./features/settings/scheduled-task-editor";
 import { SettingsKeyboardRouteScreen } from "./features/settings/SettingsKeyboardRouteScreen";
 import { SettingsLegalRouteScreen } from "./features/settings/SettingsLegalRouteScreen";
+import { SettingsMicrophoneRouteScreen } from "./features/settings/SettingsMicrophoneRouteScreen";
 import {
   SettingsOpenSourceLicenseRouteScreen,
   SettingsOpenSourceLicensesRouteScreen,
@@ -129,6 +130,7 @@ import {
 } from "./features/sharing/incoming-share-presentation";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "./native/native-glass";
 import { deriveLayout } from "./lib/layout";
+import { useNativeLayoutMetrics } from "./native/native-layout-metrics";
 import { nativeHeaderScrollEdgeEffects } from "./native/StackHeader";
 import { FORM_SHEET_PRESENTATION_OPTIONS } from "./native/sheet-surface";
 import { useThreadOutboxDrain } from "./state/use-thread-outbox-drain";
@@ -192,6 +194,9 @@ const LEGAL_DOCUMENT_HEADER_OPTIONS: AppScreenOptions = {
   headerRight: () => <SettingsLegalDocumentExternalHeaderButton />,
   presentation: "fullScreenModal",
 };
+
+// A navigator container leaves horizontal safe-area handling to its leaf screens.
+const NESTED_NAVIGATOR_OPTIONS = { nativeContentInsetHorizontally: false, headerShown: false };
 
 const SettingsContentStack = createV5SheetStackNavigator({
   initialRouteName: "Settings",
@@ -307,6 +312,13 @@ const SettingsContentStack = createV5SheetStackNavigator({
         title: "Keyboard",
       },
     }),
+    SettingsMicrophone: createNativeStackScreen({
+      screen: SettingsMicrophoneRouteScreen,
+      linking: "microphone",
+      options: {
+        title: "Microphone",
+      },
+    }),
     SettingsFollowUp: createNativeStackScreen({
       screen: SettingsFollowUpRouteScreen,
       linking: "follow-ups",
@@ -411,6 +423,7 @@ const SettingsSheetStack = createV5SheetStackNavigator({
   screens: {
     SettingsContent: createNativeStackScreen({
       screen: SettingsContentStack,
+      options: NESTED_NAVIGATOR_OPTIONS,
       linking: "",
       layout: ({ children }) => (
         <SettingsEnvironmentFilterProvider>
@@ -847,6 +860,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
       screen: SettingsSheetStack,
       linking: "settings",
       options: {
+        ...NESTED_NAVIGATOR_OPTIONS,
         gestureEnabled: true,
         headerShown: false,
       },
@@ -913,6 +927,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
         </GuardedScreenLayout>
       ),
       options: {
+        ...NESTED_NAVIGATOR_OPTIONS,
         gestureEnabled: true,
         headerShown: false,
       },
@@ -953,8 +968,9 @@ function ScreenRenderFallback(props: RenderFailureProps & { readonly routeName: 
 
 export const RootStack = RootStackConfig.with(function AdaptiveRootStack({ Navigator }) {
   const { width, height } = useWindowDimensions();
+  const nativeMetrics = useNativeLayoutMetrics();
   const usesWorkspaceFlowScreens =
-    Platform.OS === "android" || deriveLayout({ width, height }).usesSplitView;
+    Platform.OS === "android" || deriveLayout({ width, height, nativeMetrics }).usesSplitView;
 
   return (
     <Navigator

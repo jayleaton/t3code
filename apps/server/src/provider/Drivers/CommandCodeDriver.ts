@@ -1,5 +1,6 @@
 import { CommandCodeSettings, ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
 import { IdAllocatorV2 } from "@t3tools/provider-core/server/IdAllocator";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -51,6 +52,7 @@ export type CommandCodeDriverEnv =
   | ChildProcessSpawner.ChildProcessSpawner
   | IdAllocatorV2
   | FileSystem.FileSystem
+  | McpProviderSessions.McpProviderSessions
   | ProviderHost;
 
 export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeDriverEnv> = {
@@ -62,7 +64,10 @@ export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeD
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const host = yield* ProviderHost;
-      const environment = { ...mergeProviderInstanceEnvironment(input.environment), NO_COLOR: "1" };
+      const environment = {
+        ...(yield* mergeProviderInstanceEnvironment(input.environment)),
+        NO_COLOR: "1",
+      };
       const config = { ...input.config, enabled: input.enabled };
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER,
@@ -166,7 +171,7 @@ export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeD
           ),
         ),
       );
-      const source = makeProviderSnapshotSettingsSource(config, host.settings);
+      const source = yield* makeProviderSnapshotSettingsSource(config);
       const snapshot = yield* makeManagedServerProvider<
         ProviderSnapshotSettings<CommandCodeSettings>
       >({
