@@ -100,6 +100,16 @@ export const threadTaskInputFields = {
     questionRequestId: z.string().trim().min(1).nullable().optional(),
     evidence: z.array(taskText(1000)).max(20).optional(),
     waitingOn: taskContinuation.nullable().optional(),
+    checkBack: z
+      .object({
+        minutes: z.number().int().min(1).max(1440),
+        note: taskText(500).describe("What your own watcher is waiting for."),
+      })
+      .nullable()
+      .optional()
+      .describe(
+        "WAITING only: your own watcher (background command, monitor, external script) covers this task. Your turn ends are not reported for `minutes` (max 1440); if the task has not changed by then, your owner is woken once. Does not change the revision. null clears it; any content change also clears it.",
+      ),
     settleWhenAccepted: z.boolean().optional().describe("Owner only."),
     accept: z
       .literal(true)

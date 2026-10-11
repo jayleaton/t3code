@@ -87,6 +87,11 @@ same secret in the repository's webhook settings with content type
 up on desktop or web; mobile keeps an existing signature check but can't turn
 one on.
 
+A script that may retry a request can send an `Idempotency-Key` header, 1 to
+200 printable characters with no spaces. T3 Code runs the task once per key
+for 48 hours; a retry with the same key is accepted as a duplicate and answers
+with the first delivery's id. A malformed key gets a 400 and nothing runs.
+
 On desktop and web, pick **Deliveries** from a task's menu to see recent
 requests and the prompt each one produced.
 
@@ -98,6 +103,63 @@ T3 Connect URL for up to 24 hours and delivers them when the environment
 returns. Leave it off if you don't want request bodies stored outside your
 machine. To skip requests that waited too long, set **Skip requests older
 than** on the task.
+
+### Trigger a webhook only when something changes
+
+`t3 watch` turns external state into a webhook call without spending a model
+run on polling. It probes a file, an HTTP endpoint, or a command's exit status,
+and sends one POST to your webhook task only when a value changes into one you
+listed. While nothing changes it sends nothing. Send actionable changes only,
+never routine progress.
+
+```json
+{
+  "name": "build-box",
+  "webhookUrl": "https://<the webhook URL shown for the task>",
+  "intervalSeconds": 30,
+  "probes": [
+    { "kind": "file", "name": "lease", "path": "/var/run/build.lease", "notify": ["present"] },
+    {
+      "kind": "http",
+      "name": "api",
+      "url": "http://localhost:8080/health",
+      "notify": ["status:500", "unreachable"]
+    },
+    {
+      "kind": "command",
+      "name": "backup",
+      "argv": ["/usr/local/bin/check-backup"],
+      "notify": ["exit:1"]
+    }
+  ],
+  "deadlines": [
+    {
+      "name": "backup-by-dawn",
+      "at": "2026-10-12T06:00:00Z",
+      "unless": { "probe": "backup", "value": "exit:0" }
+    }
+  ]
+}
+```
+
+Values are `present`/`absent` for files, `status:<code>`/`unreachable` for HTTP,
+and `exit:<code>`/`timeout` for commands (add `"output": true` to use the first
+line of stdout instead). `"*"` in `notify` means any change. The first run
+records a baseline and sends nothing unless a probe sets `"notifyInitial": true`.
+Commands run directly, without a shell. The webhook URL can be the direct,
+Tailscale, or T3 Connect URL. Failed deliveries retry, and a still-undelivered
+event is re-sent with the same `Idempotency-Key` on the next run.
+
+Run `t3 watch config.json --once` from a scheduler, or `t3 watch config.json
+--interval 30` under any supervisor. Use `npx t3 watch ...` where `t3` is not on
+the `PATH`. Progress is kept in `config.json.state.json`.
+
+- Linux: a cron line such as `* * * * * t3 watch /path/config.json --once`, or a systemd user timer.
+- macOS: a launchd agent with `ProgramArguments` of `t3`, `watch`, `/path/config.json`, `--once` and `StartInterval` `60`.
+- Windows: `schtasks /Create /TN t3-watch /SC MINUTE /TR "t3 watch C:\path\config.json --once"`.
+
+The command exits non-zero while an event is still undelivered, so schedulers
+show the failure.
 
 ## Defaults and inheritance
 
