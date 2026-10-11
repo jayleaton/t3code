@@ -24,7 +24,8 @@ concurrency:
 jobs:
   fingerprint:
     name: Native fingerprint diff
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    # The jayleaton/t3code fork has no Blacksmith runners; it uses the GitHub-hosted image.
+    runs-on: ${{ github.repository == 'jayleaton/t3code' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     permissions:
       contents: read
       issues: write
