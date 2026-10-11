@@ -2290,6 +2290,16 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const bottomContentInset = props.contentBottomInset ?? 18;
   const usesNativeAutomaticInsets =
     props.usesAutomaticContentInsets === true && Platform.OS === "ios";
+  // Horizontal Duo reservations are already included in the row padding.
+  // Let UIKit adjust the scrolling axis without shifting content sideways.
+  const contentInsetAdjustmentBehavior = usesNativeAutomaticInsets
+    ? usesNativeWorkspaceColumns &&
+      Platform.OS === "ios" &&
+      !Platform.isPad &&
+      props.layoutVariant === "split"
+      ? "scrollableAxes"
+      : "automatic"
+    : "never";
   const initialContentInset = deriveThreadFeedInitialContentInset({
     platform: Platform.OS,
     usesNativeAutomaticInsets,
@@ -3140,18 +3150,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             // (facebook/react-native#54123); the anchored end space after a send
             // is pure inset, so without this the blank region can't be scrolled.
             applyWorkaroundForContentInsetHitTestBug
-            // Horizontal Duo reservations are already included in the row padding.
-            // Let UIKit adjust the scrolling axis without shifting content sideways.
-            contentInsetAdjustmentBehavior={
-              usesNativeAutomaticInsets
-                ? usesNativeWorkspaceColumns &&
-                  Platform.OS === "ios" &&
-                  !Platform.isPad &&
-                  props.layoutVariant === "split"
-                  ? "scrollableAxes"
-                  : "automatic"
-                : "never"
-            }
+            contentInsetAdjustmentBehavior={contentInsetAdjustmentBehavior}
             automaticallyAdjustsScrollIndicatorInsets={usesNativeAutomaticInsets}
             {...(usesNativeAutomaticInsets
               ? {

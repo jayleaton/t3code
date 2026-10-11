@@ -68,6 +68,32 @@ export function resolveRenameCommit(input: {
   return { action: "commit", title: trimmed };
 }
 
+/**
+ * Whether the breadcrumb's untruncated labels overflow the list. Includes a
+ * collapsed parent's hidden text, so expanding and collapsing never change the
+ * result. Width-capped labels (the project) never grow, so their overflow is
+ * skipped.
+ */
+function breadcrumbOverflows(list: HTMLOListElement): boolean {
+  const gap = Number.parseFloat(getComputedStyle(list).columnGap) || 0;
+  const width = Array.from(list.children).reduce(
+    (total, item) => {
+      const label = item.querySelector('[data-slot="workspace-breadcrumb-text"]');
+      const ellipsis = item.querySelector("[data-parent-breadcrumb-ellipsis]");
+      return (
+        total +
+        (item.firstElementChild?.getBoundingClientRect().width ?? 0) +
+        (label && getComputedStyle(label).maxWidth === "none"
+          ? label.scrollWidth - label.clientWidth
+          : 0) -
+        (ellipsis?.getBoundingClientRect().width ?? 0)
+      );
+    },
+    gap * (list.children.length - 1),
+  );
+  return width > list.clientWidth;
+}
+
 // How long a click on the thread title waits before opening the action menu,
 // so a double-click-to-rename can cancel it first. Only the native desktop
 // menu needs this: it swallows input while open, so the wait must cover the
@@ -89,7 +115,8 @@ export const ChatHeader = memo(function ChatHeader({
 }: ChatHeaderProps) {
   const activeProjectName = activeProject?.title;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
-  const interfaceFont = useClientSettings((settings) => settings.fontFamilySans);
+  // Subscribed so a font change re-renders and re-fits the breadcrumb.
+  useClientSettings((settings) => settings.fontFamilySans);
   const breadcrumbContainerRef = useRef<HTMLDivElement>(null);
   const [collapseParentTitle, setCollapseParentTitle] = useState(false);
   const activeThreadRef = useMemo(
@@ -125,43 +152,28 @@ export const ChatHeader = memo(function ChatHeader({
     renaming.environmentId === activeThreadEnvironmentId
       ? renaming.title
       : null;
-  // Leaving rename swaps the input back for the title, which needs a fresh fit.
-  const isRenamingTitle = renamingTitle !== null;
+  // Re-fit after every render: title, project, rename and font changes all
+  // re-render this header and can change the labels' natural widths.
   useEffect(() => {
     const list = breadcrumbContainerRef.current?.querySelector("ol");
     if (!list || !parentThreadLink) return;
-    // Measure the untruncated labels, including a collapsed parent's hidden
-    // text, so expanding and collapsing never change the fit calculation.
-    // Width-capped labels (the project) never grow, so their overflow is skipped.
-    const measure = () => {
-      const gap = Number.parseFloat(getComputedStyle(list).columnGap) || 0;
-      const width = Array.from(list.children).reduce(
-        (total, item) => {
-          const label = item.querySelector('[data-slot="workspace-breadcrumb-text"]');
-          const ellipsis = item.querySelector("[data-parent-breadcrumb-ellipsis]");
-          return (
-            total +
-            (item.firstElementChild?.getBoundingClientRect().width ?? 0) +
-            (label && getComputedStyle(label).maxWidth === "none"
-              ? label.scrollWidth - label.clientWidth
-              : 0) -
-            (ellipsis?.getBoundingClientRect().width ?? 0)
-          );
-        },
-        gap * (list.children.length - 1),
-      );
-      setCollapseParentTitle(width > list.clientWidth);
-    };
+    const measure = () => setCollapseParentTitle(breadcrumbOverflows(list));
     measure();
     const frame = requestAnimationFrame(measure);
+    return () => cancelAnimationFrame(frame);
+  });
+  // Width changes and late font loads change the fit without a render.
+  useEffect(() => {
+    const list = breadcrumbContainerRef.current?.querySelector("ol");
+    if (!list || !parentThreadLink) return;
+    const measure = () => setCollapseParentTitle(breadcrumbOverflows(list));
     document.fonts.addEventListener("loadingdone", measure);
     const stopObserving = observeResize(list, measure);
     return () => {
-      cancelAnimationFrame(frame);
       document.fonts.removeEventListener("loadingdone", measure);
       stopObserving();
     };
-  }, [activeProjectName, activeThreadTitle, parentThreadLink, interfaceFont, isRenamingTitle]);
+  }, [parentThreadLink]);
   const renameCommittedRef = useRef(false);
   const startRename = useCallback(() => {
     if (

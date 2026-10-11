@@ -449,11 +449,12 @@ function SidebarRail({
     // Toggling the sidebar cancels a drag so the inline width never pins a
     // collapsed sidebar open.
   }, String(open));
+  const refreshResize = resize.refresh;
   React.useLayoutEffect(() => {
     latestResizable.current = resolvedResizable;
     // Bounds follow the window; keep an active drag's inline width inside them.
-    resize.refresh();
-  }, [resolvedResizable]);
+    refreshResize();
+  }, [refreshResize, resolvedResizable]);
 
   const handleClick = React.useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {

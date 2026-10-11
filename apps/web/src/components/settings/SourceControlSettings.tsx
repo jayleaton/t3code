@@ -62,7 +62,7 @@ import {
 import { searchableSetting, sourceControlHostSettingsSearchId } from "./settingsSearch";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
-import { sourceControlIcon } from "~/sourceControlPresentation";
+import { SOURCE_CONTROL_ICONS } from "~/sourceControlPresentation";
 
 const EMPTY_DISCOVERY_RESULT: SourceControlDiscoveryResult = {
   versionControlSystems: [],
@@ -161,24 +161,42 @@ function itemStatusDot(item: VcsDiscoveryItem | SourceControlProviderDiscoveryIt
   return "bg-success";
 }
 
+const ITEM_MARK_ICON_CLASS = "size-4.5 text-foreground/80";
+
+/** Takes the definition's icon key as a prop so the art is picked from the static map, not created in render. */
+function SourceControlHostIcon({
+  iconKey,
+  className,
+}: {
+  readonly iconKey: string;
+  readonly className: string;
+}) {
+  const Icon = SOURCE_CONTROL_ICONS[iconKey] ?? PullRequestGlyph.pullRequest;
+  return <Icon className={className} aria-hidden />;
+}
+
 function SourceControlItemMark({
   item,
 }: {
   readonly item: VcsDiscoveryItem | SourceControlProviderDiscoveryItem;
 }) {
   const dotClassName = itemStatusDot(item);
-  const host = isProviderDiscoveryItem(item) ? sourceControlClients.find(item.kind) : undefined;
-  const Icon = isProviderDiscoveryItem(item)
-    ? host && sourceControlIcon(host)
-    : VCS_ICONS[item.kind];
+  const hostIconKey = isProviderDiscoveryItem(item)
+    ? sourceControlClients.find(item.kind)?.icon
+    : undefined;
+  const VcsIcon = isProviderDiscoveryItem(item) ? undefined : VCS_ICONS[item.kind];
 
-  if (!Icon) {
+  if (hostIconKey === undefined && !VcsIcon) {
     return <span className={cn("size-2 shrink-0 rounded-full", dotClassName)} aria-hidden />;
   }
 
   return (
     <span className="relative inline-flex size-5 shrink-0 items-center justify-center">
-      <Icon className="size-4.5 text-foreground/80" aria-hidden />
+      {hostIconKey !== undefined ? (
+        <SourceControlHostIcon iconKey={hostIconKey} className={ITEM_MARK_ICON_CLASS} />
+      ) : VcsIcon ? (
+        <VcsIcon className={ITEM_MARK_ICON_CLASS} aria-hidden />
+      ) : null}
       <span
         className={cn(
           "pointer-events-none absolute -left-0.5 -top-0.5 size-2 rounded-full ring-2 ring-background",

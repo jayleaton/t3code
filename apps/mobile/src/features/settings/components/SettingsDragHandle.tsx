@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { View } from "react-native";
-import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
 
 import { SymbolView } from "../../../components/AppSymbol";
 
@@ -19,23 +19,20 @@ export function SettingsDragHandle(props: {
     latest.current = props;
   });
   const translation = useRef(0);
-  const gesture = useMemo(
-    () =>
-      Gesture.Pan()
-        .minDistance(0)
-        .shouldCancelWhenOutside(false)
-        .runOnJS(true)
-        .onStart(() => {
-          translation.current = 0;
-          latest.current.onStart();
-        })
-        .onUpdate((event) => {
-          translation.current = event.translationY;
-          latest.current.onMove(event.translationY);
-        })
-        .onFinalize((_, success) => latest.current.onEnd(translation.current, !success)),
-    [],
-  );
+  const gesture = usePanGesture({
+    minDistance: 0,
+    shouldCancelWhenOutside: false,
+    runOnJS: true,
+    onActivate: () => {
+      translation.current = 0;
+      latest.current.onStart();
+    },
+    onUpdate: (event) => {
+      translation.current = event.translationY;
+      latest.current.onMove(event.translationY);
+    },
+    onFinalize: (event) => latest.current.onEnd(translation.current, event.canceled),
+  });
   return (
     <GestureDetector gesture={gesture}>
       <View

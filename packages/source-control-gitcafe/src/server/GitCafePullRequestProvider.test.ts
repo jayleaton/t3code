@@ -547,7 +547,9 @@ describe("GitCafePullRequestProvider", () => {
         expectedStackHeads: [{ number: 7, headSha: headOid }],
       });
       assert.deepStrictEqual(server.writes(), ["POST /repos/owner/repo/pulls/stacks/3/restack"]);
-      const { requestId, ...body } = server.sent.at(-1)?.body as { requestId: unknown };
+      const sent = server.sent.at(-1);
+      assert.isDefined(sent);
+      const { requestId, ...body } = sent.body as { requestId: unknown };
       assertRequestId({ requestId });
       assert.deepStrictEqual(body, { expectedRevision: 5 });
     }).pipe(Effect.provide(server.layer));
