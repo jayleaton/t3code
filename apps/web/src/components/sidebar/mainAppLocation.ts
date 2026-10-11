@@ -98,7 +98,7 @@ export function MainAppLocationTracker() {
 }
 
 /** The main app URL a utility page returns to: the last one visited, else the thread list. */
-export function readMainAppHref(): string {
+function readMainAppHref(): string {
   return current().href ?? "/";
 }
 

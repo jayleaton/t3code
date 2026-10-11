@@ -24,7 +24,7 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { writeFakeCli } from "@t3tools/provider-testing/fakeCli";
-import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import {
   IdAllocatorV2,
   layer as idAllocatorLayer,
@@ -97,7 +97,7 @@ const setup = Effect.gen(function* () {
   return { fs, cwd, make };
 });
 
-const layer = Layer.mergeAll(NodeServices.layer, idAllocatorLayer);
+const layer = Layer.mergeAll(NodeServices.layer, idAllocatorLayer, McpProviderSessions.layer);
 const harness = Effect.gen(function* () {
   const { fs, cwd, make } = yield* setup;
   const adapter = yield* make();
@@ -290,7 +290,8 @@ it.effect.each(["ready", "missing-mod", "mcp-failure"])(
   "keeps authorized MCP endpoints and fails closed for %s",
   (prompt) =>
     Effect.gen(function* () {
-      McpProviderSession.setMcpProviderSession({
+      const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+      yield* mcpSessions.set({
         environmentId: EnvironmentId.make("test"),
         threadId,
         providerSessionId: "test-session",
@@ -299,9 +300,6 @@ it.effect.each(["ready", "missing-mod", "mcp-failure"])(
         authorizationHeader: "Bearer test-only",
         browserToolsAvailable: false,
       });
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId)),
-      );
       const h = yield* harness;
       const events = yield* h.run(prompt);
       assert.ok(

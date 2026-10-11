@@ -34,8 +34,6 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
-  findSharedSettingsMismatches,
-  pickSharedServerSettings,
   filterSharedServerPatch,
   splitSharedServerPatch,
   supportsSharedSettingsSync,
@@ -562,7 +560,7 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
               serverPatch.agentSkills !== undefined
                 ? "Skills saved on this machine"
                 : "Agent saved on this machine",
-            description: "Some machines could not sync. Use Apply to all in Settings to retry.",
+            description: "Some machines could not sync. Save again to retry.",
           });
         }
         if (Object.keys(clientPatch).length > 0) persistClientSettingsPatch(clientPatch);
@@ -672,79 +670,6 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
   );
 
   return updateSettings;
-}
-
-/**
- * Shared-settings sync targets whose values differ from the primary's,
- * plus an action that writes the primary's values to all of them. Drift
- * happens when an environment was offline during an edit or was changed by
- * an older client.
- */
-export function useSharedSettingsSync() {
-  const primaryEnvironment = usePrimaryEnvironment();
-  const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
-  const primaryCapabilities = primaryEnvironment?.serverConfig?.environment.capabilities;
-  // Read the loaded config, not `primaryServerSettingsAtom`: that atom falls
-  // back to defaults while the primary is disconnected, and "apply to all"
-  // must never push defaults over real values. Same for a primary too old to
-  // hold the shared keys: its decoded defaults are not a source of truth.
-  const primarySettings =
-    primaryEnvironment !== null && supportsSharedSettingsSync(primaryEnvironment)
-      ? (primaryEnvironment.serverConfig?.settings ?? null)
-      : null;
-  const { environments } = useEnvironments();
-  const writableTargetIds = useSharedSettingsSyncTargetIds();
-  const persistServerSettings = useAtomCommand(
-    serverEnvironment.updateSettings,
-    "server settings update",
-  );
-
-  const mismatches = useMemo(
-    () =>
-      findSharedSettingsMismatches({
-        primaryEnvironmentId,
-        primarySettings,
-        primaryCapabilities,
-        environments: environments.map((environment) => ({
-          environmentId: environment.environmentId,
-          label: environment.label,
-          syncEligible:
-            supportsSharedSettingsSync(environment) &&
-            writableTargetIds.includes(environment.environmentId),
-          settings: environment.serverConfig?.settings ?? null,
-          capabilities: environment.serverConfig?.environment.capabilities,
-        })),
-      }),
-    [environments, primaryEnvironmentId, primarySettings, primaryCapabilities, writableTargetIds],
-  );
-
-  const applyToAll = useCallback(() => {
-    if (primarySettings === null) {
-      return;
-    }
-    const patch = pickSharedServerSettings(primarySettings, primaryCapabilities);
-    for (const mismatch of mismatches) {
-      const target = environments.find(
-        (candidate) => candidate.environmentId === mismatch.environmentId,
-      );
-      void persistServerSettings({
-        environmentId: mismatch.environmentId,
-        input: {
-          patch: filterSharedServerPatch(
-            patch,
-            target?.serverConfig?.environment.capabilities,
-            target?.serverConfig?.settings,
-            primarySettings,
-          ),
-          ...(target?.serverConfig?.environment.capabilities.agentLibrarySync === true
-            ? { replicateProfiles: true }
-            : {}),
-        },
-      });
-    }
-  }, [environments, mismatches, persistServerSettings, primarySettings, primaryCapabilities]);
-
-  return { mismatches, applyToAll };
 }
 
 export function useUpdateEnvironmentSettings(environmentId: EnvironmentId | null) {

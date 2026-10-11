@@ -243,6 +243,20 @@ describe("age settlement", () => {
     },
   );
 
+  it.each(["manual", "timer"])("restarts inactivity on a %s snooze wake", (wake) => {
+    const thread = {
+      ...shell({ latestRunCompletedAt: at(-4 * DAY_MS) }),
+      ...(wake === "manual"
+        ? { lastSnoozeWakeAt: at(-1_000) }
+        : { snoozedAt: at(-3 * DAY_MS), snoozedUntil: at(-1_000) }),
+    };
+    const input = { thread, nowMs: NOW_MS, autoSettleAfterDays: 1 };
+    expect(AutoSettlement.resolveAutoSettlementAt(input)).toBeNull();
+    expect(AutoSettlement.resolveAutoSettlementAt({ ...input, nowMs: NOW_MS + DAY_MS })).toEqual(
+      at(-1_000),
+    );
+  });
+
   it.each(["monitor", "subagent", "background_task"] as const)(
     "keeps a completed card with a pending %s active",
     (kind) => {

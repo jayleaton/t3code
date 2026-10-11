@@ -87,6 +87,11 @@ same secret in the repository's webhook settings with content type
 up on desktop or web; mobile keeps an existing signature check but can't turn
 one on.
 
+A script that may retry a request can send an `Idempotency-Key` header, 1 to
+200 printable characters with no spaces. T3 Code runs the task once per key
+for 48 hours; a retry with the same key is accepted as a duplicate and answers
+with the first delivery's id. A malformed key gets a 400 and nothing runs.
+
 On desktop and web, pick **Deliveries** from a task's menu to see recent
 requests and the prompt each one produced.
 
@@ -98,6 +103,95 @@ T3 Connect URL for up to 24 hours and delivers them when the environment
 returns. Leave it off if you don't want request bodies stored outside your
 machine. To skip requests that waited too long, set **Skip requests older
 than** on the task.
+
+### Trigger a webhook only when something changes
+
+`t3 watch` turns external state into a webhook call without spending a model
+run on polling. It probes a file, an HTTP endpoint, or a command's exit status,
+and sends one POST to your webhook task only when a value changes into one you
+listed. While nothing changes it sends nothing. Send actionable changes only,
+never routine progress.
+
+```json
+{
+  "name": "build-box",
+  "webhookUrl": "https://<the webhook URL shown for the task>",
+  "intervalSeconds": 30,
+  "probes": [
+    { "kind": "file", "name": "lease", "path": "/var/run/build.lease", "notify": ["present"] },
+    {
+      "kind": "http",
+      "name": "api",
+      "url": "http://localhost:8080/health",
+      "notify": ["status:500", "unreachable"]
+    },
+    {
+      "kind": "command",
+      "name": "backup",
+      "argv": ["/usr/local/bin/check-backup"],
+      "notify": ["exit:1"]
+    }
+  ],
+  "deadlines": [
+    {
+      "name": "backup-by-dawn",
+      "at": "2026-10-12T06:00:00Z",
+      "unless": { "probe": "backup", "value": "exit:0" }
+    }
+  ]
+}
+```
+
+Values are `present`/`absent` for files, `status:<code>`/`unreachable` for HTTP,
+and `exit:<code>`/`timeout` for commands (add `"output": true` to use the first
+line of stdout instead). `"*"` in `notify` means any change. The first run
+records a baseline and sends nothing unless a probe sets `"notifyInitial": true`.
+Commands run directly, without a shell. The webhook URL can be the direct,
+Tailscale, or T3 Connect URL. Failed deliveries retry, and a still-undelivered
+event is re-sent with the same `Idempotency-Key` on the next run.
+
+Use the `t3` command from the same T3 Code release as your server. Earlier
+releases and the `t3` package on npm don't include `watch`, so if `t3 watch`
+reports an unknown command, that `t3` is too old.
+
+- **Desktop app:** the app keeps its own launcher at `~/.t3/bin/t3`, or
+  `%USERPROFILE%\.t3\bin\t3.cmd` on Windows (under your T3 home if you changed
+  it). [The `t3` command](./install.md#the-t3-command) explains how to put it on
+  your `PATH`.
+- **Server without the desktop app:** use the standalone `t3` CLI built with
+  the same release, not one installed from npm.
+
+Run `t3 watch /path/config.json --once` from a scheduler, or `t3 watch
+/path/config.json --interval 30` under any supervisor. Progress is kept next
+to the config, in `config.json.state.json`.
+
+Each state file is one watcher: it holds a single-writer lock while a run is in
+progress, so overlapping scheduled runs skip safely instead of sending twice or
+failing. A crashed run's lock is reclaimed automatically. The state file also
+carries the watcher's identity, which is part of every `Idempotency-Key`. Don't
+copy a state file to another host or machine; give each its own. To start fresh,
+delete the state file.
+
+Schedulers don't read your shell's `PATH`, so give them absolute paths for
+both the `t3` launcher and the config. These examples use the desktop app's
+launcher. Check them against your scheduler's own documentation before relying
+on them:
+
+- Linux: a cron line such as
+  `* * * * * /home/me/.t3/bin/t3 watch /home/me/watch/config.json --once`, or a
+  systemd user timer with the same command.
+- macOS: a launchd agent with `ProgramArguments` of `/Users/me/.t3/bin/t3`,
+  `watch`, `/Users/me/watch/config.json` and `--once`, and `StartInterval`
+  `60`. launchd skips runs while the Mac sleeps.
+- Windows, from Command Prompt (paths with spaces keep their inner `\"`
+  quotes):
+
+  ```bat
+  schtasks /Create /TN t3-watch /SC MINUTE /TR "\"%USERPROFILE%\.t3\bin\t3.cmd\" watch \"C:\watch\config.json\" --once"
+  ```
+
+The command exits non-zero while an event is still undelivered, so schedulers
+show the failure.
 
 ## Defaults and inheritance
 
@@ -143,8 +237,11 @@ captures and log retention remain machine-wide.
 
 Worktrees can be removed after a chosen number of inactive days, after merging, or when they
 have no commits beyond the default branch. Only T3-managed worktrees are eligible. Active
-sessions, shared worktrees, uncommitted changes, and ignored files other than `node_modules`
-prevent removal. Branches and thread history stay; starting another turn recreates the checkout.
+sessions and shared worktrees prevent removal. **Keep worktrees with local changes** defaults
+to **Uncommitted changes**, which protects tracked edits and untracked files but deletes ignored
+files such as `.env` and build output. **Any local files** also protects ignored files other than
+`node_modules`. **Edited tracked files** protects only tracked edits and allows untracked and
+ignored files to be deleted. Branches and thread history stay; starting another turn recreates the checkout.
 Merge cleanup requires a merged pull request whose commits are included in the remote default
 branch. A squash or rebase merge on GitHub also counts when the pull request targeted the default
 branch and the worktree is still at the pull request's last commit.
@@ -153,6 +250,9 @@ Enable **Delete worktrees with deleted threads** to remove safe worktrees after 
 thread is deleted, including archived threads and worktrees left by earlier deletions. The
 server waits for sessions and terminals to stop and retries skipped worktrees after restart.
 Existing prompts for deleting a worktree manually remain available when this policy is off.
+
+Choose **Delete now** to run the enabled rules immediately. The latest results show which
+worktrees were removed or kept and why, plus any failures.
 
 To free a finished thread's worktree without enabling a policy, ask an agent connected through
 T3's MCP tools to reclaim it (`t3_reclaim_worktree`; a dry run only reports). The thread keeps

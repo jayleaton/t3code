@@ -88,7 +88,13 @@ export function resolveAutoSettlementAt(input: {
   const { thread } = input;
   if (!isAutoSettlementCandidate(thread, input.nowMs)) return null;
   if (input.autoSettleAfterDays === null || input.autoSettleAfterDays <= 0) return null;
+  // A passed wake timer restarts inactivity. An earlier wake can only delay settlement.
+  const snoozedUntilMs = toMillis(thread.snoozedUntil);
+  const timerWakeAtMs =
+    snoozedUntilMs !== null && snoozedUntilMs <= input.nowMs ? snoozedUntilMs : null;
   const activityAtMs = latestMillis([
+    toMillis(thread.lastSnoozeWakeAt),
+    timerWakeAtMs,
     toMillis(thread.createdAt),
     toMillis(thread.updatedAt),
     toMillis(thread.unsettledAt),

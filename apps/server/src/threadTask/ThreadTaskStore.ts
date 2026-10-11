@@ -36,6 +36,8 @@ export type ThreadTaskEventKind =
   | "wake_queued"
   | "wake_delivered"
   | "wake_skipped"
+  /** A turn end the owner already holds the answer to; detail names the run and revision. */
+  | "wake_suppressed"
   | "remote_sync_ok"
   | "remote_sync_failed"
   | "remote_applied"

@@ -7,7 +7,7 @@ import {
   type WorktreeReclaimRefusal,
   type WorktreeReclaimResult,
 } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { threadShellHasActiveWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -136,7 +136,7 @@ export const make = Effect.fn("WorktreeReclamation.make")(function* (runtime: Re
   const allocatedBytes = (target: string) =>
     Effect.gen(function* () {
       if (!(yield* fs.exists(target))) return 0;
-      if ((yield* HostProcessPlatform) === "win32") return null;
+      if ((yield* HostProcess.Platform) === "win32") return null;
       const result = yield* processes.run({
         command: "du",
         args: ["-sk", target],

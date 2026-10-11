@@ -115,6 +115,37 @@ const post = (
 ) => new Request(`http://env.local${path}`, { method: "POST", body, headers });
 
 describe("webhook route", () => {
+  it("answers 400 for an invalid idempotency key and passes a valid one through", async () => {
+    let received: WebhookTriggerRequest | undefined;
+    const { handler, dispose } = handlerFor((request) => {
+      received = request;
+      return Effect.succeed(
+        request.headers["idempotency-key"] === "bad key"
+          ? { _tag: "invalid_idempotency_key" }
+          : {
+              _tag: "accepted",
+              deliveryId: ScheduledTaskWebhookDeliveryId.make("delivery:key:1"),
+              outcome: "duplicate",
+            },
+      );
+    });
+    try {
+      const invalid = await handler(
+        post("/api/hooks/id/tok", "{}", { "Idempotency-Key": "bad key" }),
+      );
+      expect(invalid.status).toBe(400);
+      expect(await invalid.json()).toEqual({ error: "invalid_idempotency_key" });
+      expect(invalid.headers.get("x-t3-hook-outcome")).toBe("invalid_idempotency_key");
+
+      const valid = await handler(post("/api/hooks/id/tok", "{}", { "Idempotency-Key": "k-1" }));
+      expect(valid.status).toBe(202);
+      expect(valid.headers.get("x-t3-hook-outcome")).toBe("duplicate");
+      expect(received?.headers["idempotency-key"]).toBe("k-1");
+    } finally {
+      await dispose();
+    }
+  });
+
   it("passes the raw request to the service and answers 202 with the delivery id", async () => {
     let received: WebhookTriggerRequest | undefined;
     const { handler, dispose } = handlerFor((request) => {

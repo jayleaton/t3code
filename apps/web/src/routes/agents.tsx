@@ -1,5 +1,4 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import "../components/agents/agents.css";
 import { AgentsBoard } from "../components/agents/AgentsBoard";
 
 export const Route = createFileRoute("/agents")({

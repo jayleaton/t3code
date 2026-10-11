@@ -29,9 +29,7 @@ export class ThreadSettlementServiceV2 extends Context.Service<
 >()("t3/orchestration-v2/ThreadSettlementService/ThreadSettlementServiceV2") {}
 
 /** Identity of age settings; unrelated edits do not trigger a sweep. */
-export function autoSettlementSettingsKey(
-  settings: import("@t3tools/contracts").ServerSettings,
-): string {
+function autoSettlementSettingsKey(settings: import("@t3tools/contracts").ServerSettings): string {
   return JSON.stringify([
     settings.sidebarAutoSettleAfterDays,
     Object.entries(settings.projectSettingsOverrides)

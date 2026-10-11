@@ -24,6 +24,7 @@ import ChatView from "../ChatView";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialog";
 import { agentMachineUnavailableReason } from "./agentMachineAvailability";
 import { agentColorFor, resolveAgentTaskProject } from "./agents.logic";
@@ -114,64 +115,66 @@ export function AgentTaskDialog({
         if (!open && !lock.busy) onClose();
       }}
     >
-      <DialogPopup className="agent-dialog agent-task-dialog p-6">
-        <DialogTitle>New chat{profile ? ` · ${profile.name}` : ""}</DialogTitle>
-        <DialogDescription className="mt-2 text-sm text-muted-foreground">
-          Pick an agent and a project, then give it a task.
-        </DialogDescription>
-        <fieldset className="agent-choice-group" disabled={lock.busy || lock.hasContent}>
-          <legend>Agent</legend>
-          <div className="agent-choice-grid">
-            {visibleProfiles.map((item) => (
-              <label
-                key={item.profileId}
-                className="agent-choice-card"
-                style={{ "--agent-color": agentColorFor(item, profiles) } as CSSProperties}
-              >
-                <input
-                  type="radio"
-                  name="agent-task-agent"
-                  className="sr-only"
-                  value={item.profileId}
-                  checked={item.profileId === profile?.profileId}
-                  disabled={item.runtimeMode === "read-only"}
-                  onChange={() => setProfileId(item.profileId)}
-                />
-                <AgentIcon icon={item.icon} />
-                <span className="agent-choice-body">
-                  <span className="agent-choice-name">{item.name}</span>
-                  {item.description && (
-                    <span className="agent-choice-detail">{item.description}</span>
-                  )}
-                </span>
-              </label>
-            ))}
-          </div>
-          <ShowMoreChoices
-            total={sortedProfiles.length}
-            expanded={showAllAgents}
-            onToggle={() => setShowAllAgents((value) => !value)}
-          />
-        </fieldset>
-        {profile ? (
-          <AgentTaskForm
-            key={profile.profileId}
-            profile={profile}
-            onLockChange={setLock}
-            onClose={onClose}
-          />
-        ) : (
-          <>
-            <p role="alert" className="mt-4">
-              No agent can start chats. Read-only agents only answer through MCP.
-            </p>
-            <div className="mt-4 flex justify-end">
-              <Button variant="ghost" onClick={onClose}>
-                Cancel
-              </Button>
+      <DialogPopup className="w-[min(760px,calc(100vw-32px))] max-w-[760px]">
+        <div className="agent-dialog p-6">
+          <DialogTitle>New chat{profile ? ` · ${profile.name}` : ""}</DialogTitle>
+          <DialogDescription className="mt-2">
+            Pick an agent and a project, then give it a task.
+          </DialogDescription>
+          <fieldset className="agent-choice-group" disabled={lock.busy || lock.hasContent}>
+            <legend>Agent</legend>
+            <div className="agent-choice-grid">
+              {visibleProfiles.map((item) => (
+                <label
+                  key={item.profileId}
+                  className="agent-choice-card"
+                  style={{ "--agent-color": agentColorFor(item, profiles) } as CSSProperties}
+                >
+                  <input
+                    type="radio"
+                    name="agent-task-agent"
+                    className="sr-only"
+                    value={item.profileId}
+                    checked={item.profileId === profile?.profileId}
+                    disabled={item.runtimeMode === "read-only"}
+                    onChange={() => setProfileId(item.profileId)}
+                  />
+                  <AgentIcon icon={item.icon} />
+                  <span className="agent-choice-body">
+                    <span className="agent-choice-name">{item.name}</span>
+                    {item.description && (
+                      <span className="agent-choice-detail">{item.description}</span>
+                    )}
+                  </span>
+                </label>
+              ))}
             </div>
-          </>
-        )}
+            <ShowMoreChoices
+              total={sortedProfiles.length}
+              expanded={showAllAgents}
+              onToggle={() => setShowAllAgents((value) => !value)}
+            />
+          </fieldset>
+          {profile ? (
+            <AgentTaskForm
+              key={profile.profileId}
+              profile={profile}
+              onLockChange={setLock}
+              onClose={onClose}
+            />
+          ) : (
+            <>
+              <p role="alert" className="mt-4">
+                No agent can start chats. Read-only agents only answer through MCP.
+              </p>
+              <div className="mt-4 flex justify-end">
+                <Button variant="ghost" onClick={onClose}>
+                  Cancel
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
       </DialogPopup>
     </Dialog>
   );
@@ -406,21 +409,24 @@ function AgentTaskForm({
             )}
             <div className="agent-choice-grid">
               {visibleProjects.map((item) => (
-                <label key={item.id} className="agent-choice-card" title={item.workspaceRoot}>
-                  <input
-                    type="radio"
-                    name="agent-task-project"
-                    className="sr-only"
-                    value={item.id}
-                    checked={project?.id === item.id}
-                    onChange={() => selectProject(item.id)}
-                  />
-                  <ProjectFavicon project={item} className="mt-px size-4 shrink-0" />
-                  <span className="agent-choice-body">
-                    <span className="agent-choice-name">{item.title}</span>
-                    <span className="agent-choice-detail">{item.workspaceRoot}</span>
-                  </span>
-                </label>
+                <Tooltip key={item.id}>
+                  <TooltipTrigger render={<label className="agent-choice-card" />}>
+                    <input
+                      type="radio"
+                      name="agent-task-project"
+                      className="sr-only"
+                      value={item.id}
+                      checked={project?.id === item.id}
+                      onChange={() => selectProject(item.id)}
+                    />
+                    <ProjectFavicon project={item} className="mt-px size-4 shrink-0" />
+                    <span className="agent-choice-body">
+                      <span className="agent-choice-name">{item.title}</span>
+                      <span className="agent-choice-detail">{item.workspaceRoot}</span>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipPopup>{item.workspaceRoot}</TooltipPopup>
+                </Tooltip>
               ))}
             </div>
             {!searchingProjects && (

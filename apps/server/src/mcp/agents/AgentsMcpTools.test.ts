@@ -10,20 +10,33 @@ import { McpSchema, McpServer } from "effect/ai";
 import * as McpInvocationContext from "../McpInvocationContext.ts";
 import * as McpGatewayBrokerModule from "../McpGatewayBroker.ts";
 import { McpGatewayBroker } from "../McpGatewayBroker.ts";
-import { AgentsToolsRegistrationLive } from "./AgentsMcpTools.ts";
+import { layerAgentsToolkit } from "../McpHttpServer.ts";
+import * as McpToolAccessTestkit from "../McpToolAccess.testkit.ts";
 import { LocalGatewayPort } from "./LocalGatewayPort.ts";
 
 const localId = EnvironmentId.make("environment-local");
 const threadId = ThreadId.make("thread-agents-mcp-test");
 
-const makeInvocation = (capabilities: ReadonlyArray<"orchestration" | "preview">) => ({
+const readOnlyClient = {
+  sessionId: "session-read-only",
+  label: "Read-only client",
+  access: "read-only" as const,
+};
+
+const makeInvocation = (
+  capabilities: ReadonlyArray<"orchestration" | "preview">,
+  outsideClient?: typeof readOnlyClient,
+) => ({
   environmentId: localId,
-  thread: {
-    threadId,
-    providerSessionId: "provider-session-agents-test",
-    providerInstanceId: ProviderInstanceId.make("codex"),
-  },
-  client: undefined,
+  thread:
+    outsideClient === undefined
+      ? {
+          threadId,
+          providerSessionId: "provider-session-agents-test",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        }
+      : undefined,
+  client: outsideClient,
   requestNamespace: `thread:${threadId}`,
   capabilities: new Set(capabilities),
   issuedAt: 1,
@@ -70,8 +83,9 @@ const makeLayer = (
       };
     },
   } as unknown as GatewayRuntimePort;
-  const base = AgentsToolsRegistrationLive.pipe(
+  const base = layerAgentsToolkit.pipe(
     Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
     Layer.provide(
       Layer.succeed(LocalGatewayPort, { environmentId: localId, label: "Local", port }),
     ),
@@ -120,6 +134,7 @@ const callTool = (
   name: string,
   args: Record<string, unknown>,
   capabilities: ReadonlyArray<"orchestration" | "preview"> = ["orchestration"],
+  outsideClient?: typeof readOnlyClient,
 ) =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
@@ -128,7 +143,7 @@ const callTool = (
       .pipe(
         Effect.provideService(
           McpInvocationContext.McpInvocationContext,
-          makeInvocation(capabilities),
+          makeInvocation(capabilities, outsideClient),
         ),
         Effect.provideService(McpSchema.McpServerClient, client),
       );
@@ -211,4 +226,35 @@ it.effect("schedules on this chat's environment while another device's app is co
     expect(scheduledOn).toEqual([localId]);
     expect(relayed).toEqual([]);
   }).pipe(Effect.provide(makeLayer([], relayed, scheduledOn)));
+});
+
+it.effect("lets a read-only client read but not change anything", () => {
+  const listedFor: Array<string> = [];
+  const scheduledOn: Array<string> = [];
+  return Effect.gen(function* () {
+    const read = yield* callTool(
+      "t3_list_projects",
+      { environmentId: localId },
+      ["orchestration"],
+      readOnlyClient,
+    );
+    expect(read.isError).toBe(false);
+    expect(listedFor).toEqual([localId]);
+    const write = yield* callTool(
+      "t3_create_scheduled_task",
+      {
+        environmentId: localId,
+        prompt: "Review what the agents did today.",
+        profileId: "reviewer",
+        projectId: "project-1",
+        cron: "0 4 * * *",
+        timezone: "Asia/Bangkok",
+      },
+      ["orchestration"],
+      readOnlyClient,
+    );
+    expect(write.isError).toBe(true);
+    expect(JSON.stringify(write.structuredContent)).toContain("read-only access");
+    expect(scheduledOn).toEqual([]);
+  }).pipe(Effect.provide(makeLayer(listedFor, undefined, scheduledOn)));
 });

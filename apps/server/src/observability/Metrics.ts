@@ -58,7 +58,7 @@ export const terminalRestartsTotal = Metric.counter("t3_terminal_restarts_total"
 /**
  * One per webhook request that reached a task, by `outcome` (accepted,
  * not_found, rejected_signature, disabled, rate_limited, queue_full, expired,
- * prompt_too_long, error) and `source` (relay or direct).
+ * prompt_too_long, invalid_idempotency_key, duplicate, error) and `source` (relay or direct).
  */
 export const webhookDeliveriesTotal = Metric.counter("t3_webhook_deliveries_total", {
   description: "Webhook requests handled, by outcome and source.",

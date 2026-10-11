@@ -28,8 +28,9 @@ vi.mock("@tanstack/react-router", () => ({
 vi.mock("../ui/preview-card", () => ({
   PreviewCard: ({ children }: { children: ReactNode }) => children,
   PreviewCardTrigger: ({ children }: { children: ReactNode }) => <a>{children}</a>,
-  PreviewCardPopup: () => null,
 }));
+// The chat preview popup portals out of the card; these tests cover the card itself.
+vi.mock("@base-ui/react/preview-card", () => ({ PreviewCard: { Portal: () => null } }));
 vi.mock("./AgentChatPreview", () => ({ AgentChatPreview: () => null }));
 import { ThreadCard } from "./ThreadCard";
 import type { AgentCardChildren } from "./agents.logic";

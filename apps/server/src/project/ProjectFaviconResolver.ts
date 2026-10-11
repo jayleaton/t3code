@@ -23,7 +23,7 @@ import * as Schema from "effect/Schema";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as T3ProjectFileLoader from "./T3ProjectFileLoader.ts";
 
-// Resolution probes ~22 well-known paths and 7 source files, then the
+// Resolution probes 23 well-known paths and 7 source files, then the
 // well-known paths again in each `apps/*` package, so a miss costs dozens of
 // filesystem probes. AssetAccess resolves on every project-favicon asset URL,
 // and a project's icon does not move, so the answer is cached.
@@ -72,6 +72,8 @@ const FAVICON_CANDIDATES = [
   "assets/logo.png",
   "assets/images/icon.png",
   ".idea/icon.svg",
+  "Resources/AppIcon.icns",
+  "AppIcon.icns",
 ] as const;
 
 // Monorepos keep their apps one level below this directory, each with its own

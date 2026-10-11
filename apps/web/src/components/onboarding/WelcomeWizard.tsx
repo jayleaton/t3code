@@ -236,7 +236,7 @@ export function WelcomeWizard({
           identity={
             <div className="flex items-center gap-1.5" role="img" aria-label="T3 Agents">
               <BrandMark className="size-5" />
-              <span className="text-[1.4rem] font-medium tracking-tight text-muted-foreground">
+              <span className="text-2xl font-medium tracking-tight text-muted-foreground">
                 Agents
               </span>
             </div>
@@ -1453,8 +1453,8 @@ function ImportStep({
 
   return (
     <StepShell
-      title="Choose your projects"
-      description="Import projects and conversations from your selected computers."
+      title="Import your projects"
+      description="Import projects and conversations from Claude Code and Codex on your selected computers."
     >
       {candidates.length > 0 ? (
         <div className="mt-5 flex items-center justify-between gap-3 text-xs text-muted-foreground">

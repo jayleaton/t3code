@@ -36,7 +36,7 @@ export class DesktopAssets extends Context.Service<
   }
 >()("@t3tools/desktop/app/DesktopAssets") {}
 
-export const resolveResourcePath = Effect.fn("desktop.assets.resolveResourcePath")(function* (
+const resolveResourcePath = Effect.fn("desktop.assets.resolveResourcePath")(function* (
   fileName: string,
 ): Effect.fn.Return<
   Option.Option<string>,
