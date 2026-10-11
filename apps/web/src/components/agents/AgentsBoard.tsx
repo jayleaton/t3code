@@ -410,7 +410,7 @@ export function AgentsBoard() {
               </button>
               <Menu>
                 <MenuTrigger
-                  className="agent-icon-button"
+                  render={<button type="button" className="agent-icon-button" />}
                   aria-label={`Options for ${profile.name}`}
                 >
                   <MoreHorizontalIcon size={14} />
@@ -582,40 +582,42 @@ export function AgentsBoard() {
             if (!open && !busy) setDeleting(null);
           }}
         >
-          <DialogPopup className="agent-dialog p-6">
-            <DialogTitle>Delete {deleting.name}?</DialogTitle>
-            <DialogDescription className="mt-2 text-sm text-muted-foreground">
-              Existing threads will remain visible in All. This does not stop running work.
-            </DialogDescription>
-            {deleteError && <p role="alert">{deleteError}</p>}
-            <div className="agent-form">
-              <footer>
-                <button disabled={busy} onClick={() => setDeleting(null)}>
-                  Cancel
-                </button>
-                <button
-                  className="agent-primary"
-                  disabled={busy}
-                  onClick={async () => {
-                    setBusy(true);
-                    try {
-                      if (
-                        await updateSettings({
-                          mcpGatewayProfiles: profiles.filter(
-                            (p) => p.profileId !== deleting.profileId,
-                          ),
-                        })
-                      )
-                        setDeleting(null);
-                      else setDeleteError("Could not delete the agent. Try again.");
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
-                >
-                  {busy ? "Deleting…" : "Delete agent"}
-                </button>
-              </footer>
+          <DialogPopup>
+            <div className="agent-dialog p-6">
+              <DialogTitle>Delete {deleting.name}?</DialogTitle>
+              <DialogDescription className="mt-2">
+                Existing threads will remain visible in All. This does not stop running work.
+              </DialogDescription>
+              {deleteError && <p role="alert">{deleteError}</p>}
+              <div className="agent-form">
+                <footer>
+                  <button disabled={busy} onClick={() => setDeleting(null)}>
+                    Cancel
+                  </button>
+                  <button
+                    className="agent-primary"
+                    disabled={busy}
+                    onClick={async () => {
+                      setBusy(true);
+                      try {
+                        if (
+                          await updateSettings({
+                            mcpGatewayProfiles: profiles.filter(
+                              (p) => p.profileId !== deleting.profileId,
+                            ),
+                          })
+                        )
+                          setDeleting(null);
+                        else setDeleteError("Could not delete the agent. Try again.");
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                  >
+                    {busy ? "Deleting…" : "Delete agent"}
+                  </button>
+                </footer>
+              </div>
             </div>
           </DialogPopup>
         </Dialog>

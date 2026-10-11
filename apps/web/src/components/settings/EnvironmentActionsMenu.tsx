@@ -108,27 +108,29 @@ export function EnvironmentActionsMenu({
                 This name is saved on the machine and shown on connected devices.
               </DialogDescription>
             </DialogHeader>
-            <DialogPanel className="space-y-3">
-              <label className="text-sm">
-                Machine name
-                <Input
-                  autoFocus
-                  value={name}
-                  maxLength={80}
-                  disabled={saving}
-                  onChange={(event) => setName(event.target.value)}
-                />
-              </label>
-              {error && (
-                <p role="alert" className="text-sm text-destructive">
-                  {error}
-                </p>
-              )}
-              {lock && (
-                <p role="alert" className="text-sm text-muted-foreground">
-                  {lock}
-                </p>
-              )}
+            <DialogPanel>
+              <div className="space-y-3">
+                <label className="text-sm">
+                  Machine name
+                  <Input
+                    autoFocus
+                    value={name}
+                    maxLength={80}
+                    disabled={saving}
+                    onChange={(event) => setName(event.target.value)}
+                  />
+                </label>
+                {error && (
+                  <p role="alert" className="text-sm text-destructive">
+                    {error}
+                  </p>
+                )}
+                {lock && (
+                  <p role="alert" className="text-sm text-muted-foreground">
+                    {lock}
+                  </p>
+                )}
+              </div>
             </DialogPanel>
             <DialogFooter>
               <Button

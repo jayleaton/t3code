@@ -5,6 +5,7 @@ import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environ
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { useProject, useThreadProjection, useThreadStatus } from "../../state/entities";
 import { stripInlineContextReferences } from "../../lib/composerContextReferences";
+import { observeResize } from "../../lib/observeResize";
 import ChatMarkdown from "../ChatMarkdown";
 import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
 import {
@@ -44,9 +45,7 @@ export function AgentChatPreview({
       if (following.current) scroll.scrollTop = scroll.scrollHeight;
     };
     follow();
-    const observer = new ResizeObserver(follow);
-    observer.observe(content);
-    return () => observer.disconnect();
+    return observeResize(content, follow);
   }, []);
   return (
     <section aria-label="Chat preview" className="agent-preview-chat">

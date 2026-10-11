@@ -19,7 +19,8 @@ import {
 import { useDraggable } from "@dnd-kit/core";
 import { AgentRunDragContext, agentChildDragId } from "./agentRunDrag";
 import { Link, useLocation } from "@tanstack/react-router";
-import { PreviewCard, PreviewCardTrigger, PreviewCardPopup } from "../ui/preview-card";
+import { PreviewCard as PreviewCardPrimitive } from "@base-ui/react/preview-card";
+import { PreviewCard, PreviewCardTrigger } from "../ui/preview-card";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { useProject } from "../../state/entities";
@@ -410,30 +411,39 @@ export const ThreadCard = memo(function ThreadCard({
             <p className="agent-thread-time">Environment unavailable</p>
           )}
         </PreviewCardTrigger>
-        <PreviewCardPopup
-          ref={popupRef}
-          onPointerDownCapture={() => {
-            editing.current = true;
-          }}
-          onFocusCapture={() => {
-            editing.current = true;
-          }}
-          side="right"
-          align="start"
-          sideOffset={12}
-          // Composer menus and dialogs portal above this interactive preview.
-          positionerClassName="z-[120]"
-          className="agent-chat-preview bg-background text-foreground"
-        >
-          {showPreview && (
-            <AgentChatPreview
-              thread={thread}
-              project={project?.title ?? "Project unavailable"}
-              pendingWork={pendingWork}
-              onClose={closePreview}
-            />
-          )}
-        </PreviewCardPopup>
+        {/* The chat preview is this board's own surface, so it builds on the primitive rather
+            than restyling the shared PreviewCardPopup. */}
+        <PreviewCardPrimitive.Portal>
+          <PreviewCardPrimitive.Positioner
+            side="right"
+            align="start"
+            sideOffset={12}
+            // Composer menus and dialogs portal above this interactive preview.
+            className="z-[120] max-w-(--available-width)"
+            data-slot="preview-card-positioner"
+          >
+            <PreviewCardPrimitive.Popup
+              ref={popupRef}
+              onPointerDownCapture={() => {
+                editing.current = true;
+              }}
+              onFocusCapture={() => {
+                editing.current = true;
+              }}
+              className="agent-chat-preview origin-(--transform-origin) bg-background text-foreground outline-none transition-[scale,opacity] data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0"
+              data-slot="preview-card-popup"
+            >
+              {showPreview && (
+                <AgentChatPreview
+                  thread={thread}
+                  project={project?.title ?? "Project unavailable"}
+                  pendingWork={pendingWork}
+                  onClose={closePreview}
+                />
+              )}
+            </PreviewCardPrimitive.Popup>
+          </PreviewCardPrimitive.Positioner>
+        </PreviewCardPrimitive.Portal>
       </PreviewCard>
       {showSettleAction && (
         <div className="agent-thread-actions">

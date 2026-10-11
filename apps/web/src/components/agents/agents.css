@@ -1229,10 +1229,6 @@
   }
 }
 
-.agent-task-dialog {
-  width: min(760px, calc(100vw - 32px));
-  max-width: 760px;
-}
 .agent-preview-chat > [data-embedded-chat-composer] {
   flex-shrink: 0;
   max-height: 60%;

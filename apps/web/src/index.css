@@ -2367,3 +2367,7 @@ code {
     }
   }
 }
+
+/* The Agents board stylesheet joins the theme graph so the class linter knows its classes.
+   It stays last to keep its place in the cascade after the rules above. */
+@import "./components/agents/agents.css";
