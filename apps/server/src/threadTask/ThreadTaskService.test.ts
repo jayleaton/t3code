@@ -540,6 +540,125 @@ it.effect("a settled owner is not woken and its worker reports no live continuat
   ).pipe(Effect.provide(testLayer)),
 );
 
+it.effect("only turns that ran wake the owner, and old runs never replay", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const tasks = yield* makeService;
+      yield* tasks.start();
+      yield* f.create("captain");
+      yield* f.create("worker", "captain");
+      yield* tasks.assign(owner, { threadId: worker.threadId, summary: "Keep going" });
+      /** Starts the worker's latest run and ends it. */
+      const runLatest = (status: "completed" | "failed") =>
+        Effect.gen(function* () {
+          yield* TestClock.adjust("1 minute");
+          const run = (yield* f.projections.getThreadRecords(worker.threadId, ["runs"])).runs.at(
+            -1,
+          )!;
+          const now = yield* DateTime.now;
+          yield* f.sink.write({
+            events: [
+              {
+                id: EventId.make(`event:turn:${run.id}`),
+                type: "run.updated",
+                threadId: worker.threadId,
+                runId: run.id,
+                providerInstanceId: instanceId,
+                occurredAt: now,
+                payload: { ...run, status, startedAt: now, completedAt: now },
+              },
+            ],
+          });
+          yield* TestClock.adjust("1 minute");
+          return (yield* f.projections.getThreadRecords(worker.threadId, ["runs"])).runs.at(-1)!;
+        });
+      const turn = (n: number, status: "completed" | "failed" = "completed") =>
+        f.send("worker", n).pipe(Effect.andThen(runLatest(status)));
+
+      const first = yield* turn(1);
+      yield* turn(2, "failed");
+      yield* tasks.drain;
+      assert.equal((yield* f.wakes("captain")).length, 2);
+
+      // A finished run rewritten later (a disposed wake delivery) is not a new end.
+      yield* f.sink.write({
+        events: [
+          {
+            id: EventId.make("event:rewrite:first"),
+            type: "run.updated",
+            threadId: worker.threadId,
+            runId: first.id,
+            providerInstanceId: instanceId,
+            occurredAt: yield* DateTime.now,
+            payload: { ...first, checkpointId: null },
+          },
+        ],
+      });
+      // Queued turns cancelled before they start, out of order, are not news.
+      yield* f.send("worker", 3);
+      yield* f.send("worker", 4);
+      yield* f.send("worker", 5);
+      const pending = (yield* f.projections.getThreadRecords(worker.threadId, ["runs"])).runs
+        .filter((run) => run.status !== "completed" && run.status !== "failed")
+        .toReversed();
+      const queued = pending.filter((run) => run.status === "queued");
+      assert.equal(queued.length, 2);
+      for (const run of queued) {
+        yield* f.orchestrator.dispatch({
+          type: "queued-run.cancel",
+          commandId: CommandId.make(`cancel:${run.id}`),
+          threadId: worker.threadId,
+          runId: run.id,
+        });
+      }
+      const unstarted = pending.at(-1)!;
+      yield* f.sink.write({
+        events: [
+          {
+            id: EventId.make(`event:cancel:${unstarted.id}`),
+            type: "run.updated",
+            threadId: worker.threadId,
+            runId: unstarted.id,
+            providerInstanceId: instanceId,
+            occurredAt: yield* DateTime.now,
+            payload: { ...unstarted, status: "cancelled", completedAt: yield* DateTime.now },
+          },
+        ],
+      });
+      yield* tasks.drain;
+      assert.equal((yield* f.wakes("captain")).length, 2);
+    }),
+  ).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("turn ends judged after the worker settled do not wake the owner", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const tasks = yield* makeService;
+      yield* f.create("captain");
+      yield* f.create("worker", "captain");
+      yield* f.send("worker", 1);
+      yield* tasks.assign(owner, { threadId: worker.threadId, summary: "Keep going" });
+      // The turn ended, then the worker was settled before the end was judged.
+      const runId = yield* f.endLatestRun("worker", "failed");
+      yield* f.orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("settle:worker"),
+        threadId: worker.threadId,
+      });
+      yield* tasks.recover;
+      assert.equal((yield* f.wakes("captain")).length, 0);
+      const view = (yield* tasks.read(owner, { threadId: worker.threadId })).tasks[0]!;
+      assert.equal(view.task.observedRunId, runId);
+      assert.deepEqual(yield* suppressed(worker.threadId), [
+        `run_ended:${worker.threadId}:run:${runId}:rev:1:worker_settled`,
+      ]);
+    }),
+  ).pipe(Effect.provide(testLayer)),
+);
+
 it.live("watch returns on the next change and times out without one", () =>
   Effect.scoped(
     Effect.gen(function* () {
