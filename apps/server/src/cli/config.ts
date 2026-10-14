@@ -100,6 +100,8 @@ const EnvServerConfig = Config.all({
   traceFile: traceFileConfig,
   traceMaxBytes: Config.Int("T3CODE_TRACE_MAX_BYTES").pipe(Config.withDefault(10 * 1024 * 1024)),
   traceMaxFiles: traceMaxFilesConfig,
+  traceSampleRate: Config.Number("T3CODE_TRACE_SAMPLE_RATE").pipe(Config.withDefault(0.05)),
+  traceSlowSpanMs: Config.Int("T3CODE_TRACE_SLOW_SPAN_MS").pipe(Config.withDefault(1_000)),
   traceBatchWindowMs: Config.Int("T3CODE_TRACE_BATCH_WINDOW_MS").pipe(Config.withDefault(1_000)),
   otlpTracesUrl: Config.String("T3CODE_OTLP_TRACES_URL").pipe(
     Config.option,
@@ -447,6 +449,8 @@ export const resolveServerConfig = (
       traceBatchWindowMs: env.traceBatchWindowMs,
       traceMaxBytes: env.traceMaxBytes,
       traceMaxFiles: env.traceMaxFiles,
+      traceSampleRate: env.traceSampleRate,
+      traceSlowSpanMs: env.traceSlowSpanMs,
       otlpTracesUrl: traces?.url,
       otlpMetricsUrl: metrics?.url,
       otlpLogsUrl: logs?.url,

@@ -2,11 +2,13 @@ import { assert, describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
+import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
@@ -26,6 +28,7 @@ import {
   makeTraceSink,
   type EffectTraceRecord,
   type TraceRecord,
+  type TraceSampling,
   type TraceSinkFlushStats,
   OtlpHeadersFromString,
   truncateTraceAttributes,
@@ -705,6 +708,122 @@ describe("observability", () => {
       ),
     );
   });
+});
+
+describe("local trace sampling", () => {
+  const ms = (value: number) => BigInt(value) * 1_000_000n;
+
+  const makeSampledTracer = (sampling: TraceSampling) =>
+    Effect.gen(function* () {
+      const written: Array<string> = [];
+      const tracer = yield* makeLocalFileTracer({
+        filePath: "unused",
+        maxBytes: 1024,
+        maxFiles: 1,
+        batchWindowMs: 10_000,
+        sampling,
+        sink: {
+          filePath: "unused",
+          push: (record) => written.push(record.name),
+          flush: Effect.void,
+          close: () => Effect.void,
+        },
+      });
+      const start = (name: string, startMs: number, parent?: Tracer.AnySpan) =>
+        tracer.span({
+          name,
+          parent: Option.fromUndefinedOr(parent),
+          annotations: Context.empty(),
+          links: [],
+          startTime: ms(startMs),
+          kind: "internal",
+          root: parent === undefined,
+          sampled: true,
+        });
+      return { written, start };
+    });
+
+  it.effect("drops routine subtrees and keeps roots, lifecycle, failed, and slow spans", () =>
+    Effect.gen(function* () {
+      const { written, start } = yield* makeSampledTracer({
+        rate: 0,
+        slowSpanMs: 1_000,
+        keepName: (name) => name.startsWith("ws.rpc."),
+      });
+      const root = start("root", 0);
+      const routine = start("routine", 1, root);
+      const routineChild = start("routine-child", 2, routine);
+      routineChild.end(ms(3), Exit.void);
+      routine.end(ms(4), Exit.void);
+      const rpc = start("ws.rpc.request", 5, root);
+      rpc.end(ms(6), Exit.void);
+      const failed = start("failed", 7, root);
+      failed.end(ms(8), Exit.fail("boom"));
+      const interrupted = start("interrupted", 9, root);
+      interrupted.end(ms(10), Exit.interrupt(1));
+      const slow = start("slow", 11, root);
+      slow.end(ms(1_011), Exit.void);
+      root.end(ms(1_100), Exit.void);
+
+      assert.deepStrictEqual(written, ["ws.rpc.request", "failed", "interrupted", "slow", "root"]);
+    }),
+  );
+
+  it.effect("keeps the open ancestors of a kept span so it is never orphaned", () =>
+    Effect.gen(function* () {
+      const { written, start } = yield* makeSampledTracer({ rate: 0, slowSpanMs: 1_000 });
+      const root = start("root", 0);
+      const transaction = start("transaction", 1, root);
+      const query = start("query", 2, transaction);
+      const failedQuery = start("failed-query", 3, query);
+      failedQuery.end(ms(4), Exit.fail("boom"));
+      query.end(ms(5), Exit.void);
+      const sibling = start("sibling", 6, transaction);
+      sibling.end(ms(7), Exit.void);
+      transaction.end(ms(8), Exit.void);
+      root.end(ms(9), Exit.void);
+
+      assert.deepStrictEqual(written, ["failed-query", "query", "transaction", "root"]);
+    }),
+  );
+
+  it.effect("samples whole subtrees, and each child of a long-lived span on its own", () =>
+    Effect.gen(function* () {
+      const draws = [true, false, true];
+      const { written, start } = yield* makeSampledTracer({
+        rate: 0.5,
+        slowSpanMs: 1_000,
+        random: () => (draws.shift() ? 0 : 1),
+      });
+      // The root draws once, and its young children follow that draw.
+      const root = start("root", 0);
+      const first = start("first", 10, root);
+      start("first-child", 11, first).end(ms(12), Exit.void);
+      first.end(ms(13), Exit.void);
+      // Once the root has run past the slow threshold it will be written as
+      // slow, so each later child draws for its own subtree.
+      const dropped = start("dropped", 2_000, root);
+      start("dropped-child", 2_001, dropped).end(ms(2_002), Exit.void);
+      dropped.end(ms(2_003), Exit.void);
+      const kept = start("kept", 3_000, root);
+      start("kept-child", 3_001, kept).end(ms(3_002), Exit.void);
+      kept.end(ms(3_003), Exit.void);
+      root.end(ms(4_000), Exit.void);
+
+      assert.deepStrictEqual(written, ["first-child", "first", "kept-child", "kept", "root"]);
+    }),
+  );
+
+  it.effect("writes every span at rate 1", () =>
+    Effect.gen(function* () {
+      const { written, start } = yield* makeSampledTracer({ rate: 1, slowSpanMs: 1_000 });
+      const root = start("root", 0);
+      start("child", 1, root).end(ms(2), Exit.void);
+      root.end(ms(3), Exit.void);
+
+      assert.deepStrictEqual(written, ["child", "root"]);
+    }),
+  );
 });
 
 describe("OtlpHeadersFromString", () => {

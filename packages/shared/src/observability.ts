@@ -154,9 +154,25 @@ export interface TraceSink {
   close: () => Effect.Effect<void>;
 }
 
+/**
+ * Which completed spans the local trace file writes. Spans that failed, were
+ * interrupted, ran at least `slowSpanMs`, have no local parent, or match
+ * `keepName` are always written. Other spans are written for a `rate` share of
+ * subtrees. A written span keeps its still-open ancestors, so only a span forked
+ * to outlive its parent can be orphaned. OTLP export does not use it.
+ */
+export interface TraceSampling {
+  /** Share of routine span subtrees written, from 0 to 1. 1 writes every span. */
+  readonly rate: number;
+  readonly slowSpanMs: number;
+  readonly keepName?: (name: string) => boolean;
+  readonly random?: () => number;
+}
+
 export interface LocalFileTracerOptions extends TraceSinkOptions {
   readonly delegate?: Tracer.Tracer;
   readonly sink?: TraceSink;
+  readonly sampling?: TraceSampling;
 }
 
 type OtlpSpan = OtlpTracer.ScopeSpan["spans"][number];
@@ -503,14 +519,40 @@ class LocalFileSpan implements Tracer.Span {
   events: Array<[name: string, startTime: bigint, attributes: Record<string, unknown>]>;
   private readonly delegate: Tracer.Span;
   private readonly push: (record: EffectTraceRecord) => void;
+  private readonly localParent: LocalFileSpan | undefined;
+  private readonly slowNanos: bigint | undefined;
+  // Whether this span's routine subtree won the sample. Children inherit it
+  // while this span is younger than the slow threshold. An older span is
+  // written as slow anyway, so each later child samples its own subtree and
+  // children of long-lived spans are not all decided by one draw.
+  private readonly sampledIn: boolean;
+  private readonly pinned: boolean;
+  private keptByChild = false;
 
   constructor(
     options: Parameters<Tracer.Tracer["span"]>[0],
     delegate: Tracer.Span,
     push: (record: EffectTraceRecord) => void,
+    sampling: TraceSampling | undefined,
   ) {
     this.delegate = delegate;
     this.push = push;
+    const parent = Option.getOrUndefined(options.parent);
+    this.localParent = parent instanceof LocalFileSpan ? parent : undefined;
+    if (sampling === undefined) {
+      this.slowNanos = undefined;
+      this.sampledIn = true;
+      this.pinned = true;
+    } else {
+      const slowNanos = BigInt(Math.round(sampling.slowSpanMs * 1_000_000));
+      const localParent = this.localParent;
+      this.slowNanos = slowNanos;
+      this.sampledIn =
+        localParent !== undefined && options.startTime - localParent.status.startTime < slowNanos
+          ? localParent.sampledIn
+          : sampling.rate >= 1 || (sampling.random ?? Math.random)() < sampling.rate;
+      this.pinned = localParent === undefined || sampling.keepName?.(delegate.name) === true;
+    }
     this.name = delegate.name;
     this.spanId = delegate.spanId;
     this.traceId = delegate.traceId;
@@ -538,9 +580,20 @@ class LocalFileSpan implements Tracer.Span {
     };
     this.delegate.end(endTime, traceExit);
 
-    if (this.sampled) {
+    if (this.sampled && this.shouldWrite(endTime, exit)) {
+      if (this.localParent !== undefined) this.localParent.keptByChild = true;
       this.push(spanToTraceRecord(this));
     }
+  }
+
+  private shouldWrite(endTime: bigint, exit: Exit.Exit<unknown, unknown>): boolean {
+    return (
+      this.sampledIn ||
+      this.pinned ||
+      this.keptByChild ||
+      !ExitRuntime.isSuccess(exit) ||
+      (this.slowNanos !== undefined && endTime - this.status.startTime >= this.slowNanos)
+    );
   }
 
   attribute(key: string, value: unknown): void {
@@ -581,7 +634,12 @@ export const makeLocalFileTracer = Effect.fn("makeLocalFileTracer")(function* (
 
   return Tracer.make({
     span(spanOptions) {
-      return new LocalFileSpan(spanOptions, delegate.span(spanOptions), sink.push);
+      return new LocalFileSpan(
+        spanOptions,
+        delegate.span(spanOptions),
+        sink.push,
+        options.sampling,
+      );
     },
     ...(delegate.context ? { context: delegate.context } : {}),
   });
