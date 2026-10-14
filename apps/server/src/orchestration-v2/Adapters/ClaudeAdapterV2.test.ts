@@ -6356,6 +6356,85 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect("offers a wake again after a user turn when the earlier continuation never ran", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-wake-held-1"),
+            text: "Run the build in the background.",
+            attachments: [],
+          }),
+        );
+        yield* Queue.offer(harness.sdkMessages, wakeTaskStarted);
+        yield* Queue.offer(harness.sdkMessages, turnOneResult);
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "first turn terminal");
+        yield* Queue.offer(harness.sdkMessages, wakeNotification);
+        yield* Queue.offer(harness.sdkMessages, wakeResult);
+        yield* awaitUntil(() => harness.continuationRequests.length === 1, "first offer");
+
+        // The offered continuation is held (Stop holds the queue) and never
+        // starts; the user sends another message instead.
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-wake-held-2"),
+            text: "How is the build going?",
+            attachments: [],
+            providerTurnOrdinal: 2,
+          }),
+        );
+        yield* awaitUntil(() => harness.offeredMessages.length === 2, "user prompt offered");
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000140",
+            result: "Still running.",
+          }),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 2, "user turn terminal");
+
+        // Claude wakes again while idle: this wake is offered, not swallowed.
+        yield* Queue.offer(harness.sdkMessages, wakeTurnInit);
+        yield* awaitUntil(() => harness.continuationRequests.length === 2, "second offer");
+
+        // Its run drains the output the held continuation never claimed.
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-wake-held-3"),
+            text: "Background task completed.",
+            attachments: [],
+            providerTurnOrdinal: 3,
+            messageCreatedBy: "agent",
+            messageCreationSource: "provider",
+          }),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 3, "continuation terminal");
+        assert.equal(harness.terminalEvents()[2]?.status, "completed");
+        assert.isTrue(
+          harness.events.some(
+            (event) => event.type === "message.updated" && event.message.text === WAKE_RESULT_TEXT,
+          ),
+        );
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
   it.effect("terminalizes an agent server wake from a positive task-notification result", () =>
     Effect.scoped(
       Effect.gen(function* () {
