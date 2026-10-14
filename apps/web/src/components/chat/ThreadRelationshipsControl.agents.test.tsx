@@ -468,7 +468,7 @@ it("groups and counts a workflow by its run status instead of its coordinator ch
   };
   await act(async () => renderer.update(cloneElement(panel)));
   expect(renderer.root.findByType("h3").children).toEqual(["Lineage"]);
-  expect(text()).toContain("Previous agents");
+  expect(text()).toContain("Previous subagents");
   expect(renderer.root.findAllByProps({ "aria-label": "Open Checker chat" })).toHaveLength(0);
   await act(async () =>
     renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),
