@@ -1,12 +1,15 @@
 import { AuthStandardClientScopes, EnvironmentId, type ServerConfig } from "@t3tools/contracts";
 import { RelayClientTracer } from "@t3tools/shared/relayTracing";
 import { describe, expect, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
+import * as Exit from "effect/Exit";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Random from "effect/Random";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
@@ -309,9 +312,10 @@ describe("EnvironmentSupervisor", () => {
           return span;
         },
       });
+      const failure = transient();
       const harness = yield* makeHarness({
         prepare: (attempt) =>
-          attempt === 1 ? Effect.fail(transient()) : Effect.succeed(PREPARED_CONNECTION),
+          attempt === 1 ? Effect.fail(failure) : Effect.succeed(PREPARED_CONNECTION),
       });
       const supervisor = yield* EnvironmentSupervisor.make(RELAY_ENTRY, {
         initiallyDesired: true,
@@ -326,6 +330,11 @@ describe("EnvironmentSupervisor", () => {
       );
       const firstAttempt = spans.find((span) => span.name === "relay.connection.attempt");
       expect(firstAttempt).toBeDefined();
+      if (firstAttempt?.status._tag !== "Ended" || !Exit.isFailure(firstAttempt.status.exit)) {
+        throw new Error("Expected the failed relay attempt to have ended.");
+      }
+      const tracedFailure = Cause.findError(firstAttempt.status.exit.cause);
+      expect(Result.isSuccess(tracedFailure) ? tracedFailure.success : undefined).toBe(failure);
 
       yield* TestClock.adjust("3 seconds");
       yield* awaitState(supervisor.state, (state) => state.phase === "connected");
