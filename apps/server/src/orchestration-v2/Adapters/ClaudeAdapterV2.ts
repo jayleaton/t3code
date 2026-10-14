@@ -7937,6 +7937,18 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               // afterwards with correct attribution.
               // Counted only here, so a turn that failed to start does not age reports.
               yield* startUserTurnForWakeReports(nativeThreadId);
+              // The offer is not: a continuation that has not started by now
+              // can stay queued forever (Stop holds the queue), and a sticky
+              // offer would swallow every later wake on this thread. The next
+              // idle wake offers again and its run drains everything buffered;
+              // a continuation that does start later finds the buffer empty
+              // and settles at once.
+              yield* Ref.update(requestedContinuations, (current) => {
+                if (!current.has(nativeThreadId)) return current;
+                const updated = new Set(current);
+                updated.delete(nativeThreadId);
+                return updated;
+              });
               yield* querySession.query.offer(userMessage);
               return;
             }
