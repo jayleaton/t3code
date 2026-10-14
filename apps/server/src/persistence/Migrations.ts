@@ -82,6 +82,9 @@ import Migration0057 from "./Migrations/057_ProjectionThreadsAutoSettleDisabledA
 import Migration0058 from "./Migrations/058_ProjectionThreadsParentThreadId.ts";
 import Migration0066 from "./Migrations/059_McpAppModelContext.ts";
 import Migration0067 from "./Migrations/060_ThreadSnapshotWindowIndexes.ts";
+// Upstream ships these as 61 and 62; the fork ledger had already used those ids.
+import Migration0068 from "./Migrations/061_PullRequestReviewGuides.ts";
+import Migration0069 from "./Migrations/062_ThreadFailureLookupIndex.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -163,6 +166,9 @@ export const migrationEntries = [
   // Upstream ships these as 59 and 60; the fork ledger had already used those ids.
   [66, "McpAppModelContext", Migration0066],
   [67, "ThreadSnapshotWindowIndexes", Migration0067],
+  // Upstream ships these as 61 and 62; the fork ledger had already used those ids.
+  [68, "PullRequestReviewGuides", Migration0068],
+  [69, "ThreadFailureLookupIndex", Migration0069],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -192,6 +198,48 @@ const makeMigrationLoader = (throughId?: number) =>
     ),
   );
 
+// The fork ledger records V2's schema at 59, after the fork's legacy schema migrations.
+const FIRST_V2_MIGRATION_ID = 59;
+
+/**
+ * Fail before migrating when the migrator would skip one of V2's own
+ * migrations. It skips every id up to the highest recorded one, whatever name
+ * was recorded, so a database that took a V2 id for another migration would
+ * start without V2's schema and fail on first use. Earlier ids keep the
+ * warning below: databases with a site-local migration there still work.
+ */
+const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function* (
+  throughId?: number,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const tables = yield* sql`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
+  `;
+  if (tables.length === 0) return;
+  const recorded = yield* sql<{
+    readonly migration_id: number;
+    readonly name: string;
+  }>`SELECT migration_id, name FROM effect_sql_migrations`;
+  const latestRecordedId = Math.max(0, ...recorded.map((row) => row.migration_id));
+  const recordedNames = new Map(recorded.map((row) => [row.migration_id, row.name]));
+  const skipped = migrationEntries.flatMap(([id, name]) => {
+    if (
+      id < FIRST_V2_MIGRATION_ID ||
+      id > latestRecordedId ||
+      (throughId !== undefined && id > throughId)
+    )
+      return [];
+    const recordedName = recordedNames.get(id);
+    if (recordedName !== undefined && isKnownMigrationName(id, recordedName)) return [];
+    return [`${id}_${name} (recorded: ${recordedName ?? "nothing"})`];
+  });
+  if (skipped.length === 0) return;
+  return yield* new Migrator.MigrationError({
+    kind: "BadState",
+    message: `This database's migration history would skip required schema migrations: ${skipped.join(", ")}. The migrator skips every id up to the highest recorded id (${latestRecordedId}), regardless of name. It was probably written by a different build. Start the build that wrote it, or report this migration history so an upgrade path can be added.`,
+  });
+});
+
 /**
  * Migrator run function - no schema dumping needed
  * Uses the base Migrator.make without platform dependencies
@@ -215,7 +263,12 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
-  yield* reconcileV2PreviewMigration();
+  const includesV2 =
+    toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
+  if (includesV2) {
+    yield* reconcileV2PreviewMigration();
+    yield* assertV2MigrationsCanRun(toMigrationInclusive);
+  }
   const executedMigrations = yield* run({ loader: makeMigrationLoader(toMigrationInclusive) });
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0

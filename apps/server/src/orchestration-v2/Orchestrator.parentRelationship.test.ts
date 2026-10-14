@@ -16,6 +16,8 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Sqlite from "../persistence/Sqlite.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { OrchestratorV2 } from "./Orchestrator.ts";
@@ -312,5 +314,15 @@ it.effect("settling a parent settles its children and its subagents; unsettle re
     });
     assert.isNull(yield* settledAt("doug"));
     assert.isNull(yield* settledAt("helper"));
-  }).pipe(Effect.provide(Layer.provideMerge(ThreadManagement.layer, testLayer))),
+  }).pipe(
+    Effect.provide(
+      Layer.provideMerge(
+        ThreadManagement.layer.pipe(
+          Layer.provide(ServerSettings.layerTest()),
+          Layer.provide(CommandReceiptStore.layer.pipe(Layer.provide(database))),
+        ),
+        testLayer,
+      ),
+    ),
+  ),
 );

@@ -200,6 +200,11 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
                 code: "orchestration_error",
                 message: error.message,
               });
+            if (error._tag === "ThreadManagementProviderInstanceDisabledError")
+              return new OrchestratorMcpFailure({
+                code: "invalid_request",
+                message: error.message,
+              });
             // A stale, read-only, or unroutable agent is rejected at create; say why.
             const rejection = profile === undefined ? undefined : profileRejection(error.cause);
             return rejection === undefined

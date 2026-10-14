@@ -20,6 +20,7 @@ import {
   sanitizePrTitle,
   sanitizeThreadTitle,
 } from "@t3tools/provider-core/server/textGenerationUtils";
+import { investigationUnsupported } from "@t3tools/provider-core/server/textGenerationOperations";
 import { collectCommandCode } from "../provider/commandCodeProcess.ts";
 
 export const makeCommandCodeTextGeneration = Effect.fn("makeCommandCodeTextGeneration")(function* (
@@ -183,10 +184,15 @@ export const makeCommandCodeTextGeneration = Effect.fn("makeCommandCodeTextGener
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 
+  // Text generation runs Command Code for a single planning turn, which cannot investigate a checkout.
+  const generateReviewGuide: TextGeneration.TextGeneration["Service"]["generateReviewGuide"] = () =>
+    Effect.fail(investigationUnsupported("generateReviewGuide", "Command Code"));
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateReviewGuide,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
+  OtlpEndpointCheckInput,
   resolveEnvironmentMachineKind,
   resolveEnvironmentLabel,
   ServerConfig,
@@ -278,5 +279,18 @@ describe("machine display name", () => {
     );
     expect(resolveEnvironmentLabel(null, "host.local")).toBe("host.local");
     expect(resolveEnvironmentLabel({}, "host.local")).toBe("host.local");
+  });
+});
+
+describe("OtlpEndpointCheckInput", () => {
+  const decode = Schema.decodeUnknownSync(OtlpEndpointCheckInput);
+
+  it("accepts HTTP receivers only", () => {
+    expect(decode({ signal: "traces", url: "https://collector.example.com/v1/traces" }).url).toBe(
+      "https://collector.example.com/v1/traces",
+    );
+    for (const url of ["data:text/plain,ok", "file:///etc/hosts", "collector:4318/v1/traces"]) {
+      expect(() => decode({ signal: "traces", url })).toThrow();
+    }
   });
 });

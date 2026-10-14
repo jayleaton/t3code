@@ -3583,9 +3583,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             item.payload_json AS failure_payload_json,
             (
               SELECT json_extract(session.payload_json, '$.lastError')
-              FROM orchestration_v2_projection_provider_sessions session
-              INNER JOIN orchestration_v2_projection_provider_session_bindings binding
-                ON binding.provider_session_id = session.provider_session_id
+              -- Keep bindings outermost: one provider instance can hold every session.
+              FROM orchestration_v2_projection_provider_session_bindings binding
+              CROSS JOIN orchestration_v2_projection_provider_sessions session
+                ON session.provider_session_id = binding.provider_session_id
               WHERE binding.thread_id = t.thread_id
                 AND session.provider_instance_id = t.provider_instance_id
               ORDER BY session.updated_at DESC, session.provider_session_id DESC
@@ -5370,9 +5371,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               runless.started_at AS runless_turn_started_at,
               (
                 SELECT json_extract(session.payload_json, '$.lastError')
-                FROM orchestration_v2_projection_provider_sessions session
-                INNER JOIN orchestration_v2_projection_provider_session_bindings binding
-                  ON binding.provider_session_id = session.provider_session_id
+                -- Keep bindings outermost: one provider instance can hold every session.
+                FROM orchestration_v2_projection_provider_session_bindings binding
+                CROSS JOIN orchestration_v2_projection_provider_sessions session
+                  ON session.provider_session_id = binding.provider_session_id
                 WHERE binding.thread_id = t.thread_id
                   AND session.provider_instance_id = t.provider_instance_id
                 ORDER BY session.updated_at DESC, session.provider_session_id DESC
@@ -5381,7 +5383,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               (
                 SELECT item.payload_json
                 FROM orchestration_v2_projection_turn_items item
-                  INDEXED BY orchestration_v2_projection_turn_items_thread_run_idx
                 INNER JOIN orchestration_v2_projection_runs r ON r.run_id = item.run_id
                 WHERE r.run_id = presented.run_id
                   AND r.status = 'failed'
@@ -5398,7 +5399,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               (
                 SELECT item.payload_json
                 FROM orchestration_v2_projection_turn_items item
-                  INDEXED BY orchestration_v2_projection_turn_items_thread_run_idx
                 WHERE item.thread_id = t.thread_id
                   AND item.run_id = blocked.run_id
                   AND item.type = 'error' AND item.status = 'failed'

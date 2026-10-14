@@ -8,6 +8,17 @@ export const THREAD_LIST_V2_ROW_FRAME_CLASS_NAME = undefined;
 /** Queued-task rows are not tiles, so they get the bordered frame. */
 export const THREAD_LIST_V2_PENDING_ROW_FRAME_CLASS_NAME =
   "mx-2 my-0.5 overflow-hidden rounded-[20px] border border-border";
+export const THREAD_LIST_V2_SIDEBAR_ROW_STYLE = {
+  borderRadius: 20,
+  paddingHorizontal: 12,
+  paddingVertical: 10,
+} satisfies ViewStyle;
+export const THREAD_LIST_V2_SIDEBAR_ROW_CONTAINER_STYLE = {
+  borderRadius: 20,
+  overflow: "hidden",
+  marginHorizontal: 8,
+  marginVertical: 2,
+} satisfies ViewStyle;
 
 export const selectedThreadRowColors = {
   foregroundClassName: "text-thread-selected-foreground",
@@ -29,16 +40,11 @@ export function getThreadListV2RowAppearance(
   const backgroundColor = theme[sidebarPane ? "--color-drawer" : "--color-screen"];
   const style: ViewStyle = {
     backgroundColor: selected ? selectedBackgroundColor : backgroundColor,
-    borderRadius: 20,
+    borderRadius: THREAD_LIST_V2_SIDEBAR_ROW_STYLE.borderRadius,
     borderWidth: 1,
     borderColor: theme["--color-border"],
   };
-  const swipeContainerStyle: ViewStyle = {
-    borderRadius: 20,
-    overflow: "hidden",
-    marginHorizontal: 8,
-    marginVertical: 2,
-  };
+  const swipeContainerStyle = THREAD_LIST_V2_SIDEBAR_ROW_CONTAINER_STYLE;
 
   return {
     className: undefined,
@@ -58,7 +64,7 @@ export function getThreadListV2RowAppearance(
       ? "accent-drawer-foreground-muted"
       : "accent-foreground-tertiary",
     style,
-    cardStyle: sidebarPane ? { ...style, paddingHorizontal: 12, paddingVertical: 10 } : style,
+    cardStyle: sidebarPane ? { ...style, ...THREAD_LIST_V2_SIDEBAR_ROW_STYLE } : style,
     swipeContainerStyle,
     swipeBackgroundColor: backgroundColor,
     providerIconSurfaceColor: selected ? selectedBackgroundColor : backgroundColor,

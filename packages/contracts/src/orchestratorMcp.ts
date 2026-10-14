@@ -180,6 +180,12 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
   target: Schema.optional(OrchestratorMcpTarget),
   title: Schema.optional(OrchestratorMcpTitle),
   role: Schema.optional(OrchestratorMcpTaskRole),
+  isolation: Schema.optional(
+    Schema.Literals(["shared", "worktree"]).annotate({
+      description:
+        "Defaults to shared: use the parent's checkout. Worktree creates a separate checkout from the parent's current local commit before starting the child. Uncommitted edits are not copied.",
+    }),
+  ),
   mode: Schema.optional(
     Schema.Literals(["async", "wait"]).annotate({
       description:
@@ -418,6 +424,7 @@ export const OrchestratorMcpThreadTimelineItem = Schema.Struct({
   visibility: Schema.Literals(["local", "inherited", "synthetic"]),
   sourceThreadId: ThreadId,
   itemId: TurnItemId,
+  subagentId: Schema.optional(NodeId),
   runId: Schema.NullOr(RunId),
   messageId: Schema.NullOr(MessageId),
   createdBy: Schema.NullOr(OrchestrationV2Actor),
@@ -506,6 +513,8 @@ export const OrchestratorMcpProviderCapability = Schema.Struct({
       options: Schema.optional(Schema.Array(ProviderOptionDescriptor)),
     }),
   ),
+  /** Runtime modes the provider offers; omitted when it offers all of them. */
+  runtimeModes: Schema.optional(Schema.Array(RuntimeMode)),
   canRunChildTask: Schema.Boolean,
   canRunCrossProviderChildTask: Schema.Boolean,
   constraints: Schema.Array(Schema.String),

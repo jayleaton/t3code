@@ -38,6 +38,7 @@ export * from "./scheduledTask.ts";
 export * from "./todo.ts";
 export * from "./threadTask.ts";
 export * from "./pullRequest.ts";
+export * from "./pullRequestReviewGuide.ts";
 export * from "./orchestrationDispatch.ts";
 export * from "./agentProfile.ts";
 export * from "./commandReceipts.ts";

@@ -20,6 +20,8 @@ import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Sqlite from "../persistence/Sqlite.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { OrchestratorV2 } from "./Orchestrator.ts";
@@ -438,7 +440,17 @@ it.effect(
       assert.isNull(yield* settledAt("worker"));
       assert.isNull(yield* settledAt("helper"));
       assert.deepEqual(yield* settledAt("earlier"), earlierAt);
-    }).pipe(Effect.provide(Layer.provideMerge(ThreadManagement.layer, testLayer))),
+    }).pipe(
+      Effect.provide(
+        Layer.provideMerge(
+          ThreadManagement.layer.pipe(
+            Layer.provide(ServerSettings.layerTest()),
+            Layer.provide(CommandReceiptStore.layer.pipe(Layer.provide(database))),
+          ),
+          testLayer,
+        ),
+      ),
+    ),
 );
 
 it("a sub-run nests under the chat that spawned it, not that chat's parent", () => {

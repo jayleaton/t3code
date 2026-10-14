@@ -10,6 +10,7 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
+  type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   type OrchestrationV2TurnItem,
   OrchestratorMcpFailure,
   type OrchestratorMcpCapabilitiesResult,
@@ -83,6 +84,8 @@ import {
   type DispatchModeRefusal,
 } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { isSnoozed } from "../orchestration-v2/autoSettlement.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
@@ -117,6 +120,7 @@ const DEFAULT_THREAD_ITEM_MAX_CHARS = 20_000;
 
 interface ResolvedTarget {
   readonly modelSelection: ModelSelection;
+  readonly supportedRuntimeModes: ReadonlyArray<RuntimeMode> | undefined;
 }
 
 type TerminalTaskStatus = Extract<
@@ -217,6 +221,8 @@ function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
     case "ThreadManagementProjectThreadsListError":
     case "ThreadManagementDurableRunProjectionError":
       return failure("orchestration_error", error.message);
+    case "ThreadManagementProviderInstanceDisabledError":
+      return failure("invalid_request", error.message);
   }
 }
 
@@ -553,19 +559,46 @@ function interactionModeRank(mode: ProviderInteractionMode): number {
   return mode === "plan" ? 0 : 1;
 }
 
+/**
+ * The mode a new thread runs in: the requested mode, else the parent's, never
+ * broader than the parent's. Pass `target` when the thread runs on a known
+ * provider. A provider runs a mode it does not offer as Supervised, so an
+ * explicit request for one is refused, and an inherited one steps down to the
+ * broadest mode the provider offers.
+ */
 export function resolveRuntimeMode(
   parentMode: RuntimeMode,
   requested: OrchestratorMcpRuntimeMode | undefined,
+  target?: Pick<ResolvedTarget, "modelSelection" | "supportedRuntimeModes">,
 ): Effect.Effect<RuntimeMode, OrchestratorMcpFailure> {
-  const resolved = requested === undefined || requested === "inherit" ? parentMode : requested;
-  return runtimeModeRank(resolved) > runtimeModeRank(parentMode)
-    ? Effect.fail(
-        failure(
-          "runtime_mode_escalation_denied",
-          `Child runtime mode ${resolved} is broader than parent mode ${parentMode}.`,
-        ),
-      )
-    : Effect.succeed(resolved);
+  const inherited = requested === undefined || requested === "inherit";
+  const resolved = inherited ? parentMode : requested;
+  if (runtimeModeRank(resolved) > runtimeModeRank(parentMode)) {
+    return Effect.fail(
+      failure(
+        "runtime_mode_escalation_denied",
+        `Child runtime mode ${resolved} is broader than parent mode ${parentMode}.`,
+      ),
+    );
+  }
+  const supported = target?.supportedRuntimeModes;
+  if (supported === undefined || supported.length === 0 || supported.includes(resolved)) {
+    return Effect.succeed(resolved);
+  }
+  if (!inherited) {
+    return Effect.fail(
+      failure(
+        "invalid_request",
+        `Provider ${target?.modelSelection.instanceId} does not offer runtime mode ${resolved}, so it would run as approval-required. Use one of: ${supported.join(", ")}.`,
+      ),
+    );
+  }
+  return Effect.succeed(
+    supported
+      .filter((mode) => runtimeModeRank(mode) <= runtimeModeRank(resolved))
+      .toSorted((left, right) => runtimeModeRank(right) - runtimeModeRank(left))[0] ??
+      "approval-required",
+  );
 }
 
 export function resolveInteractionMode(
@@ -896,6 +929,7 @@ function timelineItem(input: {
     visibility: input.row.visibility,
     sourceThreadId: input.row.sourceThreadId,
     itemId: input.row.sourceItemId,
+    ...(input.row.item.type === "subagent" ? { subagentId: input.row.item.subagentId } : {}),
     runId: input.row.item.runId,
     messageId,
     createdBy: message?.createdBy ?? null,
@@ -955,6 +989,9 @@ const make = Effect.gen(function* () {
     });
 
   const projects = yield* ProjectService.ProjectService;
+  const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
+  const gitDriver = yield* GitVcsDriver.GitVcsDriver;
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
 
   /** A caller-named project, which must exist before anything is recorded against it. */
   const requireProject = (projectId: ProjectId) =>
@@ -1187,6 +1224,19 @@ const make = Effect.gen(function* () {
    * unattended agent can see a provider as unavailable after it was fixed.
    * Re-probe the requested instance once before refusing it.
    */
+  const assertTargetEnabledForProject = (
+    parent: Pick<OrchestrationV2ThreadProjection, "thread">,
+    commandId: CommandId,
+    target: ResolvedTarget,
+  ) =>
+    threadManagement
+      .assertProviderInstanceEnabled({
+        projectId: parent.thread.projectId,
+        commandId,
+        instanceId: target.modelSelection.instanceId,
+      })
+      .pipe(Effect.mapError(threadManagementFailure));
+
   const resolveTargetRechecking = (input: Parameters<typeof resolveTarget>[0]) => {
     const instanceId =
       input.target?.providerInstanceId ??
@@ -1210,6 +1260,16 @@ const make = Effect.gen(function* () {
     readonly parent: Pick<OrchestrationV2ThreadProjection, "thread">;
     readonly target: OrchestratorMcpTarget | undefined;
     readonly providers: ReadonlyArray<ServerProvider>;
+    /**
+     * Skips the per-candidate project-enablement check in driver-only
+     * resolution. Set only when the command that will dispatch this target
+     * already has a receipt: that dispatch can only replay the recorded
+     * result, never start anything new, so filtering candidates by the
+     * project's current settings would just refuse a retry that does no new
+     * work. Never set this for a resolution whose dispatch uses a different
+     * command id than the one checked for a receipt.
+     */
+    readonly skipProjectEnablementFilter?: boolean;
   }): Effect.Effect<ResolvedTarget, OrchestratorMcpFailure> =>
     Effect.gen(function* () {
       const requestedInstanceId = input.target?.providerInstanceId;
@@ -1231,20 +1291,37 @@ const make = Effect.gen(function* () {
         }
         // Inherit the parent's instance only when it can actually serve the
         // child; an unavailable parent yields to a healthy instance of the
-        // requested driver rather than failing the delegation.
-        const inheritedCandidate = candidates.find(
-          (candidate) =>
-            candidate.instanceId === input.parent.thread.modelSelection.instanceId &&
-            providerConstraints(candidate, true).length === 0,
-        );
-        const availableCandidate = candidates.find(
+        // requested driver rather than failing the delegation. An instance
+        // the project turned off cannot serve either, so selection skips it
+        // for the next candidate instead of failing the enablement check.
+        const healthyCandidates = candidates.filter(
           (candidate) => providerConstraints(candidate, true).length === 0,
         );
-        instanceId = inheritedCandidate?.instanceId ?? availableCandidate?.instanceId;
+        const inheritedCandidate = healthyCandidates.find(
+          (candidate) => candidate.instanceId === input.parent.thread.modelSelection.instanceId,
+        );
+        const orderedCandidates = [
+          ...(inheritedCandidate === undefined ? [] : [inheritedCandidate]),
+          ...healthyCandidates.filter((candidate) => candidate !== inheritedCandidate),
+        ];
+        for (const candidate of orderedCandidates) {
+          const enabledForProject =
+            input.skipProjectEnablementFilter === true ||
+            (yield* threadManagement.isProviderInstanceEnabledForProject({
+              projectId: input.parent.thread.projectId,
+              instanceId: candidate.instanceId,
+            }));
+          if (enabledForProject) {
+            instanceId = candidate.instanceId;
+            break;
+          }
+        }
         if (instanceId === undefined) {
           return yield* failure(
             "provider_unavailable",
-            `No available V2 provider instance for driver ${requestedDriver}.`,
+            healthyCandidates.length === 0
+              ? `No available V2 provider instance for driver ${requestedDriver}.`
+              : `No instance of driver ${requestedDriver} is enabled for this project.`,
           );
         }
       }
@@ -1321,6 +1398,7 @@ const make = Effect.gen(function* () {
             : requestedOptions === undefined
               ? { instanceId, model }
               : { instanceId, model, options: requestedOptions },
+        supportedRuntimeModes: provider.supportedRuntimeModes,
       };
     });
 
@@ -1910,6 +1988,11 @@ const make = Effect.gen(function* () {
               Effect.map((library) => library.mcpGatewayProfiles),
               Effect.orElseSucceed(() => []),
             );
+        // Models the user hid from pickers stay out of the catalog agents choose from.
+        const modelPreferences = yield* serverSettings.getSettings.pipe(
+          Effect.map((settings) => settings.providerModelPreferences ?? {}),
+          Effect.mapError(() => failure("orchestration_error", "Unable to read server settings.")),
+        );
         return {
           parentThreadId: parent?.thread.id ?? null,
           inheritedProviderInstanceId: parent?.thread.modelSelection.instanceId ?? null,
@@ -1926,13 +2009,23 @@ const make = Effect.gen(function* () {
               driverKind: provider.driver,
               displayName: provider?.displayName ?? null,
               models:
-                provider?.models.map((model) => ({
-                  id: model.slug,
-                  label: model.name ?? null,
-                  ...(model.capabilities?.optionDescriptors === undefined
-                    ? {}
-                    : { options: model.capabilities.optionDescriptors }),
-                })) ?? [],
+                provider?.models
+                  .filter(
+                    (model) =>
+                      model.isCustom ||
+                      !modelPreferences[provider.instanceId]?.hiddenModels.includes(model.slug),
+                  )
+                  .map((model) => ({
+                    id: model.slug,
+                    label: model.name ?? null,
+                    ...(model.capabilities?.optionDescriptors === undefined
+                      ? {}
+                      : { options: model.capabilities.optionDescriptors }),
+                  })) ?? [],
+              ...(provider.supportedRuntimeModes === undefined ||
+              provider.supportedRuntimeModes.length === 0
+                ? {}
+                : { runtimeModes: [...provider.supportedRuntimeModes] }),
               canRunChildTask: constraints.length === 0,
               canRunCrossProviderChildTask: constraints.length === 0,
               constraints: [...constraints],
@@ -1975,12 +2068,28 @@ const make = Effect.gen(function* () {
           );
         }
         const providers = yield* loadProviders;
+        // Computed before resolving the target so a retry of an already
+        // accepted delegation can be recognized: dispatching under the same
+        // command id only replays the recorded result, so candidate
+        // selection must not refuse it over the project's current settings.
+        const key = yield* requestKey(input.clientRequestId);
+        const commandId = stableCommandId({
+          scope,
+          requestKey: key,
+          operation: "delegate-task",
+        });
+        const isRetryOfAcceptedDelegation = yield* threadManagement.hasReceipt(commandId);
         const target = yield* resolveTargetRechecking({
           parent,
           target: input.target,
           providers,
+          skipProjectEnablementFilter: isRetryOfAcceptedDelegation,
         });
-        const runtimeMode = yield* resolveRuntimeMode(parent.thread.runtimeMode, input.runtimeMode);
+        const runtimeMode = yield* resolveRuntimeMode(
+          parent.thread.runtimeMode,
+          input.runtimeMode,
+          target,
+        );
         const interactionMode = yield* resolveInteractionMode(
           parent.thread.interactionMode,
           input.interactionMode,
@@ -1992,12 +2101,24 @@ const make = Effect.gen(function* () {
           runtimeMode: input.runtimeMode,
           interactionMode: input.interactionMode,
         });
-        const key = yield* requestKey(input.clientRequestId);
-        const commandId = stableCommandId({
-          scope,
-          requestKey: key,
-          operation: "delegate-task",
-        });
+        let workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy | undefined;
+        if (input.isolation === "worktree" && !isRetryOfAcceptedDelegation) {
+          const project = yield* requireProject(parent.thread.projectId);
+          const base = yield* gitDriver
+            .resolveCommit({
+              cwd: parent.thread.worktreePath ?? project.workspaceRoot,
+              revision: "HEAD",
+            })
+            .pipe(
+              Effect.mapError(() =>
+                failure("invalid_request", "Unable to resolve the parent checkout commit."),
+              ),
+            );
+          workspaceStrategy = { type: "worktree", baseRef: base.commitSha, startFromOrigin: false };
+        }
+        // ThreadManagementService.dispatch is the chokepoint for this command
+        // type's own enablement check, using the same command id and its
+        // receipt-replay exemption, so no separate assert runs here.
         const result = yield* threadManagement
           .dispatch({
             type: "delegated_task.request",
@@ -2013,6 +2134,7 @@ const make = Effect.gen(function* () {
             modelSelection: target.modelSelection,
             runtimeMode,
             interactionMode,
+            ...(workspaceStrategy === undefined ? {} : { workspaceStrategy }),
             // Async delegations wake the parent on every child terminal; wait
             // delegations deliver through the blocking tool call, so a wake is
             // only needed if the parent settled first (timeout, disconnect).
@@ -2020,10 +2142,12 @@ const make = Effect.gen(function* () {
           })
           .pipe(
             Effect.mapError((error) =>
-              failure(
-                "orchestration_error",
-                `Unable to create delegated task${input.profileId === undefined ? "" : ` as agent ${input.profileId}`}: ${errorMessage(error)}`,
-              ),
+              error._tag === "ThreadManagementProviderInstanceDisabledError"
+                ? threadManagementFailure(error)
+                : failure(
+                    "orchestration_error",
+                    `Unable to create delegated task${input.profileId === undefined ? "" : ` as agent ${input.profileId}`}: ${errorMessage(error)}`,
+                  ),
             ),
           );
         const taskEvent = result.storedEvents.find(
@@ -2037,6 +2161,22 @@ const make = Effect.gen(function* () {
           );
         }
         const taskId = taskEvent.event.payload.id;
+        const childThreadId = taskEvent.event.payload.childThreadId;
+        const childRunEvent = result.storedEvents.find(
+          (stored) =>
+            stored.event.type === "run.created" && stored.event.threadId === childThreadId,
+        );
+        if (
+          childThreadId !== null &&
+          childRunEvent?.event.type === "run.created" &&
+          childRunEvent.event.payload.workspacePreparation !== undefined
+        ) {
+          yield* threadLaunch.prepareRun({
+            commandId,
+            threadId: childThreadId,
+            runId: childRunEvent.event.payload.id,
+          });
+        }
 
         if (input.mode !== "wait") {
           return yield* readTask(scope, taskId, false, true);
@@ -2273,6 +2413,7 @@ const make = Effect.gen(function* () {
               const runtimeMode = yield* resolveRuntimeMode(
                 parent.thread.runtimeMode,
                 request.runtimeMode,
+                target,
               );
               const interactionMode = yield* resolveInteractionMode(
                 parent.thread.interactionMode,
@@ -2290,6 +2431,11 @@ const make = Effect.gen(function* () {
                 requestKey: key,
                 index,
               });
+              yield* assertTargetEnabledForProject(
+                parent,
+                stableCommandId({ scope, requestKey: key, operation: "create-thread", index }),
+                target,
+              );
               const title = threadTitle({
                 parentTitle: parent.thread.title,
                 prompt: request.prompt,
@@ -2688,9 +2834,12 @@ export const layer: Layer.Layer<
   never,
   | Crypto.Crypto
   | ThreadManagementService.ThreadManagementService
+  | ThreadLaunchService.ThreadLaunchService
+  | GitVcsDriver.GitVcsDriver
   | ProviderRegistry.ProviderRegistry
   | ProviderAdapterRegistry.ProviderAdapterRegistryV2
   | ScheduledTaskService.ScheduledTaskService
   | ProjectService.ProjectService
   | SecretRequests.SecretRequests
+  | ServerSettings.ServerSettingsService
 > = Layer.effect(OrchestratorMcpService, make);
