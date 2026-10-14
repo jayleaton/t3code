@@ -3583,11 +3583,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             item.payload_json AS failure_payload_json,
             (
               SELECT json_extract(session.payload_json, '$.lastError')
-              -- Keep bindings outermost: one provider instance can hold every session.
+              -- Start with this thread's bindings, not every session for its provider.
               FROM orchestration_v2_projection_provider_session_bindings binding
               CROSS JOIN orchestration_v2_projection_provider_sessions session
-                ON session.provider_session_id = binding.provider_session_id
               WHERE binding.thread_id = t.thread_id
+                AND session.provider_session_id = binding.provider_session_id
                 AND session.provider_instance_id = t.provider_instance_id
               ORDER BY session.updated_at DESC, session.provider_session_id DESC
               LIMIT 1
@@ -5371,11 +5371,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               runless.started_at AS runless_turn_started_at,
               (
                 SELECT json_extract(session.payload_json, '$.lastError')
-                -- Keep bindings outermost: one provider instance can hold every session.
+                -- Start with this thread's bindings, not every session for its provider.
                 FROM orchestration_v2_projection_provider_session_bindings binding
                 CROSS JOIN orchestration_v2_projection_provider_sessions session
-                  ON session.provider_session_id = binding.provider_session_id
                 WHERE binding.thread_id = t.thread_id
+                  AND session.provider_session_id = binding.provider_session_id
                   AND session.provider_instance_id = t.provider_instance_id
                 ORDER BY session.updated_at DESC, session.provider_session_id DESC
                 LIMIT 1

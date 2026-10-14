@@ -82,6 +82,8 @@ it.effect("parks automatic pull until activation without delaying command readin
           traceBatchWindowMs: 200,
           traceMaxBytes: 1024,
           traceMaxFiles: 1,
+          traceSampleRate: 1,
+          traceSlowSpanMs: 1_000,
           otlpTracesUrl: undefined,
           otlpMetricsUrl: undefined,
           otlpLogsUrl: undefined,

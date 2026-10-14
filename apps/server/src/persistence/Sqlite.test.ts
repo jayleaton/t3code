@@ -107,7 +107,11 @@ it.effect("collects planner statistics for an existing database on open", () => 
       const rows = yield* sql<{ readonly stat: string }>`
         SELECT stat FROM sqlite_stat1 WHERE idx = 'stats_probe_thread_idx'
       `;
-      assert.deepEqual([...rows], [{ stat: "1000 100" }]);
+      // optimize analyzes under a temporary analysis_limit, so the per-key
+      // average is a sample estimate that shifts with the rest of the schema.
+      // The row count is exact.
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0]?.stat.split(" ")[0], "1000");
     }).pipe(Effect.provide(persistence()));
   }).pipe(
     Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),

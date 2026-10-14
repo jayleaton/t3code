@@ -70,6 +70,8 @@ export class ServerConfig extends Context.Service<
     readonly traceBatchWindowMs: number;
     readonly traceMaxBytes: number;
     readonly traceMaxFiles: number;
+    readonly traceSampleRate: number;
+    readonly traceSlowSpanMs: number;
     readonly otlpTracesUrl: string | undefined;
     readonly otlpMetricsUrl: string | undefined;
     readonly otlpLogsUrl: string | undefined;
@@ -218,6 +220,8 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     traceBatchWindowMs: 200,
     traceMaxBytes: 10 * 1024 * 1024,
     traceMaxFiles: 10,
+    traceSampleRate: 1,
+    traceSlowSpanMs: 1_000,
     otlpTracesUrl: undefined,
     otlpMetricsUrl: undefined,
     otlpLogsUrl: undefined,

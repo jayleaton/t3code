@@ -60,6 +60,8 @@ const makeConfig = (baseDir: string) =>
       traceBatchWindowMs: 200,
       traceMaxBytes: 10 * 1024 * 1024,
       traceMaxFiles: 10,
+      traceSampleRate: 1,
+      traceSlowSpanMs: 1_000,
       otelEnvironment: OtelEnvironment.none,
       otlpTracesUrl: undefined,
       otlpMetricsUrl: undefined,
