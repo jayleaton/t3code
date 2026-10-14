@@ -5,11 +5,19 @@ import { PROVIDER_ICON_BY_PROVIDER } from "../chat/providerIconUtils";
 import { providerClients } from "../settings/providerDriverMeta";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
-import { CheckIcon, CornerLeftUpIcon, PinIcon, Undo2Icon } from "lucide-react";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  CornerLeftUpIcon,
+  PinIcon,
+  Undo2Icon,
+} from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import {
   memo,
   useContext,
+  useId,
   useState,
   useRef,
   useEffect,
@@ -200,6 +208,70 @@ function AgentChildRuns({
 }
 
 /**
+ * The PRs a card lists: the thread's visible links, else its legacy linked and
+ * branch PRs (servers without multi-PR links).
+ */
+function cardPullRequests(thread: EnvironmentThreadShell) {
+  const links = visibleThreadPullRequests(thread.pullRequests ?? []);
+  if (links.length > 0) return links;
+  return [thread.linkedPullRequest, thread.branchPullRequest].filter(
+    (reference, index, references): reference is NonNullable<typeof reference> =>
+      reference != null && references.findIndex((item) => item?.url === reference.url) === index,
+  );
+}
+
+/**
+ * A card's expanded PR list. Mounted only while expanded, so collapsed cards
+ * never query PR details.
+ */
+function AgentThreadPullRequests({ id, thread }: { id: string; thread: EnvironmentThreadShell }) {
+  const prReference = thread.linkedPullRequest ?? thread.branchPullRequest;
+  const linkedPr = useLinkedThreadPullRequest(thread.environmentId, prReference);
+  const prStatus = prStatusIndicator(linkedPr?.pr ?? null, linkedPr?.sourceControlProvider);
+  const openPrLink = useOpenPrLink();
+  const badges = cardPullRequests(thread).map((reference) => {
+    if ("source" in reference) {
+      const detail = linkedPullRequestSnapshotStatus(reference);
+      return {
+        reference,
+        status: prStatusIndicator(detail?.pr ?? null, detail?.sourceControlProvider),
+      };
+    }
+    return { reference, status: reference === prReference ? prStatus : null };
+  });
+  return (
+    <div id={id} className="agent-thread-pr-list">
+      {badges.map(({ reference, status }) => (
+        <Tooltip key={reference.url}>
+          <TooltipTrigger
+            render={
+              <a
+                href={reference.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`agent-thread-pr ${status?.colorClass ?? "text-muted-foreground"}`}
+                aria-label={status?.tooltip ?? `Open PR #${reference.number}`}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) =>
+                  openPrLink(event, reference.url, undefined, thread.environmentId)
+                }
+              />
+            }
+          >
+            <PullRequestGlyph.pullRequest size={12} aria-hidden="true" />
+            <span className="agent-thread-pr-repository">{reference.repository}</span>
+            <span>#{reference.number}</span>
+          </TooltipTrigger>
+          <TooltipPopup>
+            {status?.tooltip ?? `${reference.repository} #${reference.number}`}
+          </TooltipPopup>
+        </Tooltip>
+      ))}
+    </div>
+  );
+}
+
+/**
  * Memoized: a drag re-renders every sortable wrapper on each hover change, and
  * the cards themselves only need to render when their run changes.
  */
@@ -252,29 +324,9 @@ export const ThreadCard = memo(function ThreadCard({
   );
   const modelLabel = model?.name ?? thread.modelSelection.model;
   const project = useProject(scopeProjectRef(thread.environmentId, thread.projectId));
-  const prReference = thread.linkedPullRequest ?? thread.branchPullRequest;
-  const linkedPr = useLinkedThreadPullRequest(thread.environmentId, prReference);
-  const prStatus = prStatusIndicator(linkedPr?.pr ?? null, linkedPr?.sourceControlProvider);
-  const links = visibleThreadPullRequests(thread.pullRequests ?? []);
-  const badges =
-    links.length > 0
-      ? links.map((link) => {
-          const detail = linkedPullRequestSnapshotStatus(link);
-          return {
-            reference: link,
-            status: prStatusIndicator(detail?.pr ?? null, detail?.sourceControlProvider),
-          };
-        })
-      : [thread.linkedPullRequest, thread.branchPullRequest]
-          .filter(
-            (reference, index, references) =>
-              reference != null &&
-              references.findIndex((item) => item?.url === reference.url) === index,
-          )
-          .flatMap((reference) =>
-            reference ? [{ reference, status: reference === prReference ? prStatus : null }] : [],
-          );
-  const openPrLink = useOpenPrLink();
+  const pullRequestCount = cardPullRequests(thread).length;
+  const [pullRequestsOpen, setPullRequestsOpen] = useState(false);
+  const pullRequestListId = useId();
   const [previewOpen, setPreviewOpen] = useState(false);
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
   // The open chat needs no preview, and a second composer on its draft would
@@ -499,34 +551,27 @@ export const ThreadCard = memo(function ThreadCard({
           onContextMenu={onContextMenu}
         />
       )}
-      {badges.length > 0 && (
+      {pullRequestCount > 0 && (
         <div className="agent-thread-prs" aria-label="Pull requests">
-          {badges.map(({ reference, status }) => (
-            <Tooltip key={reference.url}>
-              <TooltipTrigger
-                render={
-                  <a
-                    href={reference.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className={`agent-thread-pr ${status?.colorClass ?? "text-muted-foreground"}`}
-                    aria-label={status?.tooltip ?? `Open PR #${reference.number}`}
-                    onPointerDown={(event) => event.stopPropagation()}
-                    onClick={(event) =>
-                      openPrLink(event, reference.url, undefined, thread.environmentId)
-                    }
-                  />
-                }
-              >
-                <PullRequestGlyph.pullRequest size={12} aria-hidden="true" />
-                <span className="agent-thread-pr-repository">{reference.repository}</span>
-                <span>#{reference.number}</span>
-              </TooltipTrigger>
-              <TooltipPopup>
-                {status?.tooltip ?? `${reference.repository} #${reference.number}`}
-              </TooltipPopup>
-            </Tooltip>
-          ))}
+          <button
+            type="button"
+            className="agent-thread-prs-toggle"
+            aria-expanded={pullRequestsOpen}
+            aria-controls={pullRequestsOpen ? pullRequestListId : undefined}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              setPullRequestsOpen((open) => !open);
+            }}
+          >
+            {pullRequestsOpen ? (
+              <ChevronDownIcon size={12} aria-hidden="true" />
+            ) : (
+              <ChevronRightIcon size={12} aria-hidden="true" />
+            )}
+            {pullRequestCount} {pullRequestCount === 1 ? "PR" : "PRs"}
+          </button>
+          {pullRequestsOpen && <AgentThreadPullRequests id={pullRequestListId} thread={thread} />}
         </div>
       )}
     </div>
