@@ -52,6 +52,8 @@ const layerConfig = (overrides: Partial<ServerConfig.ServerConfig["Service"]>) =
         traceBatchWindowMs: 200,
         traceMaxBytes: 1024,
         traceMaxFiles: 1,
+        traceSampleRate: 1,
+        traceSlowSpanMs: 1_000,
         otlpTracesUrl: undefined,
         otlpMetricsUrl: undefined,
         otlpLogsUrl: undefined,

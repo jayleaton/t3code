@@ -41,6 +41,15 @@ server starts: production and explicitly configured homes use
 `<worktree>/.t3/userdata/logs/server.trace.ndjson`, and an implicit dev run outside a linked
 worktree uses `~/.t3/dev/logs/server.trace.ndjson`.
 
+The file does not keep every span. It always keeps spans that failed or were interrupted, spans
+that ran at least `T3CODE_TRACE_SLOW_SPAN_MS`, spans without a server parent such as HTTP requests,
+`ws.rpc.*` spans, and provider turn and session spans. Other spans are kept for a
+`T3CODE_TRACE_SAMPLE_RATE` share of their subtrees, so a sampled operation keeps all of its children.
+A kept span also keeps its ancestors that are still running, so only work forked to outlive its
+parent can lose its parent. Browser spans forwarded by clients are sampled by trace with the same
+rules. OTLP export is not sampled. Set `T3CODE_TRACE_SAMPLE_RATE=1` to write every span while you
+investigate something.
+
 Important fields common to both record types:
 
 - `type`: `effect-span` or `otlp-span`
@@ -66,7 +75,8 @@ request.
 
 `t3 trace summary` reads the trace file and its rotated backups directly, so it works while the
 server is stalled or stopped. It prints counts, rates, and latency percentiles per span name. Use
-it to measure background work or to compare two builds.
+it to measure background work or to compare two builds. Counts and rates cover only the spans the
+file kept, so compare builds at the same `T3CODE_TRACE_SAMPLE_RATE`, or at `1` for exact numbers.
 
 ```bash
 t3 trace summary --since 30m --limit 40
@@ -424,7 +434,8 @@ Use traces when the question is:
 1. Start with the local NDJSON file.
 2. Find `effect-span` records where `exit._tag != "Success"`.
 3. Group by `traceId`.
-4. Inspect sibling spans and span events.
+4. Inspect sibling spans and span events. Routine siblings may be sampled out; reproduce with
+   `T3CODE_TRACE_SAMPLE_RATE=1` if you need them.
 5. If needed, move to Tempo for the full trace tree.
 
 ### "Why is the UI feeling slow?"
@@ -582,6 +593,9 @@ Local trace file:
 - `T3CODE_TRACE_BATCH_WINDOW_MS`: flush window, default `1000`
 - `T3CODE_TRACE_MIN_LEVEL`: minimum trace level, default `Info`
 - `T3CODE_TRACE_TIMING_ENABLED`: enable timing metadata, default `true`
+- `T3CODE_TRACE_SAMPLE_RATE`: share of routine span subtrees written, from `0` to `1`, default
+  `0.05`. `1` writes every span. See [Traces](#traces) for what is always written.
+- `T3CODE_TRACE_SLOW_SPAN_MS`: spans that ran at least this long are always written, default `1000`
 
 OTLP export:
 

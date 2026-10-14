@@ -1,5 +1,9 @@
 import * as HttpObservability from "@t3tools/shared/httpObservability";
-import { makeLocalFileTracer, makeTraceSink } from "@t3tools/shared/observability";
+import {
+  makeLocalFileTracer,
+  makeTraceSink,
+  type TraceSampling,
+} from "@t3tools/shared/observability";
 import * as SharedObservability from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import * as Effect from "effect/Effect";
@@ -15,6 +19,11 @@ import * as ResourceAttribution from "../resourceTelemetry/ResourceAttribution.t
 import * as ServerLogger from "../serverLogger.ts";
 import * as BrowserTraceCollector from "./BrowserTraceCollector.ts";
 
+// Request and turn lifecycle spans stay in the local trace file even when their
+// routine neighbours are sampled out.
+const LIFECYCLE_SPAN_NAME =
+  /^ws\.rpc\.|^orchestrationV2\.(providerTurnStart|checkpointCapture)\.|AdapterV2\.(openSession|startTurn|steerTurn|interruptTurn)$/;
+
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
@@ -26,6 +35,11 @@ export const layer = Layer.unwrap(
     const layerSerialization = SharedObservability.layerOtlpSerialization(traces.protocol);
     const resource = ServerConfig.otlpResource(config);
     const attribution = yield* ResourceAttribution.ResourceAttribution;
+    const sampling: TraceSampling = {
+      rate: config.traceSampleRate,
+      slowSpanMs: config.traceSlowSpanMs,
+      keepName: (name) => LIFECYCLE_SPAN_NAME.test(name),
+    };
 
     const layerTraceReferences = Layer.mergeAll(
       Layer.succeed(Tracer.MinimumTraceLevel, config.traceMinLevel),
@@ -65,12 +79,13 @@ export const layer = Layer.unwrap(
           maxFiles: config.traceMaxFiles,
           batchWindowMs: config.traceBatchWindowMs,
           sink,
+          sampling,
           ...(delegate ? { delegate } : {}),
         });
 
         return Layer.mergeAll(
           Layer.succeed(Tracer.Tracer, tracer),
-          BrowserTraceCollector.layer(sink),
+          BrowserTraceCollector.layer(sink, sampling),
         );
       }),
     ).pipe(Layer.provide(OtlpExporter.layerFlusher), Layer.provideMerge(layerSerialization));

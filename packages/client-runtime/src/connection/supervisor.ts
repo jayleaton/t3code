@@ -444,8 +444,9 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     generation: number,
     pendingRetry: Option.Option<PendingRetryTrace>,
   ) => {
+    let attemptSpan = Option.none<Tracer.Span>();
     const traced = Effect.gen(function* () {
-      const attemptSpan = yield* Effect.currentSpan.pipe(Effect.orDie);
+      attemptSpan = Option.some(yield* Effect.currentSpan.pipe(Effect.orDie));
       yield* annotateTarget(target);
       yield* Effect.annotateCurrentSpan({
         "connection.attempt": attempt,
@@ -455,14 +456,13 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           onSome: (retry) => retry.failureCount,
         }),
       });
-      const lease = yield* effect.pipe(
-        Effect.mapError((error): TracedAttemptFailure => ({
-          error,
-          attemptSpan: Option.some(attemptSpan),
-        })),
-      );
-      return { attemptSpan: Option.some(attemptSpan), lease };
-    }).pipe(Effect.withSpan("relay.connection.attempt", { root: true }));
+      const lease = yield* effect;
+      return { attemptSpan, lease };
+    }).pipe(
+      Effect.withSpan("relay.connection.attempt", { root: true }),
+      // Retry metadata contains the span itself; attach it only after the span records its exit.
+      Effect.mapError((error): TracedAttemptFailure => ({ error, attemptSpan })),
+    );
 
     return Option.match(pendingRetry, {
       onNone: () => traced,
