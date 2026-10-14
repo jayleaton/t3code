@@ -4549,6 +4549,149 @@ it.layer(layerSharedApplicationDataPlaneTest)("pending provider interruption", (
   );
 });
 
+it.layer(layerTest)("snooze queued runs", (it) => {
+  it.effect.each(["notification", "delegated-completion", "user"] as const)(
+    "only user messages block snooze with a held %s run",
+    (kind) =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const threadId = ThreadId.make(`snooze-queued:${kind}`);
+        const snoozedUntil = "2099-07-25T09:00:00.000Z";
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`create:${threadId}`),
+          threadId,
+          projectId: ProjectId.make("snooze-queued-project"),
+          title: "Snooze with held queued work",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: "/tmp/snooze-queued",
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`active:${threadId}`),
+          threadId,
+          messageId: MessageId.make(`active:${threadId}`),
+          text: "Active run",
+          attachments: [],
+          modelSelection,
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const activeRun = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
+        const now = yield* DateTime.now;
+        if (kind === "delegated-completion") {
+          yield* eventSink.write({
+            events: [
+              {
+                id: EventId.make(`completion:${threadId}`),
+                type: "run.updated",
+                threadId,
+                runId: activeRun.id,
+                occurredAt: now,
+                payload: {
+                  ...activeRun,
+                  delegatedCompletion: {
+                    disposition: "open",
+                    nextGeneration: 2,
+                    delivery: {
+                      messageId: MessageId.make(`queued:${threadId}`),
+                      generation: 1,
+                      taskIds: [NodeId.make("snooze-queued-task")],
+                    },
+                  },
+                },
+              },
+            ],
+          });
+        }
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`queued:${threadId}`),
+          threadId,
+          messageId: MessageId.make(`queued:${threadId}`),
+          text: "Queued work",
+          attachments: [],
+          modelSelection,
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: kind === "user" ? "user" : "agent",
+          creationSource: kind === "user" ? "web" : "server",
+          ...(kind === "notification"
+            ? {
+                notification: {
+                  source: { kind: "background_task" as const },
+                  outcome: "updated" as const,
+                  summary: "Background activity updated",
+                },
+              }
+            : kind === "delegated-completion"
+              ? {
+                  delegatedCompletion: {
+                    parentRunId: activeRun.id,
+                    generation: 1,
+                    taskIds: [NodeId.make("snooze-queued-task")],
+                  },
+                }
+              : {}),
+        });
+        // Recovery holds the queue while the thread's active run ends.
+        const beforeRecovery = yield* orchestrator.getThreadProjection(threadId);
+        yield* eventSink.commitCommand({
+          commandId: CommandId.make(`recovery:${threadId}`),
+          threadId,
+          commandType: "provider-runtime.reconcile",
+          acceptedAt: now,
+          events: beforeRecovery.runs.map((run) => ({
+            id: EventId.make(`recovery:${run.id}`),
+            type: "run.updated" as const,
+            threadId,
+            runId: run.id,
+            occurredAt: now,
+            payload:
+              run.status === "queued"
+                ? { ...run, queueHeld: true }
+                : { ...run, status: "completed" as const, completedAt: now },
+          })),
+          effects: [],
+        });
+        const beforeSnooze = yield* orchestrator.getThreadProjection(threadId);
+        assert.isTrue(beforeSnooze.runs.some((run) => run.status === "queued" && run.queueHeld));
+        const snooze = orchestrator.dispatch({
+          type: "thread.snooze",
+          commandId: CommandId.make(`snooze:${threadId}`),
+          threadId,
+          snoozedUntil,
+        });
+        if (kind === "user") {
+          const error = yield* snooze.pipe(Effect.flip);
+          assert.equal(error._tag, "OrchestratorDispatchError");
+          assert.equal(error.cause, `Thread ${threadId} has a queued run and cannot be snoozed.`);
+          assert.isNull((yield* orchestrator.getThreadProjection(threadId)).thread.snoozedUntil);
+        } else {
+          yield* snooze;
+          const snoozed = yield* orchestrator.getThreadProjection(threadId);
+          assert.equal(DateTime.formatIso(snoozed.thread.snoozedUntil!), snoozedUntil);
+          assert.deepEqual(snoozed.runs, beforeSnooze.runs);
+          yield* orchestrator.dispatch({
+            type: "thread.unsnooze",
+            commandId: CommandId.make(`unsnooze:${threadId}`),
+            threadId,
+            reason: "user",
+          });
+          const awake = yield* orchestrator.getThreadProjection(threadId);
+          assert.isNull(awake.thread.snoozedUntil);
+          assert.deepEqual(awake.runs, beforeSnooze.runs);
+        }
+      }),
+  );
+});
+
 it.layer(layerSharedApplicationDataPlaneTest)("snooze projection", (it) => {
   it.effect("carries snooze state through the V2 shell projection", () =>
     Effect.gen(function* () {
@@ -5486,3 +5629,133 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
     }),
   );
 });
+
+const queueResumeDisabledInstanceProjectId = ProjectId.make(
+  "project:queue-resume-disabled-instance",
+);
+
+const layerQueueResumeDisabledInstanceTest = Layer.mergeAll(
+  RuntimeLayer.layer,
+  RuntimeLayer.layerEventSink,
+  ProjectStore.layer,
+  ProjectionStore.layer,
+  EffectOutbox.layer,
+  ThreadCommandExecutor.layer,
+).pipe(
+  Layer.provide(McpSessionRegistryTestkit.layer),
+  Layer.provide(McpProviderSessions.layer),
+  Layer.provide(SqlitePersistence.layerMemory),
+  Layer.provide(layerCheckpointStoreTest),
+  Layer.provide(layerServerConfig),
+  Layer.provide(
+    ServerSettings.layerTest({
+      providerInstances: {
+        [alternateInstanceId]: { driver: "codex", enabled: true },
+      },
+      projectSettingsOverrides: {
+        [queueResumeDisabledInstanceProjectId]: {
+          providerInstances: { [alternateInstanceId]: { enabled: false } },
+        },
+      },
+    }),
+  ),
+  Layer.provide(layerTestProviderInstanceRegistry),
+  Layer.provide(layerGitWorkflowTest),
+  Layer.provide(layerProjectServiceTest),
+  Layer.provide(layerPlatformTest),
+);
+
+it.layer(layerQueueResumeDisabledInstanceTest)(
+  "queue.resume on a project-disabled instance",
+  (it) => {
+    it.effect(
+      "holds a queued run instead of starting it on an instance the project turned off",
+      () =>
+        Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const events = yield* EventSink.EventSinkV2;
+          const threadId = ThreadId.make("queue-resume-disabled-instance-thread");
+          const queuedModelSelection = {
+            instanceId: alternateInstanceId,
+            model: "gpt-5.5",
+          } satisfies ModelSelection;
+
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            createdBy: "user",
+            creationSource: "web",
+            commandId: CommandId.make(`${threadId}:create`),
+            threadId,
+            projectId: queueResumeDisabledInstanceProjectId,
+            title: "Queue resume disabled instance",
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+          });
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            createdBy: "user",
+            creationSource: "web",
+            commandId: CommandId.make(`${threadId}:message:active`),
+            threadId,
+            messageId: MessageId.make(`${threadId}:message:active`),
+            text: "Active",
+            attachments: [],
+            dispatchMode: { type: "defer_start" },
+          });
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            createdBy: "user",
+            creationSource: "web",
+            commandId: CommandId.make(`${threadId}:message:queued`),
+            threadId,
+            messageId: MessageId.make(`${threadId}:message:queued`),
+            text: "Queued",
+            attachments: [],
+            modelSelection: queuedModelSelection,
+            dispatchMode: { type: "queue_after_active" },
+          });
+
+          const before = yield* orchestrator.getThreadProjection(threadId);
+          const activeRun = before.runs.find((run) => run.status !== "queued")!;
+          const queuedRun = before.runs.find((run) => run.status === "queued")!;
+          const now = yield* DateTime.now;
+          // A raw event ends the active run without going through dispatch,
+          // so nothing has yet tried to advance the queue onto the disabled
+          // instance.
+          yield* events.write({
+            events: [
+              {
+                id: EventId.make(`${threadId}:active-completed`),
+                type: "run.updated",
+                threadId,
+                runId: activeRun.id,
+                occurredAt: now,
+                payload: { ...activeRun, status: "completed", completedAt: now },
+              },
+            ],
+          });
+
+          yield* orchestrator.dispatch({
+            type: "queue.resume",
+            commandId: CommandId.make(`${threadId}:resume`),
+            threadId,
+          });
+
+          const resumed = yield* orchestrator.getThreadProjection(threadId);
+          const resumedQueuedRun = resumed.runs.find((run) => run.id === queuedRun.id);
+          assert.equal(
+            resumedQueuedRun?.status,
+            "queued",
+            "a disabled instance must not start the queued run",
+          );
+          assert.isTrue(
+            resumedQueuedRun?.queueHeld,
+            "a refused resume re-holds the queue instead of leaving it looking resumable",
+          );
+        }),
+    );
+  },
+);

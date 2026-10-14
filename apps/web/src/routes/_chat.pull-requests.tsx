@@ -129,7 +129,10 @@ import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { isElectron } from "../env";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { PanelLayoutControls } from "../components/chat/PanelLayoutControls";
+import {
+  PanelLayoutControls,
+  RightPanelMaximizeControl,
+} from "../components/chat/PanelLayoutControls";
 import { Button } from "../components/ui/button";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../components/ui/menu";
 import { SidebarInset } from "../components/ui/sidebar";
@@ -329,7 +332,9 @@ export const Route = createFileRoute("/_chat/pull-requests")({
     ...(typeof raw.selectedEnvironmentId === "string" && raw.selectedEnvironmentId
       ? { selectedEnvironmentId: raw.selectedEnvironmentId as EnvironmentId }
       : {}),
-    ...(typeof raw.q === "string" && raw.q ? { q: raw.q.slice(0, 200) } : {}),
+    // Always an own key: the router lays this result over the parent route's unvalidated
+    // search, so leaving out a `q` the URL parser made a number would let the number through.
+    q: typeof raw.q === "string" && raw.q ? raw.q.slice(0, 200) : undefined,
     ...(raw.draft === "only" || raw.draft === "hide" ? { draft: raw.draft } : {}),
     ...(raw.review === "approved" ||
     raw.review === "changes-requested" ||
@@ -1739,6 +1744,17 @@ function PullRequestsRouteView() {
     [search.number, search.repository, selectedProject, selectedHost],
   );
   const rightPanelAvailable = selectedPullRequestSurface !== null;
+  // Maximized like the thread view's panel, with the list collapsing out of the way. Opening a
+  // guide maximizes the panel for its wider layout; only the reader's own toggle restores it, so
+  // switching tabs never resizes the page under them.
+  const [maximized, setMaximized] = useState(false);
+  const rightPanelMaximized = rightPanelState.isOpen && maximized;
+  // A closed panel reopens at its own size, as the thread view's does.
+  if (!rightPanelState.isOpen && maximized) setMaximized(false);
+  const toggleRightPanelMaximized = () => {
+    if (rightPanelState.isOpen) setMaximized((value) => !value);
+  };
+  const onGuideShown = useCallback(() => setMaximized(true), []);
   useEffect(() => {
     if (!pullRequestsSupported || rightPanelRef === null || linkedSelection === null) return;
     useRightPanelStore.getState().openPullRequest(rightPanelRef, linkedSelection);
@@ -1869,6 +1885,12 @@ function PullRequestsRouteView() {
       className="absolute top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] z-50 mr-px flex h-[var(--workspace-topbar-height)] items-center gap-1 [-webkit-app-region:no-drag]"
       data-workspace-titlebar-controls
     >
+      {rightPanelState.isOpen ? (
+        <RightPanelMaximizeControl
+          maximized={rightPanelMaximized}
+          onToggle={toggleRightPanelMaximized}
+        />
+      ) : null}
       {panelToggleControls}
     </div>
   );
@@ -2127,6 +2149,7 @@ function PullRequestsRouteView() {
         )
       ) : null,
     rightPanelOpen: rightPanelState.isOpen,
+    maximizedAway: rightPanelMaximized,
     listBody,
     scrollRef,
   };
@@ -2198,6 +2221,12 @@ function PullRequestsRouteView() {
     event.stopPropagation();
     if (!event.repeat) toggleRightPanel();
   });
+  const toggleRightPanelMaximizedFromShortcut = useEffectEvent((event: KeyboardEvent) => {
+    if (!rightPanelState.isOpen) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) toggleRightPanelMaximized();
+  });
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || isCommandPaletteOpen()) return;
@@ -2206,6 +2235,7 @@ function PullRequestsRouteView() {
       });
       if (command === "rightPanel.close") closeActiveSurfaceFromShortcut(event);
       if (command === "rightPanel.toggle") toggleRightPanelFromShortcut(event);
+      if (command === "rightPanel.toggleMaximized") toggleRightPanelMaximizedFromShortcut(event);
       if (command === "thread.copyReference") copyPullRequestFromShortcut(event);
     };
     // Let panel shortcuts consume Escape before page navigation at window.
@@ -2223,6 +2253,7 @@ function PullRequestsRouteView() {
           <RightPanelTabs
             mode="inline"
             open={rightPanelState.isOpen}
+            maximized={rightPanelMaximized}
             keybindings={keybindings}
             getShortcutContext={getShortcutContext}
             widthStorageKey="t3code:pull-request-panel-width"
@@ -2277,6 +2308,7 @@ function PullRequestsRouteView() {
               shortcutsEnabled={activePullRequestSurface?.id === renderedPullRequestSurface.id}
               key={renderedPullRequestSurface.id}
               environmentId={panelEnvironmentId}
+              onGuideShown={onGuideShown}
               onSelectPullRequest={(reference) => {
                 if (rightPanelRef === null) return;
                 useRightPanelStore.getState().openPullRequest(rightPanelRef, {
@@ -2527,6 +2559,7 @@ function PullRequestsColumn({
   rightPanelControl,
   titlebarControls,
   rightPanelOpen,
+  maximizedAway,
   listBody,
   scrollRef,
 }: {
@@ -2546,6 +2579,8 @@ function PullRequestsColumn({
   rightPanelControl: ReactNode;
   titlebarControls: ReactNode;
   rightPanelOpen: boolean;
+  /** The panel beside the list is maximized, so the list gives up its width. */
+  maximizedAway: boolean;
   listBody: ReactNode;
   scrollRef: RefObject<HTMLDivElement | null>;
 }) {
@@ -2607,7 +2642,12 @@ function PullRequestsColumn({
   return (
     // Painted flat like the chat column: the inset underneath carries the chrome grain, and a
     // content surface that lets it show reads as a different background than every thread.
-    <div className="@container/pr-list flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+    <div
+      className={cn(
+        "@container/pr-list flex min-h-0 min-w-0 flex-col overflow-x-hidden bg-background",
+        maximizedAway ? "w-0 flex-none" : "flex-1",
+      )}
+    >
       {/* A closed right panel leaves this column full-width, so the shared header
           reserves native window controls and hosts the controls strip itself: on
           desktop the header is a drag-region, and only a no-drag descendant wins

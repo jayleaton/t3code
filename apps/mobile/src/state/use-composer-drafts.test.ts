@@ -253,6 +253,22 @@ describe("mobile composer drafts", () => {
     ).toBeUndefined();
   });
 
+  it("restores a PR checkout source after restarting the composer", () => {
+    const draft: ComposerDraft = {
+      text: "Address feedback",
+      attachments: [],
+      workspaceSelection: {
+        mode: "worktree",
+        branch: "fork/feature",
+        worktreePath: null,
+        startFromOrigin: false,
+        pullRequestReference: "https://github.com/acme/repo/pull/123",
+      },
+    };
+    expect(
+      decodePersistedComposerState({ schemaVersion: 1, drafts: { task: draft } }).drafts.task,
+    ).toEqual(draft);
+  });
   it.each([false, true])(
     "restores visible file chips from legacy drafts (archived: %s)",
     async (archived) => {

@@ -3149,6 +3149,37 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.map((trimmed) => (trimmed.length > 0 ? trimmed : null)),
     );
 
+  const resolveBranchName = Effect.fn("GitVcsDriver.resolveBranchName")(function* (
+    cwd: string,
+    refName: string,
+  ) {
+    const result = yield* executeGit(
+      "GitVcsDriver.resolveBranchName.resolveRef",
+      cwd,
+      ["rev-parse", "--symbolic-full-name", "--verify", "--end-of-options", refName],
+      { allowNonZeroExit: true },
+    );
+    if (result.exitCode !== 0) {
+      // Remote-only bases are often recorded by their unqualified branch name.
+      const remoteName = yield* resolvePrimaryRemoteName(cwd).pipe(
+        Effect.orElseSucceed(() => null),
+      );
+      return remoteName && (yield* remoteBranchExists({ cwd, remoteName, refName }))
+        ? refName
+        : null;
+    }
+    const ref = result.stdout.trim();
+    if (ref.startsWith("refs/heads/")) return ref.slice("refs/heads/".length);
+    if (!ref.startsWith("refs/remotes/")) return null;
+    const remoteNames = yield* listRemoteNames(cwd);
+    return (
+      parseRemoteRefWithRemoteNames(
+        ref.slice("refs/remotes/".length),
+        remoteNames.toSorted((left, right) => right.length - left.length),
+      )?.branchName ?? null
+    );
+  });
+
   const readGitRefsSnapshot = Effect.fn("readGitRefsSnapshot")(function* (gitCommonDir: string) {
     const fetchCwd =
       path.basename(gitCommonDir) === ".git" ? path.dirname(gitCommonDir) : gitCommonDir;
@@ -3580,40 +3611,38 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
 
     if (input.newRefName && input.baseRefName) {
-      const remoteNames = yield* listRemoteNames(input.cwd).pipe(Effect.orElseSucceed(() => []));
-      const parsedBaseRef = parseRemoteRefWithRemoteNames(
-        input.baseRefName,
-        remoteNames.toSorted((left, right) => right.length - left.length),
-      );
-      const baseBranch = parsedBaseRef?.branchName ?? input.baseRefName;
+      // A checkout can start at a commit or tag, but a PR must target a branch.
+      const baseBranch = yield* resolveBranchName(input.cwd, input.baseRefName);
       const newRefName = input.newRefName;
-      yield* writeConfigValue(
-        "GitVcsDriver.createWorktree.configureBaseRef",
-        input.cwd,
-        `branch.${newRefName}.gh-merge-base`,
-        baseBranch,
-      ).pipe(
-        // Undo the worktree and branch this call created, so a retry with the
-        // same branch and path is not refused by its leftovers.
-        Effect.tapError(() =>
-          removeWorktree({ cwd: input.cwd, path: worktreePath, force: true }).pipe(
-            Effect.andThen(
-              runGit("GitVcsDriver.createWorktree.deleteBranch", input.cwd, [
-                "branch",
-                "-D",
-                "--",
-                newRefName,
-              ]),
-            ),
-            Effect.catchCause((cause) =>
-              Effect.logWarning("Failed to undo a worktree whose base ref was not recorded", {
-                worktreePath,
-                cause,
-              }),
+      if (baseBranch) {
+        yield* writeConfigValue(
+          "GitVcsDriver.createWorktree.configureBaseRef",
+          input.cwd,
+          `branch.${newRefName}.gh-merge-base`,
+          baseBranch,
+        ).pipe(
+          // Undo the worktree and branch this call created, so a retry with the
+          // same branch and path is not refused by its leftovers.
+          Effect.tapError(() =>
+            removeWorktree({ cwd: input.cwd, path: worktreePath, force: true }).pipe(
+              Effect.andThen(
+                runGit("GitVcsDriver.createWorktree.deleteBranch", input.cwd, [
+                  "branch",
+                  "-D",
+                  "--",
+                  newRefName,
+                ]),
+              ),
+              Effect.catchCause((cause) =>
+                Effect.logWarning("Failed to undo a worktree whose base ref was not recorded", {
+                  worktreePath,
+                  cause,
+                }),
+              ),
             ),
           ),
-        ),
-      );
+        );
+      }
     }
 
     return {
@@ -4165,6 +4194,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     getReviewDiffPreview,
     getReviewDiffFileContents,
     readConfigValue,
+    resolveBranchName,
     listRefs,
     createWorktree: (input, options) =>
       withListRefsInvalidation(input.cwd, createWorktree(input, options)),
