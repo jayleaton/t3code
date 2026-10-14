@@ -3186,6 +3186,90 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         (yield* projectionStore.getThreadProjection(secondThreadId)).providerSessions,
         1,
       );
+
+      const detachedShells = yield* projectionStore.getShellSnapshot();
+      assert.isNull(
+        detachedShells.threads.find((thread) => thread.id === firstThreadId)!.lastError,
+      );
+      assert.strictEqual(
+        detachedShells.threads.find((thread) => thread.id === secondThreadId)!.lastError,
+        session.lastError,
+      );
+
+      const later = DateTime.add(now, { seconds: 1 });
+      for (const candidate of [
+        { suffix: "a", instance: providerInstanceId, updatedAt: later, attached: true },
+        { suffix: "z", instance: providerInstanceId, updatedAt: later, attached: true },
+        {
+          suffix: "older",
+          instance: providerInstanceId,
+          updatedAt: now,
+          attached: true,
+        },
+        {
+          suffix: "unbound",
+          instance: providerInstanceId,
+          updatedAt: DateTime.add(now, { seconds: 2 }),
+          attached: false,
+        },
+        {
+          suffix: "other-instance",
+          instance: ProviderInstanceId.make("other-codex"),
+          updatedAt: DateTime.add(now, { seconds: 3 }),
+          attached: true,
+        },
+      ]) {
+        yield* projectionStore.apply({
+          id: EventId.make(`event:projection-shared-provider-session:${candidate.suffix}`),
+          type: candidate.attached ? "provider-session.attached" : "provider-session.updated",
+          threadId: firstThreadId,
+          driver,
+          providerInstanceId: candidate.instance,
+          occurredAt: candidate.updatedAt,
+          payload: {
+            ...session,
+            id: ProviderSessionId.make(`provider-session:ordered:${candidate.suffix}`),
+            providerInstanceId: candidate.instance,
+            updatedAt: candidate.updatedAt,
+            lastError: candidate.suffix,
+          },
+        });
+      }
+      const { statements, tracer } = traceSqlStatements();
+      const orderedShells = yield* projectionStore
+        .getShellSnapshot()
+        .pipe(Effect.withTracer(tracer));
+      assert.strictEqual(
+        orderedShells.threads.find((thread) => thread.id === firstThreadId)!.lastError,
+        "z",
+      );
+      assert.strictEqual(
+        orderedShells.threads.find((thread) => thread.id === secondThreadId)!.lastError,
+        session.lastError,
+      );
+      const shellStatement = statements.find((statement) => statement.includes("AS last_error"));
+      assert.isDefined(shellStatement);
+      const sql = yield* SqlClient.SqlClient;
+      const plan = yield* sql.unsafe<{
+        readonly id: number;
+        readonly parent: number;
+        readonly detail: string;
+      }>(`EXPLAIN QUERY PLAN ${shellStatement}`);
+      const bindingSearch = plan.find((row) =>
+        row.detail.includes(
+          "SEARCH binding USING INDEX orchestration_v2_projection_provider_session_bindings_thread_idx (thread_id=?)",
+        ),
+      );
+      assert.isDefined(bindingSearch);
+      const sessionLookup = plan.find(
+        (row) =>
+          row.parent === bindingSearch!.parent &&
+          row.detail.includes(
+            "SEARCH session USING INDEX sqlite_autoindex_orchestration_v2_projection_provider_sessions_1 (provider_session_id=?)",
+          ),
+      );
+      assert.isDefined(sessionLookup);
+      assert.isBelow(bindingSearch!.id, sessionLookup!.id);
     }),
   );
 
