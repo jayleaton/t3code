@@ -45,7 +45,7 @@ afterEach(async () => {
 });
 describe("agent card PR navigation", () => {
   it.each(["linkedPullRequest", "branchPullRequest", "pullRequests"] as const)(
-    "opens %s even while PR details are unavailable",
+    "collapses %s behind a count and opens it even while PR details are unavailable",
     async (field) => {
       const reference = {
         projectId: ProjectId.make("project"),
@@ -77,6 +77,13 @@ describe("agent card PR navigation", () => {
           : { [field]: reference }),
       } satisfies EnvironmentThreadShell;
       await act(async () => root.render(<ThreadCard thread={thread} onContextMenu={vi.fn()} />));
+      // Collapsed by default: only the count shows until the card is expanded.
+      expect(container.querySelector(`a[href="${reference.url}"]`)).toBeNull();
+      const toggle = container.querySelector<HTMLButtonElement>(".agent-thread-prs-toggle")!;
+      expect(toggle.textContent).toBe(field === "pullRequests" ? "2 PRs" : "1 PR");
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      await act(async () => toggle.click());
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
       const link = container.querySelector<HTMLAnchorElement>(`a[href="${reference.url}"]`)!;
       expect(link).not.toBeNull();
       if (field === "pullRequests")
@@ -90,8 +97,16 @@ describe("agent card PR navigation", () => {
         undefined,
         thread.environmentId,
       );
+      await act(async () => toggle.click());
+      expect(container.querySelector(`a[href="${reference.url}"]`)).toBeNull();
     },
   );
+
+  it("renders nothing without linked PRs", async () => {
+    const thread = presentThreadShell(EnvironmentId.make("remote"), v2ThreadShell);
+    await act(async () => root.render(<ThreadCard thread={thread} onContextMenu={vi.fn()} />));
+    expect(container.querySelector(".agent-thread-prs-toggle")).toBeNull();
+  });
 });
 
 describe("agent card linked chats", () => {

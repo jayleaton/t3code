@@ -736,6 +736,32 @@
   padding: 7px 12px 5px;
   border-top: 1px solid var(--border);
 }
+/* Linked PRs collapse behind a count; the list mounts only when expanded. */
+.agent-thread-prs-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px 2px 4px;
+  border-radius: 6px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+.agent-thread-prs-toggle:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.agent-thread-prs-toggle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.agent-thread-pr-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+}
 .agent-thread-pr {
   display: inline-flex;
   align-items: center;
