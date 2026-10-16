@@ -3623,7 +3623,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           readonly failure_payload_json: string;
           readonly last_error: string | null;
         }>`
-          SELECT t.payload_json, r.run_id, r.completed_at,
+          SELECT json_remove(t.payload_json, '$.profileSnapshot.skills') AS payload_json,
+            r.run_id, r.completed_at,
             item.payload_json AS failure_payload_json,
             (
               SELECT json_extract(session.payload_json, '$.lastError')
@@ -5389,7 +5390,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       sql<ShellThreadRow>`
             SELECT
               t.thread_id,
-              t.payload_json,
+              -- Shells drop profile skills; leaving them in SQLite avoids decoding ~150 KB of SKILL.md per thread.
+              json_remove(t.payload_json, '$.profileSnapshot.skills') AS payload_json,
               CASE
                 WHEN json_extract(t.payload_json, '$.forkedFrom.type') = 'run'
                   THEN json_extract(t.payload_json, '$.forkedFrom.threadId')
@@ -5713,7 +5715,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         .withTransaction(
           Effect.gen(function* () {
             const rows = yield* sql<SettlementThreadRow>`
-            SELECT t.thread_id, t.payload_json,
+            SELECT t.thread_id,
+              json_remove(t.payload_json, '$.profileSnapshot.skills') AS payload_json,
               r.run_id AS latest_run_id,
               r.status AS latest_run_status,
               r.requested_at AS latest_run_requested_at,
@@ -5843,7 +5846,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     ) =>
       Effect.gen(function* () {
         const rows = yield* sql<PayloadRow>`
-          SELECT payload_json
+          SELECT json_remove(payload_json, '$.profileSnapshot.skills') AS payload_json
           FROM orchestration_v2_projection_threads
           WHERE deleted_at IS NULL${threadId === undefined ? sql`` : sql` AND thread_id = ${threadId}`}
             AND json_extract(payload_json, '$.archivedAt') IS NULL
@@ -6232,7 +6235,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         hasActiveDescendants(
           (parentId) =>
             sql<PayloadRow>`
-          SELECT payload_json FROM orchestration_v2_projection_threads
+          SELECT json_remove(payload_json, '$.profileSnapshot.skills') AS payload_json
+          FROM orchestration_v2_projection_threads
           WHERE deleted_at IS NULL AND (
             (json_extract(payload_json, '$.parentThreadId') = ${parentId}
               AND json_extract(payload_json, '$.parentEnvironmentId') IS NULL)

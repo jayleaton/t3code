@@ -612,7 +612,8 @@ const make = Effect.gen(function* () {
       if (root !== null && !isFilesystemRoot(root, path)) roots.push(root);
     }
     const deletedRows = yield* sql<{ payload_json: string; workspaceRoot: string }>`
-          SELECT t.payload_json, p.workspace_root AS "workspaceRoot"
+          SELECT json_remove(t.payload_json, '$.profileSnapshot.skills') AS payload_json,
+            p.workspace_root AS "workspaceRoot"
           FROM orchestration_v2_projection_threads t
           JOIN projection_projects p ON p.project_id = t.project_id
           WHERE t.deleted_at IS NOT NULL

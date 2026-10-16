@@ -4203,7 +4203,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
     }),
   );
 
-  it.effect("builds shell snapshots without decoding full turn item payloads", () =>
+  it.effect("builds shell snapshots without decoding turn items or profile skills", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
       const sql = yield* SqlClient.SqlClient;
@@ -4317,6 +4317,11 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             attachments: [],
           })}
         )
+      `;
+      yield* sql`
+        UPDATE orchestration_v2_projection_threads
+        SET payload_json = json_set(payload_json, '$.profileSnapshot.skills', json('[{"unreadable":true}]'))
+        WHERE thread_id = ${threadId}
       `;
 
       const shell = yield* projectionStore.getShellSnapshot();
