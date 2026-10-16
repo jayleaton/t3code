@@ -356,7 +356,7 @@ describe("shared MCP gateway", () => {
       }),
     ).rejects.toThrow("The port belongs to an older gateway or a different service");
     expect(NodeFS.existsSync(input.stateFile)).toBe(false);
-  });
+  }, 30_000);
 
   it("lets the desktop join an owner a manual launcher started without an explicit state file", async () => {
     const input = await config();

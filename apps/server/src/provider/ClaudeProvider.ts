@@ -646,6 +646,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       claudeSettings,
       ["auth", "status", "--json"],
       resolvedEnvironment,
+      cwd,
     ).pipe(Effect.timeoutOption(DEFAULT_TIMEOUT_MS), Effect.result);
     const authResult =
       Result.isSuccess(authProbe) && Option.isSome(authProbe.success)

@@ -405,8 +405,6 @@ export const make = Effect.gen(function* () {
       }
     });
 
-  // ---- settlement --------------------------------------------------------
-
   /**
    * Settles an accepted worker whose owner consented, once its work is quiet.
    * Settlement cascades to the worker's own sub-runs.
@@ -477,8 +475,6 @@ export const make = Effect.gen(function* () {
         }),
       ),
     );
-
-  // ---- commands ----------------------------------------------------------
 
   /** repo:<canonical remote> when the project has one, else an environment-local key. */
   const projectKeyFor = (projectId: ProjectId) =>
@@ -899,8 +895,6 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  // ---- adoption ----------------------------------------------------------
-
   /** A child chat launched as a named agent: a managed worker with or without a task row. */
   const isNamedChild = (shell: OrchestrationV2ThreadShell) =>
     shell.parentThreadId != null &&
@@ -955,8 +949,6 @@ export const make = Effect.gen(function* () {
       return adopted;
     }).pipe(Effect.orElseSucceed(() => undefined));
 
-  // ---- messaging -------------------------------------------------------
-
   const authorizeMessage: ThreadTaskService["Service"]["authorizeMessage"] = (input) =>
     Effect.gen(function* () {
       if (input.targetThreadId === input.senderThreadId) return;
@@ -993,8 +985,6 @@ export const make = Effect.gen(function* () {
         "Managed workers do not message other chats. Update your task status with t3_task_update (INPUT for a decision, DONE with evidence); your Captain watches or reads the task and relays requests.",
       );
     });
-
-  // ---- settle after turn -------------------------------------------------
 
   /** Settles a requesting chat once it is quiet, or records what still blocks it. */
   const evaluateSettleRequest = (threadId: ThreadId) =>
@@ -1145,7 +1135,6 @@ export const make = Effect.gen(function* () {
       return current;
     });
 
-  // ---- across environments ---------------------------------------------
   //
   // The worker's environment keeps the authoritative task; the owner's keeps a
   // mirror. Each side stores the task's capability, which only the two servers
@@ -1555,8 +1544,6 @@ export const make = Effect.gen(function* () {
     Effect.ignore,
   );
 
-  // ---- project board -----------------------------------------------------
-
   const decodeSnapshot = Schema.decodeUnknownEffect(ProjectSnapshotSchema);
   const PEER_READ_TIMEOUT = "10 seconds";
 
@@ -1698,8 +1685,6 @@ export const make = Effect.gen(function* () {
         owners: [...owners.values()],
       } satisfies ThreadTaskBoard;
     });
-
-  // ---- reactions ---------------------------------------------------------
 
   /** An answered question no longer blocks the INPUT its worker reported for it. */
   const onQuestionAnswered = (workerThreadId: ThreadId, requestId: RuntimeRequestId) =>
