@@ -108,7 +108,7 @@ export const threadTaskInputFields = {
       .nullable()
       .optional()
       .describe(
-        "WAITING only: your own watcher (background command, monitor, external script) covers this task. Your turn ends are not reported for `minutes` (max 1440); if the task has not changed by then, your owner is woken once. Does not change the revision. null clears it; any content change also clears it.",
+        "WAITING only: your own watcher (background command, monitor, external script) covers this task. Record its expected deadline in `minutes` (max 1440) for your owner to read; passing it never sends an automatic chat message. Does not change the revision. null clears it; any content change also clears it.",
       ),
     settleWhenAccepted: z.boolean().optional().describe("Owner only."),
     accept: z

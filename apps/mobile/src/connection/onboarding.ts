@@ -24,7 +24,6 @@ export const connectPairingUrl = createRuntimeCommand(connectionAtomRuntime, {
   },
   execute: (input: {
     readonly pairingUrl: string;
-    /** Set when adding a route to this saved machine. */
     readonly expectedEnvironmentId?: EnvironmentId;
   }) =>
     Effect.gen(function* () {

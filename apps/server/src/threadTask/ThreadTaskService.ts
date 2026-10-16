@@ -1,14 +1,10 @@
 import {
   CommandId,
-  MessageId,
   THREAD_TASK_WATCH_MAX_MS,
   ThreadTaskError,
   threadParentRelationship,
-  type OrchestrationV2Notification,
-  type OrchestrationV2Run,
   type OrchestrationV2StoredEvent,
   type OrchestrationV2ThreadShell,
-  type RunId,
   type RuntimeRequestId,
   type ThreadId,
   type ThreadTask,
@@ -20,9 +16,6 @@ import {
   type ThreadTaskReadInput,
   type ThreadTaskUpdateInput,
   type ThreadTaskView,
-  type ThreadTaskWake,
-  type ThreadTaskWakeReason,
-  type ThreadTaskWakeSkipReason,
   type ThreadTaskWatchInput,
   type EnvironmentId,
   EnvironmentId as EnvironmentIdSchema,
@@ -54,7 +47,6 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as FiberMap from "effect/FiberMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -65,7 +57,6 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TxRef from "effect/TxRef";
 
-import * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
@@ -114,14 +105,14 @@ const sameContinuation = (
   }
 };
 
+const WAKE_MESSAGE_PREFIX = "message:thread-task-wake:";
 const sameEvidence = (left: ReadonlyArray<string>, right: ReadonlyArray<string>) =>
   left.length === right.length && left.every((item, index) => item === right[index]);
 
 /**
  * Typed task records between an owner chat and its child worker chats: the
- * worker reports WAITING/INPUT/DONE, the owner accepts, and meaningful
- * transitions wake the owner through a queued notification. Run lifecycle is
- * read, never replaced.
+ * worker reports WAITING/INPUT/DONE and the owner watches or reads those records
+ * before accepting. Child activity never dispatches messages to the owner.
  */
 export class ThreadTaskService extends Context.Service<
   ThreadTaskService,
@@ -177,7 +168,6 @@ export class ThreadTaskService extends Context.Service<
       caller: ThreadTaskCaller,
       input: ThreadTaskWatchInput,
     ) => Effect.Effect<ThreadTaskListResult, ThreadTaskError>;
-    /** Delivers wakes and settlements a stopped server left unfinished. */
     /**
      * Records a chat's request to settle once its current turn ends and nothing
      * it owns is still working, or withdraws it. Only the chat itself or the
@@ -216,7 +206,6 @@ export const make = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const eventSink = yield* EventSink.EventSinkV2;
-  const effectOutbox = yield* EffectOutbox.EffectOutboxV2;
   const writes = yield* Semaphore.make(1);
   const changes = yield* PubSub.unbounded<void>();
 
@@ -240,9 +229,8 @@ export const make = Effect.gen(function* () {
       ),
     );
   const put = (task: ThreadTask): Effect.Effect<ThreadTask, ThreadTaskError> =>
-    store.put(task).pipe(
+    store.put({ ...task, wake: null }).pipe(
       Effect.tap(() => PubSub.publish(changes, undefined)),
-      Effect.tap(scheduleCheckBack),
       // The owner is on another environment: record what it has not seen and send it.
       Effect.tap((stored) =>
         stored.ownerEnvironmentId === null
@@ -367,7 +355,6 @@ export const make = Effect.gen(function* () {
             : "idle";
       const continuationLive =
         task.status === "WAITING" &&
-        task.wake?.state !== "skipped" &&
         (checkBackLive(task, yield* nowMillis) ||
           (task.waitingOn !== null && (yield* continuationExists(task, task.waitingOn))));
       return {
@@ -392,134 +379,31 @@ export const make = Effect.gen(function* () {
     return undefined;
   };
 
-  // ---- wakes -------------------------------------------------------------
-
-  const wakeOutcome = (
-    reason: ThreadTaskWakeReason,
-    runStatus: string | undefined,
-  ): OrchestrationV2Notification["outcome"] => {
-    if (reason === "done") return "completed";
-    if (reason === "run_ended") {
-      if (runStatus === "failed") return "failed";
-      if (runStatus === "interrupted" || runStatus === "cancelled") return "cancelled";
-    }
-    return "updated";
-  };
-
-  const wakeMessage = (
-    task: ThreadTask,
-    reason: ThreadTaskWakeReason,
-    runStatus?: string,
-    checkBack?: ThreadTaskCheckBack,
-  ) => {
-    const short = task.summary.split("\n")[0]!.slice(0, 80);
-    const headline =
-      checkBack !== undefined
-        ? `Task "${short}" passed its check-back time without a change`
-        : reason === "done"
-          ? `Task "${short}" reports DONE`
-          : reason === "input" || reason === "question"
-            ? `Task "${short}" needs input`
-            : reason === "gate"
-              ? `Task "${short}" is waiting on a new gate`
-              : `Task "${short}" turn ${runStatus ?? "ended"}`;
-    const lines = [
-      `${headline}. Worker chat ${task.workerThreadId}, task ${task.taskId}, status ${task.status}, revision ${task.revision}.`,
-      ...(task.needs === null ? [] : [`Needs: ${task.needs}`]),
-      ...(reason === "done"
-        ? [
-            `Evidence: ${task.evidence.join("; ")}`,
-            "Verify its gates, then accept this revision with t3_task_update accept=true.",
-          ]
-        : []),
-      ...(checkBack !== undefined
-        ? [
-            `The worker's own watcher was due by ${checkBack.at}: ${checkBack.note}`,
-            "Read it with t3_task_read and follow up.",
-          ]
-        : reason === "run_ended"
-          ? ["A finished turn is not a finished task: read it with t3_task_read and follow up."]
-          : []),
-    ];
-    const notification: OrchestrationV2Notification = {
-      source: { kind: "subagent", childThreadId: task.workerThreadId },
-      outcome: wakeOutcome(reason, runStatus),
-      summary: headline,
-    };
-    return { text: lines.join("\n"), notification };
-  };
-
-  /** Queues the pending wake on the owner, then records what happened to it. */
-  const deliverWake = (workerThreadId: ThreadId, runStatus?: string) =>
+  /** Discards every task notification queued by an older server. */
+  const clearQueuedWakes = (ownerThreadId: ThreadId) =>
     Effect.gen(function* () {
-      const task = yield* getTask(workerThreadId);
-      const wake = task?.wake;
-      if (task === undefined || wake == null || wake.state !== "pending") return;
-      // A remote owner's environment queues the wake when this change is delivered.
-      if (task.ownerEnvironmentId !== null) return;
-      const owner = yield* getShell(task.ownerThreadId);
-      const skipReason: ThreadTaskWakeSkipReason | null =
-        owner === undefined
-          ? "owner_missing"
-          : owner.archivedAt != null
-            ? "owner_archived"
-            : owner.settledOverride === "settled"
-              ? "owner_settled"
-              : null;
-      if (skipReason === null) {
-        const message = wakeMessage(task, wake.reason, runStatus, wake.checkBack);
+      const { runs } = yield* projections.getThreadRecords(ownerThreadId, ["runs"], {
+        runStatuses: ["queued"],
+      });
+      if (runs.length === 0) return;
+      const { messages } = yield* projections.getThreadRecords(ownerThreadId, ["messages"], {
+        messageIds: runs.map((run) => run.userMessageId),
+      });
+      const wakeIds = new Set(
+        messages
+          .filter((message) => String(message.id).startsWith(WAKE_MESSAGE_PREFIX))
+          .map((message) => message.id),
+      );
+      for (const run of runs) {
+        if (!wakeIds.has(run.userMessageId)) continue;
         yield* orchestrator.dispatch({
-          type: "message.dispatch",
-          commandId: CommandId.make(`server:thread-task-wake:${wake.id}`),
-          threadId: task.ownerThreadId,
-          messageId: MessageId.make(`message:thread-task-wake:${wake.id}`),
-          text: message.text,
-          notification: message.notification,
-          attachments: [],
-          dispatchMode: { type: "queue_after_active" },
-          createdBy: "agent",
-          creationSource: "server",
+          type: "queued-run.cancel",
+          commandId: CommandId.make(`server:thread-task-wake-retired:${run.id}`),
+          threadId: ownerThreadId,
+          runId: run.id,
         });
       }
-      yield* writes.withPermits(1)(
-        Effect.gen(function* () {
-          const current = yield* getTask(workerThreadId);
-          if (current?.wake?.id !== wake.id || current.wake.state !== "pending") return;
-          yield* put({
-            ...current,
-            wake: {
-              ...current.wake,
-              state: skipReason === null ? "delivered" : "skipped",
-              skipReason,
-            },
-          });
-          yield* record(
-            workerThreadId,
-            skipReason === null ? "wake_delivered" : "wake_skipped",
-            current.revision,
-            `${wake.reason}:${wake.id}${skipReason === null ? "" : `:${skipReason}`}`,
-          );
-        }),
-      );
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("thread task wake was not delivered", {
-          workerThreadId,
-          cause: Cause.pretty(cause),
-        }),
-      ),
-    );
-
-  const pendingWake = (input: {
-    readonly id: string;
-    readonly reason: ThreadTaskWakeReason;
-    readonly revision: number;
-    readonly runId: RunId | null;
-    readonly createdAt: string;
-    readonly checkBack?: ThreadTaskCheckBack;
-  }): ThreadTaskWake => ({ ...input, state: "pending", skipReason: null });
-
-  // ---- settlement --------------------------------------------------------
+    });
 
   /**
    * Settles an accepted worker whose owner consented, once its work is quiet.
@@ -592,8 +476,6 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  // ---- commands ----------------------------------------------------------
-
   /** repo:<canonical remote> when the project has one, else an environment-local key. */
   const projectKeyFor = (projectId: ProjectId) =>
     Effect.gen(function* () {
@@ -655,7 +537,7 @@ export const make = Effect.gen(function* () {
               : (existing?.settleWhenAccepted ?? null),
         acceptance: null,
         settlement: { state: "none", blockedBy: null },
-        wake: existing?.wake ?? null,
+        wake: null,
         observedRunId: existing?.observedRunId ?? null,
         lastRequestId: input.clientRequestId ?? null,
         assignedAt: now,
@@ -854,7 +736,7 @@ export const make = Effect.gen(function* () {
             return yield* fail("scope_denied", "Only a task's worker or owner can update it.");
           }
           if (input.clientRequestId !== undefined && input.clientRequestId === task.lastRequestId) {
-            return { task, wake: false };
+            return { task };
           }
           if (input.expectedRevision !== task.revision) {
             return yield* fail(
@@ -958,33 +840,6 @@ export const make = Effect.gen(function* () {
                 : null,
             };
           }
-          // Only the worker's meaningful transitions wake the owner; the
-          // owner's own writes and summary churn never do.
-          const reason: ThreadTaskWakeReason | null =
-            role !== "worker" || !contentChanged
-              ? null
-              : next.status === "DONE" &&
-                  (statusChanged || !sameEvidence(next.evidence, task.evidence))
-                ? "done"
-                : next.status === "INPUT" && (statusChanged || next.needs !== task.needs)
-                  ? "input"
-                  : next.status === "WAITING" &&
-                      next.waitingOn?.kind !== "run" &&
-                      !sameContinuation(next.waitingOn, task.waitingOn)
-                    ? "gate"
-                    : null;
-          if (reason !== null) {
-            next = {
-              ...next,
-              wake: pendingWake({
-                id: `${task.workerThreadId}:revision:${next.revision}:${reason}`,
-                reason,
-                revision: next.revision,
-                runId: worker.activeRunId,
-                createdAt: now,
-              }),
-            };
-          }
           const stored = yield* put(next);
           if (contentChanged) {
             yield* record(
@@ -996,13 +851,12 @@ export const make = Effect.gen(function* () {
           } else if (input.accept === true) {
             yield* record(stored.workerThreadId, "transition", stored.revision, `${role}:accepted`);
           }
-          return { task: stored, wake: reason !== null };
+          return { task: stored };
         }),
       )
       .pipe(
-        Effect.tap(({ task, wake }) =>
+        Effect.tap(({ task }) =>
           Effect.gen(function* () {
-            if (wake) yield* deliverWake(task.workerThreadId);
             yield* evaluateSettlement(task.workerThreadId);
             // An accepted child task can be the last thing its owner's settle request waits on.
             if (task.ownerEnvironmentId === null) yield* evaluateSettleRequest(task.ownerThreadId);
@@ -1040,8 +894,6 @@ export const make = Effect.gen(function* () {
         };
       }),
     );
-
-  // ---- adoption ----------------------------------------------------------
 
   /** A child chat launched as a named agent: a managed worker with or without a task row. */
   const isNamedChild = (shell: OrchestrationV2ThreadShell) =>
@@ -1097,8 +949,6 @@ export const make = Effect.gen(function* () {
       return adopted;
     }).pipe(Effect.orElseSucceed(() => undefined));
 
-  // ---- messaging -------------------------------------------------------
-
   const authorizeMessage: ThreadTaskService["Service"]["authorizeMessage"] = (input) =>
     Effect.gen(function* () {
       if (input.targetThreadId === input.senderThreadId) return;
@@ -1132,11 +982,9 @@ export const make = Effect.gen(function* () {
       );
       return yield* fail(
         "scope_denied",
-        "Managed workers do not message other chats. Update your task status with t3_task_update (INPUT for a decision, DONE with evidence); your Captain is woken and relays requests.",
+        "Managed workers do not message other chats. Update your task status with t3_task_update (INPUT for a decision, DONE with evidence); your Captain watches or reads the task and relays requests.",
       );
     });
-
-  // ---- settle after turn -------------------------------------------------
 
   /** Settles a requesting chat once it is quiet, or records what still blocks it. */
   const evaluateSettleRequest = (threadId: ThreadId) =>
@@ -1287,7 +1135,6 @@ export const make = Effect.gen(function* () {
       return current;
     });
 
-  // ---- across environments ---------------------------------------------
   //
   // The worker's environment keeps the authoritative task; the owner's keeps a
   // mirror. Each side stores the task's capability, which only the two servers
@@ -1343,7 +1190,7 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  /** Owner side: fold a delivered worker view into the mirror and wake the owner once. */
+  /** Owner side: fold a delivered worker view into the readable mirror. */
   const applyRemoteView = (peerEnvironmentId: EnvironmentId, remote: ThreadTaskView) =>
     writes
       .withPermits(1)(
@@ -1358,23 +1205,11 @@ export const make = Effect.gen(function* () {
             yield* record(remote.task.workerThreadId, "remote_duplicate", remote.task.revision);
             return false;
           }
-          const existing = yield* getTask(remote.task.workerThreadId);
-          // Wake ids are scoped by the worker's environment so they never meet local ones.
-          const remoteWake = remote.task.wake;
-          const wakeId = remoteWake === null ? null : `${peerEnvironmentId}:${remoteWake.id}`;
-          const wake =
-            remoteWake === null
-              ? (existing?.wake ?? null)
-              : existing?.wake?.id === wakeId
-                ? existing.wake
-                : remoteWake.state === "skipped"
-                  ? null
-                  : { ...remoteWake, id: wakeId!, state: "pending" as const, skipReason: null };
           yield* put({
             ...remote.task,
             ownerEnvironmentId: null,
             workerEnvironmentId: peerEnvironmentId,
-            wake,
+            wake: null,
           });
           const now = yield* nowIso;
           yield* store
@@ -1393,7 +1228,6 @@ export const make = Effect.gen(function* () {
         }),
       )
       .pipe(
-        Effect.tap((applied) => (applied ? deliverWake(remote.task.workerThreadId) : Effect.void)),
         Effect.tap((applied) =>
           // Any delivery can be the last thing the owner's own settle request waits on.
           applied ? evaluateSettleRequest(remote.task.ownerThreadId) : Effect.void,
@@ -1691,16 +1525,6 @@ export const make = Effect.gen(function* () {
         lastError: null,
       });
       yield* record(workerThreadId, "remote_sync_ok", task.revision);
-      // The owner's environment queued the wake; mark it so a restart does not resend it.
-      if (task.wake?.state === "pending") {
-        yield* writes.withPermits(1)(
-          Effect.gen(function* () {
-            const fresh = yield* getTask(workerThreadId);
-            if (fresh?.wake?.id !== task.wake!.id || fresh.wake.state !== "pending") return;
-            yield* put({ ...fresh, wake: { ...fresh.wake, state: "delivered" } });
-          }),
-        );
-      }
     }).pipe(
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
@@ -1719,8 +1543,6 @@ export const make = Effect.gen(function* () {
     ),
     Effect.ignore,
   );
-
-  // ---- project board -----------------------------------------------------
 
   const decodeSnapshot = Schema.decodeUnknownEffect(ProjectSnapshotSchema);
   const PEER_READ_TIMEOUT = "10 seconds";
@@ -1864,216 +1686,26 @@ export const make = Effect.gen(function* () {
       } satisfies ThreadTaskBoard;
     });
 
-  // ---- reactions ---------------------------------------------------------
-
-  /**
-   * A completed turn is not news when the owner already holds this revision
-   * and something other than the ended turn carries the task: an INPUT or DONE
-   * the owner must act on, a live non-run continuation, or the worker's own
-   * check-back. Failed and cancelled turns, a WAITING-on-run stall, and the
-   * first turn end after an unreported revision still wake.
-   */
-  const turnEndCovered = (task: ThreadTask, runStatus: string) =>
-    Effect.gen(function* () {
-      if (runStatus !== "completed") return false;
-      if (task.wake === null || task.wake.revision !== task.revision) return false;
-      if (task.wake.state === "skipped") return false;
-      if (task.status !== "WAITING") return true;
-      if (checkBackLive(task, yield* nowMillis)) return true;
-      return (
-        task.waitingOn !== null &&
-        task.waitingOn.kind !== "run" &&
-        (yield* continuationExists(task, task.waitingOn))
-      );
-    });
-
-  /** When a run took its turn; a thread runs one turn at a time, so later turns start later. */
-  const runOrder = (run: OrchestrationV2Run) =>
-    DateTime.toEpochMillis(run.startedAt ?? run.requestedAt);
-
-  /**
-   * Judges one run's end. Only a turn that ran ends: a queued run cancelled
-   * before it started (a disposed wake delivery, a cleared queue) is not news,
-   * and a terminal update for a run older than the one already observed (a
-   * metadata rewrite of a finished run) never moves observation back.
-   */
-  const onRunEnded = (workerThreadId: ThreadId, run: OrchestrationV2Run) =>
-    Effect.gen(function* () {
-      const runId = run.id;
-      const runStatus = run.status;
-      if (runStatus === "cancelled" && run.startedAt === null) return;
-      yield* ensureTask(workerThreadId);
-      const wakeNow = yield* writes.withPermits(1)(
-        Effect.gen(function* () {
-          const task = yield* getTask(workerThreadId);
-          if (task === undefined || task.observedRunId === runId) return false;
-          if (task.observedRunId !== null) {
-            const observed = (yield* projections
-              .getThreadRecords(workerThreadId, ["runs"], { runIds: [task.observedRunId] })
-              .pipe(Effect.catch(unavailable))).runs[0];
-            if (observed?.startedAt != null && runOrder(run) < runOrder(observed)) return false;
-          }
-          // A DONE/INPUT/gate wake raised during this run already told the owner.
-          const reported =
-            task.wake !== null && task.wake.runId === runId && task.wake.reason !== "run_ended";
-          const covered = !reported && (yield* turnEndCovered(task, runStatus));
-          // A settled worker is put away; its later turn ends are not news.
-          const workerSettled = (yield* getShell(workerThreadId))?.settledOverride === "settled";
-          const quiet =
-            reported ||
-            covered ||
-            workerSettled ||
-            isAccepted(task) ||
-            task.settlement.state === "settled";
-          if (covered || (workerSettled && !reported)) {
-            yield* record(
-              workerThreadId,
-              "wake_suppressed",
-              task.revision,
-              `run_ended:${workerThreadId}:run:${runId}:rev:${task.revision}${covered ? "" : ":worker_settled"}`,
-            );
-          }
-          yield* put({
-            ...task,
-            observedRunId: runId,
-            ...(quiet
-              ? {}
-              : {
-                  wake: pendingWake({
-                    id: `${workerThreadId}:run:${runId}`,
-                    reason: "run_ended",
-                    revision: task.revision,
-                    runId,
-                    createdAt: yield* nowIso,
-                  }),
-                }),
-          });
-          return !quiet;
-        }),
-      );
-      if (wakeNow) yield* deliverWake(workerThreadId, runStatus);
-    });
-
-  /** Raises the single wake for a check-back that passed without a change. */
-  const onCheckBackDue = (item: { readonly workerThreadId: ThreadId; readonly at: string }) =>
-    Effect.gen(function* () {
-      const wakeNow = yield* writes.withPermits(1)(
-        Effect.gen(function* () {
-          const task = yield* getTask(item.workerThreadId);
-          const checkBack = task?.checkBack;
-          if (
-            task === undefined ||
-            checkBack == null ||
-            checkBack.at !== item.at ||
-            !checkBackDue(task, yield* nowMillis)
-          )
-            return false;
-          yield* put({
-            ...task,
-            checkBack: null,
-            wake: pendingWake({
-              id: `${task.workerThreadId}:deadline:${task.revision}:${checkBack.at}`,
-              reason: "run_ended",
-              revision: task.revision,
-              runId: null,
-              createdAt: yield* nowIso,
-              checkBack,
-            }),
-          });
-          return true;
-        }),
-      );
-      if (wakeNow) yield* deliverWake(item.workerThreadId);
-    }).pipe(
-      Effect.catchCauseIf(
-        (cause) => !Cause.hasInterruptsOnly(cause),
-        (cause) =>
-          Effect.logWarning("thread task check-back failed", {
-            workerThreadId: item.workerThreadId,
-            cause: Cause.pretty(cause),
-          }),
-      ),
+  /** An answered question no longer blocks the INPUT its worker reported for it. */
+  const onQuestionAnswered = (workerThreadId: ThreadId, requestId: RuntimeRequestId) =>
+    writes.withPermits(1)(
+      Effect.gen(function* () {
+        const task = yield* getTask(workerThreadId);
+        if (task === undefined || task.settlement.state === "settled") return;
+        if (task.status !== "INPUT" || task.questionRequestId !== requestId) return;
+        yield* put({
+          ...task,
+          status: "WAITING",
+          needs: null,
+          questionRequestId: null,
+          waitingOn: { kind: "run" },
+          revision: task.revision + 1,
+          acceptance: null,
+          updatedAt: yield* nowIso,
+          updatedBy: "server",
+        });
+      }),
     );
-
-  const checkBackDue = (task: ThreadTask, nowMs: number) =>
-    task.workerEnvironmentId === null &&
-    task.status === "WAITING" &&
-    task.checkBack != null &&
-    !checkBackLive(task, nowMs) &&
-    !isAccepted(task) &&
-    task.settlement.state !== "settled";
-
-  const dueCheckBacks = yield* makeDrainableWorker(onCheckBackDue);
-  const checkBackTimers = yield* FiberMap.make<ThreadId>();
-
-  /**
-   * Keeps one timer per authoritative task with a check-back; any write that
-   * clears or replaces the check-back replaces the timer. The timer only
-   * enqueues, so the write it causes never interrupts itself.
-   */
-  const scheduleCheckBack = (task: ThreadTask) => {
-    const checkBack = task.checkBack;
-    if (task.workerEnvironmentId !== null || task.status !== "WAITING" || checkBack == null) {
-      return FiberMap.remove(checkBackTimers, task.workerThreadId);
-    }
-    return Effect.gen(function* () {
-      const item = { workerThreadId: task.workerThreadId, at: checkBack.at };
-      const delay = DateTime.toEpochMillis(DateTime.makeUnsafe(checkBack.at)) - (yield* nowMillis);
-      // Already due (a restart after the time): queue it now, so a drain covers it.
-      if (delay <= 0) {
-        yield* FiberMap.remove(checkBackTimers, task.workerThreadId);
-        return yield* dueCheckBacks.enqueue(item);
-      }
-      yield* FiberMap.run(
-        checkBackTimers,
-        task.workerThreadId,
-        Effect.sleep(Duration.millis(delay)).pipe(Effect.andThen(dueCheckBacks.enqueue(item))),
-      );
-    });
-  };
-
-  const onQuestion = (workerThreadId: ThreadId, requestId: RuntimeRequestId, pending: boolean) =>
-    Effect.gen(function* () {
-      if (pending) yield* ensureTask(workerThreadId);
-      const wakeNow = yield* writes.withPermits(1)(
-        Effect.gen(function* () {
-          const task = yield* getTask(workerThreadId);
-          if (task === undefined || task.settlement.state === "settled") return false;
-          const now = yield* nowIso;
-          if (!pending) {
-            // An answered question no longer blocks the task.
-            if (task.status !== "INPUT" || task.questionRequestId !== requestId) return false;
-            yield* put({
-              ...task,
-              status: "WAITING",
-              needs: null,
-              questionRequestId: null,
-              waitingOn: { kind: "run" },
-              revision: task.revision + 1,
-              acceptance: null,
-              updatedAt: now,
-              updatedBy: "server",
-            });
-            return false;
-          }
-          const id = `${workerThreadId}:question:${requestId}`;
-          if (task.wake?.id === id) return false;
-          const worker = yield* getShell(workerThreadId);
-          yield* put({
-            ...task,
-            wake: pendingWake({
-              id,
-              reason: "question",
-              revision: task.revision,
-              runId: worker?.activeRunId ?? null,
-              createdAt: now,
-            }),
-          });
-          return true;
-        }),
-      );
-      if (wakeNow) yield* deliverWake(workerThreadId);
-    });
 
   const reevaluatePendingSettlements = store.listUnfinished().pipe(
     Effect.flatMap((tasks) =>
@@ -2089,15 +1721,15 @@ export const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const event = stored.event;
       if (event.type === "run.updated" && TERMINAL_RUN_STATUSES.has(event.payload.status)) {
-        // Restart reconciliation cancels runs a continuation resumes; that is not news.
-        if (!String(stored.commandId).startsWith("command:runtime-reconcile:")) {
-          yield* onRunEnded(event.threadId, event.payload);
-        }
         yield* evaluateSettlement(event.threadId);
         yield* reevaluatePendingSettlements;
         yield* reevaluateSettleRequests;
-      } else if (event.type === "runtime-request.updated" && event.payload.kind === "user_input") {
-        yield* onQuestion(event.threadId, event.payload.id, event.payload.status === "pending");
+      } else if (
+        event.type === "runtime-request.updated" &&
+        event.payload.kind === "user_input" &&
+        event.payload.status !== "pending"
+      ) {
+        yield* onQuestionAnswered(event.threadId, event.payload.id);
       }
     }).pipe(
       Effect.catchCause((cause) =>
@@ -2114,42 +1746,14 @@ export const make = Effect.gen(function* () {
   const seenSequence = yield* TxRef.make(-1);
 
   const recover: ThreadTaskService["Service"]["recover"] = Effect.gen(function* () {
-    // Only unfinished deliveries and runs that ended unobserved; open tasks
-    // with nothing new stay quiet.
-    const unfinished = yield* store.listUnfinished();
-    for (const task of unfinished) {
-      if (task.wake?.state === "pending") yield* deliverWake(task.workerThreadId);
+    const tasks = yield* store.listVisible({ threadId: null, afterCursor: 0 });
+    for (const task of tasks) {
+      if (task.wake !== null) yield* put({ ...task, wake: null });
     }
-    const open = yield* store.listVisible({ threadId: null, afterCursor: 0 });
-    for (const task of open) {
-      if (task.workerEnvironmentId !== null) continue;
-      if (isAccepted(task) || task.settlement.state === "settled") continue;
-      // A check-back that passed while the server was down wakes once now.
-      yield* scheduleCheckBack(task);
-      const records = yield* projections.getThreadRecords(task.workerThreadId, ["runs"]);
-      const latest = records.runs.at(-1);
-      // A run restart reconciliation cut and will continue is not news; the
-      // continuation's own run reports when it ends.
-      const continues =
-        latest !== undefined &&
-        Option.exists(
-          yield* effectOutbox
-            .get(`effect:restart-continuation:${latest.id}`)
-            .pipe(Effect.orElseSucceed(() => Option.none())),
-          (effect) => effect.status === "pending" || effect.status === "running",
-        );
-      if (
-        latest !== undefined &&
-        !continues &&
-        latest.id !== task.observedRunId &&
-        TERMINAL_RUN_STATUSES.has(latest.status)
-      ) {
-        yield* onRunEnded(task.workerThreadId, latest);
-      }
-    }
-    // Named children launched before tasks existed get one, so their status
-    // reaches their parent instead of chat messages.
     const links = yield* projections.getThreadParentLinks();
+    // Scan every thread, including owners whose child was deleted or reparented.
+    yield* Effect.forEach(links, (link) => clearQueuedWakes(link.threadId), { discard: true });
+    // Adopt named children launched before tasks existed for readable task state.
     for (const link of links) {
       if (
         link.parentThreadId !== null &&
@@ -2203,7 +1807,6 @@ export const make = Effect.gen(function* () {
       Effect.tx,
     );
     yield* worker.drain;
-    yield* dueCheckBacks.drain;
     yield* syncs.drain;
   });
 

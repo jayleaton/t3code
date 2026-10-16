@@ -17,11 +17,9 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
-import * as SqlClient from "effect/sql/SqlClient";
 
 import * as Sqlite from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
-import * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
 import { EventSinkV2 } from "../orchestration-v2/EventSink.ts";
 import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
 import {
@@ -52,31 +50,14 @@ const runtime = Layer.mergeAll(
     { databaseLayer: database, runEffectWorker: false },
   ),
 );
-const testLayer = Layer.mergeAll(
-  runtime,
-  ThreadTaskStore.layer.pipe(Layer.provide(database)),
-  EffectOutbox.layer.pipe(Layer.provide(database)),
-).pipe(Layer.provideMerge(runtime));
+const testLayer = Layer.mergeAll(runtime, ThreadTaskStore.layer.pipe(Layer.provide(database))).pipe(
+  Layer.provideMerge(runtime),
+);
 
 /** A fresh service over the same database, as after a server restart. */
 const makeService = ThreadTaskService.make.pipe(
-  Effect.provide(
-    Layer.mergeAll(
-      ThreadTaskStore.layer.pipe(Layer.provide(database)),
-      EffectOutbox.layer.pipe(Layer.provide(database)),
-    ),
-  ),
+  Effect.provide(ThreadTaskStore.layer.pipe(Layer.provide(database))),
 );
-
-/** `wake_suppressed` details recorded for a worker, oldest first. */
-const suppressed = (workerThreadId: ThreadId) =>
-  Effect.flatMap(SqlClient.SqlClient, (sql) =>
-    sql<{ readonly detail: string }>`
-      SELECT detail FROM thread_task_events
-      WHERE worker_thread_id = ${workerThreadId} AND kind = 'wake_suppressed'
-      ORDER BY sequence
-    `.pipe(Effect.orDie),
-  ).pipe(Effect.map((rows) => rows.map((row) => row.detail)));
 
 const owner = { kind: "thread", threadId: ThreadId.make("captain") } as const;
 const worker = { kind: "thread", threadId: ThreadId.make("worker") } as const;
@@ -248,7 +229,7 @@ it.effect(
         assert.equal(conflict.code, "revision_conflict");
         assert.equal(conflict.currentRevision, 1);
 
-        // INPUT must name the missing decision; then it wakes the owner once.
+        // INPUT must name the missing decision and stays readable without messaging the owner.
         assert.equal(
           (yield* tasks.update(worker, { expectedRevision: 1, status: "INPUT" }).pipe(Effect.flip))
             .code,
@@ -261,7 +242,8 @@ it.effect(
           clientRequestId: "input-1",
         });
         assert.equal(input.task.revision, 2);
-        assert.equal(input.task.wake?.state, "delivered");
+        assert.deepEqual(yield* f.wakes("captain"), []);
+        assert.isNull(input.task.wake);
         const retried = yield* tasks.update(worker, {
           expectedRevision: 1,
           status: "INPUT",
@@ -269,7 +251,7 @@ it.effect(
           clientRequestId: "input-1",
         });
         assert.equal(retried.task.revision, 2);
-        // Summary churn does not wake; owner writes never wake.
+        // Worker and owner edits keep task state without dispatching messages.
         yield* tasks.update(worker, { expectedRevision: 2, summary: "Still blocked on provider" });
         yield* tasks.update(owner, {
           threadId: worker.threadId,
@@ -277,8 +259,7 @@ it.effect(
           needs: "Provider choice, asked JJ",
         });
         let wakes = yield* f.wakes("captain");
-        assert.equal(wakes.length, 1);
-        assert.include(wakes[0]!.text, "Which provider");
+        assert.equal(wakes.length, 0);
 
         // Worker cannot accept or grant consent.
         assert.equal(
@@ -300,8 +281,7 @@ it.effect(
         assert.equal(done.task.status, "DONE");
         assert.isFalse(done.accepted);
         wakes = yield* f.wakes("captain");
-        assert.equal(wakes.length, 2);
-        assert.include(wakes[1]!.text, "reports DONE");
+        assert.equal(wakes.length, 0);
 
         // DONE plus standing consent does not settle an unaccepted deliverable.
         yield* f.endLatestRun("worker");
@@ -309,8 +289,8 @@ it.effect(
         assert.isFalse(yield* f.settled("worker"));
         const unaccepted = (yield* tasks.read(owner, { threadId: worker.threadId })).tasks[0]!;
         assert.equal(unaccepted.task.settlement.blockedBy, "not_accepted");
-        // The run that raised DONE does not wake the owner a second time.
-        assert.equal((yield* f.wakes("captain")).length, 2);
+        // DONE and its turn end leave the owner quiet.
+        assert.equal((yield* f.wakes("captain")).length, 0);
 
         // Owner acceptance of that exact revision settles the idle worker.
         const accepted = yield* tasks.update(owner, {
@@ -385,7 +365,7 @@ it.effect("acceptance waits for the worker's turn and descendants, and reopening
       assert.equal(pending.task.settlement.blockedBy, "active_run");
       assert.isFalse(yield* f.settled("worker"));
 
-      // The worker's turns end (including the helper's DONE wake) but its helper still runs.
+      // The worker's turns end but its helper still runs.
       yield* f.endOpenRuns("worker");
       yield* tasks.drain;
       const descendant = (yield* tasks.read(owner, { threadId: worker.threadId })).tasks[0]!;
@@ -405,7 +385,7 @@ it.effect("acceptance waits for the worker's turn and descendants, and reopening
   ).pipe(Effect.provide(testLayer)),
 );
 
-it.effect("every follow-up turn and question wakes the owner once; answers clear INPUT", () =>
+it.effect("turn ends and questions never message the owner; answers clear INPUT", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const f = yield* fixture;
@@ -415,27 +395,21 @@ it.effect("every follow-up turn and question wakes the owner once; answers clear
       yield* f.create("worker", "captain");
       yield* f.send("worker", 1);
       yield* tasks.assign(owner, { threadId: worker.threadId, summary: "Fix the bug" });
+      const ownerRuns = f.projections
+        .getThreadRecords(owner.threadId, ["runs"])
+        .pipe(Effect.map(({ runs }) => runs.length));
 
+      // The owner reads its children's thread state; no turn end reaches it.
       yield* f.endLatestRun("worker", "failed");
-      yield* tasks.drain;
-      let wakes = yield* f.wakes("captain");
-      assert.equal(wakes.length, 1);
-      assert.include(wakes[0]!.text, "turn failed");
-      assert.include(wakes[0]!.text, "A finished turn is not a finished task");
-
-      // A later follow-up run reports again, and only once.
       yield* f.send("worker", 2);
-      const runId = yield* f.endLatestRun("worker");
-      yield* tasks.drain;
-      wakes = yield* f.wakes("captain");
-      assert.equal(wakes.length, 2);
-      assert.include(wakes[1]!.id, String(runId));
-
-      // A question wakes the owner; answering it clears the stale INPUT.
+      yield* f.endLatestRun("worker");
       yield* f.send("worker", 3);
       yield* f.question("worker", "request:q1", "pending");
       yield* tasks.drain;
-      assert.equal((yield* f.wakes("captain")).length, 3);
+      assert.equal((yield* f.wakes("captain")).length, 0);
+      assert.equal(yield* ownerRuns, 0);
+
+      // INPUT stays readable without starting an owner turn.
       const read = (yield* tasks.read(worker, {})).tasks.find(
         (view) => view.task.workerThreadId === worker.threadId,
       )!;
@@ -445,17 +419,101 @@ it.effect("every follow-up turn and question wakes the owner once; answers clear
         needs: "Answer to the scope question",
         questionRequestId: RuntimeRequestId.make("request:q1"),
       });
+      yield* tasks.drain;
+      const wakes = yield* f.wakes("captain");
+      assert.equal(wakes.length, 0);
+      assert.equal(yield* ownerRuns, 0);
+
+      // Answering the question clears the stale INPUT.
       yield* f.question("worker", "request:q1", "resolved");
       yield* tasks.drain;
       const answered = (yield* tasks.read(owner, { threadId: worker.threadId })).tasks[0]!;
       assert.equal(answered.task.status, "WAITING");
       assert.isNull(answered.task.questionRequestId);
       assert.isNull(answered.task.needs);
+      assert.equal((yield* f.wakes("captain")).length, 0);
     }),
   ).pipe(Effect.provide(testLayer)),
 );
 
-it.effect("restart replays only unfinished wakes and judges unobserved turns, exactly once", () =>
+it.effect("a busy owner gets no reports and recovery cancels every legacy queued report", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const tasks = yield* makeService;
+      yield* tasks.start();
+      yield* f.create("captain");
+      yield* f.create("worker", "captain");
+      yield* f.create("other", "captain");
+      const other = { kind: "thread", threadId: ThreadId.make("other") } as const;
+      // The owner is mid-turn, so every report queues behind it.
+      yield* f.send("captain", 1);
+      yield* tasks.assign(owner, { threadId: worker.threadId, summary: "Fix the bug" });
+      yield* tasks.assign(owner, { threadId: other.threadId, summary: "Other work" });
+      for (const revision of [1, 2, 3]) {
+        yield* tasks.update(worker, {
+          expectedRevision: revision,
+          status: "INPUT",
+          needs: `Question ${revision}`,
+        });
+      }
+      yield* tasks.update(other, { expectedRevision: 1, status: "DONE", evidence: ["sha 1"] });
+      yield* tasks.drain;
+      const queuedWakes = Effect.gen(function* () {
+        const { runs, messages } = yield* f.projections.getThreadRecords(
+          owner.threadId,
+          ["runs", "messages"],
+          { messageRoles: ["user"] },
+        );
+        const wakeIds = new Set(
+          messages
+            .filter((message) => String(message.id).startsWith("message:thread-task-wake:"))
+            .map((message) => message.id),
+        );
+        return runs
+          .filter((run) => run.status === "queued" && wakeIds.has(run.userMessageId))
+          .map((run) => String(run.userMessageId));
+      });
+      assert.deepEqual(yield* queuedWakes, []);
+
+      // A backlog queued by an older server, turn-end wakes included, is cleared on restart.
+      const legacy = (wakeId: string) =>
+        f.orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`legacy:${wakeId}`),
+          threadId: owner.threadId,
+          messageId: MessageId.make(`message:thread-task-wake:${wakeId}`),
+          text: `Legacy wake ${wakeId}`,
+          notification: {
+            source: { kind: "subagent", childThreadId: worker.threadId },
+            outcome: "updated",
+            summary: `Legacy wake ${wakeId}`,
+          },
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "agent",
+          creationSource: "server",
+        });
+      yield* legacy(`${worker.threadId}:run:run:thread:worker:ordinal:7`);
+      yield* legacy(`${worker.threadId}:question:request:q9`);
+      yield* legacy(`${worker.threadId}:revision:5:input`);
+      yield* legacy(`${worker.threadId}:revision:6:done`);
+      yield* legacy(`${worker.threadId}:revision:7:gate`);
+      yield* legacy(`${worker.threadId}:deadline:7:1970-01-01T00:30:00.000Z`);
+      // Ordinary user/agent work is preserved.
+      yield* f.send("captain", 2);
+      assert.equal((yield* queuedWakes).length, 6);
+      const restarted = yield* makeService;
+      yield* restarted.recover;
+      yield* restarted.recover;
+      assert.deepEqual(yield* queuedWakes, []);
+      const remaining = yield* f.projections.getThreadRecords(owner.threadId, ["runs"]);
+      assert.equal(remaining.runs.filter((run) => run.status !== "cancelled").length, 2);
+    }),
+  ).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("restart clears pending reports without dispatching them", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const f = yield* fixture;
@@ -490,31 +548,39 @@ it.effect("restart replays only unfinished wakes and judges unobserved turns, ex
         },
       });
       yield* f.endLatestRun("worker");
+      // An older server left a turn-end wake pending; it is retired, not replayed.
+      const quiet: ThreadTask = Option.getOrThrow(yield* store.get(ThreadId.make("quiet")));
+      yield* store.put({
+        ...quiet,
+        wake: {
+          id: `quiet:run:run:thread:quiet:ordinal:1`,
+          reason: "run_ended",
+          revision: 1,
+          runId: null,
+          state: "pending",
+          skipReason: null,
+          createdAt: now,
+        },
+      });
+      yield* f.endLatestRun("quiet");
 
       const restarted = yield* makeService;
       yield* restarted.recover;
       yield* restarted.recover;
-      // The DONE replays once; the unobserved turn end is judged once and,
-      // since the owner holds that DONE, recorded as suppressed.
-      const wakes = yield* f.wakes("captain");
-      assert.deepEqual(
-        wakes.map((wake) => wake.id),
-        [`message:thread-task-wake:${worker.threadId}:revision:2:done`],
-      );
+      assert.deepEqual(yield* f.wakes("captain"), []);
       const recovered = (yield* restarted.read(owner, { threadId: worker.threadId })).tasks[0]!;
-      assert.equal(recovered.task.wake?.state, "delivered");
-      const runId = (yield* f.projections.getThreadRecords(worker.threadId, ["runs"])).runs.at(
-        -1,
-      )!.id;
-      assert.equal(recovered.task.observedRunId, runId);
-      assert.deepEqual(yield* suppressed(worker.threadId), [
-        `run_ended:${worker.threadId}:run:${runId}:rev:2`,
-      ]);
+      assert.isNull(recovered.task.wake);
+      assert.equal(recovered.task.status, "DONE");
+      assert.deepEqual(recovered.task.evidence, ["sha 1"]);
+      assert.equal(
+        (yield* f.projections.getThreadRecords(owner.threadId, ["runs"])).runs.length,
+        0,
+      );
     }),
   ).pipe(Effect.provide(testLayer)),
 );
 
-it.effect("a settled owner is not woken and its worker reports no live continuation", () =>
+it.effect("a settled owner is not messaged while its worker continuation remains readable", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const f = yield* fixture;
@@ -529,110 +595,18 @@ it.effect("a settled owner is not woken and its worker reports no live continuat
         commandId: CommandId.make("settle:captain"),
         threadId: owner.threadId,
       });
-      yield* f.endLatestRun("worker").pipe(Effect.ignore);
+      yield* tasks.update(worker, { expectedRevision: 1, status: "INPUT", needs: "Region?" });
+      yield* tasks.update(worker, { expectedRevision: 2, status: "WAITING" });
       yield* tasks.drain;
       const view = (yield* tasks.read(worker, {})).tasks[0]!;
-      assert.equal(view.task.wake?.state, "skipped");
-      assert.equal(view.task.wake?.skipReason, "owner_settled");
-      assert.isFalse(view.continuationLive);
+      assert.isNull(view.task.wake);
+      assert.isTrue(view.continuationLive);
       assert.equal((yield* f.wakes("captain")).length, 0);
     }),
   ).pipe(Effect.provide(testLayer)),
 );
 
-it.effect("only turns that ran wake the owner, and old runs never replay", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const f = yield* fixture;
-      const tasks = yield* makeService;
-      yield* tasks.start();
-      yield* f.create("captain");
-      yield* f.create("worker", "captain");
-      yield* tasks.assign(owner, { threadId: worker.threadId, summary: "Keep going" });
-      /** Starts the worker's latest run and ends it. */
-      const runLatest = (status: "completed" | "failed") =>
-        Effect.gen(function* () {
-          yield* TestClock.adjust("1 minute");
-          const run = (yield* f.projections.getThreadRecords(worker.threadId, ["runs"])).runs.at(
-            -1,
-          )!;
-          const now = yield* DateTime.now;
-          yield* f.sink.write({
-            events: [
-              {
-                id: EventId.make(`event:turn:${run.id}`),
-                type: "run.updated",
-                threadId: worker.threadId,
-                runId: run.id,
-                providerInstanceId: instanceId,
-                occurredAt: now,
-                payload: { ...run, status, startedAt: now, completedAt: now },
-              },
-            ],
-          });
-          yield* TestClock.adjust("1 minute");
-          return (yield* f.projections.getThreadRecords(worker.threadId, ["runs"])).runs.at(-1)!;
-        });
-      const turn = (n: number, status: "completed" | "failed" = "completed") =>
-        f.send("worker", n).pipe(Effect.andThen(runLatest(status)));
-
-      const first = yield* turn(1);
-      yield* turn(2, "failed");
-      yield* tasks.drain;
-      assert.equal((yield* f.wakes("captain")).length, 2);
-
-      // A finished run rewritten later (a disposed wake delivery) is not a new end.
-      yield* f.sink.write({
-        events: [
-          {
-            id: EventId.make("event:rewrite:first"),
-            type: "run.updated",
-            threadId: worker.threadId,
-            runId: first.id,
-            providerInstanceId: instanceId,
-            occurredAt: yield* DateTime.now,
-            payload: { ...first, checkpointId: null },
-          },
-        ],
-      });
-      // Queued turns cancelled before they start, out of order, are not news.
-      yield* f.send("worker", 3);
-      yield* f.send("worker", 4);
-      yield* f.send("worker", 5);
-      const pending = (yield* f.projections.getThreadRecords(worker.threadId, ["runs"])).runs
-        .filter((run) => run.status !== "completed" && run.status !== "failed")
-        .toReversed();
-      const queued = pending.filter((run) => run.status === "queued");
-      assert.equal(queued.length, 2);
-      for (const run of queued) {
-        yield* f.orchestrator.dispatch({
-          type: "queued-run.cancel",
-          commandId: CommandId.make(`cancel:${run.id}`),
-          threadId: worker.threadId,
-          runId: run.id,
-        });
-      }
-      const unstarted = pending.at(-1)!;
-      yield* f.sink.write({
-        events: [
-          {
-            id: EventId.make(`event:cancel:${unstarted.id}`),
-            type: "run.updated",
-            threadId: worker.threadId,
-            runId: unstarted.id,
-            providerInstanceId: instanceId,
-            occurredAt: yield* DateTime.now,
-            payload: { ...unstarted, status: "cancelled", completedAt: yield* DateTime.now },
-          },
-        ],
-      });
-      yield* tasks.drain;
-      assert.equal((yield* f.wakes("captain")).length, 2);
-    }),
-  ).pipe(Effect.provide(testLayer)),
-);
-
-it.effect("turn ends judged after the worker settled do not wake the owner", () =>
+it.effect("watch returns on the next change and times out without one", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const f = yield* fixture;
@@ -640,34 +614,7 @@ it.effect("turn ends judged after the worker settled do not wake the owner", () 
       yield* f.create("captain");
       yield* f.create("worker", "captain");
       yield* f.send("worker", 1);
-      yield* tasks.assign(owner, { threadId: worker.threadId, summary: "Keep going" });
-      // The turn ended, then the worker was settled before the end was judged.
-      const runId = yield* f.endLatestRun("worker", "failed");
-      yield* f.orchestrator.dispatch({
-        type: "thread.settle",
-        commandId: CommandId.make("settle:worker"),
-        threadId: worker.threadId,
-      });
-      yield* tasks.recover;
-      assert.equal((yield* f.wakes("captain")).length, 0);
-      const view = (yield* tasks.read(owner, { threadId: worker.threadId })).tasks[0]!;
-      assert.equal(view.task.observedRunId, runId);
-      assert.deepEqual(yield* suppressed(worker.threadId), [
-        `run_ended:${worker.threadId}:run:${runId}:rev:1:worker_settled`,
-      ]);
-    }),
-  ).pipe(Effect.provide(testLayer)),
-);
-
-it.live("watch returns on the next change and times out without one", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const f = yield* fixture;
-      const tasks = yield* makeService;
-      yield* f.create("captain");
-      yield* f.create("worker", "captain");
-      yield* f.send("worker", 1);
-      const initial = yield* tasks.watch(owner, {});
+      const initial = yield* tasks.read(owner, {});
       const waiting = yield* tasks
         .watch(owner, { afterCursor: initial.cursor, timeoutMs: 60_000 })
         .pipe(Effect.forkScoped);
@@ -675,7 +622,11 @@ it.live("watch returns on the next change and times out without one", () =>
       const changed = yield* Fiber.join(waiting);
       assert.isFalse(changed.timedOut);
       assert.equal(changed.tasks[0]?.task.summary, "Watch me");
-      const quiet = yield* tasks.watch(owner, { afterCursor: changed.cursor, timeoutMs: 1 });
+      const quietWait = yield* tasks
+        .watch(owner, { afterCursor: changed.cursor, timeoutMs: 1 })
+        .pipe(Effect.forkScoped);
+      yield* TestClock.adjust("1 millis");
+      const quiet = yield* Fiber.join(quietWait);
       assert.isTrue(quiet.timedOut);
       assert.equal(quiet.cursor, changed.cursor);
     }),
@@ -814,43 +765,6 @@ it.effect("a pull request watch counts only while its thread is live", () =>
       const archived = (yield* tasks.read(worker, {})).tasks[0]!;
       assert.equal(archived.task.waitingOn?.kind, "pull_request");
       assert.isFalse(archived.continuationLive);
-    }),
-  ).pipe(Effect.provide(testLayer)),
-);
-
-it.effect("restart recovery leaves a run that its restart continuation resumes", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const f = yield* fixture;
-      const tasks = yield* makeService;
-      yield* f.create("captain");
-      yield* f.create("worker", "captain");
-      yield* f.send("worker", 1);
-      yield* tasks.assign(owner, { threadId: worker.threadId, summary: "Survive an update" });
-
-      // An update cut the worker's turn and recorded that it will continue.
-      const runId = yield* f.endLatestRun("worker", "failed");
-      const commandId = CommandId.make(`command:restart-prepare:${runId}`);
-      yield* f.sink.writeWithEffects({
-        commandId,
-        events: [],
-        effects: [
-          {
-            id: `effect:restart-continuation:${runId}`,
-            commandId,
-            threadId: worker.threadId,
-            request: { type: "provider-runtime.continue", sourceRunId: runId },
-          },
-        ],
-      });
-      yield* (yield* makeService).recover;
-      assert.equal((yield* f.wakes("captain")).length, 0);
-
-      // Without a continuation the same cut turn is reported once.
-      yield* f.send("worker", 2);
-      yield* f.endLatestRun("worker", "failed");
-      yield* (yield* makeService).recover;
-      assert.equal((yield* f.wakes("captain")).length, 1);
     }),
   ).pipe(Effect.provide(testLayer)),
 );
@@ -994,19 +908,18 @@ it.effect(
         assert.equal(adopted.ownerThreadId, "captain");
         assert.equal(adopted.summary, "Legacy legacy");
 
-        // Its turn ending wakes the Captain instead of being stranded.
+        // Its turn ending and DONE report leave the Captain to read its thread.
         yield* f.send("legacy", 1);
         yield* f.endLatestRun("legacy");
         yield* tasks.drain;
-        const wakes = yield* f.wakes("captain");
-        assert.equal(wakes.length, 1);
-        assert.include(wakes[0]!.text, "Legacy legacy");
+        assert.equal((yield* f.wakes("captain")).length, 0);
         const done = yield* tasks.update(
           { kind: "thread", threadId: ThreadId.make("legacy") },
           { expectedRevision: adopted.revision, status: "DONE", evidence: ["staging deployed"] },
         );
         assert.equal(done.task.status, "DONE");
-        assert.equal((yield* f.wakes("captain")).length, 2);
+        const wakes = yield* f.wakes("captain");
+        assert.equal(wakes.length, 0);
 
         // An idle legacy child is adopted when the server starts.
         assert.isTrue(Option.isNone(yield* store.get(ThreadId.make("idle"))));
@@ -1016,72 +929,6 @@ it.effect(
           "captain",
         );
         assert.isTrue(Option.isNone(yield* store.get(ThreadId.make("helper"))));
-      }),
-    ).pipe(Effect.provide(testLayer)),
-);
-
-it.effect(
-  "turns after DONE stay quiet; a later unreported revision wakes the Captain once, also across a restart",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const f = yield* fixture;
-        yield* f.create("captain");
-        yield* f.create("worker", "captain");
-        yield* f.send("worker", 1);
-
-        // The first server: assignment, a DONE turn, then a later unaccepted turn.
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const tasks = yield* makeService;
-            yield* tasks.start();
-            yield* tasks.assign(owner, { threadId: worker.threadId, summary: "Ship and verify" });
-
-            // Turn 1 reports DONE; that turn's end is already covered by the DONE wake.
-            yield* tasks.update(worker, {
-              expectedRevision: 1,
-              status: "DONE",
-              evidence: ["pr 12"],
-            });
-            yield* f.endLatestRun("worker");
-            yield* tasks.drain;
-            assert.deepEqual(
-              (yield* f.wakes("captain")).map((wake) => wake.id.split(":").at(-1)),
-              ["done"],
-            );
-
-            // Turn 2 (say, answering the Captain) ends without changing the task:
-            // the Captain already holds this DONE, so it is not woken again.
-            yield* f.send("worker", 2);
-            const turn2 = yield* f.endLatestRun("worker");
-            yield* tasks.drain;
-            assert.equal((yield* f.wakes("captain")).length, 1);
-            assert.deepEqual(yield* suppressed(worker.threadId), [
-              `run_ended:${worker.threadId}:run:${turn2}:rev:2`,
-            ]);
-
-            // The worker reopens to WAITING on its run: not a gate, so no wake yet.
-            yield* f.send("worker", 3);
-            yield* tasks.update(worker, { expectedRevision: 2, status: "WAITING" });
-            yield* tasks.drain;
-            assert.equal((yield* f.wakes("captain")).length, 1);
-            const seen = (yield* tasks.read(owner, { threadId: worker.threadId })).tasks[0]!;
-            assert.equal(seen.workerRun, "running");
-            assert.isFalse(seen.accepted);
-          }),
-        );
-
-        // The server is down when that turn ends; the next start reports the
-        // unreported revision exactly once.
-        const turn3 = yield* f.endLatestRun("worker");
-        assert.equal((yield* f.wakes("captain")).length, 1);
-        const restarted = yield* makeService;
-        yield* restarted.recover;
-        yield* restarted.recover;
-        const wakes = yield* f.wakes("captain");
-        assert.equal(wakes.length, 2);
-        assert.include(wakes[1]!.id, String(turn3));
-        assert.include(wakes[1]!.text, "A finished turn is not a finished task");
       }),
     ).pipe(Effect.provide(testLayer)),
 );
@@ -1159,182 +1006,175 @@ it.effect("a named child cannot send when its task cannot be stored or read", ()
   ).pipe(Effect.provide(testLayer)),
 );
 
-it.effect(
-  "covered turn ends start no owner runs; changes, failures and stalls still wake once",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const f = yield* fixture;
-        const tasks = yield* makeService;
-        yield* tasks.start();
-        const helper = { kind: "thread", threadId: ThreadId.make("helper") } as const;
-        yield* f.create("captain");
-        yield* f.create("worker", "captain");
-        yield* f.create("helper", "worker");
-        yield* f.send("worker", 1);
-        yield* f.send("helper", 1);
-        yield* tasks.assign(owner, { threadId: worker.threadId, summary: "Integrate" });
-        yield* tasks.assign(worker, { threadId: helper.threadId, summary: "Build" });
-        const ownerRuns = f.projections
-          .getThreadRecords(owner.threadId, ["runs"])
-          .pipe(Effect.map(({ runs }) => runs.length));
+it.effect("gates, INPUT, changed needs and turn ends start no owner runs", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const tasks = yield* makeService;
+      yield* tasks.start();
+      const helper = { kind: "thread", threadId: ThreadId.make("helper") } as const;
+      yield* f.create("captain");
+      yield* f.create("worker", "captain");
+      yield* f.create("helper", "worker");
+      yield* f.send("worker", 1);
+      yield* f.send("helper", 1);
+      yield* tasks.assign(owner, { threadId: worker.threadId, summary: "Integrate" });
+      yield* tasks.assign(worker, { threadId: helper.threadId, summary: "Build" });
+      const ownerRuns = f.projections
+        .getThreadRecords(owner.threadId, ["runs"])
+        .pipe(Effect.map(({ runs }) => runs.length));
 
-        // WAITING on its own child task: a live gate the Captain is told about once.
-        yield* tasks.update(worker, {
-          expectedRevision: 1,
-          status: "WAITING",
-          waitingOn: { kind: "task", threadId: helper.threadId },
-        });
-        yield* f.endLatestRun("worker");
-        yield* tasks.drain;
-        assert.equal((yield* f.wakes("captain")).length, 1);
-        const runsBefore = yield* ownerRuns;
+      // WAITING on its own child task remains a readable live gate.
+      yield* tasks.update(worker, {
+        expectedRevision: 1,
+        status: "WAITING",
+        waitingOn: { kind: "task", threadId: helper.threadId },
+      });
+      yield* f.endLatestRun("worker");
+      yield* tasks.drain;
+      assert.equal((yield* f.wakes("captain")).length, 0);
+      const runsBefore = yield* ownerRuns;
 
-        // Acknowledgement turns that change nothing: no wake, no owner run.
-        for (const turn of [2, 3, 4]) {
-          yield* f.send("worker", turn);
-          yield* f.endLatestRun("worker");
-        }
-        yield* tasks.drain;
-        assert.equal((yield* f.wakes("captain")).length, 1);
-        assert.equal(yield* ownerRuns, runsBefore);
-        assert.equal((yield* suppressed(worker.threadId)).length, 3);
+      // Acknowledgement turns that change nothing: no wake, no owner run.
+      for (const turn of [2, 3, 4]) {
+        yield* f.send("worker", turn);
+        yield* f.endLatestRun("worker");
+      }
+      yield* tasks.drain;
+      // A failed turn is visible in the worker's thread state, not a message.
+      yield* f.send("worker", 5);
+      yield* f.endLatestRun("worker", "failed");
+      yield* tasks.drain;
+      assert.equal((yield* f.wakes("captain")).length, 0);
+      assert.equal(yield* ownerRuns, runsBefore);
 
-        // A failed turn is news even when covered.
-        yield* f.send("worker", 5);
-        yield* f.endLatestRun("worker", "failed");
-        yield* tasks.drain;
-        let wakes = yield* f.wakes("captain");
-        assert.equal(wakes.length, 2);
-        assert.include(wakes[1]!.text, "turn failed");
+      // INPUT and changed needs remain readable without dispatching owner work.
+      yield* f.send("worker", 6);
+      yield* tasks.update(worker, {
+        expectedRevision: 2,
+        status: "INPUT",
+        needs: "Which region?",
+      });
+      yield* f.endLatestRun("worker");
+      yield* f.send("worker", 7);
+      yield* f.endLatestRun("worker");
+      yield* tasks.drain;
+      const wakes = yield* f.wakes("captain");
+      assert.equal(wakes.length, 0);
+      yield* f.send("worker", 8);
+      yield* tasks.update(worker, { expectedRevision: 3, needs: "Which region, eu or us?" });
+      yield* f.endLatestRun("worker");
+      yield* tasks.drain;
+      assert.equal((yield* f.wakes("captain")).length, 0);
+      assert.equal(yield* ownerRuns, 0);
 
-        // INPUT wakes once; FYI turns while it is open stay quiet; new needs wake once.
-        yield* f.send("worker", 6);
-        yield* tasks.update(worker, {
-          expectedRevision: 2,
-          status: "INPUT",
-          needs: "Which region?",
-        });
-        yield* f.endLatestRun("worker");
-        yield* f.send("worker", 7);
-        yield* f.endLatestRun("worker");
-        yield* tasks.drain;
-        wakes = yield* f.wakes("captain");
-        assert.equal(wakes.length, 3);
-        assert.include(wakes.find((wake) => wake.id.endsWith(":input"))!.text, "needs input");
-        yield* f.send("worker", 8);
-        yield* tasks.update(worker, { expectedRevision: 3, needs: "Which region, eu or us?" });
-        yield* f.endLatestRun("worker");
-        yield* tasks.drain;
-        assert.equal((yield* f.wakes("captain")).length, 4);
-
-        // Back to WAITING on its run: the first turn end reports the unreported
-        // revision, and every later one is a possible stall.
-        yield* f.send("worker", 9);
-        yield* tasks.update(worker, { expectedRevision: 4, status: "WAITING" });
-        yield* f.endLatestRun("worker");
-        yield* f.send("worker", 10);
-        yield* f.endLatestRun("worker");
-        yield* tasks.drain;
-        assert.equal((yield* f.wakes("captain")).length, 6);
-      }),
-    ).pipe(Effect.provide(testLayer)),
+      // Back to WAITING on its run: no gate, and its turn ends stay quiet.
+      yield* f.send("worker", 9);
+      yield* tasks.update(worker, { expectedRevision: 4, status: "WAITING" });
+      yield* f.endLatestRun("worker");
+      yield* f.send("worker", 10);
+      yield* f.endLatestRun("worker");
+      yield* tasks.drain;
+      assert.equal((yield* f.wakes("captain")).length, 0);
+      assert.equal(yield* ownerRuns, 0);
+    }),
+  ).pipe(Effect.provide(testLayer)),
 );
 
-it.effect(
-  "a declared check-back covers turn ends and wakes once when it passes without a change",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const f = yield* fixture;
-        yield* f.create("captain");
-        yield* f.create("worker", "captain");
-        yield* f.send("worker", 1);
-        const read = Effect.gen(function* () {
+it.effect("check-back expiry stays readable and never messages the owner, including recovery", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* f.create("captain");
+      yield* f.create("worker", "captain");
+      yield* f.send("worker", 1);
+      const read = Effect.gen(function* () {
+        const tasks = yield* makeService;
+        return (yield* tasks.read(owner, { threadId: worker.threadId })).tasks[0]!;
+      });
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
           const tasks = yield* makeService;
-          return (yield* tasks.read(owner, { threadId: worker.threadId })).tasks[0]!;
-        });
+          yield* tasks.start();
+          yield* tasks.assign(owner, { threadId: worker.threadId, summary: "Copy the data" });
+          // Declaring a watcher is bookkeeping: no new revision, no wake.
+          const declared = yield* tasks.update(worker, {
+            expectedRevision: 1,
+            checkBack: { minutes: 30, note: "rsync monitor in my shell" },
+          });
+          assert.equal(declared.task.revision, 1);
+          assert.equal(declared.task.checkBack?.at, "1970-01-01T00:30:00.000Z");
+          assert.isTrue(declared.continuationLive);
+          // Only a WAITING task may declare one.
+          assert.equal(
+            (yield* tasks
+              .update(worker, {
+                expectedRevision: 1,
+                status: "INPUT",
+                needs: "x",
+                checkBack: { minutes: 5, note: "n" },
+              })
+              .pipe(Effect.flip)).code,
+            "invalid_transition",
+          );
 
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const tasks = yield* makeService;
-            yield* tasks.start();
-            yield* tasks.assign(owner, { threadId: worker.threadId, summary: "Copy the data" });
-            // Declaring a watcher is bookkeeping: no new revision, no wake.
-            const declared = yield* tasks.update(worker, {
-              expectedRevision: 1,
-              checkBack: { minutes: 30, note: "rsync monitor in my shell" },
-            });
-            assert.equal(declared.task.revision, 1);
-            assert.equal(declared.task.checkBack?.at, "1970-01-01T00:30:00.000Z");
-            assert.isTrue(declared.continuationLive);
-            // Only a WAITING task may declare one.
-            assert.equal(
-              (yield* tasks
-                .update(worker, {
-                  expectedRevision: 1,
-                  status: "INPUT",
-                  needs: "x",
-                  checkBack: { minutes: 5, note: "n" },
-                })
-                .pipe(Effect.flip)).code,
-              "invalid_transition",
-            );
-
-            // The first turn end reports revision 1; later ones are covered.
+          yield* f.endLatestRun("worker");
+          for (const turn of [2, 3]) {
+            yield* f.send("worker", turn);
             yield* f.endLatestRun("worker");
-            for (const turn of [2, 3]) {
-              yield* f.send("worker", turn);
-              yield* f.endLatestRun("worker");
-            }
-            yield* tasks.drain;
-            assert.equal((yield* f.wakes("captain")).length, 1);
+          }
+          yield* tasks.drain;
+          assert.equal((yield* f.wakes("captain")).length, 0);
 
-            yield* TestClock.adjust("29 minutes");
-            yield* tasks.drain;
-            assert.equal((yield* f.wakes("captain")).length, 1);
-            yield* TestClock.adjust("1 minute");
-            yield* tasks.drain;
-            const wakes = yield* f.wakes("captain");
-            assert.equal(wakes.length, 2);
-            assert.include(wakes[1]!.id, `${worker.threadId}:deadline:1:1970-01-01T00:30:00.000Z`);
-            assert.include(wakes[1]!.text, "passed its check-back time");
-            assert.include(wakes[1]!.text, "rsync monitor in my shell");
-            const after = (yield* tasks.read(owner, { threadId: worker.threadId })).tasks[0]!;
-            assert.isNull(after.task.checkBack ?? null);
+          yield* TestClock.adjust("29 minutes");
+          yield* tasks.drain;
+          assert.equal((yield* f.wakes("captain")).length, 0);
+          yield* TestClock.adjust("1 minute");
+          yield* tasks.drain;
+          const wakes = yield* f.wakes("captain");
+          assert.equal(wakes.length, 0);
+          const after = (yield* tasks.read(owner, { threadId: worker.threadId })).tasks[0]!;
+          assert.equal(after.task.checkBack?.note, "rsync monitor in my shell");
+          assert.isFalse(after.continuationLive);
 
-            // A content change before the time clears the check-back: no deadline wake.
-            yield* f.send("worker", 4);
-            yield* tasks.update(worker, {
-              expectedRevision: 1,
-              checkBack: { minutes: 10, note: "second watcher" },
-            });
-            yield* tasks.update(worker, { expectedRevision: 1, summary: "Copy the data, part 2" });
-            yield* TestClock.adjust("15 minutes");
-            yield* tasks.drain;
-            assert.equal((yield* f.wakes("captain")).length, 2);
+          // A content change before the time clears the check-back: no deadline wake.
+          yield* f.send("worker", 4);
+          yield* tasks.update(worker, {
+            expectedRevision: 1,
+            checkBack: { minutes: 10, note: "second watcher" },
+          });
+          yield* tasks.update(worker, { expectedRevision: 1, summary: "Copy the data, part 2" });
+          yield* TestClock.adjust("15 minutes");
+          yield* tasks.drain;
+          assert.equal((yield* f.wakes("captain")).length, 0);
 
-            // A third watcher whose time passes while the server is down.
-            yield* tasks.update(worker, {
-              expectedRevision: 2,
-              checkBack: { minutes: 5, note: "third watcher" },
-            });
-          }),
-        );
-        yield* TestClock.adjust("10 minutes");
-        assert.equal((yield* f.wakes("captain")).length, 2);
-        const restarted = yield* makeService;
-        yield* restarted.start();
-        yield* restarted.recover;
-        yield* restarted.drain;
-        const second = yield* makeService;
-        yield* second.start();
-        yield* second.recover;
-        yield* second.drain;
-        const wakes = yield* f.wakes("captain");
-        assert.equal(wakes.length, 3);
-        assert.include(wakes[2]!.id, ":deadline:2:");
-        assert.isNull((yield* read).task.checkBack ?? null);
-      }),
-    ).pipe(Effect.provide(testLayer)),
+          // A third watcher whose time passes while the server is down.
+          yield* tasks.update(worker, {
+            expectedRevision: 2,
+            checkBack: { minutes: 5, note: "third watcher" },
+          });
+        }),
+      );
+      yield* f.endOpenRuns("worker");
+      yield* TestClock.adjust("10 minutes");
+      assert.equal((yield* f.wakes("captain")).length, 0);
+      const restarted = yield* makeService;
+      yield* restarted.start();
+      yield* restarted.recover;
+      yield* restarted.drain;
+      const second = yield* makeService;
+      yield* second.start();
+      yield* second.recover;
+      yield* second.drain;
+      const wakes = yield* f.wakes("captain");
+      assert.equal(wakes.length, 0);
+      assert.equal((yield* read).task.checkBack?.note, "third watcher");
+      assert.isFalse((yield* read).continuationLive);
+      assert.equal(
+        (yield* f.projections.getThreadRecords(owner.threadId, ["runs"])).runs.length,
+        0,
+      );
+    }),
+  ).pipe(Effect.provide(testLayer)),
 );

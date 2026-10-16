@@ -321,6 +321,26 @@ describe("age settlement", () => {
       AutoSettlement.resolveAutoSettlementAt({ thread, nowMs: NOW_MS, autoSettleAfterDays: 3 }),
     ).toEqual(at(-3 * DAY_MS));
   });
+  it("keeps threads with a PR from age settlement only when asked", () => {
+    const input = {
+      thread: shell({
+        latestUserMessageAt: at(-4 * DAY_MS),
+        linkedPullRequest: {
+          projectId: ProjectId.make("project-1"),
+          repository: "owner/repo",
+          number: 1,
+          url: "https://example.test/owner/repo/pull/1",
+        },
+      }),
+      nowMs: NOW_MS,
+      autoSettleAfterDays: 3,
+      autoSettleKeepPullRequests: true,
+    };
+    expect(AutoSettlement.resolveAutoSettlementAt(input)).toBeNull();
+    expect(
+      AutoSettlement.resolveAutoSettlementAt({ ...input, autoSettleKeepPullRequests: false }),
+    ).toEqual(at(-4 * DAY_MS));
+  });
   it.each([null, 0])("disables age settlement with %s", (autoSettleAfterDays) => {
     expect(
       AutoSettlement.resolveAutoSettlementAt({

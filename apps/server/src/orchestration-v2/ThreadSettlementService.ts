@@ -32,10 +32,19 @@ export class ThreadSettlementServiceV2 extends Context.Service<
 function autoSettlementSettingsKey(settings: import("@t3tools/contracts").ServerSettings): string {
   return JSON.stringify([
     settings.sidebarAutoSettleAfterDays,
+    settings.sidebarAutoSettleKeepPullRequests,
     Object.entries(settings.projectSettingsOverrides)
-      .filter(([, entry]) => entry.sidebarAutoSettleAfterDays !== undefined)
+      .filter(
+        ([, entry]) =>
+          entry.sidebarAutoSettleAfterDays !== undefined ||
+          entry.sidebarAutoSettleKeepPullRequests !== undefined,
+      )
       .sort(([left], [right]) => left.localeCompare(right))
-      .map(([projectId, entry]) => [projectId, entry.sidebarAutoSettleAfterDays]),
+      .map(([projectId, entry]) => [
+        projectId,
+        entry.sidebarAutoSettleAfterDays,
+        entry.sidebarAutoSettleKeepPullRequests ?? "inherit",
+      ]),
   ]);
 }
 
@@ -75,6 +84,7 @@ export const make = Effect.gen(function* () {
             thread,
             nowMs,
             autoSettleAfterDays: current.sidebarAutoSettleAfterDays,
+            autoSettleKeepPullRequests: current.sidebarAutoSettleKeepPullRequests,
           });
           if (settledAt === null || (yield* projections.hasActiveDescendants(thread.id))) return;
           // Age settlement belongs to this card alone. Child chats and subagents
@@ -82,7 +92,7 @@ export const make = Effect.gen(function* () {
           yield* orchestrator.dispatch({
             type: "thread.auto-settle",
             commandId: CommandId.make(
-              `server:auto-settle:${thread.id}:${yield* crypto.randomUUIDv4}`,
+              `server:auto-settle:${thread.id}:${yield* crypto.randomUUIDv4()}`,
             ),
             threadId: thread.id,
             snapshotAt: thread.updatedAt,
@@ -164,6 +174,7 @@ export const make = Effect.gen(function* () {
     switch (event.type) {
       case "thread.settled":
         return cleanUpSettledThread(event.threadId);
+      case "thread.pull-request-link-updated":
       case "thread.pull-request-synced":
       case "provider-session.detached":
         return worker.enqueue(event.threadId);

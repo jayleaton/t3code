@@ -74,7 +74,6 @@ describe("evaluatePullRequestWatch", () => {
       [],
     );
 
-    // A different job failing later is news of its own.
     const second = detail({ checks: [check("lint", "failure"), check("test", "failure"), bot] });
     const test = evaluatePullRequestWatch(lint.next, second, noRemarks, NONE_REQUIRED);
     assert.deepEqual(test.changes, [{ kind: "checks-failed", failed: [check("test", "failure")] }]);
@@ -86,7 +85,6 @@ describe("evaluatePullRequestWatch", () => {
       1,
     );
 
-    // A push reports its failures, even ones that failed between two passes.
     const pushed = detail({ ...second, headSha: "bbbbbbbbbb" });
     assert.equal(
       evaluatePullRequestWatch(test.next, pushed, noRemarks, NONE_REQUIRED).changes.length,
@@ -109,7 +107,6 @@ describe("evaluatePullRequestWatch", () => {
       [],
     );
 
-    // Where the branch requires none, every check has to pass.
     const plain = detail({ checks: [check("test", "success"), check("bot", "pending")] });
     assert.deepEqual(
       evaluatePullRequestWatch(watch(), plain, noRemarks, NONE_REQUIRED).changes,
@@ -356,7 +353,6 @@ describe("evaluatePullRequestWatch", () => {
     const conflicting = detail({ mergeability: "conflicting" });
     const first = evaluatePullRequestWatch(watch(), conflicting, noRemarks, NONE_REQUIRED);
     assert.deepEqual(first.changes, [{ kind: "conflicting" }]);
-    // GitHub answers "unknown" while it recomputes after a push; that is not a resolution.
     const recomputing = evaluatePullRequestWatch(
       first.next,
       detail({ mergeability: "unknown" }),

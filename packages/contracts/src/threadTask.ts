@@ -55,9 +55,9 @@ export const ThreadTaskCheckBackNote = TrimmedNonEmptyString.check(Schema.isMaxL
 
 /**
  * A worker's own watcher (a background command, a monitor, an external
- * script) that T3 cannot see. Until `at`, the task's turn ends are not
- * reported; if nothing changed by then, the owner is woken once. Any content
- * change clears it.
+ * script) that T3 cannot see. Until `at`, it counts as a live continuation.
+ * The owner reads the deadline; it never schedules a chat message. Any
+ * content change clears it.
  */
 export const ThreadTaskCheckBack = Schema.Struct({
   at: IsoDateTime,
@@ -81,14 +81,14 @@ export const ThreadTaskWakeSkipReason = Schema.Literals([
   "owner_settled",
   "owner_archived",
   "owner_missing",
-  /** The owner is on another environment; its environment queues the wake on delivery. */
+  /** Legacy remote-owner delivery marker. */
   "owner_remote",
 ]);
 export type ThreadTaskWakeSkipReason = typeof ThreadTaskWakeSkipReason.Type;
 
 /**
- * The latest owner wake. `pending` is the outbox entry a restart replays;
- * `delivered` means the wake message was queued on the owner.
+ * Legacy owner wake metadata, retained for stored records and older peers.
+ * Updated servers discard it without delivery.
  */
 export const ThreadTaskWake = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -253,7 +253,7 @@ export const ThreadTaskUpdateInput = Schema.Struct({
       }),
     ).annotate({
       description:
-        "WAITING only: your own watcher covers this task. Turn ends are not reported for `minutes`; if nothing changed by then your owner is woken once. null clears it; any content change also clears it.",
+        "WAITING only: record the expected deadline of your own watcher in `minutes` for the owner to read. Passing it never sends an automatic chat message. null clears it; any content change also clears it.",
     }),
   ),
   settleWhenAccepted: Schema.optional(Schema.Boolean.annotate({ description: "Owner only." })),
