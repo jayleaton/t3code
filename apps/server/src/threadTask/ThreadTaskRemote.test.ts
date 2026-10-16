@@ -313,7 +313,7 @@ const asCaptain = { kind: "thread", threadId: captain } as const;
 const asWorker = { kind: "thread", threadId: worker } as const;
 
 it.effect(
-  "a child on another environment reports INPUT and DONE to its Captain once, through disconnects and restarts",
+  "remote INPUT and DONE sync without Captain messages, through disconnects and restarts",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -378,7 +378,7 @@ it.effect(
         // The Captain still relays freely.
         yield* tasksA.authorizeMessage({ senderThreadId: captain, targetThreadId: null });
 
-        // INPUT on B wakes the Captain on A once.
+        // INPUT syncs to the Captain's task mirror without a chat message.
         yield* tasksB.update(asWorker, {
           expectedRevision: 1,
           status: "INPUT",
@@ -386,9 +386,7 @@ it.effect(
         });
         yield* drain;
         let captainWakes = yield* envA.wakes(captain);
-        assert.equal(captainWakes.length, 1);
-        assert.include(captainWakes[0]!.text, "Which region");
-        assert.equal(captainWakes[0]!.createdBy, "agent");
+        assert.equal(captainWakes.length, 0);
         assert.equal(
           (yield* tasksA.read(asCaptain, { threadId: worker })).tasks[0]!.task.status,
           "INPUT",
@@ -422,8 +420,7 @@ it.effect(
         yield* network.reconnect;
         yield* drain;
         captainWakes = yield* envA.wakes(captain);
-        assert.equal(captainWakes.length, 2);
-        assert.include(captainWakes[1]!.text, "reports DONE");
+        assert.equal(captainWakes.length, 0);
 
         // A repeated delivery (retry after a lost acknowledgement) changes nothing.
         tasksA = yield* envA.startService;
@@ -437,7 +434,7 @@ it.effect(
         );
         yield* tasksB.recover;
         yield* drain;
-        assert.equal((yield* envA.wakes(captain)).length, 2);
+        assert.equal((yield* envA.wakes(captain)).length, 0);
 
         // A stale owner revision is refused by B; the current one is accepted there.
         const stale = yield* tasksA
@@ -464,8 +461,8 @@ it.effect(
           (yield* tasksA.read(asCaptain, { threadId: worker })).tasks[0]!.task.settlement.state,
           "settled",
         );
-        // Only INPUT and DONE woke the Captain across all of it.
-        assert.equal((yield* envA.wakes(captain)).length, 2);
+        // No child activity created a Captain message or run.
+        assert.equal((yield* envA.wakes(captain)).length, 0);
       }),
     ),
 );
@@ -683,12 +680,11 @@ it.effect(
           .pipe(Effect.flip);
         assert.equal(denied.code, "scope_denied");
 
-        // Its turn ending reaches the Captain on A through the adopted task.
+        // Its turn ending adopts a task mirrored on A, without messaging the Captain.
         yield* envB.send(worker, 1);
         yield* envB.endOpenRuns(worker);
         yield* drain;
-        const wakes = yield* envA.wakes(captain);
-        assert.equal(wakes.length, 1);
+        assert.equal((yield* envA.wakes(captain)).length, 0);
         const mirror = (yield* tasksA.read(asCaptain, { threadId: worker })).tasks[0]!;
         assert.equal(mirror.task.workerEnvironmentId, B);
         assert.equal(mirror.sync?.state, "synced");
@@ -708,13 +704,13 @@ it.effect(
           accept: true,
         });
         assert.isTrue(accepted.accepted);
-        assert.equal((yield* envA.wakes(captain)).length, 2);
+        assert.equal((yield* envA.wakes(captain)).length, 0);
       }),
     ),
 );
 
 it.effect(
-  "the worker's environment filters covered turn ends; a passed check-back reaches the Captain once, also through an older relay",
+  "remote turn ends and check-back expiry never message the Captain through any relay",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -732,17 +728,17 @@ it.effect(
         yield* envB.send(worker, 1);
         yield* tasksA.assign(asCaptain, { threadId: worker, summary: "Remote copy" }, B);
 
-        // INPUT wakes the Captain once; acknowledgement turns on B start nothing on A.
+        // INPUT and acknowledgement turns on B start nothing on A.
         yield* tasksB.update(asWorker, { expectedRevision: 1, status: "INPUT", needs: "Region?" });
         yield* envB.endOpenRuns(worker);
         yield* drain;
-        assert.equal((yield* envA.wakes(captain)).length, 1);
+        assert.equal((yield* envA.wakes(captain)).length, 0);
         for (const turn of [2, 3]) {
           yield* envB.send(worker, turn);
           yield* envB.endOpenRuns(worker);
         }
         yield* drain;
-        assert.equal((yield* envA.wakes(captain)).length, 1);
+        assert.equal((yield* envA.wakes(captain)).length, 0);
 
         // Back to WAITING with its own watcher, relayed by an app that predates
         // check-backs: the Captain's mirror still decodes every delivery.
@@ -757,22 +753,17 @@ it.effect(
         const mirror = (yield* tasksA.read(asCaptain, { threadId: worker })).tasks[0]!;
         assert.equal(mirror.task.status, "WAITING");
         assert.equal(mirror.sync?.state, "synced");
-        // The first turn end reports revision 3; later covered ones do not.
         yield* envB.endOpenRuns(worker);
         yield* envB.send(worker, 5);
         yield* envB.endOpenRuns(worker);
         yield* drain;
-        assert.equal((yield* envA.wakes(captain)).length, 2);
+        assert.equal((yield* envA.wakes(captain)).length, 0);
 
-        // The check-back passes: B raises one wake and A queues it once, even
-        // when the same view is delivered again.
+        // Check-back expiry and repeated deliveries leave the Captain quiet.
         yield* TestClock.adjust("20 minutes");
         yield* drain;
         let wakes = yield* envA.wakes(captain);
-        assert.equal(wakes.length, 3);
-        assert.include(wakes[2]!.id, ":deadline:3:");
-        // Through the older relay the Captain reads it as a turn end, never lost.
-        assert.include(wakes[2]!.text, "A finished turn is not a finished task");
+        assert.equal(wakes.length, 0);
         const current = (yield* tasksB.read(asWorker, {})).tasks[0]!;
         const { capability } = (yield* envB.link(worker)).pipe((l) =>
           l._tag === "Some" ? l.value : assert.fail("worker link"),
@@ -782,9 +773,9 @@ it.effect(
             .applied,
         );
         yield* drain;
-        assert.equal((yield* envA.wakes(captain)).length, 3);
+        assert.equal((yield* envA.wakes(captain)).length, 0);
 
-        // With a current relay the Captain sees the check-back itself.
+        // A current relay also leaves the Captain quiet after check-back expiry.
         network.state.legacyRelay = false;
         yield* envB.send(worker, 6);
         yield* tasksB.update(asWorker, {
@@ -795,9 +786,61 @@ it.effect(
         yield* TestClock.adjust("5 minutes");
         yield* drain;
         wakes = yield* envA.wakes(captain);
-        assert.equal(wakes.length, 4);
-        assert.include(wakes[3]!.text, "passed its check-back time");
-        assert.include(wakes[3]!.text, "second transfer");
+        assert.equal(wakes.length, 0);
       }),
     ),
+);
+
+it.effect("legacy remote wakes cannot inject Captain messages or runs", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const network = yield* makeNetwork;
+      const envA = yield* environment(network, A);
+      const envB = yield* environment(network, B);
+      const tasksA = yield* envA.startService;
+      const tasksB = yield* envB.startService;
+      yield* envA.create(captain);
+      yield* envB.create(worker, { thread: captain, environment: A });
+      yield* tasksA.assign(asCaptain, { threadId: worker, summary: "Legacy peer" }, B);
+      yield* tasksB.drain;
+      yield* tasksA.drain;
+      const current = (yield* tasksB.read(asWorker, {})).tasks[0]!;
+      const link = yield* envB.link(worker);
+      assert.equal(link._tag, "Some");
+      if (link._tag !== "Some") return assert.fail("worker link");
+      const reasons = ["done", "input", "gate", "run_ended", "question"] as const;
+      for (const [index, reason] of reasons.entries()) {
+        const delivered = yield* tasksA.remoteDeliver({
+          workerEnvironmentId: B,
+          capability: link.value.capability,
+          view: {
+            ...current,
+            task: {
+              ...current.task,
+              cursor: current.task.cursor + index + 1,
+              wake: {
+                id: `legacy:${worker}:revision:${index}:${reason}`,
+                reason,
+                revision: current.task.revision,
+                runId: null,
+                state: "pending",
+                skipReason: null,
+                createdAt: "1970-01-01T00:00:00.000Z",
+              },
+            },
+          },
+        });
+        assert.isTrue(delivered.applied);
+      }
+      yield* tasksA.drain;
+      assert.deepEqual(yield* envA.wakes(captain), []);
+      assert.isNull((yield* tasksA.read(asCaptain, { threadId: worker })).tasks[0]!.task.wake);
+      const records = yield* envA.run(
+        Effect.flatMap(ProjectionStoreV2, (projections) =>
+          projections.getThreadRecords(captain, ["runs"]),
+        ),
+      );
+      assert.equal(records.runs.length, 0);
+    }),
+  ),
 );

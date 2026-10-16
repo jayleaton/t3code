@@ -10124,6 +10124,25 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly updatedTask: OrchestrationV2Subagent;
     readonly now: DateTime.Utc;
   }) {
+    // Named agents are child chats even though delegated-task lineage still
+    // identifies the task whose result can be read by its owner.
+    const child =
+      input.task.childThreadId === null
+        ? null
+        : yield* mapDelegatedCompletionError(
+            projectionStore.getThreadShell(input.task.childThreadId),
+          );
+    if (input.task.childThreadId !== null && (child === null || !isSubagentThread(child))) {
+      return {
+        task: {
+          ...input.updatedTask,
+          completionDelivery: { state: "disposed" as const, observedByRunId: null },
+        },
+        parentRun: undefined,
+        message: undefined,
+        offer: false,
+      };
+    }
     const taskDelivery = input.updatedTask.completionDelivery;
     // delivered ownership has already settled through a completed wake run.
     // A later wake-policy upgrade must not re-claim the task or offer again.
@@ -11691,6 +11710,48 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   // worker. Queue recovery instead holds unstarted runs until an explicit
   // queue.resume command arrives.
   const recoverDelegatedTasks = Effect.gen(function* () {
+    // Older versions put named-child results in the helper completion mailbox.
+    // Dispose those entries before any recovery can offer or resume their wake.
+    const completionThreads = yield* projectionStore
+      .getRecoveryThreadIds("delegated-completions")
+      .pipe(Effect.orDie);
+    for (const parentThreadId of completionThreads) {
+      yield* threadDispatch
+        .withLock(
+          parentThreadId,
+          Effect.gen(function* () {
+            const { subagents } = yield* projectionStore.getThreadRecords(parentThreadId, [
+              "subagents",
+            ]);
+            for (const task of subagents) {
+              if (
+                task.origin !== "app_owned" ||
+                task.childThreadId === null ||
+                task.completionDelivery?.state === "disposed" ||
+                task.completionDelivery?.state === "acknowledged" ||
+                task.completionDelivery?.state === "delivered"
+              )
+                continue;
+              const child = yield* projectionStore.getThreadShell(task.childThreadId);
+              if (child !== null && isSubagentThread(child)) continue;
+              const events = yield* Ref.make<Array<OrchestrationV2DomainEvent>>([]);
+              yield* dispatchDelegatedTaskCompletionDeliveryResolution(
+                {
+                  type: "delegated_task.completion-delivery.dispose",
+                  commandId: CommandId.make(
+                    `server:dispose-child-completion:${parentThreadId}:${task.id}`,
+                  ),
+                  parentThreadId,
+                  taskId: task.id,
+                },
+                events,
+              );
+              yield* eventSink.writeWithEffects({ events: yield* Ref.get(events), effects: [] });
+            }
+          }),
+        )
+        .pipe(Effect.orDie);
+    }
     yield* projectionStore.getRecoveryThreadIds("subagent-results").pipe(
       Effect.flatMap((threadIds) =>
         Effect.forEach(

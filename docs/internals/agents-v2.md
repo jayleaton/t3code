@@ -137,23 +137,18 @@ parents; clients resolve parents by both IDs.
 An ordinary child has no `task_status` delivery, so a parent learns about it through its task
 record (`apps/server/src/threadTask/`). Three distinctions are easy to collapse and must not be:
 
-- **A finished turn is not a finished task.** Run state is read, never stored on the task. A turn
-  ending wakes the owner with "turn ended", not DONE; only the worker's own DONE update reports a
-  deliverable, and the turn that raised it does not wake the owner a second time. A completed turn
-  is also quiet when the owner was already told this revision and something else carries the task:
-  INPUT or DONE, a live non-run continuation, or the worker's `checkBack`. The worker's environment
-  makes that call before any message exists, because no instruction can filter a queued wake.
-  Failed or cancelled turns, WAITING on the ended run itself, and an unreported revision still
-  wake. `checkBack` is how a worker declares a watcher T3 cannot see; it is bookkeeping, not a
-  revision, any content change clears it, and its time passing raises one deadline wake.
+- **A finished turn is not a finished task.** Run state is read, never stored on the task.
+  Child activity never dispatches automatic parent messages, including task updates, provider
+  questions, check-back deadlines, and named-agent delegation completion. The parent waits for
+  the child thread to end and reads its result, or watches task state. `checkBack` records a
+  watcher T3 cannot see; its deadline affects continuation liveness without scheduling a message.
 - **Consent is not acceptance.** `settleWhenAccepted` is the owner's standing permission to settle;
   the owner's `accept` names one DONE revision after its gates pass. Any content change bumps the
   revision and drops acceptance. Settlement waits for both, then for the worker's turn and every
   descendant task and run.
-- **Wakes are keyed by the transition, not by time.** Each wake id derives from the worker, revision,
-  run, or question that caused it, and its message and command ids reuse that key, so the
-  orchestrator's command receipts make a replayed wake a no-op. Restart recovery replays only a
-  wake still marked pending and a worker run that ended unobserved; quiet open tasks stay quiet.
+- **Recovery must not replay retired messages.** Legacy pending task wakes are cleared and all
+  queued task wake runs are cancelled, including explicit reports. Incoming remote task state
+  remains readable, but legacy wake metadata is discarded so older peers cannot resume delivery.
 
 A chat may also ask to settle itself after its turn (`t3_settle_after_turn`). The request is
 stored, so it survives the turn that made it, and it never discards a queued wake: it waits for the
@@ -170,14 +165,15 @@ the two servers store, and every later call between them (`threadTasks.remoteDel
 `remoteOwnerAction`) presents it, so the receiver acts as that task's peer and never as the
 relaying app's user. Calls travel through a connected app (`McpGatewayBroker`), which is live only:
 the worker side keeps a delivery cursor per task, retries when an app connects or the server
-starts, and the owner side ignores a cursor it has already applied. Wakes are created where the
-facts are and queued on the owner's environment under an environment-prefixed id. With no app
+starts, and the owner side ignores a cursor it has already applied. Task changes update the
+owner's readable mirror without dispatching chat messages. With no app
 connected, owner actions fail and the mirror's `sync` shows the last delivery.
 
 Peers and the relaying app may run older contracts, and Schema drops unknown keys but rejects an
 unknown literal. So the task view grows only by optional fields: a new continuation or wake reason
 added as a union member would fail every delivery through an older peer. `checkBack` follows this,
-and a deadline wake travels as `run_ended` with an optional `checkBack` an older owner ignores.
+but an older relay may omit that optional metadata. Legacy wake fields remain decodable
+but never cause delivery on an updated owner.
 
 Workers (any chat with a task) may message only their own children, on every send path; Captains
 coordinate freely. Gateway-originated turns are stored as agent messages, so a relay never counts

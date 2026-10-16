@@ -801,6 +801,7 @@ const seedRestartCancelledChild = (input: {
   readonly name: string;
   readonly completionWake: "always" | "settled_only";
   readonly continuationPending: boolean;
+  readonly namedChild?: boolean;
   /** "completed" seeds a settled turn whose background work the restart cancelled. */
   readonly runStatus?: "cancelled" | "completed";
   readonly now: DateTime.Utc;
@@ -836,6 +837,9 @@ const seedRestartCancelledChild = (input: {
               relationshipToParent: "subagent",
               rootThreadId: input.parentThreadId,
             },
+            ...(input.namedChild
+              ? { parentThreadId: input.parentThreadId, parentRelationship: "child" as const }
+              : {}),
             forkedFrom: { type: "node", nodeId: taskId },
             createdAt: input.now,
             updatedAt: input.now,
@@ -904,6 +908,177 @@ const seedRestartCancelledChild = (input: {
     });
     return { taskId, childThreadId, childRunId };
   });
+
+it.layer(Layer.merge(layerTest, ProviderContinuationRequests.layer))(
+  "named child completion",
+  (it) => {
+    it.effect.each([
+      { queued: false, missing: false },
+      { queued: true, missing: false },
+      { queued: true, missing: true },
+    ])("disposes legacy child delivery (%o)", ({ queued, missing }) =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const sink = yield* EventSink.EventSinkV2;
+        const now = yield* DateTime.now;
+        const parentThreadId = ThreadId.make(`thread:legacy-named-${queued}-${missing}`);
+        const projectId = ProjectId.make(`project:legacy-named-${queued}-${missing}`);
+        const parentRunId = RunId.make(`run:legacy-named-${queued}-${missing}`);
+        const rootNodeId = NodeId.make(`node:legacy-named-${queued}-${missing}`);
+        const taskId = NodeId.make(`node:legacy-child-${queued}-${missing}`);
+        const messageId = MessageId.make(`message:delegated-delivery:${parentThreadId}`);
+        yield* seedParentWithTerminalTask({
+          threadId: parentThreadId,
+          projectId,
+          runId: parentRunId,
+          rootNodeId,
+          taskId,
+          deliveryState: "claimed",
+          completionWake: "always",
+          deliveryTaskIds: [taskId],
+          now,
+        });
+        const child = yield* seedRestartCancelledChild({
+          parentThreadId,
+          projectId,
+          parentRunId,
+          rootNodeId,
+          name: `legacy-child-${queued}-${missing}`,
+          completionWake: "always",
+          continuationPending: false,
+          runStatus: "completed",
+          namedChild: true,
+          now,
+        });
+        const parent = yield* orchestrator.getThreadProjection(parentThreadId);
+        const task = parent.subagents.find((row) => row.id === child.taskId)!;
+        const deliveryRunId = RunId.make(`run:legacy-delivery-${queued}-${missing}`);
+        yield* sink.write({
+          events: [
+            {
+              id: EventId.make(`event:legacy-claimed-${queued}-${missing}`),
+              type: "subagent.updated",
+              threadId: parentThreadId,
+              runId: parentRunId,
+              occurredAt: now,
+              payload: {
+                ...task,
+                ...(missing ? { childThreadId: ThreadId.make("missing-child") } : {}),
+                status: "completed",
+                result: "finished",
+                completionDelivery: { state: "claimed", observedByRunId: null },
+              },
+            },
+            ...(queued
+              ? [
+                  runEvent({
+                    threadId: parentThreadId,
+                    runId: deliveryRunId,
+                    ordinal: 2,
+                    status: "queued",
+                    userMessageId: messageId,
+                    now,
+                  }),
+                  {
+                    id: EventId.make(`event:legacy-message-${queued}-${missing}`),
+                    type: "message.updated" as const,
+                    threadId: parentThreadId,
+                    runId: deliveryRunId,
+                    occurredAt: now,
+                    payload: {
+                      id: messageId,
+                      threadId: parentThreadId,
+                      runId: deliveryRunId,
+                      nodeId: null,
+                      role: "user" as const,
+                      text: "Background task finished",
+                      attachments: [],
+                      streaming: false,
+                      createdBy: "agent" as const,
+                      creationSource: "server" as const,
+                      createdAt: now,
+                      updatedAt: now,
+                      delegatedCompletion: { parentRunId, generation: 1, taskIds: [taskId] },
+                    },
+                  },
+                ]
+              : []),
+          ],
+        });
+        yield* orchestrator.recoverDelegatedTasks;
+        const recovered = yield* orchestrator.getThreadProjection(parentThreadId);
+        assert.equal(
+          recovered.subagents.find((row) => row.id === taskId)?.completionDelivery?.state,
+          "disposed",
+        );
+        assert.isNull(
+          recovered.runs.find((run) => run.id === parentRunId)?.delegatedCompletion?.delivery,
+        );
+        if (queued)
+          assert.equal(recovered.runs.find((run) => run.id === deliveryRunId)?.status, "cancelled");
+        else assert.equal(recovered.messages.length, 0);
+      }),
+    );
+    it.effect.each(["always", "settled_only"] as const)(
+      "keeps named-child results readable without a %s completion wake",
+      (completionWake) =>
+        Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const now = yield* DateTime.now;
+          const parentThreadId = ThreadId.make(`thread:named-${completionWake}`);
+          const projectId = ProjectId.make(`project:named-${completionWake}`);
+          const parentRunId = RunId.make(`run:named-${completionWake}`);
+          const rootNodeId = NodeId.make(`node:named-${completionWake}`);
+          yield* seedParentWithTerminalTask({
+            threadId: parentThreadId,
+            projectId,
+            runId: parentRunId,
+            rootNodeId,
+            taskId: NodeId.make(`node:named-seed-${completionWake}`),
+            deliveryState: "acknowledged",
+            now,
+          });
+          const child = yield* seedRestartCancelledChild({
+            parentThreadId,
+            projectId,
+            parentRunId,
+            rootNodeId,
+            name: `named-child-${completionWake}`,
+            completionWake,
+            continuationPending: false,
+            runStatus: "completed",
+            namedChild: true,
+            now,
+          });
+          yield* orchestrator.recoverDelegatedTasks;
+          let parent = yield* orchestrator.getThreadProjection(parentThreadId);
+          const task = parent.subagents.find((row) => row.id === child.taskId)!;
+          assert.equal(task.status, "completed");
+          assert.isNotNull(task.result);
+          assert.equal(task.completionDelivery?.state, "disposed");
+          assert.isNull(
+            parent.runs.find((run) => run.id === parentRunId)?.delegatedCompletion?.delivery,
+          );
+          if (completionWake === "settled_only") {
+            yield* orchestrator.dispatch({
+              type: "delegated_task.wake-policy",
+              commandId: CommandId.make("command:named-late-wake"),
+              parentThreadId,
+              taskId: child.taskId,
+              completionWake: "always",
+            });
+          }
+          yield* orchestrator.recoverDelegatedTasks;
+          parent = yield* orchestrator.getThreadProjection(parentThreadId);
+          assert.equal(parent.runs.length, 1);
+          assert.equal(parent.messages.length, 0);
+          assert.isNull(
+            parent.runs.find((run) => run.id === parentRunId)?.delegatedCompletion?.delivery,
+          );
+        }),
+    );
+  },
+);
 
 it.layer(Layer.merge(layerTest, ProviderContinuationRequests.layer))(
   "subagent follow-ups",
