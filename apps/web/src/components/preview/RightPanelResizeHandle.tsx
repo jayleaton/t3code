@@ -6,15 +6,6 @@ interface Props {
   className?: string;
 }
 
-/**
- * Hit target for resizing a panel by dragging a vertical edge. Right-anchored panels
- * place it on their left edge; zero-width rails place it between side-by-side panes.
- *
- * - Sits on top of the panel's border with a 4px overlap on each side so the
- *   user can grab a few pixels off the edge without aiming.
- * - Visual indicator is a 1px line that lights up on hover/active to mirror
- *   VS Code / Cursor.
- */
 export function RightPanelResizeHandle({ handlers, className }: Props) {
   return (
     <div

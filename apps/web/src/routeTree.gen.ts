@@ -37,8 +37,8 @@ import { Route as SettingsAppearanceRouteImport } from './routes/settings.appear
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
 import { Route as AgentsScheduledRouteImport } from './routes/agents.scheduled'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
-import { Route as AgentsEnvironmentIdThreadIdRouteImport } from './routes/agents.$environmentId.$threadId'
 import { Route as ChatNewRouteImport } from './routes/_chat.new'
+import { Route as AgentsEnvironmentIdThreadIdRouteImport } from './routes/agents.$environmentId.$threadId'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
 
@@ -182,17 +182,17 @@ const ChatPullRequestsRoute = ChatPullRequestsRouteImport.update({
   path: '/pull-requests',
   getParentRoute: () => ChatRoute,
 } as any)
+const ChatNewRoute = ChatNewRouteImport.update({
+  id: '/new',
+  path: '/new',
+  getParentRoute: () => ChatRoute,
+} as any)
 const AgentsEnvironmentIdThreadIdRoute =
   AgentsEnvironmentIdThreadIdRouteImport.update({
     id: '/$environmentId/$threadId',
     path: '/$environmentId/$threadId',
     getParentRoute: () => AgentsRoute,
   } as any)
-const ChatNewRoute = ChatNewRouteImport.update({
-  id: '/new',
-  path: '/new',
-  getParentRoute: () => ChatRoute,
-} as any)
 const ChatDraftDraftIdRoute = ChatDraftDraftIdRouteImport.update({
   id: '/draft/$draftId',
   path: '/draft/$draftId',
@@ -617,19 +617,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatPullRequestsRouteImport
       parentRoute: typeof ChatRoute
     }
-    '/agents/$environmentId/$threadId': {
-      id: '/agents/$environmentId/$threadId'
-      path: '/$environmentId/$threadId'
-      fullPath: '/agents/$environmentId/$threadId'
-      preLoaderRoute: typeof AgentsEnvironmentIdThreadIdRouteImport
-      parentRoute: typeof AgentsRoute
-    }
     '/_chat/new': {
       id: '/_chat/new'
       path: '/new'
       fullPath: '/new'
       preLoaderRoute: typeof ChatNewRouteImport
       parentRoute: typeof ChatRoute
+    }
+    '/agents/$environmentId/$threadId': {
+      id: '/agents/$environmentId/$threadId'
+      path: '/$environmentId/$threadId'
+      fullPath: '/agents/$environmentId/$threadId'
+      preLoaderRoute: typeof AgentsEnvironmentIdThreadIdRouteImport
+      parentRoute: typeof AgentsRoute
     }
     '/_chat/draft/$draftId': {
       id: '/_chat/draft/$draftId'

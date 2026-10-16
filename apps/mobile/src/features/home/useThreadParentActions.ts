@@ -7,11 +7,11 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert } from "react-native";
 
 import { useAtomCommand } from "../../state/use-atom-command";
 import { threadEnvironment } from "../../state/threads";
 import { parentLinkKey, parentRejection } from "./agent-parenting";
+import * as Dialog from "../../components/ui/Dialog";
 
 interface PendingParent extends AgentParentOverride {
   /** The server accepted the change; the entry stays until the shell shows it. */
@@ -57,7 +57,7 @@ export function useThreadParentActions(threads: readonly EnvironmentThreadShell[
         const rejection = parentRejection(child, parent, threads);
         if (rejection) {
           void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-          Alert.alert("Can't move chat", rejection);
+          Dialog.alert("Can't move chat", rejection);
           return false;
         }
       }
@@ -87,7 +87,7 @@ export function useThreadParentActions(threads: readonly EnvironmentThreadShell[
           if (next.get(key)?.request === request) next.delete(key);
         });
         const error = Cause.squash(result.cause);
-        Alert.alert(
+        Dialog.alert(
           parent ? `Couldn't move under ${parent.title}` : "Couldn't remove from parent",
           error instanceof Error && error.message.trim().length > 0
             ? error.message

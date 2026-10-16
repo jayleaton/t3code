@@ -343,7 +343,7 @@ describe("WorktreeReclamation", () => {
           shutdown: Effect.void,
           open: () => Effect.die("unused open"),
           get: () => Effect.die("liveness checks must not count as session activity"),
-          isResident: (providerSessionId) => Effect.sync(() => resident.has(providerSessionId)),
+          isLive: (providerSessionId) => Effect.sync(() => resident.has(providerSessionId)),
           close: () => Effect.void,
           closeInstance: () => Effect.void,
           release: () => Effect.void,

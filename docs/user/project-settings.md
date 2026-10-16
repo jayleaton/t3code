@@ -243,9 +243,10 @@ Inherit follows each machine's rules; Off keeps that project's worktrees until y
 manually. Custom applies separate worktree rules to the selected project or checkout. Browser
 captures and log retention remain machine-wide.
 
-Worktrees can be removed after a chosen number of inactive days, after merging, or when they
-have no commits beyond the default branch. Only T3-managed worktrees are eligible. Active
-sessions and shared worktrees prevent removal. **Keep worktrees with local changes** defaults
+Worktrees can be removed after a chosen number of inactive days, after a thread settles, after
+merging, or when they have no commits beyond the default branch. Set settled retention to 0 days
+to remove a worktree at the next cleanup after settlement. Only T3-managed worktrees are eligible.
+Active sessions and shared worktrees prevent removal. **Keep worktrees with local changes** defaults
 to **Uncommitted changes**, which protects tracked edits and untracked files but deletes ignored
 files such as `.env` and build output. **Any local files** also protects ignored files other than
 `node_modules`. **Edited tracked files** protects only tracked edits and allows untracked and
@@ -261,6 +262,7 @@ Existing prompts for deleting a worktree manually remain available when this pol
 
 Choose **Delete now** to run the enabled rules immediately. The latest results show which
 worktrees were removed or kept and why, plus any failures.
+Results also list folders in the worktree folder that no thread uses, with their sizes; cleanup never removes them, so remove them manually if you want.
 
 To free a finished thread's worktree without enabling a policy, ask an agent connected through
 T3's MCP tools to reclaim it (`t3_reclaim_worktree`; a dry run only reports). The thread keeps

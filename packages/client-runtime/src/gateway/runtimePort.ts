@@ -562,7 +562,7 @@ export function createGatewayRuntimePort(
     createSkill: async (environmentId, input) => {
       const skillId = await run(
         Effect.gen(function* () {
-          return yield* (yield* Crypto.Crypto).randomUUIDv4;
+          return yield* (yield* Crypto.Crypto).randomUUIDv4();
         }),
       );
       const now = await run(DateTime.now.pipe(Effect.map(DateTime.formatIso)));
@@ -615,7 +615,7 @@ export function createGatewayRuntimePort(
             unsettleThread({
               threadId: ThreadId.make(threadId),
               reason: "user",
-              commandId: CommandId.make(yield* crypto.randomUUIDv4),
+              commandId: CommandId.make(yield* crypto.randomUUIDv4()),
             }),
           );
           return { status: "succeeded" as const };
@@ -630,7 +630,7 @@ export function createGatewayRuntimePort(
             EnvironmentId.make(environmentId),
             settleThread({
               threadId: ThreadId.make(threadId),
-              commandId: CommandId.make(yield* crypto.randomUUIDv4),
+              commandId: CommandId.make(yield* crypto.randomUUIDv4()),
             }),
           );
           return { status: "succeeded" as const };
@@ -651,7 +651,7 @@ export function createGatewayRuntimePort(
               parentEnvironmentId === environmentId
                 ? {}
                 : { parentEnvironmentId: EnvironmentId.make(parentEnvironmentId) }),
-              commandId: CommandId.make(yield* crypto.randomUUIDv4),
+              commandId: CommandId.make(yield* crypto.randomUUIDv4()),
             }),
           );
           return { status: "succeeded" as const };
@@ -705,7 +705,7 @@ export function createGatewayRuntimePort(
       const profileId = await run(
         Effect.gen(function* () {
           const crypto = yield* Crypto.Crypto;
-          return yield* crypto.randomUUIDv4;
+          return yield* crypto.randomUUIDv4();
         }),
       );
       const now = await run(DateTime.now.pipe(Effect.map(DateTime.formatIso)));

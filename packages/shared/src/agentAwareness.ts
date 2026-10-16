@@ -55,7 +55,6 @@ export interface ProjectThreadAwarenessV2Input {
   >;
 }
 
-/** Build relay activity directly from the V2 shell projection. */
 export function projectThreadAwarenessV2(
   input: ProjectThreadAwarenessV2Input,
 ): AgentAwarenessState | null {
@@ -106,7 +105,6 @@ function resolveThreadAwarenessPhaseV2(
     case "waiting":
       return "running";
     case "completed":
-      // Work that will wake the agent keeps the run going; a dev server does not.
       return backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])
         ? "running"
         : "completed";

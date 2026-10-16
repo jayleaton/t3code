@@ -149,7 +149,9 @@ Press `Escape` while dragging to cancel.
 By default, environments settle inactive threads after three days. Finished threads
 remain active until this idle age passes. Work in progress, pending questions or approvals,
 and live background work prevent automatic settlement. New activity and un-settling reset
-the idle clock. Pull request state does not trigger automatic settlement.
+the idle clock. Pull request state does not trigger automatic settlement. Turn on
+**Keep threads with a PR** in **Settings → General** to also keep threads that have a pull
+request out of inactivity settlement.
 
 To keep one thread out of the settled shelf no matter how long it sits idle, open its menu,
 choose **Auto-settle behavior**, and pick **Disabled**. The current option is checked. Pick

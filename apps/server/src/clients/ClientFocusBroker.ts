@@ -149,7 +149,7 @@ export const make = Effect.fn("clients.focusBroker.make")(function* (
       if (target === undefined) {
         return yield* new ClientNotConnectedError({ clientId: input.clientId });
       }
-      const requestId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+      const requestId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
       yield* Queue.offer(target.queue, { requestId, target: input.target });
       return { requestId, clientId: input.clientId, label: target.host.label };
     });

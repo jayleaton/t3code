@@ -2,9 +2,8 @@ import { useEffect, useRef } from "react";
 import { View } from "react-native";
 import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
 
-import { SymbolView } from "../../../components/AppSymbol";
+import { SymbolView } from "../../../components/ui/AppSymbol";
 
-/** Pan recognition wins over the settings scroll view only inside the handle. */
 export function SettingsDragHandle(props: {
   readonly title: string;
   readonly canMoveUp: boolean;

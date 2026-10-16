@@ -1,7 +1,7 @@
 import { useAtom, useAtomValue } from "@effect/atom-react";
 import { LegendList } from "@legendapp/list/react-native";
 import { memo, useCallback, useMemo, useState } from "react";
-import { Alert, Platform, Pressable, ScrollView, View } from "react-native";
+import { Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   MCP_GATEWAY_RUNTIME_MODE_LABELS,
@@ -24,11 +24,11 @@ import {
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { resolveGatewayProfileModelSelection } from "@t3tools/client-runtime/gateway";
 import { AgentAvatar } from "../../components/AgentAvatar";
-import { SymbolView } from "../../components/AppSymbol";
-import { ControlPillMenu } from "../../components/ControlPill";
-import { AppText as Text } from "../../components/AppText";
-import { EmptyState } from "../../components/EmptyState";
-import { SegmentedControl } from "../../components/SegmentedControl";
+import { SymbolView } from "../../components/ui/AppSymbol";
+import { Menu } from "../../components/ui/Menu";
+import { AppText as Text } from "../../components/ui/AppText";
+import { EmptyState } from "../../components/ui/EmptyState";
+import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { cn } from "../../lib/cn";
 import {
   agentAppearance,
@@ -56,6 +56,7 @@ import {
 } from "./AgentCardDrag";
 import type { ParentDrop } from "./agent-parenting";
 import { useThreadParentActions } from "./useThreadParentActions";
+import * as Dialog from "../../components/ui/Dialog";
 
 const BOARD_TABS = [
   { value: "agents", label: "Agents" },
@@ -970,14 +971,14 @@ const AgentChatCard = memo(function AgentChatCard(props: AgentChatCardProps) {
       props.onRemoveFromParent(thread);
     } else if (action === "pin" || action === "unpin") {
       void (action === "unpin" ? props.unpinThread(thread) : props.pinThread(thread)).catch(
-        (error) => Alert.alert("Could not pin chat", String(error)),
+        (error) => Dialog.alert("Could not pin chat", String(error)),
       );
     } else if (action === "restore") {
       props.unsettleThread(thread);
     } else if (action === "settle") {
       void props
         .settleThread(thread)
-        .catch((error) => Alert.alert("Could not settle chat", String(error)));
+        .catch((error) => Dialog.alert("Could not settle chat", String(error)));
     }
   };
   const lifecycleActions = [
@@ -1084,7 +1085,7 @@ const AgentChatCard = memo(function AgentChatCard(props: AgentChatCardProps) {
             </View>
           </View>
         </Pressable>
-        <ControlPillMenu
+        <Menu
           accessibilityLabel={`Actions for ${thread.title}`}
           actions={[...parentActions, ...lifecycleActions]}
           onPressAction={({ nativeEvent }) => onMenuAction(nativeEvent.event)}
@@ -1097,7 +1098,7 @@ const AgentChatCard = memo(function AgentChatCard(props: AgentChatCardProps) {
               type="monochrome"
             />
           </View>
-        </ControlPillMenu>
+        </Menu>
       </View>
     </AgentCardDragSource>
   );

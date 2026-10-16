@@ -84,10 +84,16 @@ export function resolveAutoSettlementAt(input: {
   readonly thread: ProjectionStore.ProjectionSettlementCandidate;
   readonly nowMs: number;
   readonly autoSettleAfterDays: number | null;
+  readonly autoSettleKeepPullRequests?: boolean;
 }): DateTime.Utc | null {
   const { thread } = input;
   if (!isAutoSettlementCandidate(thread, input.nowMs)) return null;
   if (input.autoSettleAfterDays === null || input.autoSettleAfterDays <= 0) return null;
+  const hasPullRequest =
+    (thread.pullRequests?.length ?? 0) > 0 ||
+    thread.linkedPullRequest != null ||
+    thread.branchPullRequest != null;
+  if (input.autoSettleKeepPullRequests === true && hasPullRequest) return null;
   // A passed wake timer restarts inactivity. An earlier wake can only delay settlement.
   const snoozedUntilMs = toMillis(thread.snoozedUntil);
   const timerWakeAtMs =

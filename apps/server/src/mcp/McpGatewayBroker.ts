@@ -41,7 +41,7 @@ export const make = Effect.gen(function* () {
   const connect = (owner: string, grants: McpGatewayRelayGrants) =>
     Stream.unwrap(
       Effect.gen(function* () {
-        const connectionId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+        const connectionId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
         const requests = yield* Queue.unbounded<McpGatewayRelayEvent, Cause.Done>();
         const host: Host = { owner, connectionId, grants, requests };
         yield* Effect.acquireRelease(
@@ -100,7 +100,7 @@ export const make = Effect.gen(function* () {
       try: () => toMcpGatewayRelayJson(sent) as ReadonlyArray<unknown>,
       catch: () => unavailable(`The arguments of ${method} cannot be relayed to a T3 app.`),
     });
-    const invocationId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+    const invocationId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
     const deferred = yield* Deferred.make<unknown, McpGatewayUnavailableError>();
     pending.set(invocationId, { host, deferred });
     return yield* Effect.gen(function* () {

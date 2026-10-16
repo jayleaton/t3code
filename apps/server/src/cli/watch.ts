@@ -207,7 +207,7 @@ const sameState = (left: Record<string, string>, right: Record<string, string>) 
 /** A brand new cursor is a new watcher identity: it gets its own `instanceId`. */
 const randomId = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
-  return yield* crypto.randomUUIDv4;
+  return yield* crypto.randomUUIDv4();
 }).pipe(Effect.orDie);
 
 const newCursor = Effect.fn("watch.newCursor")(function* () {
