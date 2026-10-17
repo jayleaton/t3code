@@ -1107,7 +1107,7 @@ describe("RpcSessionFactory", () => {
     }),
   );
 
-  it.effect("closes the session after 15 seconds without a frame from the server", () =>
+  it.effect("rides out a 25 second silence but closes after 30 seconds without a frame", () =>
     Effect.gen(function* () {
       const { factory, sockets } = yield* makeFactory();
       const session = yield* factory.connect(PREPARED);
@@ -1119,15 +1119,16 @@ describe("RpcSessionFactory", () => {
       yield* completeInitialConfig(socket);
       yield* Fiber.join(readyFiber);
 
-      yield* TestClock.adjust("15 seconds");
+      // Two back-to-back packet-loss bursts on a mobile tailnet path.
+      yield* TestClock.adjust("25 seconds");
       expect(closedFiber.pollUnsafe()).toBeUndefined();
-      expect(socket.sent.map((message) => decodeJson(message)).filter(isPing)).toEqual([
-        { _tag: "Ping" },
-        { _tag: "Ping" },
-        { _tag: "Ping" },
-      ]);
+      socket.serverMessage(encodeJson({ _tag: "Pong" }));
 
-      yield* TestClock.adjust("5 seconds");
+      yield* TestClock.adjust("25 seconds");
+      expect(closedFiber.pollUnsafe()).toBeUndefined();
+      expect(socket.sent.map((message) => decodeJson(message)).filter(isPing)).toHaveLength(10);
+
+      yield* TestClock.adjust("10 seconds");
       const error = yield* Fiber.join(closedFiber);
       expect(error).toBeInstanceOf(ConnectionTransientError);
       expect(error).toMatchObject({
