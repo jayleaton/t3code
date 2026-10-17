@@ -1828,6 +1828,25 @@ describe("EnvironmentSupervisor routes", () => {
     }),
   );
 
+  it.effect("reports a refusal from a route that answered over a silent route's timeout", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        checkRoute: (route) =>
+          Effect.succeed(route.target._tag === "BearerConnectionTarget" ? "silent" : "unchecked"),
+        prepare: (_attempt, target) =>
+          target._tag === "RelayConnectionTarget"
+            ? Effect.fail(blocked("Sign in to T3 Connect."))
+            : Effect.fail(transient("LAN endpoint timed out.")),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(LAN_THEN_RELAY_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      const state = yield* awaitState(supervisor.state, (value) => value.phase === "blocked");
+      expect(state.lastFailure?.detail).toBe("Sign in to T3 Connect.");
+    }),
+  );
+
   it.effect("moves back to the LAN route when the network changes and it answers again", () =>
     Effect.gen(function* () {
       const lanReachable = yield* Ref.make(false);
