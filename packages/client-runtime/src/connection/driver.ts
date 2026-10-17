@@ -69,6 +69,7 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
   const attemptScope = yield* Scope.Scope;
   let transient: ConnectionAttemptError | undefined;
   let silentTransient: ConnectionAttemptError | undefined;
+  let answeredBlocked: ConnectionAttemptError | undefined;
   let blocked: ConnectionAttemptError | undefined;
   // Each route gets its own scope so a half-open session closes before the next try.
   const attempt = Effect.fnUntraced(function* (route: ConnectionRoute, check: RouteCheck) {
@@ -79,8 +80,10 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
       Effect.result,
     );
     if (result._tag === "Failure") {
-      if (result.failure._tag === "ConnectionBlockedError") blocked ??= result.failure;
-      else if (check === "silent") silentTransient ??= result.failure;
+      if (result.failure._tag === "ConnectionBlockedError") {
+        if (check === "answered") answeredBlocked ??= result.failure;
+        else blocked ??= result.failure;
+      } else if (check === "silent") silentTransient ??= result.failure;
       else transient ??= result.failure;
     }
     return result;
@@ -103,11 +106,14 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     if (result.failure.reason === "unsupported") return yield* result.failure;
   }
   // A route that already missed its reachability check timing out again says nothing new, while
-  // a route that answered and refused names what the user must fix, such as signing in again.
+  // a route that answered and refused names what the user must fix. A refusal from an unchecked
+  // route, such as T3 Connect asking for sign-in, must not stop retries of a direct route that
+  // needs no sign-in and only lost packets.
   return yield* (
     transient ??
-      blocked ??
+      answeredBlocked ??
       silentTransient ??
+      blocked ??
       new ConnectionTransientError({
         reason: "endpoint-unavailable",
         detail: `${entry.target.label} did not answer on any saved route.`,

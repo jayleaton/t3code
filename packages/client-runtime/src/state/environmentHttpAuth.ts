@@ -154,6 +154,7 @@ const executeEnvironmentRequest = Effect.fnUntraced(function* <
         const current = yield* remote.value
           .authorizeDpopHttp({
             expectedEnvironmentId: input.prepared.environmentId,
+            ...(input.prepared.target._tag === "RelayConnectionTarget" ? {} : { direct: true }),
             ...(rejectedAccessToken === undefined ? {} : { rejectedAccessToken }),
           })
           .pipe(
