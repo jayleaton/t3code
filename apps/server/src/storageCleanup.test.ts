@@ -446,6 +446,7 @@ const pausedMeasurementFixture = (storageCleanup?: StorageCleanupSettings) =>
 const sessionUpdated = (
   index: number,
   status: OrchestrationV2ProviderSession["status"],
+  cwd = "/elsewhere",
 ): OrchestrationV2DomainEvent => ({
   id: EventId.make(`event-${index}`),
   type: "provider-session.updated",
@@ -456,7 +457,7 @@ const sessionUpdated = (
     driver: ProviderDriverKind.make("codex"),
     providerInstanceId: ProviderInstanceId.make("codex"),
     status,
-    cwd: "/elsewhere",
+    cwd,
     model: null,
     capabilities: CodexProviderCapabilitiesV2,
     createdAt: at(0),
@@ -1297,19 +1298,27 @@ describe("storage cleanup reports and local file policies", () => {
     ),
   );
   it.live.each([
-    ["running", "ready", 1],
-    ["stopped", "error", 2],
+    ["running", "ready", "held", 2],
+    ["stopped", "error", "unrelated", 2],
+    ["stopped", "error", "held", 3],
   ] as const)(
-    "session updates to %s or %s during a sweep make %i sweep(s) in total",
-    ([first, second, sweeps]) =>
+    "session updates to %s or %s in a %s checkout during a sweep make %i sweeps in total",
+    ([first, second, checkout, sweeps]) =>
       runCleanupTest(
         Effect.gen(function* () {
           const fixture = yield* pausedMeasurementFixture();
+          fixture.setOpenSessionCwd(fixture.worktree);
+          expect((yield* fixture.service.runNow).entries[0]).toMatchObject({
+            outcome: "kept",
+            reason: "Provider session is still open",
+          });
+          fixture.setOpenSessionCwd(null);
+          const cwd = checkout === "held" ? `${fixture.worktree}/src` : "/elsewhere";
           const handled = yield* Deferred.make<void>();
           yield* fixture.activate(
             Stream.fromEffect(Deferred.await(fixture.measuring)).pipe(
               Stream.flatMap(() => Stream.range(0, 19)),
-              Stream.map((index) => sessionUpdated(index, index % 2 === 0 ? first : second)),
+              Stream.map((index) => sessionUpdated(index, index % 2 === 0 ? first : second, cwd)),
               Stream.concat(
                 Stream.fromEffect(Deferred.succeed(handled, undefined)).pipe(Stream.drain),
               ),

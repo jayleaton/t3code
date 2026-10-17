@@ -65,6 +65,13 @@ const ORPHAN_WORKTREE_GRACE_MS = 60 * 60 * 1_000;
 
 const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 const REPORT_ENTRY_LIMIT = 200;
+// Keep reasons that only a provider session stopping can clear.
+const SESSION_OPEN = "provider session is still open";
+const DELETION_PENDING = "thread deletion is still pending";
+interface HeldWorktrees {
+  readonly sessionPaths: Set<string>;
+  deletionPending: boolean;
+}
 const isGitCommandError = Schema.is(GitCommandError);
 
 function cleanupFailureReason(error: { readonly message: string }) {
@@ -592,10 +599,26 @@ const make = Effect.gen(function* () {
       );
   });
 
+  // What the latest sweep, and the one running now, kept only until a provider
+  // session stops. Any other session stop cannot free a worktree before the
+  // hourly sweep, so it does not start one.
+  let latestHeld: HeldWorktrees | undefined;
+  let runningHeld: HeldWorktrees | undefined;
+  const releasesHeldWorktree = (sessionCwd: string) => {
+    const cwd = path.resolve(sessionCwd);
+    return [latestHeld, runningHeld].some(
+      (held) =>
+        held !== undefined &&
+        (held.deletionPending ||
+          [...held.sessionPaths].some((root) => cwd === root || inside(root, cwd))),
+    );
+  };
+
   const cleanWorktrees = Effect.fn("StorageCleanup.cleanWorktrees")(function* (
     serverSettings: ServerSettings,
     now: number,
     entries: StorageCleanupReportEntry[],
+    held: HeldWorktrees,
   ) {
     if (!anyWorktreePolicy(serverSettings, worktreeCleanupEnabled)) return;
     const roots: Array<string> = [];
@@ -612,7 +635,8 @@ const make = Effect.gen(function* () {
       if (root !== null && !isFilesystemRoot(root, path)) roots.push(root);
     }
     const deletedRows = yield* sql<{ payload_json: string; workspaceRoot: string }>`
-          SELECT t.payload_json, p.workspace_root AS "workspaceRoot"
+          SELECT json_remove(t.payload_json, '$.profileSnapshot.skills') AS payload_json,
+            p.workspace_root AS "workspaceRoot"
           FROM orchestration_v2_projection_threads t
           JOIN projection_projects p ON p.project_id = t.project_id
           WHERE t.deleted_at IS NOT NULL
@@ -652,7 +676,11 @@ const make = Effect.gen(function* () {
         bytes: null,
         files: null,
       };
-      const keep = (reason: string) => entries.push({ ...entry, reason: sentence(reason) });
+      const keep = (reason: string) => {
+        if (reason === SESSION_OPEN) held.sessionPaths.add(worktreePath);
+        if (reason === DELETION_PENDING) held.deletionPending = true;
+        return entries.push({ ...entry, reason: sentence(reason) });
+      };
       yield* Effect.gen(function* () {
         if (!(yield* fs.exists(worktreePath))) return;
         if (deleted && !settings.worktreeOnDelete) return keep("no rules apply");
@@ -793,7 +821,7 @@ const make = Effect.gen(function* () {
               SELECT 1 FROM orchestration_v2_effect_outbox
               WHERE thread_id = ${thread.id} AND status NOT IN ('succeeded', 'cancelled') LIMIT 1
             `;
-            if (pendingCleanup.length > 0) return "thread deletion is still pending";
+            if (pendingCleanup.length > 0) return DELETION_PENDING;
           } else {
             const latestShells = yield* Effect.forEach(latest, (entry) =>
               projections.getThreadShell(entry.threadId),
@@ -836,7 +864,7 @@ const make = Effect.gen(function* () {
               (cwd === worktreePath || inside(worktreePath, cwd)) &&
               (yield* providerSessions.isLive(session.id))
             )
-              return "provider session is still open";
+              return SESSION_OPEN;
           }
           return null;
         });
@@ -947,7 +975,15 @@ const make = Effect.gen(function* () {
     const serverSettings = yield* settingsService.getSettings;
     const settings = serverSettings.storageCleanup;
     const entries: StorageCleanupReportEntry[] = [];
-    yield* cleanWorktrees(serverSettings, now, entries).pipe(
+    const held: HeldWorktrees = { sessionPaths: new Set(), deletionPending: false };
+    runningHeld = held;
+    yield* cleanWorktrees(serverSettings, now, entries, held).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          latestHeld = held;
+          runningHeld = undefined;
+        }),
+      ),
       Effect.catch((error) =>
         Effect.gen(function* () {
           entries.push({
@@ -1105,7 +1141,8 @@ const make = Effect.gen(function* () {
       Stream.runForEach(events, (event) =>
         (event.type === "thread.deleted" ||
           (event.type === "provider-session.updated" &&
-            (event.payload.status === "stopped" || event.payload.status === "error"))) &&
+            (event.payload.status === "stopped" || event.payload.status === "error") &&
+            releasesHeldWorktree(event.payload.cwd))) &&
         anyWorktreePolicy(lastSettings, (rules) => rules.worktreeOnDelete)
           ? requestSweep
           : Effect.void,
