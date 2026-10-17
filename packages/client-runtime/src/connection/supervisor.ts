@@ -46,6 +46,10 @@ const establishmentTimeout = Duration.fromInputUnsafe(CONNECTION_ESTABLISHMENT_T
 const synchronizationTimeout = Duration.fromInputUnsafe("75 seconds");
 const CONNECTION_PROBE_TIMEOUT = "15 seconds";
 const QUICK_CONNECTION_PROBE_TIMEOUT = "3 seconds";
+// The socket answered moments before a short trip away from the app, so give it
+// longer than one packet-loss burst on a mobile tailnet path (~5 seconds) before
+// tearing it down.
+const RESUME_PROBE_TIMEOUT = "8 seconds";
 const BACKOFF_RESET_AFTER_MS = 30_000;
 const BETTER_ROUTE_CHECK_INTERVAL = "60 seconds";
 // A better route that answered the check but then failed to connect is not
@@ -543,9 +547,10 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         if (next.reason === "application-active") {
           return CONNECTION_PROBE_TIMEOUT;
         }
-        return next.reason === "application-active-probe" || next.reason === "network-changed"
-          ? QUICK_CONNECTION_PROBE_TIMEOUT
-          : undefined;
+        if (next.reason === "application-active-probe") {
+          return RESUME_PROBE_TIMEOUT;
+        }
+        return next.reason === "network-changed" ? QUICK_CONNECTION_PROBE_TIMEOUT : undefined;
       case "ConnectRequested":
       case "DisconnectRequested":
       case "BetterRouteAvailable":
