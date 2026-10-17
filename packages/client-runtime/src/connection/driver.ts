@@ -68,9 +68,10 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
       : yield* Effect.forEach(routes, (route) => Effect.forkChild(checkRoute(route)));
   const attemptScope = yield* Scope.Scope;
   let transient: ConnectionAttemptError | undefined;
+  let silentTransient: ConnectionAttemptError | undefined;
   let blocked: ConnectionAttemptError | undefined;
   // Each route gets its own scope so a half-open session closes before the next try.
-  const attempt = Effect.fnUntraced(function* (route: ConnectionRoute) {
+  const attempt = Effect.fnUntraced(function* (route: ConnectionRoute, check: RouteCheck) {
     const routeScope = yield* Scope.fork(attemptScope);
     const result = yield* connectRoute(route).pipe(
       Scope.provide(routeScope),
@@ -78,8 +79,9 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
       Effect.result,
     );
     if (result._tag === "Failure") {
-      if (result.failure._tag === "ConnectionTransientError") transient ??= result.failure;
-      else blocked ??= result.failure;
+      if (result.failure._tag === "ConnectionBlockedError") blocked ??= result.failure;
+      else if (check === "silent") silentTransient ??= result.failure;
+      else transient ??= result.failure;
     }
     return result;
   });
@@ -90,19 +92,22 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
       silent.push(route);
       continue;
     }
-    const result = yield* attempt(route);
+    const result = yield* attempt(route, check);
     if (result._tag === "Success") return result.success;
     // An incompatible server is the same server on every route.
     if (result.failure.reason === "unsupported") return yield* result.failure;
   }
   for (const route of silent) {
-    const result = yield* attempt(route);
+    const result = yield* attempt(route, "silent");
     if (result._tag === "Success") return result.success;
     if (result.failure.reason === "unsupported") return yield* result.failure;
   }
+  // A route that already missed its reachability check timing out again says nothing new, while
+  // a route that answered and refused names what the user must fix, such as signing in again.
   return yield* (
     transient ??
       blocked ??
+      silentTransient ??
       new ConnectionTransientError({
         reason: "endpoint-unavailable",
         detail: `${entry.target.label} did not answer on any saved route.`,
