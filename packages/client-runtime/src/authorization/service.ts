@@ -81,6 +81,8 @@ export class RemoteEnvironmentAuthorization extends Context.Service<
     readonly authorizeDpopHttp: (input: {
       readonly expectedEnvironmentId: EnvironmentId;
       readonly rejectedAccessToken?: string;
+      /** The request goes to a LAN or tailnet address rather than through T3 Connect. */
+      readonly direct?: boolean;
     }) => Effect.Effect<AuthorizedRemoteHttpEnvironment, ConnectionAttemptError>;
   }
 >()("@t3tools/client-runtime/authorization/service/RemoteEnvironmentAuthorization") {}
@@ -357,12 +359,40 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  // The environment issued this token itself, so a lapsed or missing cloud sign-in must not cut
+  // off LAN and tailnet access before the token expires. T3 Connect routes still require sign-in.
+  const getDpopTokenWithoutSession = Effect.fnUntraced(function* (
+    input: Parameters<RemoteEnvironmentAuthorization["Service"]["authorizeDpopHttp"]>[0],
+  ) {
+    const thumbprint = yield* signer.thumbprint.pipe(Effect.option);
+    const now = yield* Clock.currentTimeMillis;
+    const cached = yield* tokenLock.withPermits(1)(
+      Effect.gen(function* () {
+        if (input.rejectedAccessToken !== undefined) {
+          yield* removeRejectedToken(input.expectedEnvironmentId, input.rejectedAccessToken);
+        }
+        return yield* tokenStore.get(input.expectedEnvironmentId);
+      }),
+    );
+    if (
+      Option.isSome(thumbprint) &&
+      Option.isSome(cached) &&
+      cached.value.environmentId === input.expectedEnvironmentId &&
+      cached.value.dpopThumbprint === thumbprint.value &&
+      cached.value.expiresAtEpochMs > now + DPOP_ACCESS_TOKEN_REFRESH_SKEW_MS
+    ) {
+      yield* Effect.annotateCurrentSpan({ "connection.remote_token_cache": "hit-without-session" });
+      return { token: cached.value, fromCache: true, identity: Option.none() };
+    }
+    return yield* sessionChanged();
+  });
+
   const getDpopToken = Effect.fn("clientRuntime.connection.remote.getDpopToken")(function* (
     input: Parameters<RemoteEnvironmentAuthorization["Service"]["authorizeDpopHttp"]>[0],
   ) {
     const session = yield* cloudSession.identity;
     if (Option.isNone(session)) {
-      return yield* sessionChanged();
+      return yield* input.direct === true ? getDpopTokenWithoutSession(input) : sessionChanged();
     }
     const identity = session.value;
     const thumbprint = yield* signer.thumbprint.pipe(
@@ -467,7 +497,7 @@ export const make = Effect.gen(function* () {
     });
     const token = yield* selected.token;
     yield* assertSession(identity);
-    return { token, fromCache: selected.fromCache, identity };
+    return { token, fromCache: selected.fromCache, identity: Option.some(identity) };
   });
 
   const httpAuthorization = (
@@ -499,7 +529,8 @@ export const make = Effect.gen(function* () {
       ...httpAuthorization(token, endpoint?.httpBaseUrl),
       socketUrl,
     });
-    let selected = yield* getDpopToken(input);
+    const tokenInput = { ...input, direct: endpoint !== undefined };
+    let selected = yield* getDpopToken(tokenInput);
     if (selected.fromCache) {
       const cachedSocket = yield* createDpopSocketUrl(
         selected.token,
@@ -507,7 +538,7 @@ export const make = Effect.gen(function* () {
         endpoint,
       ).pipe(Effect.result);
       if (Result.isSuccess(cachedSocket)) {
-        yield* assertSession(selected.identity);
+        if (Option.isSome(selected.identity)) yield* assertSession(selected.identity.value);
         return authorized(selected.token, cachedSocket.success);
       }
       if (cachedSocket.failure._tag === "ConnectionBlockedError") {
@@ -519,7 +550,7 @@ export const make = Effect.gen(function* () {
         return yield* mapDpopSocketError(cachedSocket.failure);
       }
       selected = yield* getDpopToken({
-        ...input,
+        ...tokenInput,
         rejectedAccessToken: selected.token.accessToken,
       });
     }
@@ -534,7 +565,7 @@ export const make = Effect.gen(function* () {
       }
       return yield* mapDpopSocketError(socket.failure);
     }
-    yield* assertSession(selected.identity);
+    if (Option.isSome(selected.identity)) yield* assertSession(selected.identity.value);
     return authorized(selected.token, socket.success);
   });
 

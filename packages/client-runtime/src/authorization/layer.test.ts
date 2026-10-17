@@ -382,6 +382,63 @@ describe("RemoteEnvironmentAuthorization", () => {
     }),
   );
 
+  it.effect("keeps direct access on a valid environment token while signed out", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        initialToken: persistedToken(),
+        responses: [Response.json(DESCRIPTOR), websocketTicket("lan-ticket")],
+      });
+      yield* Ref.set(harness.session, Option.none());
+
+      const authorized = yield* Effect.gen(function* () {
+        const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
+        return yield* remote.authorizeDpop({
+          expectedEnvironmentId: ENVIRONMENT_ID,
+          directEndpoint: {
+            httpBaseUrl: "http://100.64.0.10:3773/",
+            wsBaseUrl: "ws://100.64.0.10:3773/",
+          },
+        });
+      }).pipe(Effect.provide(harness.layer));
+
+      expect(authorized.socketUrl).toContain("wsTicket=lan-ticket");
+      expect(yield* Ref.get(harness.bootstrapCalls)).toBe(0);
+    }),
+  );
+
+  it.effect("still requires sign-in on T3 Connect and for expired tokens while signed out", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        initialToken: persistedToken({ expiresAtEpochMs: 0 }),
+        responses: [],
+      });
+      yield* Ref.set(harness.session, Option.none());
+
+      yield* Effect.gen(function* () {
+        const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
+        const expired = yield* remote
+          .authorizeDpopHttp({ expectedEnvironmentId: ENVIRONMENT_ID, direct: true })
+          .pipe(Effect.flip);
+        expect(expired).toMatchObject({ _tag: "ConnectionBlockedError", reason: "authentication" });
+      }).pipe(Effect.provide(harness.layer));
+
+      yield* Ref.set(harness.tokens, new Map([[ENVIRONMENT_ID, persistedToken()]]));
+      yield* Effect.gen(function* () {
+        const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
+        const relay = yield* remote
+          .authorizeDpopHttp({ expectedEnvironmentId: ENVIRONMENT_ID })
+          .pipe(Effect.flip);
+        expect(relay).toMatchObject({ _tag: "ConnectionBlockedError", reason: "authentication" });
+        const direct = yield* remote.authorizeDpopHttp({
+          expectedEnvironmentId: ENVIRONMENT_ID,
+          direct: true,
+        });
+        expect(direct.httpAuthorization.accessToken).toBe("cached-access-token");
+      }).pipe(Effect.provide(harness.layer));
+      expect(yield* Ref.get(harness.bootstrapCalls)).toBe(0);
+    }),
+  );
+
   it.effect("sends no token to a direct address that answers as another machine", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({

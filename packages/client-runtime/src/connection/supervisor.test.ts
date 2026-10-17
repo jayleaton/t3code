@@ -1828,7 +1828,7 @@ describe("EnvironmentSupervisor routes", () => {
     }),
   );
 
-  it.effect("reports a refusal from a route that answered over a silent route's timeout", () =>
+  it.effect("keeps retrying a silent direct route when T3 Connect asks for sign-in", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
         checkRoute: (route) =>
@@ -1836,14 +1836,33 @@ describe("EnvironmentSupervisor routes", () => {
         prepare: (_attempt, target) =>
           target._tag === "RelayConnectionTarget"
             ? Effect.fail(blocked("Sign in to T3 Connect."))
-            : Effect.fail(transient("LAN endpoint timed out.")),
+            : Effect.fail(transient("Tailnet endpoint timed out.")),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(LAN_THEN_RELAY_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      const state = yield* awaitState(supervisor.state, (value) => value.phase === "backoff");
+      expect(state.lastFailure?.detail).toBe("Tailnet endpoint timed out.");
+    }),
+  );
+
+  it.effect("reports a refusal from a route that answered over a silent route's timeout", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        checkRoute: (route) =>
+          Effect.succeed(route.target._tag === "BearerConnectionTarget" ? "answered" : "silent"),
+        prepare: (_attempt, target) =>
+          target._tag === "BearerConnectionTarget"
+            ? Effect.fail(blocked("Your cloud sign-in changed."))
+            : Effect.fail(transient("Relay timed out.")),
       });
       const supervisor = yield* EnvironmentSupervisor.make(LAN_THEN_RELAY_ENTRY, {
         initiallyDesired: true,
       }).pipe(Effect.provide(harness.dependencies));
 
       const state = yield* awaitState(supervisor.state, (value) => value.phase === "blocked");
-      expect(state.lastFailure?.detail).toBe("Sign in to T3 Connect.");
+      expect(state.lastFailure?.detail).toBe("Your cloud sign-in changed.");
     }),
   );
 

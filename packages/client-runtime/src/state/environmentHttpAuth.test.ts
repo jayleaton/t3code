@@ -25,6 +25,7 @@ import type { HttpClient } from "effect/http";
 
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import {
+  BearerConnectionTarget,
   ConnectionTransientError,
   RelayConnectionTarget,
   type PreparedConnection,
@@ -369,6 +370,29 @@ describe("authenticated environment HTTP requests", () => {
         expect(new URL(sent).pathname).toContain("/mcp%3A3534bc83-");
         expect(harness.proofs.map((proof) => proof.url)).toEqual([sent]);
       }),
+  );
+
+  it.effect("keeps a learned direct origin and marks the token request as direct", () =>
+    Effect.gen(function* () {
+      const loader = LOADERS[0]!;
+      const harness = makeHarness(() => Response.json(loader.response));
+      const direct = new BearerConnectionTarget({
+        environmentId: TARGET.environmentId,
+        label: TARGET.label,
+        connectionId: "tailnet",
+      });
+      yield* loader
+        .load({
+          ...harness.input,
+          prepared: { ...PREPARED, httpBaseUrl: "http://100.64.0.10:3773", target: direct },
+        })
+        .pipe(Effect.provide(harness.httpLayer));
+
+      expect(new URL(harness.calls[0]!.url).origin).toBe("http://100.64.0.10:3773");
+      expect(harness.authorizations).toEqual([
+        { expectedEnvironmentId: TARGET.environmentId, direct: true },
+      ]);
+    }),
   );
 
   it.effect("retries a rejected diff once with a new token, endpoint, and proof", () =>
