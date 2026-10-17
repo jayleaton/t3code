@@ -2805,6 +2805,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           role: "Viewer",
         },
       ],
+      // scripts/notarize-macos.ts notarizes from afterSign with retries.
+      notarize: false,
       ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
       ...(macPasskeySigning
         ? {
@@ -2813,6 +2815,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           }
         : {}),
     };
+    if (signed) {
+      buildConfig.afterSign = path.join(repoRoot, "scripts/notarize-macos.ts");
+    }
   }
 
   if (platform === "mac" && target === "dmg") {
@@ -3919,7 +3924,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     const debugNamespaces = [
       "electron-builder",
       "electron-builder:*",
-      ...(options.platform === "mac" ? ["electron-osx-sign*", "electron-notarize*"] : []),
+      ...(options.platform === "mac" ? ["electron-osx-sign*"] : []),
     ];
     buildEnv.DEBUG = [buildEnv.DEBUG, ...debugNamespaces].filter(Boolean).join(",");
   }
