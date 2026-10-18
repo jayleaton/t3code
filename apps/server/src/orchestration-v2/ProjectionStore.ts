@@ -3637,29 +3637,36 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               ORDER BY session.updated_at DESC, session.provider_session_id DESC
               LIMIT 1
             ) AS last_error
-          FROM orchestration_v2_projection_threads t
-          INNER JOIN orchestration_v2_projection_runs r ON r.run_id = (
-            SELECT latest.run_id FROM orchestration_v2_projection_runs latest
-            WHERE latest.thread_id = t.thread_id
-              AND latest.status <> 'queued'
-              AND NOT (
-                latest.status = 'cancelled'
-                AND json_extract(latest.payload_json, '$.startedAt') IS NULL
-              )
-            -- latestExecutedRun: the run that ended last (runRanAfter).
-            ORDER BY latest.completed_at IS NULL DESC, latest.completed_at DESC,
-              latest.ordinal DESC, latest.run_id DESC
-            LIMIT 1
-          ) AND r.status = 'failed'
-          INNER JOIN orchestration_v2_projection_turn_items item ON item.turn_item_id = (
-            SELECT error.turn_item_id FROM orchestration_v2_projection_turn_items error
-            WHERE error.thread_id = t.thread_id AND error.run_id = r.run_id
-              AND error.type = 'error' AND error.status = 'failed'
-              AND error.node_id IS json_extract(r.payload_json, '$.rootNodeId')
-            ORDER BY error.updated_at DESC, error.ordinal DESC, error.turn_item_id DESC
-            LIMIT 1
-          )
-          WHERE t.deleted_at IS NULL
+          -- Driven from the few failed error items (a partial index) so a sweep every few
+          -- seconds never visits every thread row; on a large, fragmented database that
+          -- scan blocked the event loop for seconds.
+          FROM orchestration_v2_projection_turn_items item
+          CROSS JOIN orchestration_v2_projection_runs r ON r.run_id = item.run_id
+          CROSS JOIN orchestration_v2_projection_threads t ON t.thread_id = r.thread_id
+          WHERE item.type = 'error' AND item.status = 'failed'
+            AND r.status = 'failed'
+            AND r.run_id = (
+              SELECT latest.run_id FROM orchestration_v2_projection_runs latest
+              WHERE latest.thread_id = t.thread_id
+                AND latest.status <> 'queued'
+                AND NOT (
+                  latest.status = 'cancelled'
+                  AND json_extract(latest.payload_json, '$.startedAt') IS NULL
+                )
+              -- latestExecutedRun: the run that ended last (runRanAfter).
+              ORDER BY latest.completed_at IS NULL DESC, latest.completed_at DESC,
+                latest.ordinal DESC, latest.run_id DESC
+              LIMIT 1
+            )
+            AND item.turn_item_id = (
+              SELECT error.turn_item_id FROM orchestration_v2_projection_turn_items error
+              WHERE error.thread_id = t.thread_id AND error.run_id = r.run_id
+                AND error.type = 'error' AND error.status = 'failed'
+                AND error.node_id IS json_extract(r.payload_json, '$.rootNodeId')
+              ORDER BY error.updated_at DESC, error.ordinal DESC, error.turn_item_id DESC
+              LIMIT 1
+            )
+            AND t.deleted_at IS NULL
             AND json_extract(t.payload_json, '$.archivedAt') IS NULL
             AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
             AND json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
