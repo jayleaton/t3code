@@ -23,6 +23,15 @@ model. DPoP binds a token to a client's proof key; an invalid proof must fail
 rather than fall back to bearer authentication. The OAuth token-exchange
 vocabulary gives these grants a familiar meaning.
 
+A T3 Connect client's DPoP session lasts as long as a bearer session, so its LAN
+and tailnet routes keep working while the client sleeps or the relay is
+unreachable. The environment never learns that a Connect member lost access.
+Instead, the [client](../../packages/client-runtime/src/authorization/service.ts)
+renews an hour-old token through the relay in the background and drops it when
+the relay refuses. An online client therefore loses access within about an hour,
+and a client that never reaches the relay keeps it until the session expires or
+the owner revokes it in the connections list.
+
 ### MCP clients are a separate audience
 
 Agents T3 Code did not launch sign in to `/mcp` through a narrow OAuth
