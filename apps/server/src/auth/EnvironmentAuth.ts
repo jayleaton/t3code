@@ -977,11 +977,11 @@ export const make = Effect.gen(function* () {
                 method: input?.proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
                 subject: grant.subject,
                 scopes: grantedScopes,
+                // DPoP sessions keep the default lifetime so LAN and tailnet routes outlive a
+                // sleeping client or an unreachable relay. Clients renew through the relay
+                // hourly while it answers, which is what bounds a revoked Connect member.
                 ...(input?.proofKeyThumbprint
-                  ? {
-                      proofKeyThumbprint: input.proofKeyThumbprint,
-                      ttl: Duration.hours(1),
-                    }
+                  ? { proofKeyThumbprint: input.proofKeyThumbprint }
                   : {}),
                 replaceActiveForSubjectAndMethod: grant.method === "desktop-bootstrap",
                 client: {

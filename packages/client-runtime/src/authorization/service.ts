@@ -90,6 +90,10 @@ export class RemoteEnvironmentAuthorization extends Context.Service<
 const CACHED_ENDPOINT_SOCKET_TIMEOUT_MS = 3_000;
 const BEARER_DESCRIPTOR_CACHE_TTL_MS = 10_000;
 const DPOP_AUTHORIZATION_TIMEOUT_MS = 30_000;
+// Tokens outlive this so direct routes survive a sleeping client or an unreachable relay;
+// renewing at this age through the relay is what ends access for a removed Connect member.
+const DPOP_ACCESS_TOKEN_RENEW_AFTER_MS = 60 * 60 * 1_000;
+const DPOP_ACCESS_TOKEN_RENEW_RETRY_MS = 5 * 60 * 1_000;
 
 function mapDpopSocketError(error: RemoteEnvironmentAuthError | ConnectionAttemptError) {
   return error._tag === "ConnectionTransientError" || error._tag === "ConnectionBlockedError"
@@ -354,10 +358,104 @@ export const make = Effect.gen(function* () {
         endpoint: bootstrap.endpoint,
         accessToken: access.access_token,
         expiresAtEpochMs: issuedAt + access.expires_in * 1_000,
+        issuedAtEpochMs: issuedAt,
         dpopThumbprint: thumbprint,
       });
     },
   );
+
+  // Must run under tokenLock: it registers the pending exchange other callers join.
+  const startExchange = Effect.fnUntraced(function* (
+    environmentId: EnvironmentId,
+    thumbprint: string,
+    identity: ClientCapabilities.CloudSessionIdentity,
+  ) {
+    const id = {};
+    const fiber = yield* exchangeDpopToken(environmentId, thumbprint, identity).pipe(
+      Effect.flatMap((token) =>
+        tokenLock.withPermits(1)(
+          Effect.gen(function* () {
+            yield* assertSession(identity);
+            yield* tokenStore
+              .put(token)
+              .pipe(Effect.withSpan("environment.authorization.accessToken.persist"));
+            const current = yield* cloudSession.identity;
+            if (Option.isNone(current) || current.value !== identity) {
+              yield* removeRejectedToken(environmentId, token.accessToken);
+              return yield* sessionChanged();
+            }
+            tokenOwners.set(environmentId, {
+              accessToken: token.accessToken,
+              identity,
+            });
+            if (pendingTokens.get(environmentId)?.id === id) {
+              pendingTokens.delete(environmentId);
+            }
+            return token;
+          }),
+        ),
+      ),
+      Effect.timeoutOrElse({
+        duration: DPOP_AUTHORIZATION_TIMEOUT_MS,
+        orElse: () =>
+          Effect.fail(
+            new ConnectionTransientError({
+              reason: "timeout",
+              detail: "Timed out renewing the environment credential.",
+            }),
+          ),
+      }),
+      Effect.ensuring(
+        tokenLock.withPermits(1)(
+          Effect.sync(() => {
+            if (pendingTokens.get(environmentId)?.id === id) {
+              pendingTokens.delete(environmentId);
+            }
+          }),
+        ),
+      ),
+      // One caller's timeout must not cancel renewal for other HTTP requests.
+      Effect.forkIn(serviceScope),
+    );
+    const token = Fiber.join(fiber);
+    pendingTokens.set(environmentId, { id, identity, thumbprint, token });
+    return { token };
+  });
+
+  const renewalAttempts = new Map<EnvironmentId, number>();
+
+  // A refused renewal means the Connect member or link was removed, so the cached token goes
+  // too. Anything else, including a lapsed sign-in, keeps LAN and tailnet access.
+  const renewInBackground = Effect.fnUntraced(function* (
+    cached: TokenStore.RemoteDpopAccessToken,
+    thumbprint: string,
+    identity: ClientCapabilities.CloudSessionIdentity,
+    now: number,
+  ) {
+    const issuedAt = cached.issuedAtEpochMs;
+    if (issuedAt !== undefined && now - issuedAt < DPOP_ACCESS_TOKEN_RENEW_AFTER_MS) return;
+    if (pendingTokens.has(cached.environmentId)) return;
+    const lastAttempt = renewalAttempts.get(cached.environmentId);
+    if (lastAttempt !== undefined && now - lastAttempt < DPOP_ACCESS_TOKEN_RENEW_RETRY_MS) return;
+    renewalAttempts.set(cached.environmentId, now);
+    const renewal = yield* startExchange(cached.environmentId, thumbprint, identity);
+    yield* renewal.token.pipe(
+      Effect.catch((error) =>
+        error._tag === "ConnectionBlockedError" && error.reason === "permission"
+          ? Effect.gen(function* () {
+              const current = yield* cloudSession.identity;
+              if (Option.isNone(current) || current.value !== identity) return;
+              yield* tokenLock.withPermits(1)(
+                removeRejectedToken(cached.environmentId, cached.accessToken),
+              );
+            })
+          : Effect.void,
+      ),
+      Effect.asVoid,
+      Effect.withSpan("clientRuntime.connection.remote.renewDpopToken"),
+      Effect.forkIn(serviceScope),
+    );
+  });
 
   // The environment issued this token itself, so a lapsed or missing cloud sign-in must not cut
   // off LAN and tailnet access before the token expires. T3 Connect routes still require sign-in.
@@ -426,6 +524,7 @@ export const make = Effect.gen(function* () {
             accessToken: cached.value.accessToken,
             identity,
           });
+          yield* renewInBackground(cached.value, thumbprint, identity, now);
           return { token: Effect.succeed(cached.value), fromCache: true };
         }
         if (input.rejectedAccessToken !== undefined) {
@@ -436,59 +535,7 @@ export const make = Effect.gen(function* () {
           return { token: pending.token, fromCache: false };
         }
 
-        const id = {};
-        const fiber = yield* exchangeDpopToken(
-          input.expectedEnvironmentId,
-          thumbprint,
-          identity,
-        ).pipe(
-          Effect.flatMap((token) =>
-            tokenLock.withPermits(1)(
-              Effect.gen(function* () {
-                yield* assertSession(identity);
-                yield* tokenStore
-                  .put(token)
-                  .pipe(Effect.withSpan("environment.authorization.accessToken.persist"));
-                const current = yield* cloudSession.identity;
-                if (Option.isNone(current) || current.value !== identity) {
-                  yield* removeRejectedToken(input.expectedEnvironmentId, token.accessToken);
-                  return yield* sessionChanged();
-                }
-                tokenOwners.set(input.expectedEnvironmentId, {
-                  accessToken: token.accessToken,
-                  identity,
-                });
-                if (pendingTokens.get(input.expectedEnvironmentId)?.id === id) {
-                  pendingTokens.delete(input.expectedEnvironmentId);
-                }
-                return token;
-              }),
-            ),
-          ),
-          Effect.timeoutOrElse({
-            duration: DPOP_AUTHORIZATION_TIMEOUT_MS,
-            orElse: () =>
-              Effect.fail(
-                new ConnectionTransientError({
-                  reason: "timeout",
-                  detail: "Timed out renewing the environment credential.",
-                }),
-              ),
-          }),
-          Effect.ensuring(
-            tokenLock.withPermits(1)(
-              Effect.sync(() => {
-                if (pendingTokens.get(input.expectedEnvironmentId)?.id === id) {
-                  pendingTokens.delete(input.expectedEnvironmentId);
-                }
-              }),
-            ),
-          ),
-          // One caller's timeout must not cancel renewal for other HTTP requests.
-          Effect.forkIn(serviceScope),
-        );
-        const token = Fiber.join(fiber);
-        pendingTokens.set(input.expectedEnvironmentId, { id, identity, thumbprint, token });
+        const { token } = yield* startExchange(input.expectedEnvironmentId, thumbprint, identity);
         return { token, fromCache: false };
       }),
     );

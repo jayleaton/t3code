@@ -1475,6 +1475,7 @@ describe("EnvironmentSupervisor", () => {
             endpoint,
             accessToken: "access-token-1",
             expiresAtEpochMs: 3_600_000,
+            issuedAtEpochMs: 0,
             dpopThumbprint: "test-thumbprint",
           }),
         ),

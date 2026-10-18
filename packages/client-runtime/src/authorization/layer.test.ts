@@ -4,6 +4,7 @@ import {
   EnvironmentId,
 } from "@t3tools/contracts";
 import {
+  RelayEnvironmentConnectNotAuthorizedError,
   RelayEnvironmentConnectScope,
   type RelayEnvironmentConnectResponse,
 } from "@t3tools/contracts/relay";
@@ -96,6 +97,7 @@ const persistedToken = (
     readonly environmentId?: EnvironmentId;
     readonly accessToken?: string;
     readonly expiresAtEpochMs?: number;
+    readonly issuedAtEpochMs?: number;
     readonly dpopThumbprint?: string;
   } = {},
 ) =>
@@ -106,6 +108,7 @@ const persistedToken = (
     endpoint: ENDPOINT,
     accessToken: input.accessToken ?? "cached-access-token",
     expiresAtEpochMs: input.expiresAtEpochMs ?? Number.MAX_SAFE_INTEGER,
+    issuedAtEpochMs: input.issuedAtEpochMs ?? 0,
     dpopThumbprint: input.dpopThumbprint ?? "thumbprint-1",
   });
 
@@ -115,6 +118,7 @@ const makeHarness = Effect.fn("TestRemoteAuthorization.makeHarness")(function* (
   readonly bootstrap?: RelayEnvironmentConnectResponse;
   readonly beforeBootstrap?: Effect.Effect<void, ManagedRelay.ManagedRelayClientError>;
   readonly beforePut?: Effect.Effect<void>;
+  readonly afterRemove?: Effect.Effect<void>;
   readonly clerkToken?: ClientCapabilities.CloudSession["Service"]["clerkToken"];
 }) {
   const tokens = yield* Ref.make(
@@ -163,7 +167,7 @@ const makeHarness = Effect.fn("TestRemoteAuthorization.makeHarness")(function* (
         const next = new Map(current);
         next.delete(environmentId);
         return next;
-      }),
+      }).pipe(Effect.andThen(input.afterRemove ?? Effect.void)),
   });
   const signer = ManagedRelay.ManagedRelayDpopSigner.of({
     thumbprint: Ref.get(thumbprint),
@@ -1098,6 +1102,65 @@ describe("RemoteEnvironmentAuthorization", () => {
       expect((yield* Ref.get(harness.tokens)).get(ENVIRONMENT_ID)?.dpopThumbprint).toBe(
         "thumbprint-2",
       );
+    }),
+  );
+
+  it.effect("connects on an aging token at once and renews it through the relay behind", () =>
+    Effect.gen(function* () {
+      const renewed = yield* Deferred.make<void>();
+      const harness = yield* makeHarness({
+        initialToken: persistedToken({ issuedAtEpochMs: -2 * 60 * 60 * 1_000 }),
+        responses: [Response.json(DESCRIPTOR), accessToken("renewed-access-token")],
+        beforePut: Deferred.succeed(renewed, undefined),
+      });
+      yield* Effect.gen(function* () {
+        const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
+        const first = yield* remote.authorizeDpopHttp({
+          expectedEnvironmentId: ENVIRONMENT_ID,
+          direct: true,
+        });
+        expect(first.httpAuthorization.accessToken).toBe("cached-access-token");
+        yield* Deferred.await(renewed);
+        // The renewal persists under the token lock, so this read follows it.
+        const second = yield* remote.authorizeDpopHttp({
+          expectedEnvironmentId: ENVIRONMENT_ID,
+          direct: true,
+        });
+        expect(second.httpAuthorization.accessToken).toBe("renewed-access-token");
+      }).pipe(Effect.provide(harness.layer));
+      expect(yield* Ref.get(harness.bootstrapCalls)).toBe(1);
+    }),
+  );
+
+  it.effect("drops an aging token when the relay refuses to renew it", () =>
+    Effect.gen(function* () {
+      const removed = yield* Deferred.make<void>();
+      const refusal = new RelayEnvironmentConnectNotAuthorizedError({
+        code: "environment_connect_not_authorized",
+        traceId: "trace-connect-refused",
+      });
+      const harness = yield* makeHarness({
+        initialToken: persistedToken({ issuedAtEpochMs: -2 * 60 * 60 * 1_000 }),
+        responses: [],
+        beforeBootstrap: Effect.fail(
+          new ManagedRelay.ManagedRelayRequestFailedError({
+            action: "connect relay environment",
+            cause: refusal,
+            relayError: refusal,
+          }),
+        ),
+        afterRemove: Deferred.succeed(removed, undefined),
+      });
+      yield* Effect.gen(function* () {
+        const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
+        const first = yield* remote.authorizeDpopHttp({
+          expectedEnvironmentId: ENVIRONMENT_ID,
+          direct: true,
+        });
+        expect(first.httpAuthorization.accessToken).toBe("cached-access-token");
+        yield* Deferred.await(removed);
+      }).pipe(Effect.provide(harness.layer));
+      expect((yield* Ref.get(harness.tokens)).has(ENVIRONMENT_ID)).toBe(false);
     }),
   );
 

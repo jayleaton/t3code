@@ -201,6 +201,8 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
       expect(dpop.access_token).not.toBe(exchanged.access_token);
       expect(dpop.token_type).toBe("DPoP");
       expect(dpop.scope).toBe("orchestration:read");
+      // A sleeping laptop must still reach a direct route without the relay.
+      expect(dpop.expires_in).toBeGreaterThan(29 * 24 * 60 * 60);
 
       const secondBearer = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
         token,
