@@ -8,6 +8,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Base64 from "effect/encoding/Base64";
 import * as Effect from "effect/Effect";
+import * as NodeHttpServerRequest from "@effect/platform-node/NodeHttpServerRequest";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -186,6 +187,7 @@ import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
+import * as WsClientLiveness from "./wsClientLiveness.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as DeviceService from "./device/DeviceService.ts";
@@ -3337,10 +3339,31 @@ export const layer = Layer.unwrap(
         const clientAnalyticsProps = readClientAnalyticsProps(request);
         yield* sessions.recordClientConnection(session.sessionId, clientOrigin);
         yield* analytics.record("client.connected", clientAnalyticsProps);
+        const transport = NodeHttpServerRequest.toIncomingMessage(request).socket;
+        const liveness = yield* WsClientLiveness.make(() => ({
+          pendingBytes: transport.writableLength,
+          bytesWritten: transport.bytesWritten,
+        }));
+        // A WebSocket close frame would queue behind the backlog an unresponsive
+        // client never drains. A TCP reset reaches a suspended phone at once, so
+        // the app sees a dead socket on resume and reconnects instead of waiting.
+        const resetUnresponsiveClient = liveness.awaitUnresponsive.pipe(
+          Effect.tap((reason) =>
+            Effect.logInfo("resetting unresponsive websocket client", {
+              reason,
+              sessionId: session.sessionId,
+            }),
+          ),
+          Effect.andThen(Effect.sync(() => transport.resetAndDestroy())),
+          Effect.as(HttpServerResponse.empty()),
+        );
         const rpcWebSocketHttpEffect = yield* Effect.gen(function* () {
           const { protocol, httpEffect } = yield* RpcServer.makeProtocolWithHttpEffectWebsocket;
           yield* RpcServer.make(ServerWsRpcGroup, WS_RPC_SERVER_OPTIONS).pipe(
-            Effect.provideService(RpcServer.Protocol, withTerminalOutputWindow(protocol)),
+            Effect.provideService(
+              RpcServer.Protocol,
+              withTerminalOutputWindow(liveness.observe(protocol)),
+            ),
             Effect.provide(
               Layer.merge(RpcAuthorization.layer(session.scopes), rpcInstrumentationLayer),
             ),
@@ -3368,7 +3391,7 @@ export const layer = Layer.unwrap(
           sessions.markConnected(session.sessionId),
           () =>
             Effect.raceFirst(
-              rpcWebSocketHttpEffect,
+              Effect.raceFirst(rpcWebSocketHttpEffect, resetUnresponsiveClient),
               sessions.awaitInvalidation(session.sessionId).pipe(
                 Effect.as(HttpServerResponse.empty()),
                 Effect.catchTags({
