@@ -5397,8 +5397,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       sql<ShellThreadRow>`
             SELECT
               t.thread_id,
-              -- Shells drop profile skills; leaving them in SQLite avoids decoding ~150 KB of SKILL.md per thread.
-              json_remove(t.payload_json, '$.profileSnapshot.skills') AS payload_json,
+              -- Shells drop profile skills and instructions; leaving them in SQLite avoids decoding ~150 KB per thread.
+              json_remove(
+                t.payload_json,
+                '$.profileSnapshot.skills',
+                '$.profileSnapshot.systemPrompt'
+              ) AS payload_json,
               CASE
                 WHEN json_extract(t.payload_json, '$.forkedFrom.type') = 'run'
                   THEN json_extract(t.payload_json, '$.forkedFrom.threadId')
@@ -7058,6 +7062,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
 
 function shellProfileSnapshot({
   skills: _skills,
+  systemPrompt: _systemPrompt,
   ...association
 }: import("@t3tools/contracts").ThreadProfileSnapshot) {
   return association;

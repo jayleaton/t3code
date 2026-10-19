@@ -9,6 +9,8 @@ import {
   ProviderInstanceId,
   ThreadId,
   TurnItemId,
+  type OrchestrationV2AppThread,
+  type OrchestrationV2DomainEvent,
   type OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
   OrchestrationV2TurnItemJson,
@@ -21,6 +23,7 @@ import {
   projectTurnItemForWire,
   projectTurnItemForDetail,
   projectDomainEventForWire,
+  projectThreadProjectionForWire,
 } from "./WireProjection.ts";
 import { threadShellFromProjection } from "./ProjectionStore.ts";
 import { MAX_TOOL_OUTPUT_IMAGES, toolOutputImages } from "@t3tools/shared/toolOutput";
@@ -396,5 +399,70 @@ describe("orchestration V2 wire projection", () => {
       },
     };
     expect(projectTurnItemForWire({ ...base, output })).not.toHaveProperty("output");
+  });
+
+  describe("thread records", () => {
+    const now = DateTime.makeUnsafe("2026-10-19T11:08:00.000Z");
+    const threadId = ThreadId.make("thread-profile-skills");
+    const profileSnapshot = {
+      profileId: "architect",
+      profileName: "Architect",
+      revision: 3,
+      systemPrompt: "Lead the work.",
+      skills: [
+        {
+          skillId: "skill-1",
+          name: "diagnose",
+          description: "Investigate bugs",
+          content: "s".repeat(100_000),
+          revision: 1,
+          createdAt: "2026-10-01T00:00:00.000Z",
+          updatedAt: "2026-10-01T00:00:00.000Z",
+        },
+      ],
+      effectiveSource: {
+        modelSelection: "profile",
+        runtimeMode: "profile",
+        interactionMode: "profile",
+        reasoningEffort: "profile",
+      },
+    };
+    const thread = {
+      id: threadId,
+      projectId: ProjectId.make("project-profile-skills"),
+      title: "Agent thread",
+      lastVisitedAt: now,
+      profileSnapshot,
+    } as unknown as OrchestrationV2AppThread;
+    const { skills: _skills, ...profileWithoutSkills } = profileSnapshot;
+
+    it("leaves profile skills out of whole-thread events", () => {
+      const event = {
+        id: EventId.make("event-visited"),
+        threadId,
+        occurredAt: now,
+        type: "thread.visited",
+        payload: thread,
+      } as OrchestrationV2DomainEvent;
+
+      const projected = projectDomainEventForWire(event);
+
+      expect(projected.payload).toMatchObject({ profileSnapshot: profileWithoutSkills });
+      expect(JSON.stringify(projected).length).toBeLessThan(2_000);
+      expect(thread.profileSnapshot?.skills).toHaveLength(1);
+    });
+
+    it("leaves profile skills out of thread snapshots", () => {
+      const projection = {
+        thread,
+        contextHandoffs: [],
+        turnItems: [],
+        visibleTurnItems: [],
+      } as unknown as OrchestrationV2ThreadProjection;
+
+      expect(projectThreadProjectionForWire(projection).thread.profileSnapshot).toEqual(
+        profileWithoutSkills,
+      );
+    });
   });
 });
