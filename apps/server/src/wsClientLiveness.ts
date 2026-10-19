@@ -5,10 +5,10 @@ import type { RpcServer } from "effect/rpc";
 
 // Clients ping every 5 seconds. Hidden browser tabs can be throttled to one
 // timer per minute, so silence has to outlast that before it means "gone".
-export const CLIENT_SILENCE_LIMIT = Duration.seconds(90);
+const CLIENT_SILENCE_LIMIT = Duration.seconds(90);
 // A reading client drains the socket at some rate, however slow. Bytes queued
 // with no progress mean the peer stopped reading, as a suspended iOS app does.
-export const SEND_STALL_LIMIT = Duration.seconds(30);
+const SEND_STALL_LIMIT = Duration.seconds(30);
 const CHECK_INTERVAL = Duration.seconds(5);
 
 export interface TransportProgress {

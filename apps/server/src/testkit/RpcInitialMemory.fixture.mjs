@@ -43,6 +43,7 @@ function start(ready) {
         Effect.sync(() => ({
           snapshotSequence: 1,
           projection: {
+            thread: { id: "synthetic-thread" },
             messages: [history()],
             contextHandoffs: [],
             turnItems: [],
