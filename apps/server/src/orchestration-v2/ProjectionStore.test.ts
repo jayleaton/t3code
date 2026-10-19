@@ -4203,7 +4203,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
     }),
   );
 
-  it.effect("builds shell snapshots without decoding turn items or profile skills", () =>
+  it.effect("builds shell snapshots without turn items, profile skills or instructions", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
       const sql = yield* SqlClient.SqlClient;
@@ -4227,6 +4227,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             profileId: "review",
             profileName: "Reviewer",
             revision: 1,
+            systemPrompt: "Review every change line by line.",
             skills: [
               {
                 skillId: "review",
@@ -4333,6 +4334,10 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       assert.notProperty(
         shell.threads.find((thread) => thread.id === threadId)?.profileSnapshot,
         "skills",
+      );
+      assert.notProperty(
+        shell.threads.find((thread) => thread.id === threadId)?.profileSnapshot,
+        "systemPrompt",
       );
 
       assert.deepEqual(
