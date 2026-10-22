@@ -1,5 +1,5 @@
 import { useLocation, useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect } from "react";
+import { useEffect } from "react";
 
 export function isSidebarUtilityPage(pathname: string) {
   return (
@@ -99,25 +99,22 @@ function readMainAppHref(): string {
 
 export function useNavigateToMainApp() {
   const navigate = useNavigate();
-  return useCallback(() => navigate({ href: readMainAppHref() }), [navigate]);
+  return () => navigate({ href: readMainAppHref() });
 }
 
 /** Switches between the Agents board and the threads view, back to where each was left. */
 export function useToggleWorkspaceView() {
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
-  return useCallback(
-    (target?: WorkspaceView) => {
-      const onAgents =
-        isAgentsPage(pathname) ||
-        (isSidebarUtilityPage(pathname) && readWorkspaceView() === "agents");
-      const view = target ?? (onAgents ? "threads" : "agents");
-      // Set first: a thread route reads the view to decide where an agent chat belongs.
-      store({ ...current(), view });
-      return navigate({
-        href: current().hrefByView[view] ?? (view === "agents" ? "/agents" : "/"),
-      });
-    },
-    [navigate, pathname],
-  );
+  return (target?: WorkspaceView) => {
+    const onAgents =
+      isAgentsPage(pathname) ||
+      (isSidebarUtilityPage(pathname) && readWorkspaceView() === "agents");
+    const view = target ?? (onAgents ? "threads" : "agents");
+    // Set first: a thread route reads the view to decide where an agent chat belongs.
+    store({ ...current(), view });
+    return navigate({
+      href: current().hrefByView[view] ?? (view === "agents" ? "/agents" : "/"),
+    });
+  };
 }

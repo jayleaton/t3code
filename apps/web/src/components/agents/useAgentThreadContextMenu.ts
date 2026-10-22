@@ -6,7 +6,6 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { ContextMenuItem } from "@t3tools/contracts";
 import { useRouter } from "@tanstack/react-router";
-import { useCallback } from "react";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { readLocalApi } from "../../localApi";
@@ -99,222 +98,198 @@ export function useAgentThreadContextMenu(
     onError: (error) => failureToast("Failed to copy chat ID", error),
   });
 
-  return useCallback(
-    async (
-      thread: EnvironmentThreadShell,
-      position: { x: number; y: number },
-      siblings?: readonly EnvironmentThreadShell[],
-    ) => {
-      const api = readLocalApi();
-      const ref = scopeThreadRef(thread.environmentId, thread.id);
-      const current = readThreadShell(ref);
-      if (!api || !current) return;
-      const settled = current.settledAt !== null;
-      const pinned = current.pinnedAt != null;
-      const supportsPinning = readEnvironmentSupportsPinning(ref.environmentId);
-      const supportsSettlement = readEnvironmentSupportsSettlement(ref.environmentId);
-      const supportsTitleRegeneration = readEnvironmentSupportsTitleRegeneration(ref.environmentId);
-      const project = projects.find(
-        (candidate) =>
-          candidate.environmentId === current.environmentId && candidate.id === current.projectId,
+  return async (
+    thread: EnvironmentThreadShell,
+    position: { x: number; y: number },
+    siblings?: readonly EnvironmentThreadShell[],
+  ) => {
+    const api = readLocalApi();
+    const ref = scopeThreadRef(thread.environmentId, thread.id);
+    const current = readThreadShell(ref);
+    if (!api || !current) return;
+    const settled = current.settledAt !== null;
+    const pinned = current.pinnedAt != null;
+    const supportsPinning = readEnvironmentSupportsPinning(ref.environmentId);
+    const supportsSettlement = readEnvironmentSupportsSettlement(ref.environmentId);
+    const supportsTitleRegeneration = readEnvironmentSupportsTitleRegeneration(ref.environmentId);
+    const project = projects.find(
+      (candidate) =>
+        candidate.environmentId === current.environmentId && candidate.id === current.projectId,
+    );
+    const workspacePath = current.worktreePath ?? project?.workspaceRoot ?? null;
+    const planMove = (direction: "up" | "down") => {
+      const refresh = (items: readonly EnvironmentThreadShell[]) =>
+        items.flatMap((item) => {
+          const shell = readThreadShell(scopeThreadRef(item.environmentId, item.id));
+          return shell ? [shell] : [];
+        });
+      // A child moves among its parent's children; a card moves on the board.
+      const plan = planAgentThreadMove(
+        refresh(siblings ?? visible),
+        refresh(threads),
+        current,
+        direction,
       );
-      const workspacePath = current.worktreePath ?? project?.workspaceRoot ?? null;
-      const planMove = (direction: "up" | "down") => {
-        const refresh = (items: readonly EnvironmentThreadShell[]) =>
-          items.flatMap((item) => {
-            const shell = readThreadShell(scopeThreadRef(item.environmentId, item.id));
-            return shell ? [shell] : [];
-          });
-        // A child moves among its parent's children; a card moves on the board.
-        const plan = planAgentThreadMove(
-          refresh(siblings ?? visible),
-          refresh(threads),
-          current,
-          direction,
-        );
-        return plan?.every(({ thread }) =>
-          readEnvironmentSupportsActiveReorder(thread.environmentId),
-        )
-          ? plan
-          : null;
-      };
-      const items: ContextMenuItem<AgentThreadMenuId>[] = [
-        ...(supportsPinning
-          ? [
-              pinned
-                ? { id: "unpin" as const, label: "Unpin chat", icon: "pin-off" }
-                : {
-                    id: "pin" as const,
-                    label: siblings ? "Pin to top of parent" : "Pin chat to top",
-                    icon: "pin",
-                  },
-            ]
-          : []),
-        ...(!pinned && !settled
-          ? [
-              {
-                id: "move-up" as const,
-                label: "Move up",
-                icon: "arrow-up",
-                disabled: !planMove("up"),
-              },
-              {
-                id: "move-down" as const,
-                label: "Move down",
-                icon: "arrow-down",
-                disabled: !planMove("down"),
-              },
-            ]
-          : []),
-        ...(supportsSettlement
-          ? [
-              {
-                id: (settled ? "unsettle" : "settle") as "settle" | "unsettle",
-                label: settled ? "Un-settle chat" : "Settle chat",
-                icon: "circle-check",
-              },
-            ]
-          : []),
-        ...(supportsTitleRegeneration
-          ? [
-              {
-                id: "regenerate-title" as const,
-                label: current.titleRegeneration != null ? "Regenerating…" : "Regenerate title",
-                icon: "refresh-cw",
-                disabled: current.titleRegeneration != null,
-              },
-            ]
-          : []),
-        { id: "mark-unread", label: "Mark unread", icon: "mail-open", separatorBefore: true },
-        // The board's view, which includes a pending move.
-        ...(thread.parentThreadId != null
-          ? [{ id: "detach-parent" as const, label: "Remove from parent", icon: "unlink" }]
-          : []),
-        {
-          id: "copy-path",
-          label: "Copy path",
-          icon: "folder",
-          disabled: workspacePath === null,
-        },
-        ...(current.branch
-          ? [{ id: "copy-branch" as const, label: "Copy branch", icon: "git-branch" }]
-          : []),
-        { id: "copy-thread-id", label: "Copy chat ID", icon: "hash" },
-        { id: "archive", label: "Archive chat", icon: "archive", separatorBefore: true },
-        { id: "delete", label: "Delete", destructive: true, icon: "trash" },
-      ];
-      let action: AgentThreadMenuId | null;
-      try {
-        action = await api.contextMenu.show(items, position);
-      } catch (error) {
-        failureToast("Could not open the chat menu", error);
+      return plan?.every(({ thread }) => readEnvironmentSupportsActiveReorder(thread.environmentId))
+        ? plan
+        : null;
+    };
+    const items: ContextMenuItem<AgentThreadMenuId>[] = [
+      ...(supportsPinning
+        ? [
+            pinned
+              ? { id: "unpin" as const, label: "Unpin chat", icon: "pin-off" }
+              : {
+                  id: "pin" as const,
+                  label: siblings ? "Pin to top of parent" : "Pin chat to top",
+                  icon: "pin",
+                },
+          ]
+        : []),
+      ...(!pinned && !settled
+        ? [
+            {
+              id: "move-up" as const,
+              label: "Move up",
+              icon: "arrow-up",
+              disabled: !planMove("up"),
+            },
+            {
+              id: "move-down" as const,
+              label: "Move down",
+              icon: "arrow-down",
+              disabled: !planMove("down"),
+            },
+          ]
+        : []),
+      ...(supportsSettlement
+        ? [
+            {
+              id: (settled ? "unsettle" : "settle") as "settle" | "unsettle",
+              label: settled ? "Un-settle chat" : "Settle chat",
+              icon: "circle-check",
+            },
+          ]
+        : []),
+      ...(supportsTitleRegeneration
+        ? [
+            {
+              id: "regenerate-title" as const,
+              label: current.titleRegeneration != null ? "Regenerating…" : "Regenerate title",
+              icon: "refresh-cw",
+              disabled: current.titleRegeneration != null,
+            },
+          ]
+        : []),
+      { id: "mark-unread", label: "Mark unread", icon: "mail-open", separatorBefore: true },
+      // The board's view, which includes a pending move.
+      ...(thread.parentThreadId != null
+        ? [{ id: "detach-parent" as const, label: "Remove from parent", icon: "unlink" }]
+        : []),
+      {
+        id: "copy-path",
+        label: "Copy path",
+        icon: "folder",
+        disabled: workspacePath === null,
+      },
+      ...(current.branch
+        ? [{ id: "copy-branch" as const, label: "Copy branch", icon: "git-branch" }]
+        : []),
+      { id: "copy-thread-id", label: "Copy chat ID", icon: "hash" },
+      { id: "archive", label: "Archive chat", icon: "archive", separatorBefore: true },
+      { id: "delete", label: "Delete", destructive: true, icon: "trash" },
+    ];
+    let action: AgentThreadMenuId | null;
+    try {
+      action = await api.contextMenu.show(items, position);
+    } catch (error) {
+      failureToast("Could not open the chat menu", error);
+      return;
+    }
+    if (!action) return;
+
+    const reportFailure = async (
+      title: string,
+      run: () => Promise<AtomCommandResult<unknown, unknown>>,
+    ) => {
+      const result = await run();
+      if (result._tag === "Failure") {
+        failureToast(title, squashAtomCommandFailure(result));
+      }
+    };
+
+    switch (action) {
+      case "move-up":
+      case "move-down": {
+        const plan = planMove(action === "move-up" ? "up" : "down");
+        if (!plan) return;
+        for (const { thread: target, orderKey } of plan) {
+          const result = await reorderActiveThread(
+            scopeThreadRef(target.environmentId, target.id),
+            orderKey,
+          );
+          if (result._tag === "Failure") {
+            failureToast("Failed to move chat", squashAtomCommandFailure(result));
+            return;
+          }
+        }
         return;
       }
-      if (!action) return;
-
-      const reportFailure = async (
-        title: string,
-        run: () => Promise<AtomCommandResult<unknown, unknown>>,
-      ) => {
-        const result = await run();
-        if (result._tag === "Failure") {
-          failureToast(title, squashAtomCommandFailure(result));
+      case "pin":
+        await reportFailure("Failed to pin chat", () => pinThread(ref));
+        return;
+      case "unpin":
+        await reportFailure("Failed to unpin chat", () => confirmAndUnpinThread(ref));
+        return;
+      case "settle":
+        await reportFailure("Failed to settle chat", () => settleThread(ref));
+        return;
+      case "unsettle":
+        await reportFailure("Failed to un-settle chat", () => unsettleThread(ref));
+        return;
+      case "regenerate-title":
+        await reportFailure("Failed to regenerate chat title", () =>
+          updateThreadMetadata({
+            environmentId: ref.environmentId,
+            input: { threadId: ref.threadId, regenerateTitle: true },
+          }),
+        );
+        return;
+      case "mark-unread":
+        markThreadUnread(scopedThreadKey(ref), current.latestRun?.completedAt);
+        return;
+      case "detach-parent":
+        // Same path as dragging a child out: optimistic, rolled back on failure.
+        await setParent(thread, null);
+        return;
+      case "copy-path":
+        if (workspacePath) copyPathToClipboard(workspacePath, { path: workspacePath });
+        return;
+      case "copy-branch":
+        if (current.branch) copyBranchToClipboard(current.branch, { branch: current.branch });
+        return;
+      case "copy-thread-id":
+        copyThreadIdToClipboard(ref.threadId, { threadId: ref.threadId });
+        return;
+      case "archive": {
+        if (confirmThreadArchive) {
+          const confirmed = await api.dialogs.confirm(`Archive chat "${current.title}"?`);
+          if (!confirmed) return;
         }
-      };
-
-      switch (action) {
-        case "move-up":
-        case "move-down": {
-          const plan = planMove(action === "move-up" ? "up" : "down");
-          if (!plan) return;
-          for (const { thread: target, orderKey } of plan) {
-            const result = await reorderActiveThread(
-              scopeThreadRef(target.environmentId, target.id),
-              orderKey,
-            );
-            if (result._tag === "Failure") {
-              failureToast("Failed to move chat", squashAtomCommandFailure(result));
-              return;
-            }
-          }
-          return;
-        }
-        case "pin":
-          await reportFailure("Failed to pin chat", () => pinThread(ref));
-          return;
-        case "unpin":
-          await reportFailure("Failed to unpin chat", () => confirmAndUnpinThread(ref));
-          return;
-        case "settle":
-          await reportFailure("Failed to settle chat", () => settleThread(ref));
-          return;
-        case "unsettle":
-          await reportFailure("Failed to un-settle chat", () => unsettleThread(ref));
-          return;
-        case "regenerate-title":
-          await reportFailure("Failed to regenerate chat title", () =>
-            updateThreadMetadata({
-              environmentId: ref.environmentId,
-              input: { threadId: ref.threadId, regenerateTitle: true },
-            }),
-          );
-          return;
-        case "mark-unread":
-          markThreadUnread(scopedThreadKey(ref), current.latestRun?.completedAt);
-          return;
-        case "detach-parent":
-          // Same path as dragging a child out: optimistic, rolled back on failure.
-          await setParent(thread, null);
-          return;
-        case "copy-path":
-          if (workspacePath) copyPathToClipboard(workspacePath, { path: workspacePath });
-          return;
-        case "copy-branch":
-          if (current.branch) copyBranchToClipboard(current.branch, { branch: current.branch });
-          return;
-        case "copy-thread-id":
-          copyThreadIdToClipboard(ref.threadId, { threadId: ref.threadId });
-          return;
-        case "archive": {
-          if (confirmThreadArchive) {
-            const confirmed = await api.dialogs.confirm(`Archive chat "${current.title}"?`);
-            if (!confirmed) return;
-          }
-          await reportFailure("Failed to archive chat", () =>
-            archiveThread(ref, {
-              onArchived: () => {
-                void router.navigate({ to: "/agents" });
-              },
-            }),
-          );
-          return;
-        }
-        case "delete":
-          await reportFailure("Failed to delete chat", () => confirmAndDeleteThread(ref));
-          return;
+        await reportFailure("Failed to archive chat", () =>
+          archiveThread(ref, {
+            onArchived: () => {
+              void router.navigate({ to: "/agents" });
+            },
+          }),
+        );
+        return;
       }
-    },
-    [
-      visible,
-      threads,
-      reorderActiveThread,
-      archiveThread,
-      confirmAndDeleteThread,
-      confirmAndUnpinThread,
-      confirmThreadArchive,
-      copyBranchToClipboard,
-      copyPathToClipboard,
-      copyThreadIdToClipboard,
-      markThreadUnread,
-      pinThread,
-      projects,
-      router,
-      setParent,
-      settleThread,
-      unsettleThread,
-      updateThreadMetadata,
-    ],
-  );
+      case "delete":
+        await reportFailure("Failed to delete chat", () => confirmAndDeleteThread(ref));
+        return;
+    }
+  };
 }
 
 /**
@@ -325,19 +300,16 @@ export function useAgentThreadContextMenu(
  */
 export function useAgentThreadSettleAction(): (thread: EnvironmentThreadShell) => void {
   const { settleThread, unsettleThread } = useThreadActions();
-  return useCallback(
-    async (thread: EnvironmentThreadShell) => {
-      const ref = scopeThreadRef(thread.environmentId, thread.id);
-      const current = readThreadShell(ref) ?? thread;
-      const settled = current.settledAt !== null;
-      const result = await (settled ? unsettleThread(ref) : settleThread(ref));
-      if (result._tag === "Failure") {
-        failureToast(
-          settled ? "Failed to un-settle chat" : "Failed to settle chat",
-          squashAtomCommandFailure(result),
-        );
-      }
-    },
-    [settleThread, unsettleThread],
-  );
+  return async (thread: EnvironmentThreadShell) => {
+    const ref = scopeThreadRef(thread.environmentId, thread.id);
+    const current = readThreadShell(ref) ?? thread;
+    const settled = current.settledAt !== null;
+    const result = await (settled ? unsettleThread(ref) : settleThread(ref));
+    if (result._tag === "Failure") {
+      failureToast(
+        settled ? "Failed to un-settle chat" : "Failed to settle chat",
+        squashAtomCommandFailure(result),
+      );
+    }
+  };
 }

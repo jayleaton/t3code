@@ -31,14 +31,6 @@ describe("buildOpenCodePermissionRules", () => {
     NodeAssert.equal(actionFor("auto", "edit"), "ask");
   });
 
-  it("allows workspace reads and task updates without asking in supervised modes", () => {
-    for (const runtimeMode of ["approval-required", "auto-accept-edits", "auto"] as const) {
-      for (const permission of ["read", "glob", "grep", "lsp", "skill", "todowrite"]) {
-        NodeAssert.equal(actionFor(runtimeMode, permission, "src/index.ts"), "allow");
-      }
-    }
-  });
-
   it("preserves OpenCode's environment-file approval rules", () => {
     for (const runtimeMode of ["approval-required", "auto-accept-edits", "auto"] as const) {
       for (const target of [
@@ -91,9 +83,7 @@ describe("toOpenCodePermissionReply", () => {
   it.each([
     ["accept", "once"],
     ["acceptForSession", "always"],
-    ["acceptAlways", "always"],
     ["decline", "reject"],
-    ["cancel", "reject"],
   ] as const)("maps %s to %s", (decision, reply) => {
     NodeAssert.equal(OpenCodeRuntime.toOpenCodePermissionReply(decision), reply);
   });

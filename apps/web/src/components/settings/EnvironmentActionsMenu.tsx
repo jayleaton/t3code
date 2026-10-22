@@ -26,7 +26,7 @@ export function EnvironmentActionsMenu({
 }: {
   environmentId: EnvironmentId;
   label: string;
-  serverConfig: ServerConfig | null;
+  serverConfig: Pick<ServerConfig, "environment" | "settings"> | null;
   disabled?: boolean;
   children?: ReactNode;
 }) {

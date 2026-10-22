@@ -1,4 +1,4 @@
-import { useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
+import { useContext, useRef, useState, type ReactNode } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -15,6 +15,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { readEnvironmentSupportsActiveReorder, readThreadShell } from "../../state/entities";
 import { planSidebarThreadDrop } from "../Sidebar.logic";
@@ -112,16 +113,18 @@ export function AgentRunDragArea({
   const sensor = useRef<SidebarPointerSensor | null>(null);
   const [dragging, setDragging] = useState(false);
   const [saving, setSaving] = useState(false);
-  const attach = useCallback((value: SidebarPointerSensor) => {
+  // dnd-kit keeps the sensor options, and SidebarDragLifecycle cancels the drag
+  // whenever onUnmount changes, so these handlers keep one identity.
+  const attach = useStableCallback((value: SidebarPointerSensor) => {
     sensor.current = value;
-  }, []);
+  });
   // The sensor finishes before dnd-kit reports the drop, so drop state is
   // cleared separately once the drop has been handled.
-  const finish = useCallback(() => {
+  const finish = useStableCallback(() => {
     sensor.current = null;
     setDragging(false);
-  }, []);
-  const clearDrop = useCallback(() => {
+  });
+  const clearDrop = () => {
     nestTarget.current = null;
     setNestTargetKey(null);
     blockedTarget.current = null;
@@ -131,8 +134,8 @@ export function AgentRunDragArea({
     setDraggedChild(null);
     childDrop.current = { kind: "none" };
     setChildDropHint("none");
-  }, []);
-  const cancel = useCallback(() => sensor.current?.cancel(), []);
+  };
+  const cancel = useStableCallback(() => sensor.current?.cancel());
   const sensors = useSensors(
     useSensor(SidebarPointerSensor, {
       distance: 6,
@@ -272,10 +275,7 @@ export function AgentRunDragArea({
       setSaving(false);
     }
   };
-  const dragContext = useMemo(
-    () => ({ childDragEnabled: !saving, dragging, saving }),
-    [dragging, saving],
-  );
+  const dragContext = { childDragEnabled: !saving, dragging, saving };
   const draggedChildRun = draggedChild ? runByKey.get(draggedChild.key) : undefined;
   const nestTargetRun = nestTargetKey ? runByKey.get(nestTargetKey) : undefined;
   const blockedTargetRun = blockedTargetKey ? runByKey.get(blockedTargetKey) : undefined;

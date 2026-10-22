@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import {
   agentLibraryForSync,
   mergeAgentLibraries,
@@ -17,12 +17,8 @@ export function useAgentLibrary() {
       env.connection.phase === "connected" &&
       env.serverConfig?.environment.capabilities.agentLibrarySync === true,
   );
-  const library = useMemo(
-    () =>
-      mergeAgentLibraries(
-        environments.flatMap((env) => (env.serverConfig ? [env.serverConfig.settings] : [])),
-      ),
-    [environments],
+  const library = mergeAgentLibraries(
+    environments.flatMap((env) => (env.serverConfig ? [env.serverConfig.settings] : [])),
   );
   const target =
     connected.find((env) => env.serverConfig?.environment.capabilities.agentSkillResources) ??
@@ -38,29 +34,26 @@ export function useAgentLibrary() {
     serverEnvironment.updateSettings,
     "agent library sync before edit",
   );
-  const updateSettings = useCallback(
-    async (patch: ServerSettingsPatch) => {
-      if (!target) return false;
-      if (
-        library.agentSkills.some((skill) => skill.resources?.length) &&
-        target.serverConfig?.environment.capabilities.agentSkillResources !== true
-      )
-        throw new Error("Update T3 on this machine to edit skills with resources.");
-      const synced = await replicate({
-        environmentId: target.environmentId,
-        input: {
-          patch: agentLibraryForSync(
-            library,
-            target.serverConfig?.environment.capabilities.agentSkillsSync === true,
-          ),
-          replicateProfiles: true,
-        },
-      });
-      if (synced._tag !== "Success") return false;
-      return persistSettings(patch);
-    },
-    [target, replicate, library, persistSettings],
-  );
+  const updateSettings = async (patch: ServerSettingsPatch) => {
+    if (!target) return false;
+    if (
+      library.agentSkills.some((skill) => skill.resources?.length) &&
+      target.serverConfig?.environment.capabilities.agentSkillResources !== true
+    )
+      throw new Error("Update T3 on this machine to edit skills with resources.");
+    const synced = await replicate({
+      environmentId: target.environmentId,
+      input: {
+        patch: agentLibraryForSync(
+          library,
+          target.serverConfig?.environment.capabilities.agentSkillsSync === true,
+        ),
+        replicateProfiles: true,
+      },
+    });
+    if (synced._tag !== "Success") return false;
+    return persistSettings(patch);
+  };
   return {
     skillsAvailable: target?.serverConfig?.environment.capabilities.agentSkillsSync === true,
     skills: library.agentSkills,

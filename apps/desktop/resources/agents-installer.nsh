@@ -1,4 +1,6 @@
 !include "FileFunc.nsh"
+# Shared customizations, such as the Start Menu shortcut repair.
+!include "${__FILEDIR__}/installer.nsh"
 
 # The first Agents release used the official app's package name. NSIS consequently
 # installed both products into t3code. Never execute that release's uninstaller:

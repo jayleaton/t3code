@@ -74,8 +74,14 @@ import Migration0067 from "./Migrations/060_ThreadSnapshotWindowIndexes.ts";
 // Upstream ships these as 61 and 62; the fork ledger had already used those ids.
 import Migration0068 from "./Migrations/061_PullRequestReviewGuides.ts";
 import Migration0069 from "./Migrations/062_ThreadFailureLookupIndex.ts";
+// Upstream ships these as 63 through 67; the fork ledger had already used those ids.
+import Migration0070 from "./Migrations/063_DropUnusedV1Projections.ts";
+import Migration0071 from "./Migrations/064_CanonicalizeThreadPullRequestLinks.ts";
+import Migration0072 from "./Migrations/065_CodexUsageNativeTurnIndex.ts";
+import Migration0073 from "./Migrations/066_RepairClientSettlementTimestamps.ts";
+import Migration0074 from "./Migrations/067_WebhookDedupe.ts";
 
-export const migrationEntries = [
+const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
   [3, "CheckpointDiffBlobs", Migration0003],
@@ -148,6 +154,12 @@ export const migrationEntries = [
   // Upstream ships these as 61 and 62; the fork ledger had already used those ids.
   [68, "PullRequestReviewGuides", Migration0068],
   [69, "ThreadFailureLookupIndex", Migration0069],
+  // Upstream ships these as 63 through 67; the fork ledger had already used those ids.
+  [70, "DropUnusedV1Projections", Migration0070],
+  [71, "CanonicalizeThreadPullRequestLinks", Migration0071],
+  [72, "CodexUsageNativeTurnIndex", Migration0072],
+  [73, "RepairClientSettlementTimestamps", Migration0073],
+  [74, "WebhookDedupe", Migration0074],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

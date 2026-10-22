@@ -1,8 +1,9 @@
-import type {
-  EnvironmentId,
-  OrchestrationV2ThreadProjection,
-  OrchestrationV2ThreadShell,
-  ThreadId,
+import {
+  isOrchestrationV2WorkActive,
+  type EnvironmentId,
+  type OrchestrationV2ThreadProjection,
+  type OrchestrationV2ThreadShell,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { isSubagentThread, threadParentRelationship } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -124,7 +125,10 @@ export function deriveThreadRelationshipGraph(input: {
         targetThreadId: subagent.childThreadId,
         kind: "subagent",
         status:
-          child?.activityRunStatus ?? (child?.latestRunId != null ? child.status : subagent.status),
+          child?.activityRunStatus ??
+          (child?.latestRunId != null && !isOrchestrationV2WorkActive(subagent.status)
+            ? child.status
+            : subagent.status),
       });
     }
     for (const transfer of input.projection.contextTransfers) {

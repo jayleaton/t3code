@@ -1,10 +1,8 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 export function AgentsLoadingNotice({ ready }: { ready: boolean }) {
   const [initialLoadComplete, setInitialLoadComplete] = useState(ready);
-  useEffect(() => {
-    if (ready) setInitialLoadComplete(true);
-  }, [ready]);
+  if (ready && !initialLoadComplete) setInitialLoadComplete(true);
 
   // An unavailable machine can alternate between backoff and connecting while
   // the board remains usable. Its retries must not reinsert an initial banner.

@@ -66,18 +66,8 @@ export function isAutoSettlementCandidate(
   // Manual settlement still parks it deliberately.
   if (threadHasPullRequestWatch(thread)) return false;
   if (threadHasQueuedTurnStart(thread, nowMs)) return false;
-  const snoozedUntilMs = toMillis(thread.snoozedUntil);
-  if (snoozedUntilMs === null || snoozedUntilMs <= nowMs) return true;
-  // A snoozed thread that woke early (error or completed work) can settle;
-  // one still parked on its wake time keeps its stronger statement.
-  const snoozedAtMs = toMillis(thread.snoozedAt);
-  const completedAtMs = toMillis(thread.latestRunCompletedAt);
-  const wokeOnError =
-    thread.status === "failed" &&
-    (snoozedAtMs === null || (completedAtMs !== null && completedAtMs > snoozedAtMs));
-  const wokeOnCompletion =
-    snoozedAtMs !== null && completedAtMs !== null && completedAtMs > snoozedAtMs;
-  return wokeOnError || wokeOnCompletion;
+  // Interrupted runs must keep the same snooze protection the sidebar shows.
+  return !isSnoozed(thread, nowMs);
 }
 
 export function resolveAutoSettlementAt(input: {
@@ -118,12 +108,10 @@ export function resolveAutoSettlementAt(input: {
 
 /**
  * Whether a thread is parked on its snooze: its wake time is in the future and
- * it has not raised its hand with a pending request, a fresh failure, or work
- * that completed after the snooze. Server twin of the client's
- * `effectiveSnoozed`, so agents and the sidebar agree on what is snoozed. One
- * difference: a failure counts as fresh when its run completed after the
- * snooze. The client compares the shell's update time, so a rename can wake a
- * failed thread there but not here.
+ * it has not raised its hand with a pending request or a fresh failure.
+ * Completed runs and background wakes keep it snoozed. Server twin of the
+ * client's `effectiveSnoozed`, so agents and the sidebar agree on what is
+ * snoozed.
  */
 export function isSnoozed(
   thread: Pick<
@@ -140,11 +128,5 @@ export function isSnoozed(
   const wokeOnError =
     thread.status === "failed" &&
     (snoozedAtMs === null || (completedAtMs !== null && completedAtMs > snoozedAtMs));
-  // Like the client, only a run that completed wakes it; an interrupt or cancel does not.
-  const wokeOnCompletion =
-    thread.status === "completed" &&
-    snoozedAtMs !== null &&
-    completedAtMs !== null &&
-    completedAtMs > snoozedAtMs;
-  return !wokeOnError && !wokeOnCompletion;
+  return !wokeOnError;
 }

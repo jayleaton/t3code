@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { useThreadShells } from "../../state/entities";
@@ -48,7 +48,7 @@ export function useAgentThreadShells(): readonly EnvironmentThreadShell[] {
     });
     if (landed.length > 0) update((next) => landed.forEach((thread) => next.delete(keyOf(thread))));
   }, [shells, overrides]);
-  return useMemo(() => applyAgentParentOverrides(shells, overrides), [shells, overrides]);
+  return applyAgentParentOverrides(shells, overrides);
 }
 
 /**
@@ -61,48 +61,45 @@ export function useSetAgentRunParent() {
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
-  return useCallback(
-    async (child: EnvironmentThreadShell, parent: EnvironmentThreadShell | null) => {
-      const key = keyOf(child);
-      const parentEnvironmentId =
-        parent && parent.environmentId !== child.environmentId ? parent.environmentId : null;
-      const request = (requests += 1);
-      update((next) =>
-        next.set(key, {
-          parentThreadId: parent?.id ?? null,
-          parentEnvironmentId,
-          confirmed: false,
-          request,
+  return async (child: EnvironmentThreadShell, parent: EnvironmentThreadShell | null) => {
+    const key = keyOf(child);
+    const parentEnvironmentId =
+      parent && parent.environmentId !== child.environmentId ? parent.environmentId : null;
+    const request = (requests += 1);
+    update((next) =>
+      next.set(key, {
+        parentThreadId: parent?.id ?? null,
+        parentEnvironmentId,
+        confirmed: false,
+        request,
+      }),
+    );
+    const result = await updateThreadMetadata({
+      environmentId: child.environmentId,
+      input: {
+        threadId: child.id,
+        parentThreadId: parent?.id ?? null,
+        ...(parentEnvironmentId === null ? {} : { parentEnvironmentId }),
+      },
+    });
+    if (result._tag === "Failure") {
+      update((next) => {
+        if (next.get(key)?.request === request) next.delete(key);
+      });
+      const error = squashAtomCommandFailure(result);
+      toastManager.add(
+        stackedThreadToast({
+          title: parent ? `Couldn't move under ${parent.title}` : "Couldn't remove from parent",
+          description: error instanceof Error ? error.message : "Try again.",
+          type: "error",
         }),
       );
-      const result = await updateThreadMetadata({
-        environmentId: child.environmentId,
-        input: {
-          threadId: child.id,
-          parentThreadId: parent?.id ?? null,
-          ...(parentEnvironmentId === null ? {} : { parentEnvironmentId }),
-        },
-      });
-      if (result._tag === "Failure") {
-        update((next) => {
-          if (next.get(key)?.request === request) next.delete(key);
-        });
-        const error = squashAtomCommandFailure(result);
-        toastManager.add(
-          stackedThreadToast({
-            title: parent ? `Couldn't move under ${parent.title}` : "Couldn't remove from parent",
-            description: error instanceof Error ? error.message : "Try again.",
-            type: "error",
-          }),
-        );
-        return false;
-      }
-      update((next) => {
-        const entry = next.get(key);
-        if (entry?.request === request) next.set(key, { ...entry, confirmed: true });
-      });
-      return true;
-    },
-    [updateThreadMetadata],
-  );
+      return false;
+    }
+    update((next) => {
+      const entry = next.get(key);
+      if (entry?.request === request) next.set(key, { ...entry, confirmed: true });
+    });
+    return true;
+  };
 }

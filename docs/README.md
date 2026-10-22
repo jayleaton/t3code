@@ -20,6 +20,7 @@
 - [Product usage data](./user/telemetry.md)
 - [Voice and chat control (Workspace MCP)](./user/workspace-mcp.md)
 - [Remote access](./user/remote-access.md)
+- [T3 Connect troubleshooting](./user/t3-connect-troubleshooting.md)
 - [Outside agents (MCP)](./user/outside-agents.md)
 - [Running in the background](./user/background-service.md)
 - [Updating T3 Code](./user/updating.md)
