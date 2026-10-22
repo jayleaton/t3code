@@ -698,9 +698,13 @@ it.effect("a sub-run whose turn ended with background work still open stays acti
     assert.equal((yield* projections.getThreadShell(threadId))?.pendingBackgroundTasks?.length, 1);
     yield* settle("open");
     assert.isNull(yield* settledOverride());
-    // Once the background work ends, the finished child follows its settled parent.
+    // Once the background work ends on its own, the finished child follows its settled parent.
+    const before = yield* sink.latestSequence();
     yield* sink.write({ events: [command("completed")] });
-    yield* settle("done");
+    yield* sink.stream({ afterSequence: before, eventType: "thread.settled" }).pipe(
+      Stream.filter((stored) => stored.event.threadId === threadId),
+      Stream.runHead,
+    );
     assert.equal(yield* settledOverride(), "settled");
   }).pipe(Effect.provide(testLayer)),
 );

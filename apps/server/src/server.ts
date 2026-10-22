@@ -11,6 +11,7 @@ import * as McpGatewayBroker from "./mcp/McpGatewayBroker.ts";
 import * as LocalGatewayPort from "./mcp/agents/LocalGatewayPort.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQuestionReactor.ts";
+import * as RemoteSettlementCascade from "./orchestration-v2/RemoteSettlementCascade.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeHttp from "node:http";
 
@@ -594,6 +595,12 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       yield* service.start();
     }),
   ).pipe(Layer.provide(DelegatedTaskQuestionReactor.layer), Layer.provide(ProjectionStoreV2.layer)),
+  RemoteSettlementCascade.layer.pipe(
+    Layer.provide(McpGatewayBroker.layer),
+    Layer.provide(
+      Layer.merge(EventStoreV2.layerFromOrchestrationEventStore, ProjectionStoreV2.layer),
+    ),
+  ),
   ProviderUsageLimitsIngestion.layer,
   layerProviderInstallationRefresh,
   ReplayMarkers.layer,

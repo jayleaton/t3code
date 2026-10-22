@@ -71,6 +71,7 @@ import { modelSelectionsEqual } from "@t3tools/shared/model";
 import {
   derivePendingBackgroundWork,
   pendingBackgroundTurnItems,
+  turnItemUpdateCanEndBackgroundWork,
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -11552,14 +11553,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return result;
     });
 
-  /** Finishes a manual parent cascade after a child chat or subagent completes. */
-  const settleCompletedSubRun = (threadId: ThreadId, runId: RunId) =>
+  /**
+   * Finishes a manual parent cascade after a child chat or subagent completes,
+   * or after background work its last turn left open ends on its own.
+   */
+  const settleCompletedSubRun = (threadId: ThreadId, completion: string) =>
     Effect.gen(function* () {
       const thread = yield* projectionStore.getThread(threadId);
+      if (thread.settledOverride !== null) return;
       if ((yield* manualSettlementAbove(thread)) == null) return;
       yield* dispatchWithReceipt({
         type: "thread.sub-run.settle",
-        commandId: CommandId.make(`server:sub-run-settle:${threadId}:${runId}`),
+        commandId: CommandId.make(`server:sub-run-settle:${threadId}:${completion}`),
         threadId,
       });
     });
@@ -11647,6 +11652,31 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       Stream.runForEach(handleTerminalRun),
       Effect.forkDetach,
     );
+  // Background work ends with its turn item or with the provider's roster.
+  const settleAfterBackgroundWork = (stored: OrchestrationV2StoredEvent) =>
+    settleCompletedSubRun(stored.event.threadId, `event:${stored.sequence}`).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Failed to settle a sub-run after its background work", {
+          threadId: stored.event.threadId,
+          sequence: stored.sequence,
+          cause,
+        }),
+      ),
+    );
+  yield* eventSink
+    .stream({ afterSequence: terminalEventsAfterSequence, eventType: "turn-item.updated" })
+    .pipe(
+      Stream.filter(
+        (stored) =>
+          stored.event.type === "turn-item.updated" &&
+          turnItemUpdateCanEndBackgroundWork(stored.event.payload),
+      ),
+      Stream.runForEach(settleAfterBackgroundWork),
+      Effect.forkDetach,
+    );
+  yield* eventSink
+    .stream({ afterSequence: terminalEventsAfterSequence, eventType: "provider-thread.updated" })
+    .pipe(Stream.runForEach(settleAfterBackgroundWork), Effect.forkDetach);
 
   const recoverDelegatedTasks = Effect.gen(function* () {
     // Older versions put named-child results in the helper completion mailbox.
