@@ -1,0 +1,608 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { expect, it } from "@effect/vitest";
+import type { GatewayRuntimePort } from "@t3tools/client-runtime/gateway";
+import {
+  EnvironmentId,
+  type OrchestrationV2RunStatus,
+  type OrchestrationV2ThreadShell,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
+import { McpSchema, McpServer } from "effect/ai";
+
+import * as ServerConfig from "../../config.ts";
+import * as ThreadLaunch from "../../orchestration-v2/ThreadLaunchService.ts";
+import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
+import * as ManagedProjectFolders from "../../project/ManagedProjectFolders.ts";
+import * as Project from "../../project/ProjectService.ts";
+import * as ServerSettings from "../../serverSettings.ts";
+import * as SourceControlRepositoryService from "../../sourceControl/SourceControlRepositoryService.ts";
+import * as ThreadTaskService from "../../threadTask/ThreadTaskService.ts";
+import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
+import * as McpGatewayBrokerModule from "../McpGatewayBroker.ts";
+import { McpGatewayBroker } from "../McpGatewayBroker.ts";
+import { layerAgentsToolkit, toolkitRegistration } from "../McpHttpServer.ts";
+import * as McpInvocationContext from "../McpInvocationContext.ts";
+import * as McpToolAccess from "../McpToolAccess.ts";
+import * as OrchestratorMcpService from "../OrchestratorMcpService.ts";
+import * as ThreadMetadataMcpService from "../ThreadMetadataMcpService.ts";
+import * as OrchestratorHandlers from "../toolkits/orchestrator/handlers.ts";
+import { OrchestratorToolkit } from "../toolkits/orchestrator/tools.ts";
+import * as ProjectHandlers from "../toolkits/project/handlers.ts";
+import { ProjectToolkit } from "../toolkits/project/tools.ts";
+import { LocalGatewayPort } from "./LocalGatewayPort.ts";
+
+// The 2026-10-22 shape: Captain on dev-box launching Cody on the MacBook.
+const devBox = EnvironmentId.make("environment-dev-box");
+const macBook = EnvironmentId.make("2549ba75-2a91-4554-8baa-88e6ae0efa48");
+const captain = ThreadId.make("captain");
+const child = ThreadId.make("mcp-thread-v2-macbook-child");
+const instanceId = ProviderInstanceId.make("codex");
+const modelSelection = { instanceId, model: "gpt-5" };
+
+const callerShell = {
+  id: captain,
+  projectId: ProjectId.make("project:dev-box"),
+  providerInstanceId: instanceId,
+  modelSelection,
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  activeRunId: "run-captain",
+  archivedAt: null,
+  deletedAt: null,
+} as OrchestrationV2ThreadShell;
+
+/** The MacBook as the relaying desktop app reports it, and every call that reached it. */
+const makeMacBook = (
+  runStatuses: ReadonlyArray<OrchestrationV2RunStatus> = ["running"],
+  /** The child's runs at each successive read; the last one repeats. Overrides runStatuses. */
+  runsPerRead?: ReadonlyArray<
+    ReadonlyArray<{ readonly id: string; readonly status: OrchestrationV2RunStatus }>
+  >,
+) => {
+  const statuses = [...runStatuses];
+  const reads = [...(runsPerRead ?? [])];
+  const runs = () =>
+    (reads.length > 1 ? reads.shift()! : reads[0])?.map((run) => ({
+      ...run,
+      providerInstanceId: instanceId,
+      requestedAt: "2026-10-22T03:40:00.000Z",
+      completedAt: null,
+    }));
+  const calls: Array<{ readonly method: string; readonly args: ReadonlyArray<unknown> }> = [];
+  const thread = (threadId: string) => ({
+    id: threadId,
+    projectId: "project:macbook",
+    title: "Configure Accessibility",
+    modelSelection,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    parentThreadId: captain,
+    parentEnvironmentId: devBox,
+    settledAt: null,
+    runs: runs() ?? [
+      {
+        id: "run-macbook-1",
+        status: statuses.length > 1 ? statuses.shift() : statuses[0],
+        providerInstanceId: instanceId,
+        requestedAt: "2026-10-22T03:40:00.000Z",
+        completedAt: null,
+      },
+    ],
+    messages: [
+      {
+        id: "message-1",
+        role: "user",
+        text: "Turn on the six permissions.",
+        runId: "run-macbook-1",
+      },
+      {
+        id: "message-2",
+        role: "assistant",
+        text: "Cloudflare is logged in.",
+        runId: "run-macbook-1",
+      },
+    ],
+    runtimeRequests: [],
+    createdAt: "2026-10-22T03:40:00.000Z",
+    updatedAt: "2026-10-22T03:44:00.000Z",
+  });
+  const answer = (method: string, args: ReadonlyArray<any>): unknown => {
+    switch (method) {
+      case "listEnvironments":
+        return [
+          {
+            environmentId: macBook,
+            label: "MacBook",
+            targetKind: "bearer",
+            connectionState: "connected",
+          },
+        ];
+      case "listProfiles":
+        return [
+          {
+            profileId: "cody",
+            name: "Cody",
+            revision: 1,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            modelSelection,
+          },
+        ];
+      case "resolveProfileModelSelection":
+        return modelSelection;
+      case "createThread":
+        return { requestId: args[0].requestId, status: "accepted", threadId: args[0].threadId };
+      case "sendMessage":
+        return {
+          requestId: args[0].requestId,
+          messageId: args[0].messageId,
+          status: "accepted",
+          threadId: args[0].threadId,
+        };
+      case "listThreads":
+        return { items: [], snapshotAt: "now" };
+      case "getThread":
+        return thread(args[1]);
+      default:
+        return undefined;
+    }
+  };
+  return {
+    calls,
+    answer,
+    called: (method: string) => calls.filter((call) => call.method === method),
+  };
+};
+
+const makeLayer = (macbook: ReturnType<typeof makeMacBook>, record: TestRecord) => {
+  const localPort = {
+    listEnvironments: async () => [
+      {
+        environmentId: devBox,
+        label: "dev-box",
+        targetKind: "primary",
+        connectionState: "connected",
+      },
+    ],
+  } as unknown as GatewayRuntimePort;
+  // The desktop app connected to both machines, granted the MacBook.
+  const broker = Layer.effect(
+    McpGatewayBroker,
+    Effect.gen(function* () {
+      const broker = yield* McpGatewayBrokerModule.make;
+      yield* broker.connect("desktop", { [macBook]: ["read", "create", "send"] }).pipe(
+        Stream.runForEach((event) => {
+          macbook.calls.push({ method: event.method, args: event.args });
+          return broker.respond("desktop", {
+            connectionId: event.connectionId,
+            invocationId: event.invocationId,
+            result: macbook.answer(event.method, event.args),
+          });
+        }),
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      return broker;
+    }),
+  ).pipe(Layer.provide(NodeServices.layer));
+  return Layer.mergeAll(
+    broker,
+    Layer.succeed(LocalGatewayPort, { environmentId: devBox, label: "dev-box", port: localPort }),
+    Layer.succeed(McpInvocationContext.McpInvocationContext, {
+      environmentId: devBox,
+      requestNamespace: "thread:captain",
+      thread: { threadId: captain, providerSessionId: "session", providerInstanceId: instanceId },
+      client: undefined,
+      issuedAt: 0,
+      capabilities: new Set(["orchestration" as const]),
+    }),
+    Layer.mock(ThreadManagement.ThreadManagementService)({
+      getThreadShell: (threadId) =>
+        Effect.succeed(threadId === captain ? { ...callerShell, ...record.caller } : null),
+    }),
+    Layer.mock(ThreadLaunch.ThreadLaunchService)({
+      launch: (input) => {
+        record.launches.push(input);
+        return Effect.succeed({
+          threadId: input.threadId,
+          projection: {
+            thread: { id: input.threadId, projectId: input.projectId, modelSelection },
+            runs: [],
+          },
+          resumed: false,
+        } as unknown as ThreadLaunch.ThreadLaunchResult);
+      },
+    }),
+    Layer.mock(ThreadTaskService.ThreadTaskService)({
+      assign: (owner, input, env) => {
+        record.assigned.push({ owner, input, env });
+        return Effect.succeed({} as never);
+      },
+      authorizeMessage: (input) => {
+        record.authorized.push(input.targetThreadId);
+        return Effect.void;
+      },
+    }),
+    Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({}),
+    Layer.mock(ThreadMetadataMcpService.ThreadMetadataMcpService)({}),
+    Layer.mock(Project.ProjectService)({}),
+    Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
+    Layer.mock(GitVcsDriver.GitVcsDriver)({}),
+    Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
+    NodeCrypto.layer,
+    NodeServices.layer,
+    ServerSettings.layerTest({ mcpGatewayProfiles: record.profiles } as never),
+    ServerConfig.layerTest(process.cwd(), { prefix: "t3-remote-threads-" }).pipe(
+      Layer.provide(NodeServices.layer),
+    ),
+  );
+};
+
+type TestRecord = ReturnType<typeof newRecord>;
+
+const newRecord = (
+  options: {
+    readonly caller?: Partial<OrchestrationV2ThreadShell>;
+    readonly profiles?: ReadonlyArray<unknown>;
+  } = {},
+) => ({
+  launches: [] as Array<ThreadLaunch.ThreadLaunchInput>,
+  assigned: [] as Array<{
+    readonly owner: unknown;
+    readonly input: unknown;
+    readonly env: unknown;
+  }>,
+  authorized: [] as Array<ThreadId | null>,
+  caller: options.caller ?? {},
+  profiles: options.profiles ?? [],
+});
+
+/** Runs one tool call the way the MCP server does, against the test's single layer. */
+const launch = (args: Record<string, unknown>) =>
+  Effect.gen(function* () {
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer)),
+    );
+    const output = yield* toolkit
+      .handle("t3_thread_launch", args as never)
+      .pipe(Stream.unwrap, Stream.runCollect);
+    return output.at(-1)!;
+  });
+
+const orchestrate = (
+  name: "t3_thread_read" | "t3_thread_wait" | "t3_thread_send",
+  args: Record<string, unknown>,
+) =>
+  Effect.gen(function* () {
+    const toolkit = yield* OrchestratorToolkit.pipe(
+      Effect.provide(McpToolAccess.HandlersLayer.layer(OrchestratorHandlers.layer)),
+    );
+    const output = yield* toolkit
+      .handle(name, args as never)
+      .pipe(Stream.unwrap, Stream.runCollect);
+    return output.at(-1)!;
+  });
+
+const mcpClient = McpSchema.McpServerClient.of({
+  clientId: 1,
+  clientCapabilities: {},
+  clientInfo: { name: "test", version: "1" },
+  protocolVersion: "2025-06-18",
+  initializePayload: {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    clientInfo: { name: "test", version: "1" },
+  },
+  getClient: Effect.die("unused"),
+});
+
+it.effect("a launch naming another environment lands there, never on this one", () => {
+  const macbook = makeMacBook();
+  const record = newRecord();
+  return Effect.gen(function* () {
+    const output = yield* launch({
+      environmentId: macBook,
+      projectId: "project:macbook",
+      profileId: "cody",
+      title: "Configure Accessibility",
+      message: "Turn on the six permissions.",
+    });
+    expect(output.isFailure).toBe(false);
+    expect(output.result).toMatchObject({
+      environmentId: macBook,
+      projectId: "project:macbook",
+      runId: "run-macbook-1",
+    });
+    expect(record.launches).toEqual([]);
+    const [created] = macbook.called("createThread");
+    expect(created?.args[0]).toMatchObject({
+      environmentId: macBook,
+      projectId: "project:macbook",
+      parentThreadId: captain,
+      parentEnvironmentId: devBox,
+    });
+    expect(macbook.called("sendMessage")).toHaveLength(1);
+    // The named child becomes the caller's task, which is what puts it in the caller's sweep.
+    expect(record.assigned).toEqual([
+      {
+        owner: { kind: "thread", threadId: captain },
+        input: {
+          threadId: (output.result as { threadId: string }).threadId,
+          summary: "Configure Accessibility",
+          clientRequestId: `launch:${(output.result as { threadId: string }).threadId}`,
+        },
+        env: macBook,
+      },
+    ]);
+  }).pipe(Effect.provide(makeLayer(macbook, record)));
+});
+
+it.effect("an unknown environment is refused before anything launches", () => {
+  const macbook = makeMacBook();
+  const record = newRecord();
+  return Effect.gen(function* () {
+    const output = yield* launch({
+      environmentId: "environment-typo",
+      scratch: true,
+      title: "Configure Accessibility",
+      message: "Turn on the six permissions.",
+    });
+    expect(output.isFailure).toBe(true);
+    expect(output.result).toMatchObject({ code: "invalid_request" });
+    const message = (output.result as { message: string }).message;
+    expect(message).toContain("environment-typo");
+    expect(message).toContain(`${macBook} (MacBook)`);
+    expect(record.launches).toEqual([]);
+    expect(macbook.called("createThread")).toEqual([]);
+  }).pipe(Effect.provide(makeLayer(macbook, record)));
+});
+
+it.effect("a remote launch refuses what it cannot honor there instead of dropping it", () => {
+  const macbook = makeMacBook();
+  const record = newRecord();
+  return Effect.gen(function* () {
+    const scratch = yield* launch({ environmentId: macBook, scratch: true, title: "x" });
+    expect(scratch.result).toMatchObject({ code: "invalid_request" });
+    const existing = yield* launch({
+      environmentId: macBook,
+      projectId: "project:macbook",
+      title: "x",
+      workspaceStrategy: { type: "existing_worktree", worktreePath: "/Users/jj/repo" },
+    });
+    expect(existing.result).toMatchObject({ code: "invalid_request" });
+    expect(record.launches).toEqual([]);
+    expect(macbook.called("createThread")).toEqual([]);
+  }).pipe(Effect.provide(makeLayer(macbook, record)));
+});
+
+it.effect("a launch without environmentId stays on this environment and says so", () => {
+  const macbook = makeMacBook();
+  const record = newRecord();
+  return Effect.gen(function* () {
+    const output = yield* launch({ title: "Audit", message: "Review the change" });
+    expect(output.result).toMatchObject({ environmentId: devBox, modelSelection });
+    expect(record.launches).toHaveLength(1);
+    expect(record.launches[0]?.parentThreadId).toBe(captain);
+    expect(macbook.calls).toEqual([]);
+  }).pipe(Effect.provide(makeLayer(macbook, record)));
+});
+
+it.effect("waiting on a remote child returns when its run completes", () => {
+  const macbook = makeMacBook(["running", "running", "completed"]);
+  return Effect.gen(function* () {
+    const fiber = yield* orchestrate("t3_thread_wait", {
+      environmentId: macBook,
+      threadId: child,
+      timeoutMs: 60 * 60 * 1_000,
+    }).pipe(Effect.forkChild);
+    // Steps virtual time past each backoff; the relay's replies settle between steps.
+    while (fiber.pollUnsafe() === undefined) {
+      yield* TestClock.adjust("1 second");
+      yield* Effect.promise(() => new Promise((resolve) => setImmediate(resolve)));
+    }
+    const output = yield* Fiber.join(fiber);
+    expect(output.result).toEqual({
+      environmentId: macBook,
+      threadId: child,
+      runId: "run-macbook-1",
+      status: "completed",
+      timedOut: false,
+    });
+    expect(macbook.called("getThread")).toHaveLength(3);
+  }).pipe(Effect.provide(makeLayer(macbook, newRecord())));
+});
+
+it.effect("reads and sends reach a remote child through its environmentId", () => {
+  const macbook = makeMacBook();
+  return Effect.gen(function* () {
+    const read = yield* orchestrate("t3_thread_read", { environmentId: macBook, threadId: child });
+    expect(read.result).toMatchObject({
+      environmentId: macBook,
+      thread: { threadId: child, status: "running", parentEnvironmentId: devBox },
+      items: [
+        { type: "user_message", text: "Turn on the six permissions." },
+        { type: "assistant_message", text: "Cloudflare is logged in." },
+      ],
+    });
+    const sent = yield* orchestrate("t3_thread_send", {
+      environmentId: macBook,
+      threadId: child,
+      message: "Accept the dev-box host key.",
+    });
+    expect(sent.result).toMatchObject({
+      environmentId: macBook,
+      threadId: child,
+      delivery: "accepted",
+    });
+    expect(macbook.called("sendMessage")[0]?.args[0]).toMatchObject({
+      environmentId: macBook,
+      threadId: child,
+      text: "Accept the dev-box host key.",
+    });
+    const steer = yield* orchestrate("t3_thread_send", {
+      environmentId: macBook,
+      threadId: child,
+      message: "Stop.",
+      mode: "steer",
+    });
+    expect(steer.result).toMatchObject({ code: "invalid_request" });
+  }).pipe(Effect.provide(makeLayer(macbook, newRecord())));
+});
+
+it.effect("launch, create, delegate, send, and wait reject parameters they do not know", () => {
+  const record = newRecord();
+  return Effect.gen(function* () {
+    const mcp = yield* McpServer.McpServer;
+    const tools = new Map(mcp.tools.map(({ tool }) => [tool.name, tool]));
+    for (const name of [
+      "t3_thread_launch",
+      "create_threads",
+      "delegate_task",
+      "t3_thread_read",
+      "t3_thread_send",
+      "t3_thread_wait",
+    ]) {
+      expect(tools.get(name)?.inputSchema).toMatchObject({ additionalProperties: false });
+    }
+    const refused = yield* mcp
+      .callTool({ name: "t3_thread_launch", arguments: { title: "x", machine: "macbook" } })
+      .pipe(Effect.provideService(McpSchema.McpServerClient, mcpClient), Effect.flip);
+    expect(refused.message).toContain("excess property");
+    expect(record.launches).toEqual([]);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        toolkitRegistration(ProjectToolkit, ProjectHandlers.layer),
+        toolkitRegistration(OrchestratorToolkit, OrchestratorHandlers.layer),
+      ).pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(makeLayer(makeMacBook(), record)),
+      ),
+    ),
+  );
+});
+
+it.effect(
+  "t3_create_and_start_thread on another environment also puts the child in the sweep",
+  () => {
+    const macbook = makeMacBook();
+    const record = newRecord();
+    return Effect.gen(function* () {
+      const mcp = yield* McpServer.McpServer;
+      const result = yield* mcp
+        .callTool({
+          name: "t3_create_and_start_thread",
+          arguments: {
+            environmentId: macBook,
+            projectId: "project:macbook",
+            profileId: "cody",
+            title: "Configure Accessibility",
+            text: "Turn on the six permissions.",
+            idempotencyKey: "cody-macbook-1",
+          },
+        })
+        .pipe(Effect.provideService(McpSchema.McpServerClient, mcpClient));
+      expect(result.isError).toBe(false);
+      const [created] = macbook.called("createThread");
+      expect(created?.args[0]).toMatchObject({ environmentId: macBook, parentThreadId: captain });
+      expect(record.assigned).toEqual([
+        {
+          owner: { kind: "thread", threadId: captain },
+          input: {
+            threadId: (created!.args[0] as { threadId: string }).threadId,
+            summary: "Configure Accessibility",
+            clientRequestId: `launch:${(created!.args[0] as { threadId: string }).threadId}`,
+          },
+          env: macBook,
+        },
+      ]);
+    }).pipe(
+      Effect.provide(
+        layerAgentsToolkit.pipe(
+          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(makeLayer(macbook, record)),
+        ),
+      ),
+    );
+  },
+);
+
+it.effect("a remote wait follows a restart to the run that continues the work", () => {
+  const macbook = makeMacBook(
+    [],
+    [
+      [{ id: "run-1", status: "running" }],
+      [
+        { id: "run-1", status: "interrupted" },
+        { id: "run-2", status: "running" },
+      ],
+      [
+        { id: "run-1", status: "interrupted" },
+        { id: "run-2", status: "completed" },
+      ],
+    ],
+  );
+  return Effect.gen(function* () {
+    const fiber = yield* orchestrate("t3_thread_wait", {
+      environmentId: macBook,
+      threadId: child,
+    }).pipe(Effect.forkChild);
+    while (fiber.pollUnsafe() === undefined) {
+      yield* TestClock.adjust("1 second");
+      yield* Effect.promise(() => new Promise((resolve) => setImmediate(resolve)));
+    }
+    const output = yield* Fiber.join(fiber);
+    expect(output.result).toMatchObject({ runId: "run-2", status: "completed", timedOut: false });
+  }).pipe(Effect.provide(makeLayer(macbook, newRecord())));
+});
+
+it.effect("an agent whose modes exceed the caller's is refused on another environment", () => {
+  const macbook = makeMacBook();
+  const record = newRecord({
+    caller: { runtimeMode: "approval-required" },
+    profiles: [
+      {
+        profileId: "cody",
+        name: "Cody",
+        revision: 1,
+        createdAt: "2026-10-01T00:00:00.000Z",
+        updatedAt: "2026-10-01T00:00:00.000Z",
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      },
+    ],
+  });
+  return Effect.gen(function* () {
+    const output = yield* launch({
+      environmentId: macBook,
+      projectId: "project:macbook",
+      profileId: "cody",
+      title: "x",
+      message: "y",
+    });
+    expect(output.result).toMatchObject({ code: "runtime_mode_escalation_denied" });
+    expect(macbook.called("createThread")).toEqual([]);
+  }).pipe(Effect.provide(makeLayer(macbook, record)));
+});
+
+it.effect("a chat messages its own child on another environment without the worker check", () => {
+  const macbook = makeMacBook();
+  const record = newRecord();
+  return Effect.gen(function* () {
+    yield* orchestrate("t3_thread_send", {
+      environmentId: macBook,
+      threadId: child,
+      message: "Continue.",
+    });
+    // The fake child is nested under this caller on dev-box, so it is the caller's own child.
+    expect(record.authorized).toEqual([]);
+    expect(macbook.called("sendMessage")).toHaveLength(1);
+  }).pipe(Effect.provide(makeLayer(macbook, record)));
+});

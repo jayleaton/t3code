@@ -20,8 +20,8 @@ import {
   OrchestratorMcpTaskCancelResult,
   OrchestratorMcpThreadInterruptResult,
   OrchestratorMcpThreadListResult,
-  OrchestratorMcpThreadReadResult,
-  OrchestratorMcpThreadSendResult,
+  OrchestratorMcpLocalThreadReadResult,
+  OrchestratorMcpLocalThreadSendResult,
   OrchestratorMcpThreadWaitResult,
   ProjectId,
   ProviderDriverKind,
@@ -116,8 +116,8 @@ const decodeThreadInterruptResult = Schema.decodeUnknownEffect(
   OrchestratorMcpThreadInterruptResult,
 );
 const decodeThreadListResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadListResult);
-const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
-const decodeThreadSendResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadSendResult);
+const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpLocalThreadReadResult);
+const decodeThreadSendResult = Schema.decodeUnknownEffect(OrchestratorMcpLocalThreadSendResult);
 const decodeThreadWaitResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadWaitResult);
 const decodeThreadUpdateResult = Schema.decodeUnknownEffect(ThreadMetadataMcpUpdateResult);
 
@@ -1200,7 +1200,7 @@ describe("orchestrator MCP toolkit", () => {
                 textOffset,
                 maxCharsPerItem: 50_000,
               });
-              const page: OrchestratorMcpThreadReadResult = yield* decodeThreadReadResult(
+              const page: OrchestratorMcpLocalThreadReadResult = yield* decodeThreadReadResult(
                 pageCall.structuredContent,
               ).pipe(Effect.orDie);
               expect(page.items).toHaveLength(1);

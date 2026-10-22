@@ -1,15 +1,11 @@
-import {
-  createRoutedGatewayPort,
-  GATEWAY_SCOPE_VALUES,
-  type GatewayScope,
-} from "@t3tools/client-runtime/gateway";
-import { GatewayError, type GatewayToolContext } from "@t3tools/mcp-gateway";
+import { GatewayError } from "@t3tools/mcp-gateway";
 import {
   failure,
   GATEWAY_ONLY_TOOLS,
   requestContext,
   requiresEnvironment,
   runGatewayTool,
+  success,
   TOOL_SPECS,
   toolInputJsonSchema,
   type ToolSpec,
@@ -19,26 +15,20 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { McpSchema, Tool, Toolkit } from "effect/ai";
 
-import { OrchestratorMcpFailure, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, OrchestratorMcpFailure, ThreadId } from "@t3tools/contracts";
 
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadTaskService from "../../threadTask/ThreadTaskService.ts";
-import { McpGatewayBroker } from "../McpGatewayBroker.ts";
 import * as McpInvocationContext from "../McpInvocationContext.ts";
 import * as McpToolAccess from "../McpToolAccess.ts";
 import { LocalGatewayPort } from "./LocalGatewayPort.ts";
+import { assignRemoteChild, gatewayToolContext } from "./remoteThreads.ts";
 
 type ToolResult = {
   readonly isError?: boolean;
   readonly content: unknown;
   readonly structuredContent: unknown;
 };
-
-// Agents in a thread act with every scope on their own machine; other machines apply the
-// grants the user set on the T3 app relaying the call.
-const LOCAL_GRANTS = [...GATEWAY_SCOPE_VALUES];
-const isScope = (scope: string): scope is GatewayScope =>
-  (GATEWAY_SCOPE_VALUES as ReadonlyArray<string>).includes(scope);
 
 const decodeJsonText = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -55,6 +45,12 @@ const toCallToolResult = (result: ToolResult) => {
     content,
   });
 };
+
+/** Tools that create a chat; a named child they create on another machine gets its task here. */
+const CREATE_TOOLS: ReadonlySet<string> = new Set([
+  "t3_create_thread",
+  "t3_create_and_start_thread",
+]);
 
 /** Tools that deliver text to another chat; managed workers report through their task instead. */
 const MESSAGE_TOOLS: ReadonlySet<string> = new Set(["t3_send_message", "t3_answer_question"]);
@@ -111,26 +107,8 @@ export const layer = McpToolAccess.toLayer(
     const tasks = Option.getOrUndefined(
       yield* Effect.serviceOption(ThreadTaskService.ThreadTaskService),
     );
-    const local = Option.getOrUndefined(yield* Effect.serviceOption(LocalGatewayPort));
-    const broker = Option.getOrUndefined(yield* Effect.serviceOption(McpGatewayBroker));
-    const relay = broker && {
-      invoke: (
-        method: string,
-        args: ReadonlyArray<unknown>,
-        environmentIds: ReadonlyArray<string>,
-      ) => Effect.runPromise(broker.invoke(method, args, environmentIds)),
-    };
-    const context: GatewayToolContext | undefined = local && {
-      port: createRoutedGatewayPort(local.environmentId, local.port, () =>
-        relay && broker.available() ? relay : undefined,
-      ),
-      grants: () => {
-        const relayed = Object.entries(broker?.grants() ?? {}).map(
-          ([environmentId, scopes]) => [environmentId, scopes.filter(isScope)] as const,
-        );
-        return { ...Object.fromEntries(relayed), [local.environmentId]: LOCAL_GRANTS };
-      },
-    };
+    const local = yield* gatewayToolContext;
+    const context = local?.context;
 
     const handle = (name: string) => {
       const defaultEnvironment = requiresEnvironment(name);
@@ -160,7 +138,32 @@ export const layer = McpToolAccess.toLayer(
               ? undefined
               : { environmentId: local.environmentId, threadId: invocation.thread.threadId };
           const run = Effect.promise(() => runGatewayTool(context, name, args, { caller })).pipe(
-            Effect.map((run) => toCallToolResult(run.result)),
+            Effect.flatMap((run) => {
+              const created = run.ok ? (run.value as { threadId?: unknown }) : undefined;
+              const isNamedRemoteChild =
+                caller !== undefined &&
+                created !== undefined &&
+                CREATE_TOOLS.has(name) &&
+                typeof created.threadId === "string" &&
+                args.environmentId !== local.environmentId &&
+                args.parentThreadId === undefined &&
+                (typeof args.profileId === "string" || typeof args.profile === "string");
+              if (!isNamedRemoteChild) return Effect.succeed(toCallToolResult(run.result));
+              return assignRemoteChild({
+                ownerThreadId: ThreadId.make(caller.threadId),
+                workerThreadId: ThreadId.make(created.threadId as string),
+                workerEnvironmentId: EnvironmentId.make(String(args.environmentId)),
+                summary: String(args.title ?? created.threadId),
+              }).pipe(
+                Effect.map((taskWarning) =>
+                  toCallToolResult(
+                    taskWarning === undefined
+                      ? run.result
+                      : success({ ...created, taskWarning }, requestContext(args)),
+                  ),
+                ),
+              );
+            }),
           );
           // Task tools stay with this server as the calling chat (see createRoutedGatewayPort).
           if (caller === undefined || !MESSAGE_TOOLS.has(name) || tasks === undefined) {

@@ -351,6 +351,13 @@ its own under the environment's Scratch project. For stacked PRs, use the parent
 interaction modes than the caller. Launch has no retry key, so inspect existing threads after a failed or lost response before
 launching again. `create_threads` remains the batch option for a shared checkout.
 
+`environmentId` launches on another environment instead, with a `projectId` from there. An
+environment no connected app grants is refused, never replaced by this one, and every result
+reports the `environmentId` the thread runs on. `t3_thread_read`, `t3_thread_wait`, and
+`t3_thread_send` take the same field; see
+[Agents: threads on another machine](../internals/agents-v2.md#threads-on-another-machine) for what
+works there. These tools, `create_threads`, and `delegate_task` reject unknown parameters.
+
 ### `t3_thread_list`
 
 Lists durable thread shells in one project, newest first: `projectId` when

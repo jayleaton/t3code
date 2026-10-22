@@ -178,3 +178,16 @@ but never cause delivery on an updated owner.
 Workers (any chat with a task) may message only their own children, on every send path; Captains
 coordinate freely. Gateway-originated turns are stored as agent messages, so a relay never counts
 as the user writing.
+
+### Threads on another machine
+
+The orchestrator thread tools (`t3_thread_launch`, `_read`, `_wait`, `_send`) reach a thread on
+another environment through the same connected app
+([`remoteThreads.ts`](../../apps/server/src/mcp/agents/remoteThreads.ts)). That app is the user's
+installed T3 Code, so these calls may use only runtime-port methods it already relays: a launch
+maps onto `createThread` (a project, a root or new-worktree checkout, no scratch folder, existing
+worktree, branch name, or attachments), a read returns messages rather than the timeline, a send
+cannot steer or restart, and a wait re-reads the thread with backoff because the relay streams
+nothing. Whatever a remote call cannot honor is refused rather than dropped, and a named child
+created there, by either launch tool, is assigned as a remote task at once so the owner's sweep
+lists it.
