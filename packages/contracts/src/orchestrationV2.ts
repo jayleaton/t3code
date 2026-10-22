@@ -3157,6 +3157,11 @@ const OrchestrationV2InternalCommand = Schema.Union([
     type: Schema.Literal("thread.sub-run.settle"),
     commandId: CommandId,
     threadId: ThreadId,
+    /**
+     * When the sub-run's parent is on another environment: that parent's
+     * manual settle time, as its environment reported it. Ignored otherwise.
+     */
+    parentSettledAt: Schema.optional(Schema.DateTimeUtc),
   }),
   /**
    * Sets a thread's owner and parent relationship outright: records the kind

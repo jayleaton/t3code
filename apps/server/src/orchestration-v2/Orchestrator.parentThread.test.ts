@@ -15,6 +15,7 @@ import {
   TurnItemId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
@@ -29,6 +30,7 @@ import { ProjectionStoreV2, layer as projectionLayer } from "./ProjectionStore.t
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import { makeSubagentChildThread } from "@t3tools/provider-core/server/subagentProjection";
+import { RemoteParentSettlement } from "./RemoteParentSettlement.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
@@ -698,9 +700,13 @@ it.effect("a sub-run whose turn ended with background work still open stays acti
     assert.equal((yield* projections.getThreadShell(threadId))?.pendingBackgroundTasks?.length, 1);
     yield* settle("open");
     assert.isNull(yield* settledOverride());
-    // Once the background work ends, the finished child follows its settled parent.
+    // Once the background work ends on its own, the finished child follows its settled parent.
+    const before = yield* sink.latestSequence();
     yield* sink.write({ events: [command("completed")] });
-    yield* settle("done");
+    yield* sink.stream({ afterSequence: before, eventType: "thread.settled" }).pipe(
+      Stream.filter((stored) => stored.event.threadId === threadId),
+      Stream.runHead,
+    );
     assert.equal(yield* settledOverride(), "settled");
   }).pipe(Effect.provide(testLayer)),
 );
@@ -802,6 +808,300 @@ it.effect(
     }).pipe(Effect.provide(testLayer)),
 );
 
+it.effect(
+  "settling reaches descendants under an already settled sub-run and follows them when they finish",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const projections = yield* ProjectionStoreV2;
+      const sink = yield* EventSinkV2;
+      const create = (id: string, parentThreadId?: string) =>
+        orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`create:${id}`),
+          threadId: ThreadId.make(id),
+          projectId: ProjectId.make("project:parents"),
+          title: id,
+          modelSelection: { instanceId, model: "gpt-5.1-codex" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "agent",
+          creationSource: "mcp",
+          ...(parentThreadId === undefined
+            ? {}
+            : { parentThreadId: ThreadId.make(parentThreadId) }),
+        });
+      const settledAt = (id: string) =>
+        projections.getThread(ThreadId.make(id)).pipe(Effect.map((thread) => thread.settledAt));
+
+      yield* create("lead");
+      yield* create("aged", "lead");
+      yield* create("aged-idle", "aged");
+      yield* create("aged-busy", "aged");
+      // Age settlement never cascades, so the aged sub-run's own children stay active.
+      const aged = yield* projections.getThread(ThreadId.make("aged"));
+      yield* orchestrator.dispatch({
+        type: "thread.auto-settle",
+        commandId: CommandId.make("auto-settle:aged"),
+        threadId: aged.id,
+        snapshotAt: aged.updatedAt,
+      });
+      const agedAt = yield* settledAt("aged");
+      assert.isNotNull(agedAt);
+      assert.isNull(yield* settledAt("aged-idle"));
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("send:aged-busy"),
+        threadId: ThreadId.make("aged-busy"),
+        messageId: MessageId.make("message:aged-busy"),
+        text: "Keep working",
+        attachments: [],
+        dispatchMode: { type: "defer_start" },
+        createdBy: "agent",
+        creationSource: "mcp",
+      });
+      yield* TestClock.adjust("1 minute");
+
+      yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("settle:lead"),
+        threadId: ThreadId.make("lead"),
+      });
+      const leadAt = yield* settledAt("lead");
+      assert.isNotNull(leadAt);
+      assert.deepEqual(yield* settledAt("aged"), agedAt);
+      assert.deepEqual(yield* settledAt("aged-idle"), leadAt);
+      assert.isNull(yield* settledAt("aged-busy"));
+
+      // The working grandchild follows the manual settle above its aged parent.
+      const before = yield* sink.latestSequence();
+      const run = (yield* projections.getThreadRecords(ThreadId.make("aged-busy"), [
+        "runs",
+      ])).runs.at(-1)!;
+      const now = yield* DateTime.now;
+      yield* sink.write({
+        events: [
+          ...(yield* finishOpenTurnItems(ThreadId.make("aged-busy"))),
+          {
+            id: EventId.make(`event:complete:${run.id}`),
+            type: "run.updated",
+            threadId: ThreadId.make("aged-busy"),
+            runId: run.id,
+            ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
+            providerInstanceId: instanceId,
+            occurredAt: now,
+            payload: { ...run, status: "completed", completedAt: now },
+          },
+        ],
+      });
+      yield* sink.stream({ afterSequence: before, eventType: "thread.settled" }).pipe(
+        Stream.filter((stored) => stored.event.threadId === "aged-busy"),
+        Stream.runHead,
+      );
+      assert.deepEqual(yield* settledAt("aged-busy"), leadAt);
+
+      // Un-settling the lead returns what settled with it; the aged card keeps its own clock.
+      yield* orchestrator.dispatch({
+        type: "thread.unsettle",
+        commandId: CommandId.make("unsettle:lead"),
+        threadId: ThreadId.make("lead"),
+        reason: "user",
+      });
+      assert.deepEqual(yield* settledAt("aged"), agedAt);
+      assert.isNull(yield* settledAt("aged-idle"));
+      assert.isNull(yield* settledAt("aged-busy"));
+    }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("a sub-run stopped after its parent settled follows the parent with its subtree", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* OrchestratorV2;
+    const projections = yield* ProjectionStoreV2;
+    const sink = yield* EventSinkV2;
+    const create = (id: string, parentThreadId?: string) =>
+      orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`create:${id}`),
+        threadId: ThreadId.make(id),
+        projectId: ProjectId.make("project:parents"),
+        title: id,
+        modelSelection: { instanceId, model: "gpt-5.1-codex" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+        ...(parentThreadId === undefined ? {} : { parentThreadId: ThreadId.make(parentThreadId) }),
+      });
+    const settledAt = (id: string) =>
+      projections.getThread(ThreadId.make(id)).pipe(Effect.map((thread) => thread.settledAt));
+
+    yield* create("card");
+    yield* create("stopped", "card");
+    yield* create("stopped-helper", "stopped");
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("send:stopped"),
+      threadId: ThreadId.make("stopped"),
+      messageId: MessageId.make("message:stopped"),
+      text: "Keep working",
+      attachments: [],
+      dispatchMode: { type: "defer_start" },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.settle",
+      commandId: CommandId.make("settle:card"),
+      threadId: ThreadId.make("card"),
+    });
+    const cardAt = yield* settledAt("card");
+    assert.isNull(yield* settledAt("stopped"));
+
+    // The settle refusal tells the user to stop a working chat; stopping it finishes the cascade.
+    const before = yield* sink.latestSequence();
+    const run = (yield* projections.getThreadRecords(ThreadId.make("stopped"), ["runs"])).runs.at(
+      -1,
+    )!;
+    const now = yield* DateTime.now;
+    yield* sink.write({
+      events: [
+        ...(yield* finishOpenTurnItems(ThreadId.make("stopped"))),
+        {
+          id: EventId.make(`event:interrupt:${run.id}`),
+          type: "run.updated",
+          threadId: ThreadId.make("stopped"),
+          runId: run.id,
+          ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
+          providerInstanceId: instanceId,
+          occurredAt: now,
+          payload: { ...run, status: "interrupted", completedAt: now },
+        },
+      ],
+    });
+    yield* sink.stream({ afterSequence: before, eventType: "thread.settled" }).pipe(
+      Stream.filter((stored) => stored.event.threadId === "stopped-helper"),
+      Stream.runHead,
+    );
+    assert.deepEqual(yield* settledAt("stopped"), cardAt);
+    assert.deepEqual(yield* settledAt("stopped-helper"), cardAt);
+  }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect(
+  "a sub-run under a card on another machine follows that card's manual settle once it finishes",
+  () => {
+    const pcCardSettledAt = DateTime.makeUnsafe("2026-10-22T09:00:00.000Z");
+    // What the card's machine reports; null stands for one that predates settlementSource.
+    const reported = new Map<string, DateTime.Utc | null>([
+      ["pc-card", pcCardSettledAt],
+      ["pc-old-card", null],
+    ]);
+    const asked: Array<string> = [];
+    const oldCardAsked = Deferred.makeUnsafe<void>();
+    const remoteParents = Layer.succeed(RemoteParentSettlement, {
+      manualSettledAt: (environmentId, threadId) =>
+        Effect.sync(() => {
+          asked.push(`${environmentId}:${threadId}`);
+          return reported.get(threadId) ?? null;
+        }).pipe(
+          Effect.tap(() =>
+            threadId === "pc-old-card" ? Deferred.succeed(oldCardAsked, undefined) : Effect.void,
+          ),
+        ),
+    });
+    return Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const projections = yield* ProjectionStoreV2;
+      const sink = yield* EventSinkV2;
+      const pc = EnvironmentId.make("environment-pc");
+      const create = (id: string, parent: { threadId: string; environmentId?: EnvironmentId }) =>
+        orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`create:${id}`),
+          threadId: ThreadId.make(id),
+          projectId: ProjectId.make("project:parents"),
+          title: id,
+          modelSelection: { instanceId, model: "gpt-5.1-codex" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "agent",
+          creationSource: "mcp",
+          parentThreadId: ThreadId.make(parent.threadId),
+          ...(parent.environmentId === undefined
+            ? {}
+            : { parentEnvironmentId: parent.environmentId }),
+        });
+      const settledAt = (id: string) =>
+        projections.getThread(ThreadId.make(id)).pipe(Effect.map((thread) => thread.settledAt));
+      const finishRun = (id: string) =>
+        Effect.gen(function* () {
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(`send:${id}`),
+            threadId: ThreadId.make(id),
+            messageId: MessageId.make(`message:${id}`),
+            text: "Keep working",
+            attachments: [],
+            dispatchMode: { type: "defer_start" },
+            createdBy: "agent",
+            creationSource: "mcp",
+          });
+          const run = (yield* projections.getThreadRecords(ThreadId.make(id), ["runs"])).runs.at(
+            -1,
+          )!;
+          const now = yield* DateTime.now;
+          yield* sink.write({
+            events: [
+              ...(yield* finishOpenTurnItems(ThreadId.make(id))),
+              {
+                id: EventId.make(`event:complete:${run.id}`),
+                type: "run.updated",
+                threadId: ThreadId.make(id),
+                runId: run.id,
+                ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
+                providerInstanceId: instanceId,
+                occurredAt: now,
+                payload: { ...run, status: "completed", completedAt: now },
+              },
+            ],
+          });
+        });
+
+      yield* create("remote-worker", { threadId: "pc-card", environmentId: pc });
+      yield* create("remote-worker-helper", { threadId: "remote-worker" });
+      const before = yield* sink.latestSequence();
+      yield* finishRun("remote-worker");
+      yield* sink.stream({ afterSequence: before, eventType: "thread.settled" }).pipe(
+        Stream.filter((stored) => stored.event.threadId === "remote-worker-helper"),
+        Stream.runHead,
+      );
+      // Settled at the card's time, so un-settling the card there brings both back.
+      assert.deepEqual(yield* settledAt("remote-worker"), pcCardSettledAt);
+      assert.deepEqual(yield* settledAt("remote-worker-helper"), pcCardSettledAt);
+      assert.deepEqual(asked, [`${pc}:pc-card`]);
+
+      // A sub-run never settles on a remote parent's word unless the command carries it.
+      yield* create("old-env-worker", { threadId: "pc-old-card", environmentId: pc });
+      const receipt = yield* orchestrator.dispatch({
+        type: "thread.sub-run.settle",
+        commandId: CommandId.make("settle:old-env-worker"),
+        threadId: ThreadId.make("old-env-worker"),
+      });
+      assert.equal(receipt.storedEvents.length, 0);
+      // An environment that cannot say how its card settled leaves the sub-run as before.
+      yield* finishRun("old-env-worker");
+      // The answer is null, so nothing is dispatched after it.
+      yield* Deferred.await(oldCardAsked);
+      assert.isNull(yield* settledAt("old-env-worker"));
+    }).pipe(Effect.provide(testLayer.pipe(Layer.provide(remoteParents))));
+  },
+);
 it.effect("age settlement applies to one card without cascading to child chats or subagents", () =>
   Effect.gen(function* () {
     const orchestrator = yield* OrchestratorV2;

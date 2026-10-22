@@ -73,6 +73,7 @@ import { modelSelectionsEqual } from "@t3tools/shared/model";
 import {
   derivePendingBackgroundWork,
   pendingBackgroundTurnItems,
+  turnItemUpdateCanEndBackgroundWork,
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -130,6 +131,7 @@ import {
   type ProjectionCheckpointContext,
   type ShellSnapshotOptions,
 } from "./ProjectionStore.ts";
+import { RemoteParentSettlement } from "./RemoteParentSettlement.ts";
 import { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
 import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
@@ -936,6 +938,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const projectionStore = yield* ProjectionStoreV2;
+  const remoteParents = yield* Effect.serviceOption(RemoteParentSettlement);
   const effectOutbox = yield* EffectOutbox.EffectOutboxV2;
   const nextTurnItemOrdinal = (
     projection: Pick<OrchestrationV2ThreadProjection, "thread"> &
@@ -9037,6 +9040,43 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  /**
+   * What a sub-run's settle follows: the settle time of its nearest manually
+   * settled ancestor here, or the ancestor on another machine the walk
+   * reaches, which only that machine can answer for. Ancestors that only
+   * aged out are looked past, since age settlement never cascades and must
+   * not cut a manual cascade short.
+   */
+  const manualSettlementAbove = Effect.fn("orchestrationV2.dispatch.manualSettlementAbove")(
+    function* (thread: OrchestrationV2AppThread) {
+      const seen = new Set<ThreadId>([thread.id]);
+      let current = thread;
+      while (current.parentThreadId != null) {
+        if (current.parentEnvironmentId != null) {
+          return {
+            remote: {
+              environmentId: current.parentEnvironmentId,
+              threadId: current.parentThreadId,
+            },
+          } as const;
+        }
+        if (seen.has(current.parentThreadId)) return null;
+        seen.add(current.parentThreadId);
+        const parent = yield* projectionStore
+          .getThread(current.parentThreadId)
+          .pipe(Effect.orElseSucceed(() => null));
+        if (parent === null || parent.deletedAt !== null || parent.settledOverride !== "settled") {
+          return null;
+        }
+        if (parent.settlementSource !== "inactivity") {
+          return parent.settledAt === null ? null : ({ settledAt: parent.settledAt } as const);
+        }
+        current = parent;
+      }
+      return null;
+    },
+  );
+
   /** Completes the deferred cascade of a manually settled parent, never ordinary run completion. */
   const dispatchSubRunSettle = Effect.fn("orchestrationV2.dispatch.subRunSettle")(function* (
     command: Extract<OrchestrationV2ServerCommand, { readonly type: "thread.sub-run.settle" }>,
@@ -9047,19 +9087,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       .getThreadRecords(command.threadId, ["runs", "runtimeRequests"])
       .pipe(mapDispatchError(command));
     const thread = records.thread;
-    // A parent on another machine is not readable here.
-    const parent =
-      thread.parentThreadId == null || thread.parentEnvironmentId != null
-        ? null
-        : yield* projectionStore
-            .getThread(thread.parentThreadId)
-            .pipe(Effect.orElseSucceed(() => null));
+    const above = yield* manualSettlementAbove(thread);
     const parentSettledAt =
-      parent?.settledOverride === "settled" &&
-      parent.settlementSource !== "inactivity" &&
-      parent.deletedAt === null
-        ? parent.settledAt
-        : null;
+      above === null
+        ? null
+        : "settledAt" in above
+          ? above.settledAt
+          : (command.parentSettledAt ?? null);
     if (
       thread.parentThreadId == null ||
       parentSettledAt == null ||
@@ -12083,33 +12117,42 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     >,
     settledAt: DateTime.Utc,
   ) {
-    const children = yield* projectionStore
-      .getChildThreads(command.threadId)
-      .pipe(Effect.orElseSucceed(() => []));
     const settledAtMs = DateTime.toEpochMillis(settledAt);
-    for (const child of children) {
-      if (child.parentEnvironmentId != null) continue;
-      const settled = child.settledOverride === "settled";
-      const commandId = CommandId.make(`${command.commandId}:cascade:${child.id}`);
-      const childCommand: OrchestrationV2ServerCommand | null =
-        command.type === "thread.unsettle"
-          ? settled &&
-            child.settlementSource !== "inactivity" &&
-            child.settledAt != null &&
-            DateTime.toEpochMillis(child.settledAt) === settledAtMs
+    const visited = new Set<ThreadId>([command.threadId]);
+    const pending = [command.threadId];
+    for (let index = 0; index < pending.length; index++) {
+      const children = yield* projectionStore
+        .getChildThreads(pending[index]!)
+        .pipe(Effect.orElseSucceed(() => []));
+      for (const child of children) {
+        if (child.parentEnvironmentId != null || visited.has(child.id)) continue;
+        visited.add(child.id);
+        const settled = child.settledOverride === "settled";
+        const follows =
+          command.type === "thread.unsettle"
+            ? settled &&
+              child.settlementSource !== "inactivity" &&
+              child.settledAt != null &&
+              DateTime.toEpochMillis(child.settledAt) === settledAtMs
+            : !settled;
+        if (!follows) {
+          // A card settled on its own keeps its clock, but its sub-runs still follow.
+          if (settled) pending.push(child.id);
+          continue;
+        }
+        const commandId = CommandId.make(`${command.commandId}:cascade:${child.id}`);
+        yield* dispatchWithReceipt(
+          command.type === "thread.unsettle"
             ? { type: "thread.unsettle", commandId, threadId: child.id, reason: "user" }
-            : null
-          : settled
-            ? null
             : command.type === "thread.settle"
               ? { type: "thread.settle", commandId, threadId: child.id, settledAt }
-              : { type: "thread.sub-run.settle", commandId, threadId: child.id };
-      if (childCommand === null) continue;
-      yield* dispatchWithReceipt(childCommand).pipe(
-        Effect.catch((cause) =>
-          Effect.logDebug("Sub-run kept its settlement", { threadId: child.id, cause }),
-        ),
-      );
+              : { type: "thread.sub-run.settle", commandId, threadId: child.id },
+        ).pipe(
+          Effect.catch((cause) =>
+            Effect.logDebug("Sub-run kept its settlement", { threadId: child.id, cause }),
+          ),
+        );
+      }
     }
   });
 
@@ -12190,19 +12233,42 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     return result;
   });
 
-  /** Finishes a manual parent cascade after a child chat or subagent completes. */
+  /**
+   * Finishes a manual parent cascade after a child chat or subagent completes,
+   * or after background work its last turn left open ends on its own.
+   */
   const settleCompletedSubRun = Effect.fn("Orchestrator.settleCompletedSubRun")(function* (
     threadId: ThreadId,
-    runId: RunId,
+    completion: string,
   ) {
     const thread = yield* projectionStore.getThread(threadId);
-    if (thread.parentThreadId == null || thread.parentEnvironmentId != null) return;
-    const parent = yield* projectionStore.getThread(thread.parentThreadId);
-    if (parent.settledOverride !== "settled" || parent.settlementSource === "inactivity") return;
+    if (thread.settledOverride !== null) return;
+    const above = yield* manualSettlementAbove(thread);
+    if (above === null) return;
+    let parentSettledAt: DateTime.Utc | undefined;
+    if ("remote" in above) {
+      // Ask the other machine only once nothing here keeps the sub-run active.
+      const shell = yield* projectionStore.getThreadShell(threadId);
+      if (
+        Option.isNone(remoteParents) ||
+        shell === null ||
+        threadShellHasActiveWork(shell) ||
+        (shell.pendingBackgroundTasks?.length ?? 0) > 0
+      ) {
+        return;
+      }
+      const settledAt = yield* remoteParents.value.manualSettledAt(
+        above.remote.environmentId,
+        above.remote.threadId,
+      );
+      if (settledAt === null) return;
+      parentSettledAt = settledAt;
+    }
     yield* dispatchWithReceipt({
       type: "thread.sub-run.settle",
-      commandId: CommandId.make(`server:sub-run-settle:${threadId}:${runId}`),
+      commandId: CommandId.make(`server:sub-run-settle:${threadId}:${completion}`),
       threadId,
+      ...(parentSettledAt === undefined ? {} : { parentSettledAt }),
     });
   });
 
@@ -12244,8 +12310,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         );
       }
       // Only a manually settled parent can request this deferred cascade.
-      // Ordinary completion leaves child chats and subagents unsettled.
-      if (run.status === "completed") {
+      // Ordinary completion leaves child chats and subagents unsettled. A
+      // stopped run counts: settling tells the user to stop a working chat.
+      // A failed run stays visible.
+      if (
+        run.status === "completed" ||
+        run.status === "interrupted" ||
+        run.status === "cancelled"
+      ) {
         yield* settleCompletedSubRun(threadId, run.id);
       }
     },
@@ -12286,6 +12358,31 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       Stream.runForEach(handleRunUpdate),
       Effect.forkDetach,
     );
+  // Background work ends with its turn item or with the provider's roster.
+  const settleAfterBackgroundWork = (stored: OrchestrationV2StoredEvent) =>
+    settleCompletedSubRun(stored.event.threadId, `event:${stored.sequence}`).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Failed to settle a sub-run after its background work", {
+          threadId: stored.event.threadId,
+          sequence: stored.sequence,
+          cause,
+        }),
+      ),
+    );
+  yield* eventSink
+    .stream({ afterSequence: terminalEventsAfterSequence, eventType: "turn-item.updated" })
+    .pipe(
+      Stream.filter(
+        (stored) =>
+          stored.event.type === "turn-item.updated" &&
+          turnItemUpdateCanEndBackgroundWork(stored.event.payload),
+      ),
+      Stream.runForEach(settleAfterBackgroundWork),
+      Effect.forkDetach,
+    );
+  yield* eventSink
+    .stream({ afterSequence: terminalEventsAfterSequence, eventType: "provider-thread.updated" })
+    .pipe(Stream.runForEach(settleAfterBackgroundWork), Effect.forkDetach);
 
   // A child whose run ends while its background tasks or its own subagents still run has no
   // result yet. When that work settles there is no run update to finalize it, so these events
