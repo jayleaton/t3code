@@ -15,6 +15,7 @@ import {
   TurnItemId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
@@ -29,6 +30,7 @@ import { ProjectionStoreV2, layer as projectionLayer } from "./ProjectionStore.t
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import { makeSubagentChildThread } from "@t3tools/provider-core/server/subagentProjection";
+import { RemoteParentSettlement } from "./RemoteParentSettlement.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
@@ -987,6 +989,118 @@ it.effect("a sub-run stopped after its parent settled follows the parent with it
     assert.deepEqual(yield* settledAt("stopped"), cardAt);
     assert.deepEqual(yield* settledAt("stopped-helper"), cardAt);
   }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect(
+  "a sub-run under a card on another machine follows that card's manual settle once it finishes",
+  () => {
+    const pcCardSettledAt = DateTime.makeUnsafe("2026-10-22T09:00:00.000Z");
+    // What the card's machine reports; null stands for one that predates settlementSource.
+    const reported = new Map<string, DateTime.Utc | null>([
+      ["pc-card", pcCardSettledAt],
+      ["pc-old-card", null],
+    ]);
+    const asked: Array<string> = [];
+    const oldCardAsked = Deferred.makeUnsafe<void>();
+    const remoteParents = Layer.succeed(RemoteParentSettlement, {
+      manualSettledAt: (environmentId, threadId) =>
+        Effect.sync(() => {
+          asked.push(`${environmentId}:${threadId}`);
+          return reported.get(threadId) ?? null;
+        }).pipe(
+          Effect.tap(() =>
+            threadId === "pc-old-card" ? Deferred.succeed(oldCardAsked, undefined) : Effect.void,
+          ),
+        ),
+    });
+    return Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const projections = yield* ProjectionStoreV2;
+      const sink = yield* EventSinkV2;
+      const pc = EnvironmentId.make("environment-pc");
+      const create = (id: string, parent: { threadId: string; environmentId?: EnvironmentId }) =>
+        orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`create:${id}`),
+          threadId: ThreadId.make(id),
+          projectId: ProjectId.make("project:parents"),
+          title: id,
+          modelSelection: { instanceId, model: "gpt-5.1-codex" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "agent",
+          creationSource: "mcp",
+          parentThreadId: ThreadId.make(parent.threadId),
+          ...(parent.environmentId === undefined
+            ? {}
+            : { parentEnvironmentId: parent.environmentId }),
+        });
+      const settledAt = (id: string) =>
+        projections.getThread(ThreadId.make(id)).pipe(Effect.map((thread) => thread.settledAt));
+      const finishRun = (id: string) =>
+        Effect.gen(function* () {
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(`send:${id}`),
+            threadId: ThreadId.make(id),
+            messageId: MessageId.make(`message:${id}`),
+            text: "Keep working",
+            attachments: [],
+            dispatchMode: { type: "defer_start" },
+            createdBy: "agent",
+            creationSource: "mcp",
+          });
+          const run = (yield* projections.getThreadRecords(ThreadId.make(id), ["runs"])).runs.at(
+            -1,
+          )!;
+          const now = yield* DateTime.now;
+          yield* sink.write({
+            events: [
+              ...(yield* finishOpenTurnItems(ThreadId.make(id))),
+              {
+                id: EventId.make(`event:complete:${run.id}`),
+                type: "run.updated",
+                threadId: ThreadId.make(id),
+                runId: run.id,
+                ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
+                providerInstanceId: instanceId,
+                occurredAt: now,
+                payload: { ...run, status: "completed", completedAt: now },
+              },
+            ],
+          });
+        });
+
+      yield* create("remote-worker", { threadId: "pc-card", environmentId: pc });
+      yield* create("remote-worker-helper", { threadId: "remote-worker" });
+      const before = yield* sink.latestSequence();
+      yield* finishRun("remote-worker");
+      yield* sink.stream({ afterSequence: before, eventType: "thread.settled" }).pipe(
+        Stream.filter((stored) => stored.event.threadId === "remote-worker-helper"),
+        Stream.runHead,
+      );
+      // Settled at the card's time, so un-settling the card there brings both back.
+      assert.deepEqual(yield* settledAt("remote-worker"), pcCardSettledAt);
+      assert.deepEqual(yield* settledAt("remote-worker-helper"), pcCardSettledAt);
+      assert.deepEqual(asked, [`${pc}:pc-card`]);
+
+      // A sub-run never settles on a remote parent's word unless the command carries it.
+      yield* create("old-env-worker", { threadId: "pc-old-card", environmentId: pc });
+      const receipt = yield* orchestrator.dispatch({
+        type: "thread.sub-run.settle",
+        commandId: CommandId.make("settle:old-env-worker"),
+        threadId: ThreadId.make("old-env-worker"),
+      });
+      assert.equal(receipt.storedEvents.length, 0);
+      // An environment that cannot say how its card settled leaves the sub-run as before.
+      yield* finishRun("old-env-worker");
+      // The answer is null, so nothing is dispatched after it.
+      yield* Deferred.await(oldCardAsked);
+      assert.isNull(yield* settledAt("old-env-worker"));
+    }).pipe(Effect.provide(testLayer.pipe(Layer.provide(remoteParents))));
+  },
 );
 it.effect("age settlement applies to one card without cascading to child chats or subagents", () =>
   Effect.gen(function* () {
