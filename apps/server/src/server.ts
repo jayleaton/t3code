@@ -11,6 +11,8 @@ import * as McpGatewayBroker from "./mcp/McpGatewayBroker.ts";
 import * as LocalGatewayPort from "./mcp/agents/LocalGatewayPort.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQuestionReactor.ts";
+import * as RemoteParentSettlement from "./orchestration-v2/RemoteParentSettlement.ts";
+import * as RemoteSettlementCascade from "./orchestration-v2/RemoteSettlementCascade.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeHttp from "node:http";
 
@@ -485,6 +487,7 @@ const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   // Tasks split across machines reach the other environment through the same
   // broker the WebSocket routes serve (one memoized instance).
   Layer.provide(ThreadTaskTransport.layerFromBroker.pipe(Layer.provide(McpGatewayBroker.layer))),
+  Layer.provide(RemoteParentSettlement.layerFromBroker.pipe(Layer.provide(McpGatewayBroker.layer))),
   Layer.provide(layerScheduledTaskWebhookOrigin),
   Layer.provide(ProviderEventIngestor.layerAnalytics),
   Layer.provide(layerCheckpointStore),
@@ -594,6 +597,12 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       yield* service.start();
     }),
   ).pipe(Layer.provide(DelegatedTaskQuestionReactor.layer), Layer.provide(ProjectionStoreV2.layer)),
+  RemoteSettlementCascade.layer.pipe(
+    Layer.provide(McpGatewayBroker.layer),
+    Layer.provide(
+      Layer.merge(EventStoreV2.layerFromOrchestrationEventStore, ProjectionStoreV2.layer),
+    ),
+  ),
   ProviderUsageLimitsIngestion.layer,
   layerProviderInstallationRefresh,
   ReplayMarkers.layer,

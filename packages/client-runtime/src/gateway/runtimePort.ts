@@ -334,6 +334,8 @@ export function gatewayThreadProjection(projection: OrchestrationV2ThreadProject
     parentThreadId: thread.parentThreadId ?? null,
     parentEnvironmentId: thread.parentEnvironmentId ?? null,
     settledAt: iso(thread.settledAt),
+    // Older environments omit it; readers treat a missing source as unknown.
+    settlementSource: thread.settlementSource ?? null,
     runtimeMode: thread.runtimeMode,
     interactionMode: thread.interactionMode,
     runs: projection.runs.map((run) => ({
