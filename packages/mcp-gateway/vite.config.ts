@@ -18,5 +18,9 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],
+    // CI runs this config from the package, so the root 60s ceiling does not apply.
+    // The shared gateway tests spawn real stdio sessions and detached owners.
+    hookTimeout: 60_000,
+    testTimeout: 60_000,
   },
 });
