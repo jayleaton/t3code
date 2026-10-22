@@ -28,7 +28,7 @@ const TOKEN = "test-shared-gateway-token";
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
   for (const close of cleanup.splice(0).toReversed()) await close();
-}, 45_000);
+});
 
 async function config(): Promise<SharedGatewayConfig> {
   const server = NodeNet.createServer();
@@ -200,7 +200,7 @@ describe("shared MCP gateway", () => {
       body(await client.callTool({ name: "t3_get_gateway_health", arguments: {} })).data,
     ).toMatchObject({ bridge: "connected" });
     expect(NodeFS.existsSync(input.stateFile)).toBe(true);
-  }, 45_000);
+  });
 
   it("elects one bridge owner for five concurrent launchers and keeps all sessions usable", async () => {
     const input = await config();
@@ -356,7 +356,7 @@ describe("shared MCP gateway", () => {
       }),
     ).rejects.toThrow("The port belongs to an older gateway or a different service");
     expect(NodeFS.existsSync(input.stateFile)).toBe(false);
-  }, 30_000);
+  });
 
   it("lets the desktop join an owner a manual launcher started without an explicit state file", async () => {
     const input = await config();
@@ -401,7 +401,7 @@ describe("shared MCP gateway", () => {
     expect(
       body(await manual.callTool({ name: "t3_get_gateway_health", arguments: {} })).data,
     ).toMatchObject({ bridge: "connected" });
-  }, 45_000);
+  });
 
   it("distinguishes a gateway protocol mismatch from configuration and authentication failures", async () => {
     const input = await config();
@@ -478,7 +478,7 @@ describe("shared MCP gateway", () => {
       body(await clients[4]!.callTool({ name: "t3_get_gateway_health", arguments: {} })).data,
     ).toMatchObject({ bridge: "connected" });
     expect(child.exitCode).toBeNull();
-  }, 30_000);
+  });
 
   it("delivers and replays subscriptions across separate MCP sessions", async () => {
     const input = await config();
@@ -690,7 +690,7 @@ describe("shared MCP gateway", () => {
     expect((await client.listTools()).tools.map((tool) => tool.name)).toContain(
       "t3_set_thread_parent",
     );
-  }, 30_000);
+  });
 });
 
 it("shares lifecycle grant updates and chat focus across already-connected MCP sessions", async () => {

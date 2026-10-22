@@ -2686,12 +2686,14 @@ describe("gateway coordinator operations", () => {
   it("waits for a chat to reach a requested status and returns a resumable cursor", async () => {
     const events = createGatewayEventStore();
     let status = "running";
+    const baselineRead = Promise.withResolvers<void>();
     const port = {
       ...makePort(),
-      listThreads: async () => ({
-        snapshotAt: "now",
-        items: [{ id: "chat-1", projectId: "p", title: "Chat", status, settledAt: null }],
-      }),
+      listThreads: async () => {
+        const items = [{ id: "chat-1", projectId: "p", title: "Chat", status, settledAt: null }];
+        baselineRead.resolve();
+        return { snapshotAt: "now", items };
+      },
     };
     const context = { port, grants: readGrants, events };
     const wait = callGatewayTool(context, "t3_wait_for_thread_status", {
@@ -2700,8 +2702,8 @@ describe("gateway coordinator operations", () => {
       untilStatuses: ["completed"],
       timeoutMs: 1_000,
     });
-    // @effect-diagnostics-next-line globalTimers:off - Flushes the baseline read before emitting the live event so the wait listener is installed.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The wait replays events after its starting cursor, so only the baseline must see "running".
+    await baselineRead.promise;
     status = "completed";
     const event = events.emit({
       environmentId: "local",
