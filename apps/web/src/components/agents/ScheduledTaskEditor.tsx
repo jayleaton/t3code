@@ -16,7 +16,7 @@ import {
 
 import { useClientSettings } from "../../hooks/useSettings";
 import { formatUpcomingTimestamp } from "../../timestampFormat";
-import { useEnvironments } from "../../state/environments";
+import { useEnvironmentProviders, useEnvironments } from "../../state/environments";
 import { useProjects } from "../../state/entities";
 import { type EnvironmentScheduledTask } from "../../state/scheduledTasks";
 import { serverEnvironment } from "../../state/server";
@@ -80,6 +80,7 @@ export function ScheduledTaskEditor({
   onClose: () => void;
 }) {
   const { environments } = useEnvironments();
+  const providersByEnvironment = useEnvironmentProviders();
   const projects = useProjects();
   const existing = task?.task;
   const [title, setTitle] = useState(existing?.title ?? "");
@@ -117,7 +118,12 @@ export function ScheduledTaskEditor({
     .filter((env) => env.serverConfig?.environment.capabilities.scheduledTasks === true)
     .map((env) => ({
       env,
-      reason: profile ? agentMachineUnavailableReason(profile, env) : undefined,
+      reason: profile
+        ? agentMachineUnavailableReason(profile, {
+            ...env,
+            providers: providersByEnvironment.get(env.environmentId),
+          })
+        : undefined,
     }));
   const eligible = machines.filter(({ reason }) => reason === undefined);
   // With a single machine that can run the agent there is nothing to choose.
@@ -160,7 +166,7 @@ export function ScheduledTaskEditor({
         : resolveScheduledTaskProfileRouting(
             profiles,
             profileId,
-            target.serverConfig?.providers ?? [],
+            providersByEnvironment.get(target.environmentId) ?? [],
           );
     if (typeof routing === "string") return setError(routing);
     setSaving(true);

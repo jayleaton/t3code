@@ -17,6 +17,7 @@ import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
+import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
@@ -51,6 +52,10 @@ it.effect(
       const dependencies = Layer.mergeAll(
         ScheduledTaskTestkit.layerLocalProjects(),
         Layer.mock(SecretRequests.SecretRequests)({}),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+          namedProjectsRoot: "/projects",
+          isScratchProject: () => Effect.succeed(false),
+        }),
         NodeCrypto.layer,
         Scheduler.layer,
         settingsLayer,
@@ -146,6 +151,10 @@ it.effect("imports fork V1 scheduled tasks into the V2 table and drops the legac
     const dependencies = Layer.mergeAll(
       ScheduledTaskTestkit.layerLocalProjects(),
       Layer.mock(SecretRequests.SecretRequests)({}),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+        namedProjectsRoot: "/projects",
+        isScratchProject: () => Effect.succeed(false),
+      }),
       NodeCrypto.layer,
       Scheduler.layer,
       settingsLayer,

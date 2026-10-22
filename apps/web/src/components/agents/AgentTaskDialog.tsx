@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { ChevronDownIcon } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
@@ -14,7 +14,7 @@ import {
 } from "@t3tools/contracts";
 import { withReasoningEffortOption } from "@t3tools/shared/model";
 import { connectionAtomRuntime } from "../../connection/runtime";
-import { useEnvironments } from "../../state/environments";
+import { useEnvironmentProviders, useEnvironments } from "../../state/environments";
 import { useProjects } from "../../state/entities";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { releaseComposerDraftUploads } from "../../lib/composerDraftUploads";
@@ -97,10 +97,7 @@ export function AgentTaskDialog({
   const [lock, setLock] = useState({ busy: false, hasContent: false });
   const [history] = useNewChatHistory();
   const [showAllAgents, setShowAllAgents] = useState(false);
-  const sortedProfiles = useMemo(
-    () => sortProfilesByNewChatPick(orderedProfiles, history),
-    [orderedProfiles, history],
-  );
+  const sortedProfiles = sortProfilesByNewChatPick(orderedProfiles, history);
   const visibleProfiles = showAllAgents
     ? sortedProfiles
     : collapsedNewChatChoices(
@@ -192,6 +189,7 @@ function AgentTaskForm({
   const runtime = useAtomValue(connectionAtomRuntime);
   const navigate = useNavigate();
   const { environments } = useEnvironments();
+  const providersByEnvironment = useEnvironmentProviders();
   const projects = useProjects();
   const [history, setHistory] = useNewChatHistory();
   const [showAllProjects, setShowAllProjects] = useState(false);
@@ -215,7 +213,10 @@ function AgentTaskForm({
   const busy = creating || sending;
   const machines = environments.map((env) => ({
     env,
-    reason: agentMachineUnavailableReason(profile, env),
+    reason: agentMachineUnavailableReason(profile, {
+      ...env,
+      providers: providersByEnvironment.get(env.environmentId),
+    }),
   }));
   const eligible = machines.filter(({ reason }) => reason === undefined).map(({ env }) => env);
   const machine =
@@ -227,21 +228,14 @@ function AgentTaskForm({
   const target = eligible.find((env) => env.environmentId === machine);
   const supportsAgentDrafts =
     target?.serverConfig?.environment.capabilities.agentThreadBootstrap === true;
-  const targetProjects = useMemo(
-    () =>
-      sortProjectsByNewChatPick(
-        projects.filter((project) => project.environmentId === machine),
-        history,
-      ),
-    [projects, history, machine],
+  const targetProjects = sortProjectsByNewChatPick(
+    projects.filter((project) => project.environmentId === machine),
+    history,
   );
   const project = resolveAgentTaskProject(projects, machine, projectId);
   // A search covers every project on the machine, including those collapsed behind Show more.
   const searchingProjects = projectQuery.trim() !== "";
-  const matchingProjects = useMemo(
-    () => filterNewChatProjects(targetProjects, projectQuery),
-    [targetProjects, projectQuery],
-  );
+  const matchingProjects = filterNewChatProjects(targetProjects, projectQuery);
   const visibleProjects = searchingProjects
     ? matchingProjects
     : showAllProjects
@@ -252,7 +246,10 @@ function AgentTaskForm({
           COLLAPSED_CHOICES,
         );
   const modelSelection = target
-    ? resolveGatewayProfileModelSelection(profile, target.serverConfig?.providers ?? [])
+    ? resolveGatewayProfileModelSelection(
+        profile,
+        providersByEnvironment.get(target.environmentId) ?? [],
+      )
     : undefined;
   const hasContent = Boolean(
     draft &&
@@ -301,8 +298,8 @@ function AgentTaskForm({
     const options = withReasoningEffortOption(
       modelSelection.options,
       profile.reasoningEffort,
-      target?.serverConfig?.providers
-        .find((provider) => provider.instanceId === modelSelection.instanceId)
+      (target ? providersByEnvironment.get(target.environmentId) : undefined)
+        ?.find((provider) => provider.instanceId === modelSelection.instanceId)
         ?.models.find((model) => model.slug === modelSelection.model)?.capabilities
         ?.optionDescriptors,
     );
@@ -524,9 +521,8 @@ function AgentTaskForm({
                 finish();
               } catch (cause) {
                 setError(cause instanceof Error ? cause.message : "Could not create thread.");
-              } finally {
-                setCreating(false);
               }
+              setCreating(false);
             }}
           >
             {creating ? "Creating…" : "Create empty chat"}

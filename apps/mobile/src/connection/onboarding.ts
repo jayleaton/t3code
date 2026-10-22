@@ -22,22 +22,21 @@ export const connectPairingUrl = createRuntimeCommand(connectionAtomRuntime, {
     key: (input: { readonly pairingUrl: string; readonly expectedEnvironmentId?: EnvironmentId }) =>
       JSON.stringify([input.pairingUrl, input.expectedEnvironmentId ?? null]),
   },
-  execute: (input: {
+  execute: Effect.fn("mobile.connection.connectPairingUrl")(function* (input: {
     readonly pairingUrl: string;
     readonly expectedEnvironmentId?: EnvironmentId;
-  }) =>
-    Effect.gen(function* () {
-      yield* Effect.try({
-        try: () => validateMobilePairingUrl(input.pairingUrl),
-        catch: (cause) =>
-          new ConnectionBlockedError({
-            reason: "configuration",
-            detail: cause instanceof Error ? cause.message : "The pairing details are invalid.",
-          }),
-      });
-      const onboarding = yield* ConnectionOnboarding.ConnectionOnboarding;
-      return yield* onboarding.registerPairing(input);
-    }),
+  }) {
+    yield* Effect.try({
+      try: () => validateMobilePairingUrl(input.pairingUrl),
+      catch: (cause) =>
+        new ConnectionBlockedError({
+          reason: "configuration",
+          detail: cause instanceof Error ? cause.message : "The pairing details are invalid.",
+        }),
+    });
+    const onboarding = yield* ConnectionOnboarding.ConnectionOnboarding;
+    return yield* onboarding.registerPairing(input);
+  }),
 });
 
 export const updateBearerConnection = createRuntimeCommand(connectionAtomRuntime, {

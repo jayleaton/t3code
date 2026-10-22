@@ -26,7 +26,7 @@ export function EnvironmentActionsMenu({
 }: {
   environmentId: EnvironmentId;
   label: string;
-  serverConfig: ServerConfig | null;
+  serverConfig: Pick<ServerConfig, "environment" | "settings"> | null;
   disabled?: boolean;
   children?: ReactNode;
 }) {
@@ -53,9 +53,8 @@ export function EnvironmentActionsMenu({
       else setError("Could not save the machine name. Try again.");
     } catch {
       setError("Could not save the machine name. Try again.");
-    } finally {
-      setSaving(false);
     }
+    setSaving(false);
   };
   return (
     <>

@@ -150,11 +150,10 @@ const make = Effect.gen(function* () {
         Effect.flatMap(decodeLinkRows("get-link")),
         Effect.map((links) => Option.fromNullishOr(links[0])),
       ),
-    putLink: (link) =>
-      Effect.gen(function* () {
-        const payload = yield* encodeLink(link).pipe(Effect.mapError(fail("encode-link")));
-        const pending = link.role === "worker" && link.pendingCursor > link.deliveredCursor ? 1 : 0;
-        yield* sql`
+    putLink: Effect.fn("ThreadTaskStore.putLink")(function* (link) {
+      const payload = yield* encodeLink(link).pipe(Effect.mapError(fail("encode-link")));
+      const pending = link.role === "worker" && link.pendingCursor > link.deliveredCursor ? 1 : 0;
+      yield* sql`
           INSERT INTO thread_task_links (worker_thread_id, role, pending, payload_json)
           VALUES (${link.workerThreadId}, ${link.role}, ${pending}, ${payload})
           ON CONFLICT (worker_thread_id) DO UPDATE SET
@@ -162,7 +161,7 @@ const make = Effect.gen(function* () {
             pending = excluded.pending,
             payload_json = excluded.payload_json
         `.pipe(Effect.mapError(fail("put-link")));
-      }),
+    }),
     listPendingLinks: () =>
       sql<{ readonly payload: string }>`
         SELECT payload_json AS payload FROM thread_task_links WHERE role = 'worker' AND pending = 1
@@ -174,21 +173,20 @@ const make = Effect.gen(function* () {
       sql<{ readonly payload: string }>`
         SELECT payload_json AS payload FROM thread_task_links
       `.pipe(Effect.mapError(fail("list-links")), Effect.flatMap(decodeLinkRows("list-links"))),
-    appendEvent: (event) =>
-      Effect.gen(function* () {
-        yield* sql`
+    appendEvent: Effect.fn("ThreadTaskStore.appendEvent")(function* (event) {
+      yield* sql`
           INSERT INTO thread_task_events (at, worker_thread_id, kind, revision, detail)
           VALUES (${event.at}, ${event.workerThreadId}, ${event.kind}, ${event.revision ?? null}, ${event.detail ?? null})
         `.pipe(Effect.mapError(fail("append-event")));
-        eventsSincePrune += 1;
-        if (eventsSincePrune >= 500) {
-          eventsSincePrune = 0;
-          yield* sql`
+      eventsSincePrune += 1;
+      if (eventsSincePrune >= 500) {
+        eventsSincePrune = 0;
+        yield* sql`
             DELETE FROM thread_task_events
             WHERE sequence <= (SELECT MAX(sequence) FROM thread_task_events) - ${EVENT_RETENTION}
           `.pipe(Effect.mapError(fail("prune-events")));
-        }
-      }),
+      }
+    }),
     getSettleRequest: (threadId) =>
       sql<{ readonly payload: string }>`
         SELECT payload_json AS payload FROM thread_settle_requests WHERE thread_id = ${threadId}
@@ -204,17 +202,16 @@ const make = Effect.gen(function* () {
         Effect.mapError(fail("list-settle-requests")),
         Effect.flatMap(decodeSettleRows("list-settle-requests")),
       ),
-    putSettleRequest: (request) =>
-      Effect.gen(function* () {
-        const payload = yield* encodeSettleRequest(request).pipe(Effect.mapError(fail("encode")));
-        yield* sql`
+    putSettleRequest: Effect.fn("ThreadTaskStore.putSettleRequest")(function* (request) {
+      const payload = yield* encodeSettleRequest(request).pipe(Effect.mapError(fail("encode")));
+      yield* sql`
           INSERT INTO thread_settle_requests (thread_id, state, payload_json)
           VALUES (${request.threadId}, ${request.state}, ${payload})
           ON CONFLICT (thread_id) DO UPDATE SET
             state = excluded.state,
             payload_json = excluded.payload_json
         `.pipe(Effect.mapError(fail("put-settle-request")));
-      }),
+    }),
     get: (workerThreadId) =>
       sql<{ readonly payload: string }>`
         SELECT payload_json AS payload FROM thread_tasks WHERE worker_thread_id = ${workerThreadId}
@@ -262,12 +259,11 @@ const make = Effect.gen(function* () {
         Effect.flatMap(decodeRows("list-unfinished")),
       ),
     latestCursor,
-    put: (task) =>
-      Effect.gen(function* () {
-        const cursor = (yield* latestCursor) + 1;
-        const stored = { ...task, cursor };
-        const payload = yield* encodeTask(stored).pipe(Effect.mapError(fail("encode")));
-        yield* sql`
+    put: Effect.fn("ThreadTaskStore.put")(function* (task) {
+      const cursor = (yield* latestCursor) + 1;
+      const stored = { ...task, cursor };
+      const payload = yield* encodeTask(stored).pipe(Effect.mapError(fail("encode")));
+      yield* sql`
           INSERT INTO thread_tasks (worker_thread_id, owner_thread_id, cursor, payload_json)
           VALUES (${stored.workerThreadId}, ${stored.ownerThreadId}, ${cursor}, ${payload})
           ON CONFLICT (worker_thread_id) DO UPDATE SET
@@ -275,8 +271,8 @@ const make = Effect.gen(function* () {
             cursor = excluded.cursor,
             payload_json = excluded.payload_json
         `.pipe(Effect.mapError(fail("put")));
-        return stored;
-      }),
+      return stored;
+    }),
   });
 });
 

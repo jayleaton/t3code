@@ -1,10 +1,13 @@
 import { resolveGatewayProfileModelSelection } from "@t3tools/client-runtime/gateway";
-import type { McpGatewayProfile } from "@t3tools/contracts";
+import type { McpGatewayProfile, ServerProvider } from "@t3tools/contracts";
 import type { EnvironmentPresentation } from "../../state/environments";
 
 export function agentMachineUnavailableReason(
   profile: McpGatewayProfile,
-  environment: Pick<EnvironmentPresentation, "environmentId" | "connection" | "serverConfig">,
+  environment: Pick<EnvironmentPresentation, "environmentId" | "connection" | "serverConfig"> & {
+    /** From useEnvironmentProviders(); server config no longer carries provider status. */
+    readonly providers: ReadonlyArray<ServerProvider> | undefined;
+  },
 ): string | undefined {
   if (
     profile.environmentIds?.length &&
@@ -15,14 +18,14 @@ export function agentMachineUnavailableReason(
   if (environment.connection.phase !== "connected") {
     return "Not connected — check Settings → Connections";
   }
-  if (!environment.serverConfig) return "Loading provider status";
+  const providers = environment.providers;
+  if (!environment.serverConfig || !providers) return "Loading provider status";
   if (
     profile.skillIds?.length &&
     !environment.serverConfig.environment.capabilities.agentSkillsSync
   ) {
     return "Update T3 on this machine to use shared agent skills";
   }
-  const providers = environment.serverConfig.providers;
   if (resolveGatewayProfileModelSelection(profile, providers)) return undefined;
   const hasLabels = profile.providerLabel !== undefined && profile.modelLabel !== undefined;
   const matching = providers.filter((provider) =>

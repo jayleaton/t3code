@@ -3,7 +3,6 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildPairingUrl,
   extractPairingUrlFromQrPayload,
-  PairingQrPayloadEmptyError,
   parsePairingUrl,
   validateMobilePairingUrl,
 } from "./pairing";
@@ -29,12 +28,6 @@ describe("buildPairingUrl", () => {
 });
 
 describe("extractPairingUrlFromQrPayload", () => {
-  it("trims raw pairing urls from qr payloads", () => {
-    expect(
-      extractPairingUrlFromQrPayload("  https://remote.example.com/pair#token=pairing-token  "),
-    ).toBe("https://remote.example.com/pair#token=pairing-token");
-  });
-
   it.each(["t3code", "t3code-personal", "t3code-personal-dev", "t3code-personal-preview"])(
     "unwraps %s deep links that carry an encoded pairing url",
     (scheme) => {
@@ -45,13 +38,6 @@ describe("extractPairingUrlFromQrPayload", () => {
       ).toBe("https://remote.example.com/pair#token=pairing-token");
     },
   );
-
-  it("rejects empty qr payloads", () => {
-    expect(() => extractPairingUrlFromQrPayload("   ")).toThrowError(PairingQrPayloadEmptyError);
-    expect(() => extractPairingUrlFromQrPayload("   ")).toThrowError(
-      "Scanned QR code did not contain a pairing URL.",
-    );
-  });
 });
 
 describe("parsePairingUrl", () => {

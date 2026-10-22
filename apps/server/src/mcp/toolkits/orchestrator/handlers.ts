@@ -19,11 +19,11 @@ export const layer = McpToolAccess.toLayer(
         Effect.flatMap((scope) => RemoteThreads.resolveEnvironment(gateway, scope, environmentId)),
       );
     return {
-      orchestrator_capabilities: McpToolAccess.reads(() =>
+      orchestrator_capabilities: McpToolAccess.reads((input) =>
         Effect.gen(function* () {
           const scope = yield* McpInvocationContext.McpInvocationContext;
           const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-          return yield* service.capabilities(scope);
+          return yield* service.capabilities(scope, input);
         }),
       ),
       delegate_task: McpToolAccess.actsAsCaller((input) =>

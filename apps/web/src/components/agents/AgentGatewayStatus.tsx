@@ -10,6 +10,14 @@ import {
   subscribeMcpGatewayConfiguration,
 } from "../../mcpGatewayState";
 
+const requestGatewayRestart = () => {
+  try {
+    return restartMcpGateway();
+  } catch {
+    return false;
+  }
+};
+
 /** Health belongs to the authenticated local bridge, not the desktop process or devices. */
 export function AgentGatewayStatus() {
   const available = Boolean(window.desktopBridge?.getMcpGatewayLaunchConfig?.());
@@ -144,17 +152,16 @@ export function AgentGatewayStatus() {
             setLive(false);
             setRecovering(true);
             recoveringRef.current = true;
-            try {
-              if (!restartMcpGateway()) throw new Error("Unavailable");
-              // Backstop only: startup itself is bounded and reports its own failure.
-              recoveryTimer.current = setTimeout(() => {
-                setRecovering(false);
-                setError("Gateway recovery failed. Try again or check MCP Gateway settings.");
-              }, 45_000);
-            } catch {
+            if (!requestGatewayRestart()) {
               setRecovering(false);
               setError("Gateway restart is unavailable. Check MCP Gateway settings.");
+              return;
             }
+            // Backstop only: startup itself is bounded and reports its own failure.
+            recoveryTimer.current = setTimeout(() => {
+              setRecovering(false);
+              setError("Gateway recovery failed. Try again or check MCP Gateway settings.");
+            }, 45_000);
           }}
         >
           {recovering ? "Restarting…" : "Restart"}

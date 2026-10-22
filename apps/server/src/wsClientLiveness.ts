@@ -30,43 +30,44 @@ export type ClientUnresponsiveReason = "client-silent" | "send-stalled";
  * {@link CLIENT_SILENCE_LIMIT} or the send queue has not moved for
  * {@link SEND_STALL_LIMIT}, so the caller can reset the connection.
  */
-export const make = (readProgress: () => TransportProgress) =>
-  Effect.gen(function* () {
-    const clock = yield* Clock.Clock;
-    let lastHeardAt = clock.currentTimeMillisUnsafe();
-    let lastProgressAt = lastHeardAt;
-    let lastBytesWritten = readProgress().bytesWritten;
+export const make = Effect.fn("wsClientLiveness.make")(function* (
+  readProgress: () => TransportProgress,
+) {
+  const clock = yield* Clock.Clock;
+  let lastHeardAt = clock.currentTimeMillisUnsafe();
+  let lastProgressAt = lastHeardAt;
+  let lastBytesWritten = readProgress().bytesWritten;
 
-    const observe = (protocol: RpcServer.Protocol["Service"]): RpcServer.Protocol["Service"] => ({
-      ...protocol,
-      run: (write) =>
-        protocol.run((clientId, message) => {
-          lastHeardAt = clock.currentTimeMillisUnsafe();
-          return write(clientId, message);
-        }),
-    });
-
-    const silenceMs = Duration.toMillis(CLIENT_SILENCE_LIMIT);
-    const stallMs = Duration.toMillis(SEND_STALL_LIMIT);
-    const check = Effect.sync((): ClientUnresponsiveReason | undefined => {
-      const now = clock.currentTimeMillisUnsafe();
-      const { pendingBytes, bytesWritten } = readProgress();
-      if (pendingBytes === 0 || bytesWritten !== lastBytesWritten) {
-        lastProgressAt = now;
-        lastBytesWritten = bytesWritten;
-      }
-      if (now - lastHeardAt >= silenceMs) return "client-silent";
-      if (now - lastProgressAt >= stallMs) return "send-stalled";
-      return undefined;
-    });
-
-    const awaitUnresponsive = Effect.gen(function* () {
-      while (true) {
-        yield* Effect.sleep(CHECK_INTERVAL);
-        const reason = yield* check;
-        if (reason !== undefined) return reason;
-      }
-    });
-
-    return { observe, awaitUnresponsive } as const;
+  const observe = (protocol: RpcServer.Protocol["Service"]): RpcServer.Protocol["Service"] => ({
+    ...protocol,
+    run: (write) =>
+      protocol.run((clientId, message) => {
+        lastHeardAt = clock.currentTimeMillisUnsafe();
+        return write(clientId, message);
+      }),
   });
+
+  const silenceMs = Duration.toMillis(CLIENT_SILENCE_LIMIT);
+  const stallMs = Duration.toMillis(SEND_STALL_LIMIT);
+  const check = Effect.sync((): ClientUnresponsiveReason | undefined => {
+    const now = clock.currentTimeMillisUnsafe();
+    const { pendingBytes, bytesWritten } = readProgress();
+    if (pendingBytes === 0 || bytesWritten !== lastBytesWritten) {
+      lastProgressAt = now;
+      lastBytesWritten = bytesWritten;
+    }
+    if (now - lastHeardAt >= silenceMs) return "client-silent";
+    if (now - lastProgressAt >= stallMs) return "send-stalled";
+    return undefined;
+  });
+
+  const awaitUnresponsive = Effect.gen(function* () {
+    while (true) {
+      yield* Effect.sleep(CHECK_INTERVAL);
+      const reason = yield* check;
+      if (reason !== undefined) return reason;
+    }
+  });
+
+  return { observe, awaitUnresponsive } as const;
+});

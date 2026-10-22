@@ -117,5 +117,4 @@ it.skipIf(process.env.T3CODE_NATIVE_STORAGE_TESTS !== "1")(
       NodeFS.rmSync(root, { recursive: true, force: true });
     }
   },
-  120_000,
 );

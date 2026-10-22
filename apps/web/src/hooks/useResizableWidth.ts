@@ -1,11 +1,5 @@
 import * as Schema from "effect/Schema";
-import {
-  type PointerEvent as ReactPointerEvent,
-  useCallback,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { type PointerEvent as ReactPointerEvent, useLayoutEffect, useRef, useState } from "react";
 
 import { getLocalStorageItem, setLocalStorageItem } from "./useLocalStorage";
 import { useResizeDrag } from "./useResizeDrag";
@@ -43,13 +37,10 @@ export function useResizableWidth(options: UseResizableWidthOptions): {
 } {
   const { storageKey, defaultWidth, minWidth, maxWidth, edge } = options;
 
-  const clamp = useCallback(
-    (value: number): number => {
-      if (!Number.isFinite(value)) return defaultWidth;
-      return Math.max(minWidth, Math.min(maxWidth, value));
-    },
-    [defaultWidth, maxWidth, minWidth],
-  );
+  const clamp = (value: number): number => {
+    if (!Number.isFinite(value)) return defaultWidth;
+    return Math.max(minWidth, Math.min(maxWidth, value));
+  };
 
   // Keep the saved width unclamped: bounds are often provisional on mount (the host has
   // not measured yet), and clamping here would lose the saved width once they arrive.

@@ -10,11 +10,14 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
-import * as TestClock from "effect/testing/TestClock";
 import { McpSchema, McpServer } from "effect/ai";
 
 import * as ServerConfig from "../../config.ts";
@@ -290,6 +293,34 @@ const orchestrate = (
     return output.at(-1)!;
   });
 
+/**
+ * A clock whose sleeps wait for the test instead of time: each poll's backoff lands on `sleeps`
+ * once the wait is parked on it, and `wake` lets that poll run.
+ */
+const makeSteppedClock = Effect.gen(function* () {
+  const clock = yield* Clock.Clock;
+  const sleeps = yield* Queue.unbounded<{
+    readonly duration: Duration.Duration;
+    readonly wake: Deferred.Deferred<void>;
+  }>();
+  const stepped: Clock.Clock = {
+    ...clock,
+    sleep: (duration) =>
+      Effect.gen(function* () {
+        const wake = yield* Deferred.make<void>();
+        yield* Queue.offer(sleeps, { duration, wake });
+        yield* Deferred.await(wake);
+      }),
+  };
+  /** Waits for the next poll's sleep, releases it, and returns how long it asked for. */
+  const step = Effect.gen(function* () {
+    const sleep = yield* Queue.take(sleeps);
+    yield* Deferred.succeed(sleep.wake, undefined);
+    return Duration.toMillis(sleep.duration);
+  });
+  return { stepped, step };
+});
+
 const mcpClient = McpSchema.McpServerClient.of({
   clientId: 1,
   clientCapabilities: {},
@@ -397,16 +428,13 @@ it.effect("a launch without environmentId stays on this environment and says so"
 it.effect("waiting on a remote child returns when its run completes", () => {
   const macbook = makeMacBook(["running", "running", "completed"]);
   return Effect.gen(function* () {
+    const clock = yield* makeSteppedClock;
     const fiber = yield* orchestrate("t3_thread_wait", {
       environmentId: macBook,
       threadId: child,
       timeoutMs: 60 * 60 * 1_000,
-    }).pipe(Effect.forkChild);
-    // Steps virtual time past each backoff; the relay's replies settle between steps.
-    while (fiber.pollUnsafe() === undefined) {
-      yield* TestClock.adjust("1 second");
-      yield* Effect.promise(() => new Promise((resolve) => setImmediate(resolve)));
-    }
+    }).pipe(Effect.provideService(Clock.Clock, clock.stepped), Effect.forkChild);
+    expect([yield* clock.step, yield* clock.step]).toEqual([1_000, 2_000]);
     const output = yield* Fiber.join(fiber);
     expect(output.result).toEqual({
       environmentId: macBook,
@@ -550,14 +578,13 @@ it.effect("a remote wait follows a restart to the run that continues the work", 
     ],
   );
   return Effect.gen(function* () {
+    const clock = yield* makeSteppedClock;
     const fiber = yield* orchestrate("t3_thread_wait", {
       environmentId: macBook,
       threadId: child,
-    }).pipe(Effect.forkChild);
-    while (fiber.pollUnsafe() === undefined) {
-      yield* TestClock.adjust("1 second");
-      yield* Effect.promise(() => new Promise((resolve) => setImmediate(resolve)));
-    }
+    }).pipe(Effect.provideService(Clock.Clock, clock.stepped), Effect.forkChild);
+    yield* clock.step;
+    yield* clock.step;
     const output = yield* Fiber.join(fiber);
     expect(output.result).toMatchObject({ runId: "run-2", status: "completed", timedOut: false });
   }).pipe(Effect.provide(makeLayer(macbook, newRecord())));

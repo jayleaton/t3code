@@ -34,7 +34,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import { useProject } from "../../state/entities";
 import { resolveEnvironmentMachineKind, type McpGatewayProfile } from "@t3tools/contracts";
 import { AgentIcon } from "./AgentIcon";
-import { useEnvironment } from "../../state/environments";
+import { useEnvironment, useEnvironmentProviders } from "../../state/environments";
 import { AgentChatPreview } from "./AgentChatPreview";
 import { isInsideComposerFloatingLayer } from "../chat/composerEventScope";
 import {
@@ -314,7 +314,8 @@ export const ThreadCard = memo(function ThreadCard({
   useNowMinute();
   const timestamp = thread.latestUserMessageAt ?? thread.updatedAt;
   const relativeTime = formatRelativeTime(timestamp)?.value;
-  const provider = environment?.serverConfig?.providers.find(
+  const providers = useEnvironmentProviders().get(thread.environmentId);
+  const provider = providers?.find(
     (candidate) => candidate.instanceId === thread.modelSelection.instanceId,
   );
   const ModelProviderIcon = provider ? PROVIDER_ICON_BY_PROVIDER[provider.driver] : undefined;

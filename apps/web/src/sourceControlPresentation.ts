@@ -19,7 +19,7 @@ export type { ChangeRequestTerminology } from "@t3tools/client-runtime/source-co
 
 type SourceControlIcon = ElementType<{ className?: string }>;
 
-export const SOURCE_CONTROL_ICONS: Partial<Record<string, SourceControlIcon>> = {
+const SOURCE_CONTROL_ICONS: Partial<Record<string, SourceControlIcon>> = {
   github: GitHubIcon,
   gitlab: GitLabIcon,
   forgejo: ForgejoIcon,

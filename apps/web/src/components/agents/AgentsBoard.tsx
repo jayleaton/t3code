@@ -9,7 +9,7 @@ import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { Menu, MenuTrigger, MenuPopup, MenuItem } from "../ui/menu";
 import { AgentIcon } from "./AgentIcon";
 import { Link, Outlet, useLocation, useNavigate, type LinkProps } from "@tanstack/react-router";
-import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
@@ -35,7 +35,7 @@ import {
   useScheduledTasksSupported,
   useScheduledWakeThreadKeys,
 } from "../../state/scheduledTasks";
-import { useEnvironments } from "../../state/environments";
+import { useEnvironmentProviders, useEnvironments } from "../../state/environments";
 import {
   useAllEnvironmentShellsBootstrapped,
   readEnvironmentSupportsSettlement,
@@ -175,12 +175,10 @@ export function AgentsBoard() {
     emptyAgentOrder,
     agentOrderSchema,
   );
-  const orderedProfiles = useMemo(() => {
-    const ranks = new Map(order.map((id, index) => [id, index]));
-    return profiles.toSorted(
-      (a, b) => (ranks.get(a.profileId) ?? order.length) - (ranks.get(b.profileId) ?? order.length),
-    );
-  }, [profiles, order]);
+  const ranks = new Map(order.map((id, index) => [id, index]));
+  const orderedProfiles = profiles.toSorted(
+    (a, b) => (ranks.get(a.profileId) ?? order.length) - (ranks.get(b.profileId) ?? order.length),
+  );
   const moveAgent = (index: number, direction: -1 | 1) => {
     const ids = orderedProfiles.map((profile) => profile.profileId);
     const target = index + direction;
@@ -189,6 +187,7 @@ export function AgentsBoard() {
     setOrder(ids);
   };
   const { environments } = useEnvironments();
+  const providersByEnvironment = useEnvironmentProviders();
   const navigate = useNavigate();
   const toggleWorkspaceView = useToggleWorkspaceView();
   const scheduledSupported = useScheduledTasksSupported();
@@ -198,7 +197,7 @@ export function AgentsBoard() {
   // Pending parent changes show at once (see useSetAgentRunParent).
   const threads = useAgentThreadShells();
   // Delegated tasks live in the thread details' Lineage section, never this roster.
-  const sidebarThreads = useMemo(() => selectAgentSidebarThreads(threads), [threads]);
+  const sidebarThreads = selectAgentSidebarThreads(threads);
   const ready = useAllEnvironmentShellsBootstrapped();
   const [editor, setEditor] = useState<McpGatewayProfile | "new" | null>(null);
   const [newChatOpen, setNewChatOpen] = useState(false);
@@ -213,39 +212,27 @@ export function AgentsBoard() {
   const [deleting, setDeleting] = useState<McpGatewayProfile | null>(null);
   const [busy, setBusy] = useState(false);
   const [deleteError, setDeleteError] = useState("");
-  const { groups, orphaned } = useMemo(
-    () => groupAgentThreads(profiles, sidebarThreads),
-    [profiles, sidebarThreads],
-  );
-  const allThreads = useMemo(() => [...groups.values(), orphaned].flat(), [groups, orphaned]);
+  const { groups, orphaned } = groupAgentThreads(profiles, sidebarThreads);
+  const allThreads = [...groups.values(), orphaned].flat();
   // Pinned chats stay at the top of the list no matter which agent filter or
   // search is active, so they are selected outside the filtered set.
-  const allPinned = useMemo(() => selectPinnedAgentThreads(allThreads), [allThreads]);
+  const allPinned = selectPinnedAgentThreads(allThreads);
   // Runs another run created fold into that run's card (see nestAgentRuns).
-  const { lists: nestedLists, childrenByKey } = useMemo(() => {
-    const { active, settled } = selectAgentWorkspaceThreads(sidebarThreads, filter, query);
-    return nestAgentRuns({
-      lists: {
-        pinned: allPinned,
-        active: excludePinnedAgentThreads(active, allPinned),
-        settled: excludePinnedAgentThreads(settled, allPinned),
-      },
-      all: sidebarThreads,
-    });
-  }, [sidebarThreads, filter, query, allPinned]);
+  const { active, settled } = selectAgentWorkspaceThreads(sidebarThreads, filter, query);
+  const { lists: nestedLists, childrenByKey } = nestAgentRuns({
+    lists: {
+      pinned: allPinned,
+      active: excludePinnedAgentThreads(active, allPinned),
+      settled: excludePinnedAgentThreads(settled, allPinned),
+    },
+    all: sidebarThreads,
+  });
   // Every chat, subagents included: children and subagents both keep a parent busy.
-  const pendingWork = useMemo(
-    () => selectAgentRunPendingWork(threads, scheduledWakeKeys),
-    [threads, scheduledWakeKeys],
-  );
+  const pendingWork = selectAgentRunPendingWork(threads, scheduledWakeKeys);
   const pinned = nestedLists.pinned;
-  const visible = useMemo(
-    () => [...nestedLists.active, ...nestedLists.settled],
-    [nestedLists.active, nestedLists.settled],
-  );
-  const runByKey = useMemo(
-    () => new Map(threads.map((thread) => [`${thread.environmentId}:${thread.id}`, thread])),
-    [threads],
+  const visible = [...nestedLists.active, ...nestedLists.settled];
+  const runByKey = new Map(
+    threads.map((thread) => [`${thread.environmentId}:${thread.id}`, thread]),
   );
   const onThreadContextMenu = useAgentThreadContextMenu(visible);
   const onSettleAction = useAgentThreadSettleAction();
@@ -551,9 +538,13 @@ export function AgentsBoard() {
           skills={skills}
           providers={online.flatMap((env) =>
             env.serverConfig
-              ? visibleAgentProviders(env.environmentId, env.serverConfig.providers, {
-                  providerModelPreferences: modelPreferences,
-                })
+              ? visibleAgentProviders(
+                  env.environmentId,
+                  providersByEnvironment.get(env.environmentId) ?? [],
+                  {
+                    providerModelPreferences: modelPreferences,
+                  },
+                )
               : [],
           )}
           machines={environments}
@@ -599,19 +590,13 @@ export function AgentsBoard() {
                     disabled={busy}
                     onClick={async () => {
                       setBusy(true);
-                      try {
-                        if (
-                          await updateSettings({
-                            mcpGatewayProfiles: profiles.filter(
-                              (p) => p.profileId !== deleting.profileId,
-                            ),
-                          })
-                        )
-                          setDeleting(null);
-                        else setDeleteError("Could not delete the agent. Try again.");
-                      } finally {
-                        setBusy(false);
-                      }
+                      const deleted = await updateSettings({
+                        mcpGatewayProfiles: profiles.filter(
+                          (p) => p.profileId !== deleting.profileId,
+                        ),
+                      }).finally(() => setBusy(false));
+                      if (deleted) setDeleting(null);
+                      else setDeleteError("Could not delete the agent. Try again.");
                     }}
                   >
                     {busy ? "Deleting…" : "Delete agent"}

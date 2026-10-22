@@ -87,6 +87,27 @@ jobs:
       - name: Install Electron before parallel tests
         working-directory: apps/desktop
         run: node -e "require('electron')"
+      # The agents tests include browser tests that run in headless Chromium,
+      # installed the same way as upstream CI's Test Web job.
+      - name: Resolve Playwright version
+        id: playwright_version
+        run: echo "version=$(node -p "require('./apps/web/node_modules/playwright/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Cache Chromium
+        id: chromium_cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-shell-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright_version.outputs.version }}
+      - name: Install Chromium for web browser tests
+        if: steps.chromium_cache.outputs.cache-hit != 'true'
+        run: node apps/web/node_modules/playwright/cli.js install --only-shell chromium
+      - name: Install missing Chromium system dependencies
+        run: |
+          browser=$(find "$HOME/.cache/ms-playwright" -name chrome-headless-shell -type f -print -quit)
+          test -n "$browser"
+          if ldd "$browser" | grep '=> not found'; then
+            node apps/web/node_modules/playwright/cli.js install-deps chromium
+          fi
       - name: Validate Agents and packaging
         run: scripts/fork-release-validate.sh
       - run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
@@ -223,9 +244,8 @@ jobs:
       cli_archive: true
 
   # The Windows jobs embed the same-arch Linux CLI archive as the WSL runtime.
-  # `!cancelled()` (not `!failure()`) still lets them start when that Linux job
-  # failed; the download step inside then fails this single platform if the
-  # archive is missing.
+  # Like upstream, they package and sign on Linux; release-desktop.yml's verify
+  # job runs the native checks on a Windows runner of the target architecture.
   desktop_win_x64:
     name: Desktop Windows x64
     needs: [prepare, build_bundle, desktop_linux_x64]
@@ -245,7 +265,8 @@ jobs:
       clerk_cli_oauth_client_id: ${{ vars.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID }}
       relay_url: ${{ vars.T3CODE_RELAY_URL }}
       label: Windows x64
-      runner: windows-2025
+      runner: ubuntu-24.04
+      verify_runner: windows-2025
       platform: win
       target: nsis
       arch: x64
@@ -272,7 +293,8 @@ jobs:
       clerk_cli_oauth_client_id: ${{ vars.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID }}
       relay_url: ${{ vars.T3CODE_RELAY_URL }}
       label: Windows arm64
-      runner: windows-11-arm
+      runner: ubuntu-24.04
+      verify_runner: windows-11-arm
       platform: win
       target: nsis
       arch: arm64

@@ -43,7 +43,8 @@ const environment = (providers: readonly ServerProvider[] = [provider]) =>
   ({
     environmentId: EnvironmentId.make("mac"),
     connection: { phase: "connected" },
-    serverConfig: { providers },
+    serverConfig: { environment: { capabilities: {} } },
+    providers,
   }) as Parameters<typeof agentMachineUnavailableReason>[1];
 
 describe("agent machine availability", () => {

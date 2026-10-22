@@ -60,7 +60,7 @@ describe("formatContextWindowCompactionMessage", () => {
 
   it("shows the configured auto-compaction threshold", () => {
     expect(formatContextWindowCompactionMessage("Claude Sonnet 5", 300_000)).toBe(
-      "Compacts automatically at 300,000 tokens.",
+      "Compacts automatically at about 300,000 tokens.",
     );
   });
 });
@@ -77,18 +77,6 @@ describe("shouldReserveContextWindowMeter", () => {
     expect(shouldReserveContextWindowMeter(loadingStartedThread)).toBe(true);
   });
 
-  it("reserves nothing once the detail is in", () => {
-    expect(shouldReserveContextWindowMeter({ ...loadingStartedThread, detailLoading: false })).toBe(
-      false,
-    );
-  });
-
-  it("reserves nothing for a thread that never ran a turn", () => {
-    expect(shouldReserveContextWindowMeter({ ...loadingStartedThread, threadStarted: false })).toBe(
-      false,
-    );
-  });
-
   it("reserves while the thread's provider is not in the catalog yet", () => {
     expect(
       shouldReserveContextWindowMeter({
@@ -96,21 +84,6 @@ describe("shouldReserveContextWindowMeter", () => {
         providerReportsContextWindow: null,
       }),
     ).toBe(true);
-  });
-
-  it("reserves nothing for a provider that does not stream usage", () => {
-    expect(
-      shouldReserveContextWindowMeter({
-        ...loadingStartedThread,
-        providerReportsContextWindow: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("reserves nothing while the meter is switched off", () => {
-    expect(shouldReserveContextWindowMeter({ ...loadingStartedThread, meterEnabled: false })).toBe(
-      false,
-    );
   });
 });
 

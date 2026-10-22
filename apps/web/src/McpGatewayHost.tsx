@@ -6,7 +6,7 @@ import {
 } from "@t3tools/client-runtime/gateway";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { AppRouter } from "./router";
 import { openDesktopGatewayThread, openDesktopGatewayAgents } from "./mcpGatewayNavigation";
@@ -60,27 +60,21 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
     return () => setMcpGatewayRestarter(null);
   }, []);
 
-  const nativeConfiguration = useMemo(
-    () => ({
-      enabled: configuration.available && configuration.enabled && configuration.token.length >= 16,
-      token: configuration.token,
-      port: configuration.port,
-      restartVersion,
-      retryVersion,
-    }),
-    [
-      configuration.available,
-      configuration.enabled,
-      configuration.token,
-      configuration.port,
-      restartVersion,
-      retryVersion,
-    ],
-  );
-  const [readyConfiguration, setReadyConfiguration] = useState<typeof nativeConfiguration | null>(
-    null,
-  );
-  const managedReady = nativeConfiguration.enabled && readyConfiguration === nativeConfiguration;
+  const nativeEnabled =
+    configuration.available && configuration.enabled && configuration.token.length >= 16;
+  const nativeToken = configuration.token;
+  const nativePort = configuration.port;
+  // The effect below restarts the managed gateway on any change here, so it keys on
+  // primitives rather than an object identity.
+  const nativeKey = JSON.stringify([
+    nativeEnabled,
+    nativeToken,
+    nativePort,
+    restartVersion,
+    retryVersion,
+  ]);
+  const [readyKey, setReadyKey] = useState<string | null>(null);
+  const managedReady = nativeEnabled && readyKey === nativeKey;
   useEffect(() => {
     let stopped = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
@@ -88,16 +82,12 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
     if (!desktop?.configureManagedMcpGateway) return;
     publishMcpGatewayStartup({ phase: "starting" });
     void desktop
-      .configureManagedMcpGateway(
-        nativeConfiguration.enabled
-          ? { token: nativeConfiguration.token, port: nativeConfiguration.port }
-          : null,
-      )
+      .configureManagedMcpGateway(nativeEnabled ? { token: nativeToken, port: nativePort } : null)
       .then(
         () => {
           if (stopped) return;
           startupFailures.current = 0;
-          setReadyConfiguration(nativeConfiguration);
+          setReadyKey(nativeKey);
           publishMcpGatewayStartup({ phase: "ready" });
         },
         (error: unknown) => {
@@ -106,7 +96,7 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
           console.error("MCP gateway startup failed", message);
           publishMcpGatewayStatus("degraded");
           publishMcpGatewayStartup({ phase: "failed", message });
-          if (!nativeConfiguration.enabled) return;
+          if (!nativeEnabled) return;
           startupFailures.current += 1;
           retry = setTimeout(
             () => setRetryVersion((version) => version + 1),
@@ -121,7 +111,7 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
         .configureManagedMcpGateway?.(null)
         .catch(() => console.error("MCP gateway shutdown failed"));
     };
-  }, [nativeConfiguration]);
+  }, [nativeEnabled, nativeToken, nativePort, nativeKey]);
 
   useEffect(() => {
     if (

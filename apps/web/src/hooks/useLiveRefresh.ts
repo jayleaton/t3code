@@ -1,12 +1,12 @@
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useEffectEvent, useId } from "react";
 
-export const LIVE_REFRESH_MIN_INTERVAL_MS = 10_000;
+const LIVE_REFRESH_MIN_INTERVAL_MS = 10_000;
 
-export const LIVE_REFRESH_INTERVAL_MS = 5 * 60_000;
+const LIVE_REFRESH_INTERVAL_MS = 5 * 60_000;
 
-export const LIVE_REFRESH_IDLE_AFTER_MS = 6 * 60_000;
+const LIVE_REFRESH_IDLE_AFTER_MS = 6 * 60_000;
 
-export function shouldLiveRefresh(input: {
+function shouldLiveRefresh(input: {
   readonly visible: boolean;
   readonly now: number;
   readonly lastRefreshedAt: number;
@@ -18,7 +18,7 @@ export function shouldLiveRefresh(input: {
  * A view nobody has read this session is left alone: mounting it starts its own read, and
  * refreshing on top of that cancels the request in flight and pays for the same answer twice.
  */
-export function shouldRefreshOnArrival(input: {
+function shouldRefreshOnArrival(input: {
   readonly visible: boolean;
   readonly now: number;
   readonly lastRefreshedAt: number | undefined;
@@ -29,7 +29,7 @@ export function shouldRefreshOnArrival(input: {
   );
 }
 
-export function shouldRefreshOnInterval(input: {
+function shouldRefreshOnInterval(input: {
   readonly visible: boolean;
   readonly now: number;
   readonly lastRefreshedAt: number;
@@ -83,20 +83,19 @@ export function useLiveRefresh(
   } = {},
 ): void {
   const { enabled = true, key, intervalMs = LIVE_REFRESH_INTERVAL_MS } = options;
-  // Held in a ref so a caller can pass a fresh closure every render without re-arming the
+  // An effect event so a caller can pass a fresh closure every render without re-arming the
   // listeners, which would otherwise refresh on every render that changed anything at all.
-  const latest = useRef(refresh);
-  latest.current = refresh;
+  const runRefresh = useEffectEvent((viewId: string, now: number) => {
+    if (refresh === null) return;
+    lastRefreshedAtByView.set(viewId, now);
+    refresh();
+  });
   const fallbackViewId = useId();
   const viewId = key ?? fallbackViewId;
 
   useEffect(() => {
     if (!enabled) return;
-    const read = (now: number) => {
-      if (latest.current === null) return;
-      lastRefreshedAtByView.set(viewId, now);
-      latest.current();
-    };
+    const read = (now: number) => runRefresh(viewId, now);
     const visible = () => document.visibilityState === "visible";
     const onArrival = () => {
       const now = Date.now();

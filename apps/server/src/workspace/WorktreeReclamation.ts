@@ -133,8 +133,8 @@ export const make = Effect.fn("WorktreeReclamation.make")(function* (runtime: Re
     left === right || inside(left, right) || inside(right, left);
 
   /** Allocated (not logical) bytes, via `du`, which counts hard links once. */
-  const allocatedBytes = (target: string) =>
-    Effect.gen(function* () {
+  const allocatedBytes = Effect.fn("WorktreeReclamation.allocatedBytes")(
+    function* (target: string) {
       if (!(yield* fs.exists(target))) return 0;
       if ((yield* HostProcess.Platform) === "win32") return null;
       const result = yield* processes.run({
@@ -145,7 +145,9 @@ export const make = Effect.fn("WorktreeReclamation.make")(function* (runtime: Re
       });
       const kib = Number.parseInt(result.stdout.trim().split(/\s+/)[0] ?? "", 10);
       return result.code === 0 && Number.isFinite(kib) ? kib * 1024 : null;
-    }).pipe(Effect.orElseSucceed(() => null));
+    },
+    Effect.orElseSucceed(() => null),
+  );
 
   /** Default-branch refs of every remote, fetched first when `fetch` is set. */
   const defaultBranchRefs = Effect.fn("WorktreeReclamation.defaultBranchRefs")(function* (

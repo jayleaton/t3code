@@ -1,5 +1,4 @@
 import {
-  AuthAdministrativeScopes,
   AuthStandardClientScopes,
   type AuthEnvironmentScope,
   type AuthPairingLink,
@@ -255,7 +254,7 @@ const PAIRING_TOKEN_LENGTH = 12;
 const PAIRING_TOKEN_REJECTION_LIMIT =
   Math.floor(256 / PAIRING_TOKEN_ALPHABET.length) * PAIRING_TOKEN_ALPHABET.length;
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const config = yield* ServerConfig.ServerConfig;
   const pairingLinks = yield* AuthPairingLinks.AuthPairingLinkRepository;
@@ -316,7 +315,7 @@ export const make = Effect.gen(function* () {
     const now = yield* DateTime.now;
     yield* seedGrant(config.desktopBootstrapToken, {
       method: "desktop-bootstrap",
-      scopes: AuthAdministrativeScopes,
+      scopes: AuthStandardClientScopes,
       subject: "desktop-bootstrap",
       expiresAt: DateTime.add(now, {
         milliseconds: Duration.toMillis(DESKTOP_BOOTSTRAP_TTL_HOURS),
@@ -441,7 +440,7 @@ export const make = Effect.gen(function* () {
       if (consumeRotatingDesktopToken(credential, now.epochMilliseconds)) {
         return {
           method: "desktop-bootstrap",
-          scopes: AuthAdministrativeScopes,
+          scopes: AuthStandardClientScopes,
           subject: "desktop-bootstrap",
           expiresAt: DateTime.add(now, {
             milliseconds: DESKTOP_BOOTSTRAP_TOKEN_WINDOW_MS,

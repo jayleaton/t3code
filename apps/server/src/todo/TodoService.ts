@@ -251,15 +251,17 @@ const make = Effect.gen(function* () {
       ? randomUuidV4.pipe(Effect.map(CommandId.make))
       : Effect.succeed(commandId);
 
-  const mutate = (type: "todo.settle" | "todo.unsettle", input: TodoTargetInput) =>
-    Effect.gen(function* () {
-      const todoId = yield* commit({
-        type,
-        todoId: input.todoId,
-        commandId: yield* commandIdFor(input.commandId),
-      });
-      return toTodo(yield* readTodo(todoId));
+  const mutate = Effect.fn("TodoService.mutate")(function* (
+    type: "todo.settle" | "todo.unsettle",
+    input: TodoTargetInput,
+  ) {
+    const todoId = yield* commit({
+      type,
+      todoId: input.todoId,
+      commandId: yield* commandIdFor(input.commandId),
     });
+    return toTodo(yield* readTodo(todoId));
+  });
 
   return TodoService.of({
     list: Effect.fn("TodoService.list")(function* ({ projectId }) {

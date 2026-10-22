@@ -354,11 +354,10 @@ export function AgentsBoard(props: {
         ),
     );
     if (hosting.length === 0) return "Not on this environment";
-    return hosting.some(
-      (environment) =>
-        environment.serverConfig &&
-        resolveGatewayProfileModelSelection(profile, environment.serverConfig.providers),
-    )
+    return hosting.some((environment) => {
+      const providers = configs.get(environment.environmentId)?.providers;
+      return providers && resolveGatewayProfileModelSelection(profile, providers);
+    })
       ? null
       : "Model unavailable";
   };
@@ -1000,7 +999,7 @@ const AgentChatCard = memo(function AgentChatCard(props: AgentChatCardProps) {
           {
             id: "move-under",
             title: parentKey ? "Move to another parent" : "Make child of…",
-            image: "arrow.triangle.merge",
+            image: "arrow.triangle.branch",
             attributes: { disabled: !props.connected },
             subactions: props.moveTargets.map((target) => ({
               id: `${MOVE_UNDER_PREFIX}${target.key}`,
