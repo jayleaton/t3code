@@ -28,66 +28,67 @@ export const makeCommandCodeTextGeneration = Effect.fn("makeCommandCodeTextGener
   environment: NodeJS.ProcessEnv,
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const runCommandCodeJson = <S extends Schema.Top>(input: {
+  const runCommandCodeJson = Effect.fn("CommandCodeTextGeneration.runCommandCodeJson")(function* <
+    S extends Schema.Top,
+  >(input: {
     operation: string;
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
     modelSelection: ModelSelection;
-  }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
-    Effect.gen(function* () {
-      const result = yield* collectCommandCode({
-        binaryPath: settings.binaryPath,
-        args: [
-          "--print",
-          "--output-format",
-          "text",
-          "--plan",
-          "--no-session",
-          "--no-skills",
-          "--no-auto-update",
-          "--skip-onboarding",
-          "--max-turns",
-          "1",
-          ...(input.modelSelection.model === "default"
-            ? []
-            : ["--model", input.modelSelection.model]),
-        ],
-        cwd: input.cwd,
-        environment,
-        prompt: input.prompt,
-      }).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-        Effect.scoped,
-        Effect.timeout("180 seconds"),
-        Effect.mapError(
-          (cause) =>
-            new TextGenerationError({
-              operation: input.operation,
-              detail: "Command Code text generation failed.",
-              cause,
-            }),
-        ),
-      );
-      if (result.code !== 0)
-        return yield* new TextGenerationError({
-          operation: input.operation,
-          detail: result.stderr.trim() || `Command Code exited with code ${result.code}.`,
-        });
-      // oxlint-disable-next-line t3code/no-inline-schema-compile -- Each operation supplies its output schema.
-      return yield* Schema.decodeEffect(Schema.fromJsonString(input.outputSchemaJson))(
-        extractJsonObject(result.stdout),
-      ).pipe(
-        Effect.mapError(
-          (cause) =>
-            new TextGenerationError({
-              operation: input.operation,
-              detail: "Command Code returned invalid structured output.",
-              cause,
-            }),
-        ),
-      );
-    });
+  }): Effect.fn.Return<S["Type"], TextGenerationError, S["DecodingServices"]> {
+    const result = yield* collectCommandCode({
+      binaryPath: settings.binaryPath,
+      args: [
+        "--print",
+        "--output-format",
+        "text",
+        "--plan",
+        "--no-session",
+        "--no-skills",
+        "--no-auto-update",
+        "--skip-onboarding",
+        "--max-turns",
+        "1",
+        ...(input.modelSelection.model === "default"
+          ? []
+          : ["--model", input.modelSelection.model]),
+      ],
+      cwd: input.cwd,
+      environment,
+      prompt: input.prompt,
+    }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.scoped,
+      Effect.timeout("180 seconds"),
+      Effect.mapError(
+        (cause) =>
+          new TextGenerationError({
+            operation: input.operation,
+            detail: "Command Code text generation failed.",
+            cause,
+          }),
+      ),
+    );
+    if (result.code !== 0)
+      return yield* new TextGenerationError({
+        operation: input.operation,
+        detail: result.stderr.trim() || `Command Code exited with code ${result.code}.`,
+      });
+    // oxlint-disable-next-line t3code/no-inline-schema-compile -- Each operation supplies its output schema.
+    return yield* Schema.decodeEffect(Schema.fromJsonString(input.outputSchemaJson))(
+      extractJsonObject(result.stdout),
+    ).pipe(
+      Effect.mapError(
+        (cause) =>
+          new TextGenerationError({
+            operation: input.operation,
+            detail: "Command Code returned invalid structured output.",
+            cause,
+          }),
+      ),
+    );
+  });
   const generateCommitMessage: TextGeneration.TextGeneration["Service"]["generateCommitMessage"] =
     Effect.fn("CommandCodeTextGeneration.generateCommitMessage")(function* (input) {
       const { prompt, outputSchema } = buildCommitMessagePrompt({

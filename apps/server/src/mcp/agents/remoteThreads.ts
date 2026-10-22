@@ -92,47 +92,44 @@ const invalid = (message: string) =>
  * connected app grants is refused here, before anything runs, so a call never falls back to
  * this environment.
  */
-export const resolveEnvironment = (
+export const resolveEnvironment = Effect.fn("remoteThreads.resolveEnvironment")(function* (
   gateway: Gateway | undefined,
   scope: McpInvocationScope,
   environmentId: EnvironmentId | undefined,
-): Effect.Effect<RemoteEnvironment | undefined, OrchestratorMcpFailure> =>
-  Effect.gen(function* () {
-    if (environmentId === undefined || environmentId === scope.environmentId) return undefined;
-    if (gateway === undefined || environmentId === gateway.environmentId) {
-      return yield* invalid(
-        `Environment ${environmentId} is not this environment (${scope.environmentId}), and this server reaches no other. Omit environmentId to act here.`,
+): Effect.fn.Return<RemoteEnvironment | undefined, OrchestratorMcpFailure> {
+  if (environmentId === undefined || environmentId === scope.environmentId) return undefined;
+  if (gateway === undefined || environmentId === gateway.environmentId) {
+    return yield* invalid(
+      `Environment ${environmentId} is not this environment (${scope.environmentId}), and this server reaches no other. Omit environmentId to act here.`,
+    );
+  }
+  const grants = gateway.grants();
+  if (grants[environmentId] === undefined) {
+    const environments = yield* Effect.promise(() =>
+      gateway.context.port.listEnvironments().catch(() => []),
+    );
+    const reachable = environments
+      .filter((environment) => grants[environment.environmentId] !== undefined)
+      .map((environment) =>
+        environment.environmentId === scope.environmentId
+          ? `${environment.environmentId} (${environment.label}, this environment)`
+          : `${environment.environmentId} (${environment.label})`,
       );
-    }
-    const grants = gateway.grants();
-    if (grants[environmentId] === undefined) {
-      const environments = yield* Effect.promise(() =>
-        gateway.context.port.listEnvironments().catch(() => []),
-      );
-      const reachable = environments
-        .filter((environment) => grants[environment.environmentId] !== undefined)
-        .map((environment) =>
-          environment.environmentId === scope.environmentId
-            ? `${environment.environmentId} (${environment.label}, this environment)`
-            : `${environment.environmentId} (${environment.label})`,
-        );
-      return yield* invalid(
-        `Environment ${environmentId} is unknown or not connected to this chat. Reachable environments: ${
-          reachable.length === 0
-            ? `${scope.environmentId} (this environment)`
-            : reachable.join(", ")
-        }. To reach another machine, open T3 Code on a device connected to it and grant it T3 Agents access.`,
-      );
-    }
-    return {
-      gateway,
-      environmentId,
-      caller:
-        scope.thread === undefined
-          ? undefined
-          : { environmentId: scope.environmentId, threadId: scope.thread.threadId },
-    };
-  });
+    return yield* invalid(
+      `Environment ${environmentId} is unknown or not connected to this chat. Reachable environments: ${
+        reachable.length === 0 ? `${scope.environmentId} (this environment)` : reachable.join(", ")
+      }. To reach another machine, open T3 Code on a device connected to it and grant it T3 Agents access.`,
+    );
+  }
+  return {
+    gateway,
+    environmentId,
+    caller:
+      scope.thread === undefined
+        ? undefined
+        : { environmentId: scope.environmentId, threadId: scope.thread.threadId },
+  };
+});
 
 const gatewayFailure = (environmentId: EnvironmentId, error: unknown) => {
   const message = `${error instanceof Error ? error.message : String(error)} (environment ${environmentId})`;
@@ -227,91 +224,90 @@ const DEFAULT_RUN_LIMIT = 10;
 const DEFAULT_MAX_CHARS = 20_000;
 
 /** Messages only: the relaying app reports a thread's messages, runs and state, not its timeline. */
-export const readThread = (
+export const readThread = Effect.fn("remoteThreads.readThread")(function* (
   remote: RemoteEnvironment,
   input: OrchestratorMcpThreadReadInput,
-): Effect.Effect<OrchestratorMcpRemoteThreadReadResult, OrchestratorMcpFailure> =>
-  Effect.gen(function* () {
-    if (input.view === "activity") {
-      return yield* invalid(
-        `view:"activity" reads only threads on this environment; thread ${input.threadId} is on ${remote.environmentId}. Omit view to read its messages.`,
-      );
-    }
-    const thread = yield* getRemoteThread(remote, input.threadId);
-    const maxChars = input.maxCharsPerItem ?? DEFAULT_MAX_CHARS;
-    const messages = thread.messages
-      .map((message, position) => ({ message, position }))
-      .filter(({ message }) => message.role === "user" || message.role === "assistant");
-    const item = (
-      { message, position }: (typeof messages)[number],
-      offset: number,
-    ): OrchestratorMcpRemoteThreadReadResult["items"][number] => {
-      const end = offset + maxChars;
-      const textTruncated = offset > 0 || end < message.text.length;
-      return {
-        position,
-        messageId: message.id,
-        runId: message.runId ?? null,
-        type: message.role === "user" ? "user_message" : "assistant_message",
-        text: message.text.slice(offset, end),
-        textTruncated,
-        ...(textTruncated ? { nextTextOffset: end < message.text.length ? end : null } : {}),
-        updatedAt: message.updatedAt ?? null,
-      };
-    };
-    let items: OrchestratorMcpRemoteThreadReadResult["items"];
-    let hasMore: boolean;
-    if (input.itemId !== undefined) {
-      // Messages stand in for timeline items here, so an itemId names a message.
-      const itemId: string = input.itemId;
-      const found = messages.find(({ message }) => message.id === itemId);
-      if (found === undefined) {
-        return yield* invalid(`Thread ${input.threadId} has no message ${input.itemId}.`);
-      }
-      items = [item(found, input.textOffset ?? 0)];
-      hasMore = false;
-    } else {
-      const afterPosition = input.afterPosition ?? -1;
-      const limit = input.limit ?? DEFAULT_READ_LIMIT;
-      const after = messages.filter(({ position }) => position > afterPosition);
-      items = after.slice(0, limit).map((entry) => item(entry, 0));
-      hasMore = after.length > limit;
-    }
-    const latestRun = thread.runs.at(-1);
+): Effect.fn.Return<OrchestratorMcpRemoteThreadReadResult, OrchestratorMcpFailure> {
+  if (input.view === "activity") {
+    return yield* invalid(
+      `view:"activity" reads only threads on this environment; thread ${input.threadId} is on ${remote.environmentId}. Omit view to read its messages.`,
+    );
+  }
+  const thread = yield* getRemoteThread(remote, input.threadId);
+  const maxChars = input.maxCharsPerItem ?? DEFAULT_MAX_CHARS;
+  const messages = thread.messages
+    .map((message, position) => ({ message, position }))
+    .filter(({ message }) => message.role === "user" || message.role === "assistant");
+  const item = (
+    { message, position }: (typeof messages)[number],
+    offset: number,
+  ): OrchestratorMcpRemoteThreadReadResult["items"][number] => {
+    const end = offset + maxChars;
+    const textTruncated = offset > 0 || end < message.text.length;
     return {
-      environmentId: remote.environmentId,
-      thread: {
-        threadId: thread.id,
-        projectId: thread.projectId,
-        title: thread.title,
-        status: latestRun?.status ?? "idle",
-        latestRunId: latestRun?.id ?? null,
-        providerInstanceId: thread.modelSelection.instanceId,
-        model: thread.modelSelection.model,
-        runtimeMode: thread.runtimeMode ?? null,
-        interactionMode: thread.interactionMode ?? null,
-        parentThreadId: thread.parentThreadId ?? null,
-        parentEnvironmentId: thread.parentEnvironmentId ?? null,
-        pendingRequestCount: thread.runtimeRequests?.length ?? 0,
-        settled: thread.settledAt != null,
-        createdAt: thread.createdAt ?? null,
-        updatedAt: thread.updatedAt ?? null,
-      },
-      recentRuns: thread.runs
-        .toReversed()
-        .slice(0, input.runLimit ?? DEFAULT_RUN_LIMIT)
-        .map((run) => ({
-          runId: run.id,
-          status: run.status,
-          providerInstanceId: run.providerInstanceId,
-          requestedAt: run.requestedAt ?? null,
-          completedAt: run.completedAt ?? null,
-        })),
-      items,
-      nextPosition: items.at(-1)?.position ?? null,
-      hasMore,
+      position,
+      messageId: message.id,
+      runId: message.runId ?? null,
+      type: message.role === "user" ? "user_message" : "assistant_message",
+      text: message.text.slice(offset, end),
+      textTruncated,
+      ...(textTruncated ? { nextTextOffset: end < message.text.length ? end : null } : {}),
+      updatedAt: message.updatedAt ?? null,
     };
-  });
+  };
+  let items: OrchestratorMcpRemoteThreadReadResult["items"];
+  let hasMore: boolean;
+  if (input.itemId !== undefined) {
+    // Messages stand in for timeline items here, so an itemId names a message.
+    const itemId: string = input.itemId;
+    const found = messages.find(({ message }) => message.id === itemId);
+    if (found === undefined) {
+      return yield* invalid(`Thread ${input.threadId} has no message ${input.itemId}.`);
+    }
+    items = [item(found, input.textOffset ?? 0)];
+    hasMore = false;
+  } else {
+    const afterPosition = input.afterPosition ?? -1;
+    const limit = input.limit ?? DEFAULT_READ_LIMIT;
+    const after = messages.filter(({ position }) => position > afterPosition);
+    items = after.slice(0, limit).map((entry) => item(entry, 0));
+    hasMore = after.length > limit;
+  }
+  const latestRun = thread.runs.at(-1);
+  return {
+    environmentId: remote.environmentId,
+    thread: {
+      threadId: thread.id,
+      projectId: thread.projectId,
+      title: thread.title,
+      status: latestRun?.status ?? "idle",
+      latestRunId: latestRun?.id ?? null,
+      providerInstanceId: thread.modelSelection.instanceId,
+      model: thread.modelSelection.model,
+      runtimeMode: thread.runtimeMode ?? null,
+      interactionMode: thread.interactionMode ?? null,
+      parentThreadId: thread.parentThreadId ?? null,
+      parentEnvironmentId: thread.parentEnvironmentId ?? null,
+      pendingRequestCount: thread.runtimeRequests?.length ?? 0,
+      settled: thread.settledAt != null,
+      createdAt: thread.createdAt ?? null,
+      updatedAt: thread.updatedAt ?? null,
+    },
+    recentRuns: thread.runs
+      .toReversed()
+      .slice(0, input.runLimit ?? DEFAULT_RUN_LIMIT)
+      .map((run) => ({
+        runId: run.id,
+        status: run.status,
+        providerInstanceId: run.providerInstanceId,
+        requestedAt: run.requestedAt ?? null,
+        completedAt: run.completedAt ?? null,
+      })),
+    items,
+    nextPosition: items.at(-1)?.position ?? null,
+    hasMore,
+  };
+});
 
 const FIRST_POLL = Duration.seconds(1);
 const MAX_POLL = Duration.seconds(5);
@@ -340,58 +336,57 @@ const stillActive = (remote: RemoteEnvironment, threadId: ThreadId, runId: RunId
  * the thread itself only once its run is no longer the active one. Without runId, a restart
  * moves the wait to the run that continues the work, as a local wait does.
  */
-export const waitForThread = (
+export const waitForThread = Effect.fn("remoteThreads.waitForThread")(function* (
   remote: RemoteEnvironment,
   input: OrchestratorMcpThreadWaitInput,
-): Effect.Effect<OrchestratorMcpThreadWaitResult, OrchestratorMcpFailure> =>
-  Effect.gen(function* () {
-    const deadline = (yield* Clock.currentTimeMillis) + clampWaitTimeoutMs(input.timeoutMs);
-    let thread = yield* getRemoteThread(remote, input.threadId);
-    let runId = input.runId ?? thread.runs.at(-1)?.id;
-    const result = (status: OrchestratorMcpThreadWaitResult["status"], timedOut: boolean) => ({
-      environmentId: remote.environmentId,
-      threadId: input.threadId,
-      runId: runId ?? null,
-      status,
-      timedOut,
-    });
-    if (runId === undefined) return result("idle", false);
-    let delay = FIRST_POLL;
-    let failures = 0;
-    while (true) {
-      const run = thread.runs.find((candidate) => candidate.id === runId);
-      if (run === undefined) {
-        return yield* new OrchestratorMcpFailure({
-          code: "run_not_found",
-          message: `Thread ${input.threadId} on environment ${remote.environmentId} has no run ${runId}.`,
-        });
-      }
-      const newest = thread.runs.at(-1);
-      if (
-        input.runId === undefined &&
-        (run.status === "cancelled" || run.status === "interrupted") &&
-        newest !== undefined &&
-        newest.id !== run.id &&
-        !isTerminalRunStatus(newest.status)
-      ) {
-        runId = newest.id;
-        continue;
-      }
-      if (isTerminalRunStatus(run.status)) return result(run.status, false);
-      const remaining = deadline - (yield* Clock.currentTimeMillis);
-      if (remaining <= 0) return result(run.status, true);
-      yield* Effect.sleep(Duration.min(delay, Duration.millis(remaining)));
-      delay = Duration.min(Duration.times(delay, 2), MAX_POLL);
-      if (yield* stillActive(remote, input.threadId, run.id)) continue;
-      const next = yield* getRemoteThread(remote, input.threadId).pipe(Effect.result);
-      if (next._tag === "Success") {
-        thread = next.success;
-        failures = 0;
-      } else if (++failures >= RELAY_FAILURES_TOLERATED) {
-        return yield* next.failure;
-      }
-    }
+): Effect.fn.Return<OrchestratorMcpThreadWaitResult, OrchestratorMcpFailure> {
+  const deadline = (yield* Clock.currentTimeMillis) + clampWaitTimeoutMs(input.timeoutMs);
+  let thread = yield* getRemoteThread(remote, input.threadId);
+  let runId = input.runId ?? thread.runs.at(-1)?.id;
+  const result = (status: OrchestratorMcpThreadWaitResult["status"], timedOut: boolean) => ({
+    environmentId: remote.environmentId,
+    threadId: input.threadId,
+    runId: runId ?? null,
+    status,
+    timedOut,
   });
+  if (runId === undefined) return result("idle", false);
+  let delay = FIRST_POLL;
+  let failures = 0;
+  while (true) {
+    const run = thread.runs.find((candidate) => candidate.id === runId);
+    if (run === undefined) {
+      return yield* new OrchestratorMcpFailure({
+        code: "run_not_found",
+        message: `Thread ${input.threadId} on environment ${remote.environmentId} has no run ${runId}.`,
+      });
+    }
+    const newest = thread.runs.at(-1);
+    if (
+      input.runId === undefined &&
+      (run.status === "cancelled" || run.status === "interrupted") &&
+      newest !== undefined &&
+      newest.id !== run.id &&
+      !isTerminalRunStatus(newest.status)
+    ) {
+      runId = newest.id;
+      continue;
+    }
+    if (isTerminalRunStatus(run.status)) return result(run.status, false);
+    const remaining = deadline - (yield* Clock.currentTimeMillis);
+    if (remaining <= 0) return result(run.status, true);
+    yield* Effect.sleep(Duration.min(delay, Duration.millis(remaining)));
+    delay = Duration.min(Duration.times(delay, 2), MAX_POLL);
+    if (yield* stillActive(remote, input.threadId, run.id)) continue;
+    const next = yield* getRemoteThread(remote, input.threadId).pipe(Effect.result);
+    if (next._tag === "Success") {
+      thread = next.success;
+      failures = 0;
+    } else if (++failures >= RELAY_FAILURES_TOLERATED) {
+      return yield* next.failure;
+    }
+  }
+});
 
 /** The caller's own retry key, kept apart from every other caller's. */
 const idempotencyKeyFor = (scope: McpInvocationScope, clientRequestId: string | undefined) =>
@@ -399,98 +394,96 @@ const idempotencyKeyFor = (scope: McpInvocationScope, clientRequestId: string | 
     ? newCommandId()
     : Effect.succeed(`${scope.requestNamespace}:${clientRequestId}`);
 
-export const sendToThread = (
+export const sendToThread = Effect.fn("remoteThreads.sendToThread")(function* (
   remote: RemoteEnvironment,
   scope: McpInvocationScope,
   input: OrchestratorMcpThreadSendInput,
-) =>
-  Effect.gen(function* () {
-    if (input.mode === "steer" || input.mode === "restart") {
-      return yield* invalid(
-        `mode:"${input.mode}" works only on threads on this environment; on ${remote.environmentId} a message starts the thread or queues behind its current turn. Omit mode or use "queue".`,
+) {
+  if (input.mode === "steer" || input.mode === "restart") {
+    return yield* invalid(
+      `mode:"${input.mode}" works only on threads on this environment; on ${remote.environmentId} a message starts the thread or queues behind its current turn. Omit mode or use "queue".`,
+    );
+  }
+  const thread = yield* getRemoteThread(remote, input.threadId);
+  // Same rule as a local send: a caller cannot drive a thread with broader modes than its own.
+  const limit = yield* DispatchModeLimit;
+  if (limit !== undefined) {
+    if (thread.runtimeMode === undefined || thread.interactionMode === undefined) {
+      return yield* new OrchestratorMcpFailure({
+        code: "capability_denied",
+        message: `The T3 app relaying ${remote.environmentId} does not report thread ${input.threadId}'s modes, so this send cannot be checked against yours. Update that app, or use t3_send_message.`,
+      });
+    }
+    yield* resolveRuntimeMode(limit.runtimeMode, thread.runtimeMode);
+    yield* resolveInteractionMode(limit.interactionMode, thread.interactionMode);
+  }
+  const tasks = yield* Effect.serviceOption(ThreadTaskService.ThreadTaskService);
+  // A managed worker may message only its own children; authorizeMessage cannot see this one.
+  const ownChild =
+    thread.parentThreadId === scope.thread?.threadId &&
+    thread.parentEnvironmentId === scope.environmentId;
+  if (scope.thread !== undefined && Option.isSome(tasks) && !ownChild) {
+    yield* tasks.value
+      .authorizeMessage({ senderThreadId: scope.thread.threadId, targetThreadId: null })
+      .pipe(
+        Effect.mapError(
+          (error) =>
+            new OrchestratorMcpFailure({ code: "capability_denied", message: error.detail }),
+        ),
       );
-    }
-    const thread = yield* getRemoteThread(remote, input.threadId);
-    // Same rule as a local send: a caller cannot drive a thread with broader modes than its own.
-    const limit = yield* DispatchModeLimit;
-    if (limit !== undefined) {
-      if (thread.runtimeMode === undefined || thread.interactionMode === undefined) {
-        return yield* new OrchestratorMcpFailure({
-          code: "capability_denied",
-          message: `The T3 app relaying ${remote.environmentId} does not report thread ${input.threadId}'s modes, so this send cannot be checked against yours. Update that app, or use t3_send_message.`,
-        });
-      }
-      yield* resolveRuntimeMode(limit.runtimeMode, thread.runtimeMode);
-      yield* resolveInteractionMode(limit.interactionMode, thread.interactionMode);
-    }
-    const tasks = yield* Effect.serviceOption(ThreadTaskService.ThreadTaskService);
-    // A managed worker may message only its own children; authorizeMessage cannot see this one.
-    const ownChild =
-      thread.parentThreadId === scope.thread?.threadId &&
-      thread.parentEnvironmentId === scope.environmentId;
-    if (scope.thread !== undefined && Option.isSome(tasks) && !ownChild) {
-      yield* tasks.value
-        .authorizeMessage({ senderThreadId: scope.thread.threadId, targetThreadId: null })
-        .pipe(
-          Effect.mapError(
-            (error) =>
-              new OrchestratorMcpFailure({ code: "capability_denied", message: error.detail }),
-          ),
-        );
-    }
-    const sent = yield* callRemote(remote, "t3_send_message", {
-      threadId: input.threadId,
-      text: input.message,
-      idempotencyKey: yield* idempotencyKeyFor(scope, input.clientRequestId),
-    });
-    return {
-      environmentId: remote.environmentId,
-      threadId: input.threadId,
-      messageId: MessageId.make(String(sent?.messageId ?? "")),
-      delivery: "accepted" as const,
-    };
+  }
+  const sent = yield* callRemote(remote, "t3_send_message", {
+    threadId: input.threadId,
+    text: input.message,
+    idempotencyKey: yield* idempotencyKeyFor(scope, input.clientRequestId),
   });
+  return {
+    environmentId: remote.environmentId,
+    threadId: input.threadId,
+    messageId: MessageId.make(String(sent?.messageId ?? "")),
+    delivery: "accepted" as const,
+  };
+});
 
 /**
  * Registers a named child on another environment as a task of its parent, so the parent's
  * t3_task_read lists it, as a local launch does with assignLaunchedChild. The child keeps
  * running if this fails; the returned text says why the task is missing.
  */
-export const assignRemoteChild = (input: {
+export const assignRemoteChild = Effect.fn("remoteThreads.assignRemoteChild")(function* (input: {
   readonly ownerThreadId: ThreadId;
   readonly workerThreadId: ThreadId;
   readonly workerEnvironmentId: EnvironmentId;
   readonly summary: string;
-}): Effect.Effect<string | undefined> =>
-  Effect.gen(function* () {
-    const tasks = yield* Effect.serviceOption(ThreadTaskService.ThreadTaskService);
-    if (Option.isNone(tasks)) return undefined;
-    return yield* tasks.value
-      .assign(
-        { kind: "thread", threadId: input.ownerThreadId },
-        {
-          threadId: input.workerThreadId,
-          summary: input.summary.slice(0, 2_000),
-          // A retried create returns the same child; this makes its assignment a retry too.
-          clientRequestId: `launch:${input.workerThreadId}`,
-        },
-        input.workerEnvironmentId,
-      )
-      .pipe(
-        Effect.as(undefined),
-        Effect.catch((error) =>
-          Effect.logWarning("remote child kept no task", {
-            workerThreadId: input.workerThreadId,
-            workerEnvironmentId: input.workerEnvironmentId,
-            detail: error.detail,
-          }).pipe(
-            Effect.as(
-              `The child is running, but it is not registered as your task, so t3_task_read will not list it until it reports: ${error.detail} Assign it with t3_task_assign and its environmentId.`,
-            ),
+}): Effect.fn.Return<string | undefined> {
+  const tasks = yield* Effect.serviceOption(ThreadTaskService.ThreadTaskService);
+  if (Option.isNone(tasks)) return undefined;
+  return yield* tasks.value
+    .assign(
+      { kind: "thread", threadId: input.ownerThreadId },
+      {
+        threadId: input.workerThreadId,
+        summary: input.summary.slice(0, 2_000),
+        // A retried create returns the same child; this makes its assignment a retry too.
+        clientRequestId: `launch:${input.workerThreadId}`,
+      },
+      input.workerEnvironmentId,
+    )
+    .pipe(
+      Effect.as(undefined),
+      Effect.catch((error) =>
+        Effect.logWarning("remote child kept no task", {
+          workerThreadId: input.workerThreadId,
+          workerEnvironmentId: input.workerEnvironmentId,
+          detail: error.detail,
+        }).pipe(
+          Effect.as(
+            `The child is running, but it is not registered as your task, so t3_task_read will not list it until it reports: ${error.detail} Assign it with t3_task_assign and its environmentId.`,
           ),
         ),
-      );
-  });
+      ),
+    );
+});
 
 /** What t3_thread_launch accepts, as far as a launch on another environment needs it. */
 export interface RemoteLaunchInput {
@@ -568,85 +561,84 @@ const remoteModel = (remote: RemoteEnvironment, selection: ModelSelection | unde
 };
 
 /** A t3_thread_launch on another environment: it lands there, or it fails. */
-export const launchThread = (
+export const launchThread = Effect.fn("remoteThreads.launchThread")(function* (
   remote: RemoteEnvironment,
   input: RemoteLaunchInput,
   modes: { readonly runtimeMode: RuntimeMode; readonly interactionMode: ProviderInteractionMode },
-) =>
-  Effect.gen(function* () {
-    if (input.scratch === true) {
-      return yield* invalid(
-        `scratch:true launches only on this environment. To launch on ${remote.environmentId}, pass the projectId of a project there; t3_list_projects with that environmentId lists them.`,
-      );
-    }
-    if (input.projectId === undefined) {
-      return yield* invalid(
-        `Pass projectId: projects belong to one environment, so a launch on ${remote.environmentId} cannot inherit yours. t3_list_projects with that environmentId lists them.`,
-      );
-    }
-    if (input.profileId !== undefined && input.runtimeMode !== undefined) {
-      return yield* invalid(
-        `On another environment (${remote.environmentId}) an agent runs with its own permission mode; omit runtimeMode, or launch without profileId.`,
-      );
-    }
-    if ((input.attachments ?? []).length > 0) {
-      return yield* invalid(
-        `Attachments upload to this environment only; launch on ${remote.environmentId} without them and describe the files in message.`,
-      );
-    }
-    const workspace = yield* remoteWorkspace(remote, input.workspaceStrategy);
-    const model = yield* remoteModel(remote, input.modelSelection);
-    const args = {
-      projectId: input.projectId,
-      title: input.title,
-      ...(input.profileId === undefined ? {} : { profileId: input.profileId }),
-      ...model,
-      // An agent's own modes apply on its environment; a plain thread inherits the caller's.
-      runtimeMode: modes.runtimeMode,
-      ...(input.interactionMode !== undefined || input.profileId === undefined
-        ? { interactionMode: modes.interactionMode }
-        : {}),
-      ...workspace,
-      idempotencyKey: yield* newCommandId(),
-    };
-    const created =
-      input.message === undefined
-        ? yield* callRemote(remote, "t3_create_thread", args)
-        : yield* callRemote(remote, "t3_create_and_start_thread", { ...args, text: input.message });
-    const threadId = ThreadId.make(String(created?.threadId ?? ""));
-    const warnings: Array<string> = [];
-    if (created?.partial === true) {
-      warnings.push(
-        `The thread was created, but its first message was not confirmed: ${String(created.error?.message ?? "unknown error")}. Check it with t3_thread_read and resend with t3_thread_send, both with environmentId.`,
-      );
-    }
-    if (input.profileId !== undefined && remote.caller !== undefined) {
-      const taskWarning = yield* assignRemoteChild({
-        ownerThreadId: ThreadId.make(remote.caller.threadId),
-        workerThreadId: threadId,
-        workerEnvironmentId: remote.environmentId,
-        summary: input.title,
-      });
-      if (taskWarning !== undefined) warnings.push(taskWarning);
-    }
-    const thread = Option.getOrUndefined(
-      yield* getRemoteThread(remote, threadId).pipe(
-        Effect.tapError((error) =>
-          Effect.sync(() =>
-            warnings.push(`The thread was created, but reading it back failed: ${error.message}`),
-          ),
-        ),
-        Effect.option,
-      ),
+) {
+  if (input.scratch === true) {
+    return yield* invalid(
+      `scratch:true launches only on this environment. To launch on ${remote.environmentId}, pass the projectId of a project there; t3_list_projects with that environmentId lists them.`,
     );
-    const run = input.message === undefined ? undefined : thread?.runs.at(-1);
-    return {
-      environmentId: remote.environmentId,
-      threadId,
-      projectId: thread?.projectId ?? input.projectId,
-      modelSelection: thread?.modelSelection ?? null,
-      runId: run?.id ?? null,
-      status: run?.status ?? null,
-      ...(warnings.length === 0 ? {} : { warnings }),
-    };
-  });
+  }
+  if (input.projectId === undefined) {
+    return yield* invalid(
+      `Pass projectId: projects belong to one environment, so a launch on ${remote.environmentId} cannot inherit yours. t3_list_projects with that environmentId lists them.`,
+    );
+  }
+  if (input.profileId !== undefined && input.runtimeMode !== undefined) {
+    return yield* invalid(
+      `On another environment (${remote.environmentId}) an agent runs with its own permission mode; omit runtimeMode, or launch without profileId.`,
+    );
+  }
+  if ((input.attachments ?? []).length > 0) {
+    return yield* invalid(
+      `Attachments upload to this environment only; launch on ${remote.environmentId} without them and describe the files in message.`,
+    );
+  }
+  const workspace = yield* remoteWorkspace(remote, input.workspaceStrategy);
+  const model = yield* remoteModel(remote, input.modelSelection);
+  const args = {
+    projectId: input.projectId,
+    title: input.title,
+    ...(input.profileId === undefined ? {} : { profileId: input.profileId }),
+    ...model,
+    // An agent's own modes apply on its environment; a plain thread inherits the caller's.
+    runtimeMode: modes.runtimeMode,
+    ...(input.interactionMode !== undefined || input.profileId === undefined
+      ? { interactionMode: modes.interactionMode }
+      : {}),
+    ...workspace,
+    idempotencyKey: yield* newCommandId(),
+  };
+  const created =
+    input.message === undefined
+      ? yield* callRemote(remote, "t3_create_thread", args)
+      : yield* callRemote(remote, "t3_create_and_start_thread", { ...args, text: input.message });
+  const threadId = ThreadId.make(String(created?.threadId ?? ""));
+  const warnings: Array<string> = [];
+  if (created?.partial === true) {
+    warnings.push(
+      `The thread was created, but its first message was not confirmed: ${String(created.error?.message ?? "unknown error")}. Check it with t3_thread_read and resend with t3_thread_send, both with environmentId.`,
+    );
+  }
+  if (input.profileId !== undefined && remote.caller !== undefined) {
+    const taskWarning = yield* assignRemoteChild({
+      ownerThreadId: ThreadId.make(remote.caller.threadId),
+      workerThreadId: threadId,
+      workerEnvironmentId: remote.environmentId,
+      summary: input.title,
+    });
+    if (taskWarning !== undefined) warnings.push(taskWarning);
+  }
+  const thread = Option.getOrUndefined(
+    yield* getRemoteThread(remote, threadId).pipe(
+      Effect.tapError((error) =>
+        Effect.sync(() =>
+          warnings.push(`The thread was created, but reading it back failed: ${error.message}`),
+        ),
+      ),
+      Effect.option,
+    ),
+  );
+  const run = input.message === undefined ? undefined : thread?.runs.at(-1);
+  return {
+    environmentId: remote.environmentId,
+    threadId,
+    projectId: thread?.projectId ?? input.projectId,
+    modelSelection: thread?.modelSelection ?? null,
+    runId: run?.id ?? null,
+    status: run?.status ?? null,
+    ...(warnings.length === 0 ? {} : { warnings }),
+  };
+});

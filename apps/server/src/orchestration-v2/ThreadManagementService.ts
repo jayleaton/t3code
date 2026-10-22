@@ -714,33 +714,32 @@ const make = Effect.gen(function* () {
    * held as a preparing run instead: started now, it would run in the project
    * root and be cut off when the binding detaches its provider session.
    */
-  const dispatchMessage = (
+  const dispatchMessage = Effect.fn("orchestrationV2.threadManagement.dispatchMessage")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
-  ) =>
-    Effect.gen(function* () {
-      const startsTurn =
-        command.dispatchMode.type === "start_immediately" || command.deliveryIntent !== undefined;
-      if (Option.isNone(setupTracker) || !startsTurn) return yield* orchestrator.dispatch(command);
-      const tracker = setupTracker.value;
-      if (!bindingWorkspace(yield* tracker.get(command.threadId))) {
-        return yield* orchestrator.dispatch(command);
-      }
-      const { deliveryIntent: _resolvedByHold, ...held } = command;
-      const result = yield* orchestrator.dispatch({
-        ...held,
-        dispatchMode: { type: "defer_start" },
-      });
-      const preparing = result.storedEvents.find(
-        (stored) =>
-          stored.event.type === "run.created" && stored.event.payload.status === "preparing",
-      );
-      if (preparing?.event.type === "run.created") {
-        yield* releaseWhenWorkspaceReady(tracker, command, preparing.event.payload.id).pipe(
-          Effect.forkIn(heldRunScope),
-        );
-      }
-      return result;
+  ) {
+    const startsTurn =
+      command.dispatchMode.type === "start_immediately" || command.deliveryIntent !== undefined;
+    if (Option.isNone(setupTracker) || !startsTurn) return yield* orchestrator.dispatch(command);
+    const tracker = setupTracker.value;
+    if (!bindingWorkspace(yield* tracker.get(command.threadId))) {
+      return yield* orchestrator.dispatch(command);
+    }
+    const { deliveryIntent: _resolvedByHold, ...held } = command;
+    const result = yield* orchestrator.dispatch({
+      ...held,
+      dispatchMode: { type: "defer_start" },
     });
+    const preparing = result.storedEvents.find(
+      (stored) =>
+        stored.event.type === "run.created" && stored.event.payload.status === "preparing",
+    );
+    if (preparing?.event.type === "run.created") {
+      yield* releaseWhenWorkspaceReady(tracker, command, preparing.event.payload.id).pipe(
+        Effect.forkIn(heldRunScope),
+      );
+    }
+    return result;
+  });
   const assertDispatchTargetEnabled = (command: OrchestrationV2ServerCommand) => {
     switch (command.type) {
       case "message.dispatch":
@@ -768,53 +767,54 @@ const make = Effect.gen(function* () {
     }
   };
 
-  const dispatch: ThreadManagementServiceShape["dispatch"] = (command) =>
-    Effect.gen(function* () {
-      yield* ensureCommandTranscripts(command);
-      if (command.type === "message.dispatch") {
-        yield* assertDispatchTargetEnabled(command);
-        return yield* dispatchMessage(command);
-      }
-      if (command.type !== "thread.create" && command.type !== "delegated_task.request") {
-        return yield* orchestrator.dispatch(command);
-      }
-      // Only the server resolves profile snapshots; a caller-supplied one is dropped.
-      const { profileSnapshot: _untrustedSnapshot, ...trusted } = command;
-      if (trusted.profileSelection === undefined) {
-        yield* assertDispatchTargetEnabled(trusted);
-        return yield* orchestrator.dispatch(trusted);
-      }
-      if (Option.isNone(settings) || Option.isNone(providers)) {
-        return yield* new Orchestrator.OrchestratorCommandRejectedError({
-          commandId: command.commandId,
-          commandType: command.type,
-          cause: "Agent profile settings are unavailable",
-        });
-      }
-      const resolved = yield* Effect.gen(function* () {
-        const library = yield* Option.getOrThrow(settings).getSettings;
-        const catalog = yield* Option.getOrThrow(providers).getProviders;
-        return yield* Effect.try(() =>
-          resolveThreadCreateProfile(
-            trusted,
-            library.mcpGatewayProfiles,
-            catalog,
-            library.agentSkills,
-          ),
-        );
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new Orchestrator.OrchestratorCommandRejectedError({
-              commandId: command.commandId,
-              commandType: command.type,
-              cause,
-            }),
+  const dispatch: ThreadManagementServiceShape["dispatch"] = Effect.fn(
+    "orchestrationV2.threadManagement.dispatch",
+  )(function* (command) {
+    yield* ensureCommandTranscripts(command);
+    if (command.type === "message.dispatch") {
+      yield* assertDispatchTargetEnabled(command);
+      return yield* dispatchMessage(command);
+    }
+    if (command.type !== "thread.create" && command.type !== "delegated_task.request") {
+      return yield* orchestrator.dispatch(command);
+    }
+    // Only the server resolves profile snapshots; a caller-supplied one is dropped.
+    const { profileSnapshot: _untrustedSnapshot, ...trusted } = command;
+    if (trusted.profileSelection === undefined) {
+      yield* assertDispatchTargetEnabled(trusted);
+      return yield* orchestrator.dispatch(trusted);
+    }
+    if (Option.isNone(settings) || Option.isNone(providers)) {
+      return yield* new Orchestrator.OrchestratorCommandRejectedError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "Agent profile settings are unavailable",
+      });
+    }
+    const resolved = yield* Effect.gen(function* () {
+      const library = yield* Option.getOrThrow(settings).getSettings;
+      const catalog = yield* Option.getOrThrow(providers).getProviders;
+      return yield* Effect.try(() =>
+        resolveThreadCreateProfile(
+          trusted,
+          library.mcpGatewayProfiles,
+          catalog,
+          library.agentSkills,
         ),
       );
-      yield* assertDispatchTargetEnabled(resolved);
-      return yield* orchestrator.dispatch(resolved);
-    });
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new Orchestrator.OrchestratorCommandRejectedError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause,
+          }),
+      ),
+    );
+    yield* assertDispatchTargetEnabled(resolved);
+    return yield* orchestrator.dispatch(resolved);
+  });
 
   const getProjectThread: ThreadManagementServiceShape["getProjectThread"] = (input) =>
     getThreadProjection(input.threadId).pipe(

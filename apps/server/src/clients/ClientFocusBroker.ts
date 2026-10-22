@@ -98,8 +98,8 @@ export const make = Effect.fn("clients.focusBroker.make")(function* (
 
   // Registers on call so a focus request can target the client as soon as the
   // stream exists; the stream's finalizer unregisters it.
-  const connect: ClientFocusBroker["Service"]["connect"] = (identity, host) =>
-    Effect.gen(function* () {
+  const connect: ClientFocusBroker["Service"]["connect"] = Effect.fn("clients.focusBroker.connect")(
+    function* (identity, host) {
       const queue = yield* Queue.unbounded<ClientFocusRequest>();
       const connection: Connection = {
         ...identity,
@@ -117,7 +117,8 @@ export const make = Effect.fn("clients.focusBroker.make")(function* (
           }).pipe(Effect.andThen(Queue.shutdown(queue))),
         ),
       );
-    });
+    },
+  );
 
   const list: ClientFocusBroker["Service"]["list"] = Effect.gen(function* () {
     const [connections, currentLeases] = yield* Effect.all([Ref.get(connectionsRef), leases]);
@@ -139,8 +140,8 @@ export const make = Effect.fn("clients.focusBroker.make")(function* (
     return [...byClient.values()].toSorted((left, right) => left.label.localeCompare(right.label));
   });
 
-  const focus: ClientFocusBroker["Service"]["focus"] = (input) =>
-    Effect.gen(function* () {
+  const focus: ClientFocusBroker["Service"]["focus"] = Effect.fn("clients.focusBroker.focus")(
+    function* (input) {
       const [connections, currentLeases] = yield* Effect.all([Ref.get(connectionsRef), leases]);
       const target = preferredConnection(
         [...connections].filter((connection) => connection.host.clientId === input.clientId),
@@ -152,7 +153,8 @@ export const make = Effect.fn("clients.focusBroker.make")(function* (
       const requestId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
       yield* Queue.offer(target.queue, { requestId, target: input.target });
       return { requestId, clientId: input.clientId, label: target.host.label };
-    });
+    },
+  );
 
   return ClientFocusBroker.of({ connect, list, focus });
 });

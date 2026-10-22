@@ -611,82 +611,79 @@ describe("t3 watch", () => {
 
   // Real processes: the winner holds the lock while its POST is parked, so the
   // loser can only ever see a held lock. The server answers once a process exits.
-  it.effect(
-    "lets exactly one of two real concurrent --once processes send",
-    () =>
-      withDir((dir) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const statePath = `${dir}/state.json`;
-          const posts: Array<string> = [];
-          let release = () => {};
-          const parked = new Promise<void>((resolve) => {
-            release = resolve;
-          });
-          const server = NodeHttp.createServer((request, response) => {
-            posts.push(String(request.headers["idempotency-key"]));
-            void parked.then(() => response.writeHead(200).end());
-          });
-          yield* Effect.promise(
-            () => new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve)),
-          );
-          yield* Effect.addFinalizer(() =>
-            Effect.sync(() => {
-              release();
-              server.closeAllConnections();
-              server.close();
-            }),
-          ).pipe(Effect.ignore);
-          const address = server.address();
-          const port = typeof address === "object" && address !== null ? address.port : 0;
-          const configPath = `${dir}/config.json`;
-          const config = makeConfig(dir, {
-            webhookUrl: `http://127.0.0.1:${String(port)}/hooks/x`,
-            statePath,
-            retry: { attempts: 1, baseDelayMs: 0 },
-          });
-          yield* fs.writeFileString(configPath, JSON.stringify(config));
-          yield* pass(config, statePath).pipe(Effect.provide(makeHarness().layer)); // baseline
-          yield* fs.writeFileString(`${dir}/lease`, "x");
+  it.effect("lets exactly one of two real concurrent --once processes send", () =>
+    withDir((dir) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const statePath = `${dir}/state.json`;
+        const posts: Array<string> = [];
+        let release = () => {};
+        const parked = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const server = NodeHttp.createServer((request, response) => {
+          posts.push(String(request.headers["idempotency-key"]));
+          void parked.then(() => response.writeHead(200).end());
+        });
+        yield* Effect.promise(
+          () => new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve)),
+        );
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            release();
+            server.closeAllConnections();
+            server.close();
+          }),
+        ).pipe(Effect.ignore);
+        const address = server.address();
+        const port = typeof address === "object" && address !== null ? address.port : 0;
+        const configPath = `${dir}/config.json`;
+        const config = makeConfig(dir, {
+          webhookUrl: `http://127.0.0.1:${String(port)}/hooks/x`,
+          statePath,
+          retry: { attempts: 1, baseDelayMs: 0 },
+        });
+        yield* fs.writeFileString(configPath, JSON.stringify(config));
+        yield* pass(config, statePath).pipe(Effect.provide(makeHarness().layer)); // baseline
+        yield* fs.writeFileString(`${dir}/lease`, "x");
 
-          const spawn = () =>
-            new Promise<{ code: number | null; out: string }>((resolve, reject) => {
-              const child = NodeChildProcess.spawn(
-                process.execPath,
-                [new URL("../bin.ts", import.meta.url).pathname, "watch", configPath, "--once"],
-                {
-                  env: { ...process.env, T3CODE_HOME: `${dir}/home` },
-                  stdio: ["ignore", "pipe", "pipe"],
-                },
-              );
-              let out = "";
-              child.stdout.on("data", (chunk: Buffer) => (out += chunk.toString()));
-              child.stderr.on("data", (chunk: Buffer) => (out += chunk.toString()));
-              child.on("error", reject);
-              child.on("exit", (code) => {
-                release(); // whichever exits first is the skipper; unpark the winner's POST
-                resolve({ code, out });
-              });
+        const spawn = () =>
+          new Promise<{ code: number | null; out: string }>((resolve, reject) => {
+            const child = NodeChildProcess.spawn(
+              process.execPath,
+              [new URL("../bin.ts", import.meta.url).pathname, "watch", configPath, "--once"],
+              {
+                env: { ...process.env, T3CODE_HOME: `${dir}/home` },
+                stdio: ["ignore", "pipe", "pipe"],
+              },
+            );
+            let out = "";
+            child.stdout.on("data", (chunk: Buffer) => (out += chunk.toString()));
+            child.stderr.on("data", (chunk: Buffer) => (out += chunk.toString()));
+            child.on("error", reject);
+            child.on("exit", (code) => {
+              release(); // whichever exits first is the skipper; unpark the winner's POST
+              resolve({ code, out });
             });
-          const runs = yield* Effect.promise(() => Promise.all([spawn(), spawn()]));
+          });
+        const runs = yield* Effect.promise(() => Promise.all([spawn(), spawn()]));
 
-          assert.deepStrictEqual(
-            runs.map((run) => run.code),
-            [0, 0],
-          );
-          assert.strictEqual(posts.length, 1);
-          assert.strictEqual(runs.filter((run) => /another watcher holds/.test(run.out)).length, 1);
-          const cursor = yield* readCursor(statePath);
-          assert.strictEqual(posts[0], `lease:${cursor.instanceId}:1`);
-          assert.strictEqual(cursor.seq, 1);
-          assert.isNull(cursor.pending);
-          assert.deepStrictEqual(
-            (yield* listNames(dir)).filter((name) => name !== "home"),
-            ["config.json", "lease", "state.json"],
-          );
-        }).pipe(Effect.scoped),
-      ).pipe(Effect.provide(NodeServices.layer)),
-    60_000,
+        assert.deepStrictEqual(
+          runs.map((run) => run.code),
+          [0, 0],
+        );
+        assert.strictEqual(posts.length, 1);
+        assert.strictEqual(runs.filter((run) => /another watcher holds/.test(run.out)).length, 1);
+        const cursor = yield* readCursor(statePath);
+        assert.strictEqual(posts[0], `lease:${cursor.instanceId}:1`);
+        assert.strictEqual(cursor.seq, 1);
+        assert.isNull(cursor.pending);
+        assert.deepStrictEqual(
+          (yield* listNames(dir)).filter((name) => name !== "home"),
+          ["config.json", "lease", "state.json"],
+        );
+      }).pipe(Effect.scoped),
+    ).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("turns a command's exit status into a transition without a shell", () =>

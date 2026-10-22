@@ -48,7 +48,6 @@ import {
   request,
   requestGuarded,
   RpcPermissionGuard,
-  runStream,
   runStreamGuarded,
   subscribe,
   type EnvironmentRpcInput,
@@ -111,56 +110,58 @@ function targetKind(tag: string): string {
   return tag.replace(/ConnectionTarget$/, "").toLowerCase();
 }
 
-const shellSnapshot = (environmentId: EnvironmentId) =>
-  Effect.gen(function* () {
-    const registry = yield* EnvironmentRegistry;
-    return yield* registry
-      .run(
-        environmentId,
-        subscribe(ORCHESTRATION_V2_WS_METHODS.subscribeShell, {}).pipe(
-          Stream.filter((item) => item.kind === "snapshot"),
-          Stream.runHead,
-          Effect.map(
-            (item) =>
-              (Option.getOrThrow(item) as { snapshot: OrchestrationV2ShellSnapshot }).snapshot,
-          ),
+const shellSnapshot = Effect.fn("gateway.shellSnapshot")(function* (environmentId: EnvironmentId) {
+  const registry = yield* EnvironmentRegistry;
+  return yield* registry
+    .run(
+      environmentId,
+      subscribe(ORCHESTRATION_V2_WS_METHODS.subscribeShell, {}).pipe(
+        Stream.filter((item) => item.kind === "snapshot"),
+        Stream.runHead,
+        Effect.map(
+          (item) =>
+            (Option.getOrThrow(item) as { snapshot: OrchestrationV2ShellSnapshot }).snapshot,
         ),
-      )
-      .pipe(Effect.timeout("20 seconds"));
-  });
+      ),
+    )
+    .pipe(Effect.timeout("20 seconds"));
+});
 
-const threadSnapshot = (environmentId: EnvironmentId, threadId: ThreadId) =>
-  Effect.gen(function* () {
-    const registry = yield* EnvironmentRegistry;
-    return yield* registry
-      .run(
-        environmentId,
-        subscribe(ORCHESTRATION_V2_WS_METHODS.subscribeThread, {
-          threadId,
-          acceptBoundedSnapshot: true,
-        }).pipe(
-          Stream.filter((item) => item.kind === "snapshot"),
-          Stream.runHead,
-          Effect.map((item) => Option.getOrThrow(item).projection),
-        ),
-      )
-      .pipe(Effect.timeout("20 seconds"));
-  });
+const threadSnapshot = Effect.fn("gateway.threadSnapshot")(function* (
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+) {
+  const registry = yield* EnvironmentRegistry;
+  return yield* registry
+    .run(
+      environmentId,
+      subscribe(ORCHESTRATION_V2_WS_METHODS.subscribeThread, {
+        threadId,
+        acceptBoundedSnapshot: true,
+      }).pipe(
+        Stream.filter((item) => item.kind === "snapshot"),
+        Stream.runHead,
+        Effect.map((item) => Option.getOrThrow(item).projection),
+      ),
+    )
+    .pipe(Effect.timeout("20 seconds"));
+});
 
-const listGatewayDevices = (environmentId: EnvironmentId) =>
-  Effect.gen(function* () {
-    const registry = yield* EnvironmentRegistry;
-    const { clients } = yield* registry.run(environmentId, request(WS_METHODS.clientsList, {}));
-    return clients.map((client): GatewayDevice => ({
-      deviceId: client.clientId,
-      label: client.label,
-      kind: client.clientKind === "desktop-renderer" ? "desktop" : client.clientKind,
-      ...(client.platform === undefined ? {} : { platform: client.platform }),
-      visible: client.visible,
-      focused: client.focused,
-      connectedAt: DateTime.formatIso(client.connectedAt),
-    }));
-  });
+const listGatewayDevices = Effect.fn("gateway.listGatewayDevices")(function* (
+  environmentId: EnvironmentId,
+) {
+  const registry = yield* EnvironmentRegistry;
+  const { clients } = yield* registry.run(environmentId, request(WS_METHODS.clientsList, {}));
+  return clients.map((client): GatewayDevice => ({
+    deviceId: client.clientId,
+    label: client.label,
+    kind: client.clientKind === "desktop-renderer" ? "desktop" : client.clientKind,
+    ...(client.platform === undefined ? {} : { platform: client.platform }),
+    visible: client.visible,
+    focused: client.focused,
+    connectedAt: DateTime.formatIso(client.connectedAt),
+  }));
+});
 
 /**
  * The model and modes a scheduled task stores for its agent profile, or why the profile cannot

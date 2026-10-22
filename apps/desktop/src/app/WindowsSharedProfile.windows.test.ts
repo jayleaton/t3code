@@ -85,5 +85,4 @@ it.skipIf(process.platform !== "win32")(
       NodeFS.rmSync(root, { recursive: true, force: true });
     }
   },
-  120_000,
 );

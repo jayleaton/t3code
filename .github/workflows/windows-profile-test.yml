@@ -31,4 +31,4 @@ jobs:
           NODE_ENV: test
         run: |
           node apps/desktop/scripts/ensure-electron-runtime.mjs
-          vp test run apps/desktop/src/app/WindowsSharedProfile.test.ts apps/desktop/src/app/WindowsSharedProfile.windows.test.ts
+          vp test run --testTimeout=120000 apps/desktop/src/app/WindowsSharedProfile.test.ts apps/desktop/src/app/WindowsSharedProfile.windows.test.ts
