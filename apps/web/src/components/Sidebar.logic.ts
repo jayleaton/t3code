@@ -518,7 +518,7 @@ export function buildMultiSelectThreadContextMenuItems(input: {
 }
 
 /** Subagents show only in their owner's Lineage panel; child chats are sidebar rows. */
-export function isSidebarSubagentThread(
+function isSidebarSubagentThread(
   thread: Pick<SidebarThreadSummary, "lineage" | "parentThreadId" | "parentRelationship">,
 ): boolean {
   return isSubagentThread(thread);

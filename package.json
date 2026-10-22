@@ -55,7 +55,6 @@
     "@coderabbitai/config": "1.1.0",
     "@shadcn/lint": "0.1.5",
     "@types/node": "catalog:",
-    "happy-dom": "^20.13.2",
     "knip": "6.34.0",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
