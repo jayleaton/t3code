@@ -42,10 +42,10 @@ import {
   type OrchestratorMcpThreadListItem,
   type OrchestratorMcpThreadListResult,
   type OrchestratorMcpThreadReadInput,
-  type OrchestratorMcpThreadReadResult,
+  type OrchestratorMcpLocalThreadReadResult,
   type OrchestratorMcpThreadRun,
   type OrchestratorMcpThreadSendInput,
-  type OrchestratorMcpThreadSendResult,
+  type OrchestratorMcpLocalThreadSendResult,
   type OrchestratorMcpThreadTimelineItem,
   type OrchestratorMcpThreadWaitInput,
   type OrchestratorMcpThreadWaitResult,
@@ -177,11 +177,11 @@ export interface OrchestratorMcpServiceShape {
   readonly readThread: (
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadReadInput,
-  ) => Effect.Effect<OrchestratorMcpThreadReadResult, OrchestratorMcpFailure>;
+  ) => Effect.Effect<OrchestratorMcpLocalThreadReadResult, OrchestratorMcpFailure>;
   readonly sendToThread: (
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadSendInput,
-  ) => Effect.Effect<OrchestratorMcpThreadSendResult, OrchestratorMcpFailure>;
+  ) => Effect.Effect<OrchestratorMcpLocalThreadSendResult, OrchestratorMcpFailure>;
   readonly waitForThread: (
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadWaitInput,
@@ -540,6 +540,9 @@ function runtimeModeRank(mode: RuntimeMode): number {
 function interactionModeRank(mode: ProviderInteractionMode): number {
   return mode === "plan" ? 0 : 1;
 }
+
+export const clampWaitTimeoutMs = (timeoutMs: number | undefined) =>
+  Math.min(MAX_WAIT_TIMEOUT_MS, Math.max(1, timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS));
 
 export function resolveRuntimeMode(
   parentMode: RuntimeMode,
@@ -2610,6 +2613,7 @@ const make = Effect.gen(function* () {
           }
         }
         return {
+          environmentId: scope.environmentId,
           thread: threadDetail(target, timeline.totalItems, shell, yield* Clock.currentTimeMillis),
           recentRuns: target.runs
             .toSorted((left, right) => right.ordinal - left.ordinal)
@@ -2625,7 +2629,7 @@ const make = Effect.gen(function* () {
           ),
           nextPosition: page.at(-1)?.position ?? null,
           hasMore: timeline.hasMore,
-        } satisfies OrchestratorMcpThreadReadResult;
+        } satisfies OrchestratorMcpLocalThreadReadResult;
       }),
     sendToThread: (scope, input) =>
       Effect.gen(function* () {
@@ -2679,6 +2683,7 @@ const make = Effect.gen(function* () {
             ),
           );
         return {
+          environmentId: scope.environmentId,
           threadId: input.threadId,
           messageId,
           runId: result.run.id,
@@ -2687,7 +2692,7 @@ const make = Effect.gen(function* () {
             : { taskId: result.run.delegatedTaskId }),
           status: result.run.status,
           delivery: result.delivery,
-        } satisfies OrchestratorMcpThreadSendResult;
+        } satisfies OrchestratorMcpLocalThreadSendResult;
       }),
     waitForThread: (scope, input) =>
       Effect.gen(function* () {
@@ -2697,13 +2702,11 @@ const make = Effect.gen(function* () {
             projectId: target.thread.projectId,
             threadId: input.threadId,
             ...(input.runId === undefined ? {} : { runId: input.runId }),
-            timeoutMs: Math.min(
-              MAX_WAIT_TIMEOUT_MS,
-              Math.max(1, input.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS),
-            ),
+            timeoutMs: clampWaitTimeoutMs(input.timeoutMs),
           })
           .pipe(Effect.mapError(threadManagementFailure));
         return {
+          environmentId: scope.environmentId,
           threadId: input.threadId,
           runId: result.run?.id ?? null,
           status: result.run === null ? "idle" : runOutcome(result.run),

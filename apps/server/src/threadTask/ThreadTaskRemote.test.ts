@@ -844,3 +844,31 @@ it.effect("legacy remote wakes cannot inject Captain messages or runs", () =>
     }),
   ),
 );
+
+it.effect("a named child launched on another environment is in its Captain's sweep", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const network = yield* makeNetwork;
+      const envA = yield* environment(network, A);
+      const envB = yield* environment(network, B);
+      const tasksA = yield* envA.startService;
+      const tasksB = yield* envB.startService;
+      yield* envA.create(captain);
+      // As a cross-environment launch leaves it: an agent's chat nested under the Captain.
+      yield* envB.create(worker, { thread: captain, environment: A }, "cody");
+      assert.deepEqual((yield* tasksA.read(asCaptain, {})).tasks, []);
+
+      // What the launch registers for it (remoteThreads.assignRemoteChild).
+      yield* tasksA.assign(asCaptain, { threadId: worker, summary: "Configure Accessibility" }, B);
+      yield* tasksB.drain;
+      yield* tasksA.drain;
+
+      const sweep = (yield* tasksA.read(asCaptain, {})).tasks;
+      assert.deepEqual(
+        sweep.map((view) => [view.task.workerThreadId, view.task.workerEnvironmentId]),
+        [[worker, B]],
+      );
+      assert.equal(sweep[0]!.task.summary, "Configure Accessibility");
+    }),
+  ),
+);

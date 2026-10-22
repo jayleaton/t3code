@@ -4,6 +4,7 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import {
   ContextTransferId,
+  EnvironmentId,
   IsoDateTime,
   MessageId,
   NodeId,
@@ -350,7 +351,19 @@ export const OrchestratorMcpThreadListResult = Schema.Struct({
 });
 export type OrchestratorMcpThreadListResult = typeof OrchestratorMcpThreadListResult.Type;
 
+/**
+ * Threads on another environment are reached through the T3 app connected to both, so only
+ * what that app relays is available there: see apps/server/src/mcp/agents/remoteThreads.ts.
+ */
+const OrchestratorMcpThreadEnvironment = Schema.optional(
+  EnvironmentId.annotate({
+    description:
+      "Environment the thread runs on, as returned by t3_thread_launch or t3_list_environments. Omit for this environment. Another environment is reached through your connected T3 app.",
+  }),
+);
+
 export const OrchestratorMcpThreadReadInput = Schema.Struct({
+  environmentId: OrchestratorMcpThreadEnvironment,
   threadId: ThreadId,
   itemId: Schema.optional(TurnItemId),
   textOffset: Schema.optional(NonNegativeInt),
@@ -432,16 +445,71 @@ export const OrchestratorMcpThreadTimelineItem = Schema.Struct({
 });
 export type OrchestratorMcpThreadTimelineItem = typeof OrchestratorMcpThreadTimelineItem.Type;
 
-export const OrchestratorMcpThreadReadResult = Schema.Struct({
+export const OrchestratorMcpLocalThreadReadResult = Schema.Struct({
+  environmentId: EnvironmentId,
   thread: OrchestratorMcpThreadDetail,
   recentRuns: Schema.Array(OrchestratorMcpThreadRun),
   items: Schema.Array(OrchestratorMcpThreadTimelineItem),
   nextPosition: Schema.NullOr(NonNegativeInt),
   hasMore: Schema.Boolean,
 });
+export type OrchestratorMcpLocalThreadReadResult = typeof OrchestratorMcpLocalThreadReadResult.Type;
+
+/** A thread on another environment: its messages, runs and state as the relaying app reports them. */
+export const OrchestratorMcpRemoteThreadReadResult = Schema.Struct({
+  environmentId: EnvironmentId,
+  thread: Schema.Struct({
+    threadId: ThreadId,
+    projectId: ProjectId,
+    title: Schema.String,
+    status: OrchestratorMcpThreadStatus,
+    latestRunId: Schema.NullOr(RunId),
+    providerInstanceId: ProviderInstanceId,
+    model: Schema.String,
+    runtimeMode: Schema.NullOr(RuntimeMode),
+    interactionMode: Schema.NullOr(ProviderInteractionMode),
+    parentThreadId: Schema.NullOr(ThreadId),
+    parentEnvironmentId: Schema.NullOr(EnvironmentId),
+    pendingRequestCount: NonNegativeInt,
+    settled: Schema.Boolean,
+    createdAt: Schema.NullOr(Schema.String),
+    updatedAt: Schema.NullOr(Schema.String),
+  }),
+  recentRuns: Schema.Array(
+    Schema.Struct({
+      runId: RunId,
+      status: OrchestrationV2RunStatus,
+      providerInstanceId: ProviderInstanceId,
+      requestedAt: Schema.NullOr(Schema.String),
+      completedAt: Schema.NullOr(Schema.String),
+    }),
+  ),
+  items: Schema.Array(
+    Schema.Struct({
+      position: NonNegativeInt,
+      messageId: MessageId,
+      runId: Schema.NullOr(RunId),
+      type: Schema.Literals(["user_message", "assistant_message"]),
+      text: Schema.String,
+      textTruncated: Schema.Boolean,
+      nextTextOffset: Schema.optional(Schema.NullOr(NonNegativeInt)),
+      updatedAt: Schema.NullOr(Schema.String),
+    }),
+  ),
+  nextPosition: Schema.NullOr(NonNegativeInt),
+  hasMore: Schema.Boolean,
+});
+export type OrchestratorMcpRemoteThreadReadResult =
+  typeof OrchestratorMcpRemoteThreadReadResult.Type;
+
+export const OrchestratorMcpThreadReadResult = Schema.Union([
+  OrchestratorMcpLocalThreadReadResult,
+  OrchestratorMcpRemoteThreadReadResult,
+]);
 export type OrchestratorMcpThreadReadResult = typeof OrchestratorMcpThreadReadResult.Type;
 
 export const OrchestratorMcpThreadSendInput = Schema.Struct({
+  environmentId: OrchestratorMcpThreadEnvironment,
   threadId: ThreadId,
   message: OrchestratorMcpPrompt,
   mode: Schema.optional(Schema.Literals(["auto", "queue", "steer", "restart"])),
@@ -449,7 +517,8 @@ export const OrchestratorMcpThreadSendInput = Schema.Struct({
 });
 export type OrchestratorMcpThreadSendInput = typeof OrchestratorMcpThreadSendInput.Type;
 
-export const OrchestratorMcpThreadSendResult = Schema.Struct({
+export const OrchestratorMcpLocalThreadSendResult = Schema.Struct({
+  environmentId: EnvironmentId,
   threadId: ThreadId,
   messageId: MessageId,
   runId: RunId,
@@ -457,9 +526,24 @@ export const OrchestratorMcpThreadSendResult = Schema.Struct({
   status: OrchestrationV2RunStatus,
   delivery: Schema.Literals(["started", "queued", "steered", "restarted"]),
 });
+export type OrchestratorMcpLocalThreadSendResult = typeof OrchestratorMcpLocalThreadSendResult.Type;
+
+/** Another environment accepts the message and starts or queues its turn there. */
+export const OrchestratorMcpRemoteThreadSendResult = Schema.Struct({
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  delivery: Schema.Literal("accepted"),
+});
+
+export const OrchestratorMcpThreadSendResult = Schema.Union([
+  OrchestratorMcpLocalThreadSendResult,
+  OrchestratorMcpRemoteThreadSendResult,
+]);
 export type OrchestratorMcpThreadSendResult = typeof OrchestratorMcpThreadSendResult.Type;
 
 export const OrchestratorMcpThreadWaitInput = Schema.Struct({
+  environmentId: OrchestratorMcpThreadEnvironment,
   threadId: ThreadId,
   runId: Schema.optional(RunId),
   timeoutMs: Schema.optional(Schema.Number),
@@ -467,6 +551,7 @@ export const OrchestratorMcpThreadWaitInput = Schema.Struct({
 export type OrchestratorMcpThreadWaitInput = typeof OrchestratorMcpThreadWaitInput.Type;
 
 export const OrchestratorMcpThreadWaitResult = Schema.Struct({
+  environmentId: EnvironmentId,
   threadId: ThreadId,
   runId: Schema.NullOr(RunId),
   status: OrchestratorMcpThreadStatus,

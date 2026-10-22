@@ -9,7 +9,7 @@ import {
   CommandId,
   EnvironmentId,
   NodeId,
-  OrchestratorMcpThreadReadResult,
+  OrchestratorMcpLocalThreadReadResult,
   ProviderDriverKind,
   ProviderInstanceId,
   RunId,
@@ -82,7 +82,7 @@ import {
 import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 
 const decodeMcpAttachmentInput = Schema.decodeUnknownEffect(McpAttachmentInput);
-const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
+const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpLocalThreadReadResult);
 
 const layerThreadToolkit = McpHttpServer.layerThreadToolkit.pipe(
   Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),

@@ -32,6 +32,7 @@ import {
   ThreadMetadataMcpUpdateResult,
 } from "@t3tools/contracts";
 import { Tool, Toolkit } from "effect/ai";
+import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
 
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -44,6 +45,8 @@ const dependencies = [
   ThreadManagementService.ThreadManagementService,
   OrchestratorMcpService.OrchestratorMcpService,
 ];
+// A send to another environment mints its retry key when the caller passes none.
+const sendDependencies = [...dependencies, Crypto.Crypto];
 const threadMetadataDependencies = [
   McpInvocationContext.McpInvocationContext,
   ThreadManagementService.ThreadManagementService,
@@ -73,6 +76,7 @@ export const DelegateTaskTool = Tool.make("delegate_task", {
   dependencies,
 })
   .annotate(Tool.Title, "Delegate a task")
+  .annotate(Tool.Strict, true)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
@@ -187,6 +191,7 @@ export const CreateThreadsTool = Tool.make("create_threads", {
   dependencies,
 })
   .annotate(Tool.Title, "Create T3 threads")
+  .annotate(Tool.Strict, true)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
@@ -206,7 +211,7 @@ const ThreadListTool = Tool.make("t3_thread_list", {
 
 const ThreadReadTool = Tool.make("t3_thread_read", {
   description:
-    "Read durable state and a paginated timeline from any T3 thread in this environment. The default messages view returns user messages, assistant messages, and proposed plans; activity returns all summarized timeline items. Reading an untruncated terminal assistant result from this thread's direct app-owned helper acknowledges its automatic completion delivery. Continue with afterPosition=nextPosition. Recover long item text with itemId and textOffset=nextTextOffset until nextTextOffset is null; offsets count UTF-16 code units. The thread also reports its snooze state. To link a thread for the user, write `[title](t3-thread://v1/<threadId>)` with the threadId exactly as returned, not URL-encoded; T3 Code shows the thread's current title.",
+    "Read durable state and a paginated timeline from any T3 thread in this environment, or pass environmentId for a thread on another environment (messages view only, over its latest 500 messages; the result carries environmentId). The default messages view returns user messages, assistant messages, and proposed plans; activity returns all summarized timeline items. Reading an untruncated terminal assistant result from this thread's direct app-owned helper acknowledges its automatic completion delivery. Continue with afterPosition=nextPosition. Recover long item text with itemId and textOffset=nextTextOffset until nextTextOffset is null; offsets count UTF-16 code units. The thread also reports its snooze state. To link a thread for the user, write `[title](t3-thread://v1/<threadId>)` with the threadId exactly as returned, not URL-encoded; T3 Code shows the thread's current title.",
   parameters: OrchestratorMcpThreadReadInput,
   success: OrchestratorMcpThreadReadResult,
   failure: OrchestratorMcpFailure,
@@ -229,25 +234,27 @@ export const ThreadUpdateTool = Tool.make("t3_thread_update", {
   dependencies: threadMetadataDependencies,
 })
   .annotate(Tool.Title, "Update T3 thread metadata")
+  .annotate(Tool.Strict, true)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, false);
 
 const ThreadSendTool = Tool.make("t3_thread_send", {
   description:
-    "Send a message to any T3 thread in this environment. The target cannot have broader permission modes than the caller. Use delegate_task with the full review context and a new clientRequestId for independent review rounds. For a follow-up that needs the same child's conversation, send to its childThreadId. After a profile-less helper's original task completes, a requested follow-up creates a fresh task and returns taskId; its completion notifies the parent, and the original result stays unchanged. Named children send no automatic parent messages; wait for the child and read its result. mode='auto' starts an idle thread, steers a fully active turn, or queues behind a turn that is not yet steerable. Use queue for a separate follow-up turn, steer for an in-flight update, or restart to interrupt-and-restart the active turn. clientRequestId makes retries idempotent.",
+    "Send a message to any T3 thread in this environment, or pass environmentId for a thread on another environment, where the message starts the thread or queues behind its turn (no steer or restart). The target cannot have broader permission modes than the caller. Use delegate_task with the full review context and a new clientRequestId for independent review rounds. For a follow-up that needs the same child's conversation, send to its childThreadId. After a profile-less helper's original task completes, a requested follow-up creates a fresh task and returns taskId; its completion notifies the parent, and the original result stays unchanged. Named children send no automatic parent messages; wait for the child and read its result. mode='auto' starts an idle thread, steers a fully active turn, or queues behind a turn that is not yet steerable. Use queue for a separate follow-up turn, steer for an in-flight update, or restart to interrupt-and-restart the active turn. clientRequestId makes retries idempotent.",
   parameters: OrchestratorMcpThreadSendInput,
   success: OrchestratorMcpThreadSendResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
-  dependencies,
+  dependencies: sendDependencies,
 })
   .annotate(Tool.Title, "Send to a T3 thread")
+  .annotate(Tool.Strict, true)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
 const ThreadWaitTool = Tool.make("t3_thread_wait", {
   description:
-    "Wait for a T3 thread run to reach a terminal durable state. Without runId, the latest run at call time is selected; an idle thread returns immediately. Timeout does not interrupt work, so call again or use t3_thread_read/list after timedOut=true. Waiting reports status only and does not acknowledge a delegated result.",
+    "Wait for a T3 thread run to reach a terminal durable state. Pass environmentId for a thread on another environment. Without runId, the latest run at call time is selected; an idle thread returns immediately. Timeout does not interrupt work, so call again or use t3_thread_read/list after timedOut=true. Waiting reports status only and does not acknowledge a delegated result.",
   parameters: OrchestratorMcpThreadWaitInput,
   success: OrchestratorMcpThreadWaitResult,
   failure: OrchestratorMcpFailure,
@@ -255,13 +262,14 @@ const ThreadWaitTool = Tool.make("t3_thread_wait", {
   dependencies,
 })
   .annotate(Tool.Title, "Wait for a T3 thread")
+  .annotate(Tool.Strict, true)
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
 
 const ThreadInterruptTool = Tool.make("t3_thread_interrupt", {
   description:
-    "Request interruption of a running turn in any T3 thread in this environment. Without runId, the newest interruptible run is selected. Terminal runs and threads without an active turn return without another side effect. clientRequestId makes retries idempotent.",
+    "Request interruption of a running turn in any T3 thread in this environment (for a thread on another environment use t3_control_thread with its environmentId). Without runId, the newest interruptible run is selected. Terminal runs and threads without an active turn return without another side effect. clientRequestId makes retries idempotent.",
   parameters: OrchestratorMcpThreadInterruptInput,
   success: OrchestratorMcpThreadInterruptResult,
   failure: OrchestratorMcpFailure,
@@ -269,6 +277,7 @@ const ThreadInterruptTool = Tool.make("t3_thread_interrupt", {
   dependencies,
 })
   .annotate(Tool.Title, "Interrupt a T3 thread")
+  .annotate(Tool.Strict, true)
   .annotate(Tool.Destructive, true);
 
 export const OrchestratorToolkit = Toolkit.make(
