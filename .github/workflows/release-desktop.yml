@@ -203,7 +203,7 @@ jobs:
           T3CODE_NATIVE_STORAGE_TESTS: "1"
         run: |
           node apps/desktop/scripts/ensure-electron-runtime.mjs
-          vp test run --testTimeout=120000 apps/desktop/src/app/SharedSafeStorage.native.test.ts
+          cd apps/desktop && vp test run --testTimeout=120000 src/app/SharedSafeStorage.native.test.ts
 
       - name: Cache resource monitor
         id: resource_monitor_cache
@@ -433,7 +433,7 @@ jobs:
           chmod 700 "$XDG_RUNTIME_DIR"
           dbus-run-session -- xvfb-run -a bash -euc '
             printf "disposable-test-keyring" | gnome-keyring-daemon --unlock --components=secrets
-            vp test run --testTimeout=120000 apps/desktop/src/app/SharedSafeStorage.native.test.ts
+            cd apps/desktop && vp test run --testTimeout=120000 src/app/SharedSafeStorage.native.test.ts
           '
 
       # The WSL backend runs the Linux CLI archive inside the distro, so the
@@ -732,7 +732,7 @@ jobs:
           T3CODE_NATIVE_STORAGE_TESTS: "1"
         run: |
           node apps/desktop/scripts/ensure-electron-runtime.mjs
-          vp test run --testTimeout=120000 apps/desktop/src/app/WindowsSharedProfile.test.ts apps/desktop/src/app/WindowsSharedProfile.windows.test.ts apps/desktop/src/app/SharedSafeStorage.native.test.ts
+          cd apps/desktop && vp test run --testTimeout=120000 src/app/WindowsSharedProfile.test.ts src/app/WindowsSharedProfile.windows.test.ts src/app/SharedSafeStorage.native.test.ts
 
       - name: Download verification inputs
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

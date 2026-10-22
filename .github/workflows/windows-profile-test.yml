@@ -26,9 +26,12 @@ jobs:
           run-install: false
       - name: Install desktop dependencies
         run: vp install --frozen-lockfile --filter=@t3tools/desktop...
+      # The repo-root config loads every workspace project, including apps/web,
+      # whose dependencies this desktop-only install leaves out.
       - name: Verify native Windows credential sharing
+        shell: bash
         env:
           NODE_ENV: test
         run: |
           node apps/desktop/scripts/ensure-electron-runtime.mjs
-          vp test run --testTimeout=120000 apps/desktop/src/app/WindowsSharedProfile.test.ts apps/desktop/src/app/WindowsSharedProfile.windows.test.ts
+          cd apps/desktop && vp test run --testTimeout=120000 src/app/WindowsSharedProfile.test.ts src/app/WindowsSharedProfile.windows.test.ts
