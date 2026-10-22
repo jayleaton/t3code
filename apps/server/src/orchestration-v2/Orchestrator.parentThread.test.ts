@@ -802,6 +802,188 @@ it.effect(
     }).pipe(Effect.provide(testLayer)),
 );
 
+it.effect(
+  "settling reaches descendants under an already settled sub-run and follows them when they finish",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const projections = yield* ProjectionStoreV2;
+      const sink = yield* EventSinkV2;
+      const create = (id: string, parentThreadId?: string) =>
+        orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`create:${id}`),
+          threadId: ThreadId.make(id),
+          projectId: ProjectId.make("project:parents"),
+          title: id,
+          modelSelection: { instanceId, model: "gpt-5.1-codex" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "agent",
+          creationSource: "mcp",
+          ...(parentThreadId === undefined
+            ? {}
+            : { parentThreadId: ThreadId.make(parentThreadId) }),
+        });
+      const settledAt = (id: string) =>
+        projections.getThread(ThreadId.make(id)).pipe(Effect.map((thread) => thread.settledAt));
+
+      yield* create("lead");
+      yield* create("aged", "lead");
+      yield* create("aged-idle", "aged");
+      yield* create("aged-busy", "aged");
+      // Age settlement never cascades, so the aged sub-run's own children stay active.
+      const aged = yield* projections.getThread(ThreadId.make("aged"));
+      yield* orchestrator.dispatch({
+        type: "thread.auto-settle",
+        commandId: CommandId.make("auto-settle:aged"),
+        threadId: aged.id,
+        snapshotAt: aged.updatedAt,
+      });
+      const agedAt = yield* settledAt("aged");
+      assert.isNotNull(agedAt);
+      assert.isNull(yield* settledAt("aged-idle"));
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("send:aged-busy"),
+        threadId: ThreadId.make("aged-busy"),
+        messageId: MessageId.make("message:aged-busy"),
+        text: "Keep working",
+        attachments: [],
+        dispatchMode: { type: "defer_start" },
+        createdBy: "agent",
+        creationSource: "mcp",
+      });
+      yield* TestClock.adjust("1 minute");
+
+      yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("settle:lead"),
+        threadId: ThreadId.make("lead"),
+      });
+      const leadAt = yield* settledAt("lead");
+      assert.isNotNull(leadAt);
+      assert.deepEqual(yield* settledAt("aged"), agedAt);
+      assert.deepEqual(yield* settledAt("aged-idle"), leadAt);
+      assert.isNull(yield* settledAt("aged-busy"));
+
+      // The working grandchild follows the manual settle above its aged parent.
+      const before = yield* sink.latestSequence();
+      const run = (yield* projections.getThreadRecords(ThreadId.make("aged-busy"), [
+        "runs",
+      ])).runs.at(-1)!;
+      const now = yield* DateTime.now;
+      yield* sink.write({
+        events: [
+          ...(yield* finishOpenTurnItems(ThreadId.make("aged-busy"))),
+          {
+            id: EventId.make(`event:complete:${run.id}`),
+            type: "run.updated",
+            threadId: ThreadId.make("aged-busy"),
+            runId: run.id,
+            ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
+            providerInstanceId: instanceId,
+            occurredAt: now,
+            payload: { ...run, status: "completed", completedAt: now },
+          },
+        ],
+      });
+      yield* sink.stream({ afterSequence: before, eventType: "thread.settled" }).pipe(
+        Stream.filter((stored) => stored.event.threadId === "aged-busy"),
+        Stream.runHead,
+      );
+      assert.deepEqual(yield* settledAt("aged-busy"), leadAt);
+
+      // Un-settling the lead returns what settled with it; the aged card keeps its own clock.
+      yield* orchestrator.dispatch({
+        type: "thread.unsettle",
+        commandId: CommandId.make("unsettle:lead"),
+        threadId: ThreadId.make("lead"),
+        reason: "user",
+      });
+      assert.deepEqual(yield* settledAt("aged"), agedAt);
+      assert.isNull(yield* settledAt("aged-idle"));
+      assert.isNull(yield* settledAt("aged-busy"));
+    }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("a sub-run stopped after its parent settled follows the parent with its subtree", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* OrchestratorV2;
+    const projections = yield* ProjectionStoreV2;
+    const sink = yield* EventSinkV2;
+    const create = (id: string, parentThreadId?: string) =>
+      orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`create:${id}`),
+        threadId: ThreadId.make(id),
+        projectId: ProjectId.make("project:parents"),
+        title: id,
+        modelSelection: { instanceId, model: "gpt-5.1-codex" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+        ...(parentThreadId === undefined ? {} : { parentThreadId: ThreadId.make(parentThreadId) }),
+      });
+    const settledAt = (id: string) =>
+      projections.getThread(ThreadId.make(id)).pipe(Effect.map((thread) => thread.settledAt));
+
+    yield* create("card");
+    yield* create("stopped", "card");
+    yield* create("stopped-helper", "stopped");
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("send:stopped"),
+      threadId: ThreadId.make("stopped"),
+      messageId: MessageId.make("message:stopped"),
+      text: "Keep working",
+      attachments: [],
+      dispatchMode: { type: "defer_start" },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.settle",
+      commandId: CommandId.make("settle:card"),
+      threadId: ThreadId.make("card"),
+    });
+    const cardAt = yield* settledAt("card");
+    assert.isNull(yield* settledAt("stopped"));
+
+    // The settle refusal tells the user to stop a working chat; stopping it finishes the cascade.
+    const before = yield* sink.latestSequence();
+    const run = (yield* projections.getThreadRecords(ThreadId.make("stopped"), ["runs"])).runs.at(
+      -1,
+    )!;
+    const now = yield* DateTime.now;
+    yield* sink.write({
+      events: [
+        ...(yield* finishOpenTurnItems(ThreadId.make("stopped"))),
+        {
+          id: EventId.make(`event:interrupt:${run.id}`),
+          type: "run.updated",
+          threadId: ThreadId.make("stopped"),
+          runId: run.id,
+          ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
+          providerInstanceId: instanceId,
+          occurredAt: now,
+          payload: { ...run, status: "interrupted", completedAt: now },
+        },
+      ],
+    });
+    yield* sink.stream({ afterSequence: before, eventType: "thread.settled" }).pipe(
+      Stream.filter((stored) => stored.event.threadId === "stopped-helper"),
+      Stream.runHead,
+    );
+    assert.deepEqual(yield* settledAt("stopped"), cardAt);
+    assert.deepEqual(yield* settledAt("stopped-helper"), cardAt);
+  }).pipe(Effect.provide(testLayer)),
+);
 it.effect("age settlement applies to one card without cascading to child chats or subagents", () =>
   Effect.gen(function* () {
     const orchestrator = yield* OrchestratorV2;
