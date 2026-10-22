@@ -521,9 +521,8 @@ function AgentTaskForm({
                 finish();
               } catch (cause) {
                 setError(cause instanceof Error ? cause.message : "Could not create thread.");
-              } finally {
-                setCreating(false);
               }
+              setCreating(false);
             }}
           >
             {creating ? "Creating…" : "Create empty chat"}

@@ -133,9 +133,8 @@ export function AgentEditor({
                 else setError("Could not save the agent. Check your connection and try again.");
               } catch (cause) {
                 setError(cause instanceof Error ? cause.message : "Could not save agent.");
-              } finally {
-                setSaving(false);
               }
+              setSaving(false);
             }}
           >
             <label>

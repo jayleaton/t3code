@@ -121,11 +121,7 @@ function ScheduledTaskRow({
   const id = task.id;
   const act = async (action: () => Promise<unknown>) => {
     setBusy(true);
-    try {
-      await action();
-    } finally {
-      setBusy(false);
-    }
+    await action().finally(() => setBusy(false));
   };
   // A finished one-time task has nothing to resume until it is given a new time.
   const finished = task.schedule.type === "once" && !task.enabled && task.runCount > 0;

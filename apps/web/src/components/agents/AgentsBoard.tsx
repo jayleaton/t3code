@@ -590,19 +590,13 @@ export function AgentsBoard() {
                     disabled={busy}
                     onClick={async () => {
                       setBusy(true);
-                      try {
-                        if (
-                          await updateSettings({
-                            mcpGatewayProfiles: profiles.filter(
-                              (p) => p.profileId !== deleting.profileId,
-                            ),
-                          })
-                        )
-                          setDeleting(null);
-                        else setDeleteError("Could not delete the agent. Try again.");
-                      } finally {
-                        setBusy(false);
-                      }
+                      const deleted = await updateSettings({
+                        mcpGatewayProfiles: profiles.filter(
+                          (p) => p.profileId !== deleting.profileId,
+                        ),
+                      }).finally(() => setBusy(false));
+                      if (deleted) setDeleting(null);
+                      else setDeleteError("Could not delete the agent. Try again.");
                     }}
                   >
                     {busy ? "Deleting…" : "Delete agent"}

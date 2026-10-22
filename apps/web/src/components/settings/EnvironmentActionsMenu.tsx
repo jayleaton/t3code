@@ -53,9 +53,8 @@ export function EnvironmentActionsMenu({
       else setError("Could not save the machine name. Try again.");
     } catch {
       setError("Could not save the machine name. Try again.");
-    } finally {
-      setSaving(false);
     }
+    setSaving(false);
   };
   return (
     <>

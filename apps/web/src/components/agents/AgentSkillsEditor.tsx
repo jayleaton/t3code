@@ -33,9 +33,8 @@ export function AgentSkillsEditor({
       else setError("Could not save skills. Check your connection and try again.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not save skills.");
-    } finally {
-      setSaving(false);
     }
+    setSaving(false);
   };
   return (
     <Dialog

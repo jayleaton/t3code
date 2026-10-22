@@ -38,6 +38,32 @@ import {
 import { useAgentThreadShells, useSetAgentRunParent } from "./useAgentRunParenting";
 
 const CHILD_PREFIX = AGENT_CHILD_DRAG_PREFIX;
+
+/** Writes each new order key in turn and stops at the first failure. */
+async function applyActiveOrder(
+  assignments: ReadonlyArray<{ readonly id: string; readonly orderKey: string }>,
+  byKey: ReadonlyMap<string, EnvironmentThreadShell>,
+  reorderActiveThread: ReturnType<typeof useThreadActions>["reorderActiveThread"],
+) {
+  for (const { id, orderKey } of assignments) {
+    const thread = byKey.get(id)!;
+    const result = await reorderActiveThread(
+      scopeThreadRef(thread.environmentId, thread.id),
+      orderKey,
+    );
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add(
+        stackedThreadToast({
+          title: "Failed to move chat",
+          description: error instanceof Error ? error.message : "Try again.",
+          type: "error",
+        }),
+      );
+      return;
+    }
+  }
+}
 const LINK_PREFIX = AGENT_LINK_DRAG_PREFIX;
 
 const nestWrapperOf = (key: string) =>
@@ -252,28 +278,9 @@ export function AgentRunDragArea({
     });
     if (plan.kind !== "move-active") return;
     setSaving(true);
-    try {
-      for (const { id, orderKey } of plan.assignments) {
-        const thread = byKey.get(id)!;
-        const result = await reorderActiveThread(
-          scopeThreadRef(thread.environmentId, thread.id),
-          orderKey,
-        );
-        if (result._tag === "Failure") {
-          const error = squashAtomCommandFailure(result);
-          toastManager.add(
-            stackedThreadToast({
-              title: "Failed to move chat",
-              description: error instanceof Error ? error.message : "Try again.",
-              type: "error",
-            }),
-          );
-          break;
-        }
-      }
-    } finally {
-      setSaving(false);
-    }
+    await applyActiveOrder(plan.assignments, byKey, reorderActiveThread).finally(() =>
+      setSaving(false),
+    );
   };
   const dragContext = { childDragEnabled: !saving, dragging, saving };
   const draggedChildRun = draggedChild ? runByKey.get(draggedChild.key) : undefined;
