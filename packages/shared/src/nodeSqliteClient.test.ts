@@ -15,9 +15,31 @@ import * as SqliteClient from "./nodeSqliteClient.ts";
 const startedWorkers = vi.hoisted((): Array<NodeWorkerThreads.Worker> => []);
 const silentWorkers = vi.hoisted(() => ({ on: false, readyOnTerminate: false }));
 const failingWorkers = vi.hoisted(() => ({ message: undefined as string | undefined }));
+// The checkpoint worker's first N statements fail as SQLite does when another
+// connection holds the file past busy_timeout.
+const lockedCheckpointStatements = vi.hoisted(() => ({ count: 0 }));
 
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof NodeWorkerThreads>();
+  const withLockedStatements = (args: ConstructorParameters<typeof actual.Worker>) => {
+    const [source, options] = args;
+    if (lockedCheckpointStatements.count === 0 || typeof source !== "string") return args;
+    if (!source.includes("wal_checkpoint")) return args;
+    const shim = `{
+      const { StatementSync } = require("node:sqlite");
+      const get = StatementSync.prototype.get;
+      let remaining = ${lockedCheckpointStatements.count};
+      StatementSync.prototype.get = function (...values) {
+        if (remaining-- > 0) {
+          throw Object.assign(new Error("database is locked"), {
+            code: "ERR_SQLITE_ERROR", errcode: 5, errstr: "database is locked",
+          });
+        }
+        return get.apply(this, values);
+      };
+    }\n`;
+    return [shim + source, options] as ConstructorParameters<typeof actual.Worker>;
+  };
   class RecordedWorker extends actual.Worker {
     constructor(...args: ConstructorParameters<typeof actual.Worker>) {
       super(
@@ -25,7 +47,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
           ? ["setInterval(() => {}, 1 << 30);", { eval: true }]
           : failingWorkers.message !== undefined
             ? [`throw new Error(${JSON.stringify(failingWorkers.message)});`, { eval: true }]
-            : args) as ConstructorParameters<typeof actual.Worker>),
+            : withLockedStatements(args)) as ConstructorParameters<typeof actual.Worker>),
       );
       startedWorkers.push(this);
     }
@@ -384,4 +406,35 @@ it.effect.each([
         masked ? [[1], [2]] : [[2]],
       );
     }).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect("keeps checkpoints off the writer after a transient lock", () =>
+  Effect.gen(function* () {
+    lockedCheckpointStatements.count = 3;
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-sqlite-checkpoint-" });
+    const filename = path.join(directory, "state.sqlite");
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`PRAGMA journal_mode = WAL`;
+      yield* sql`CREATE TABLE pages(value BLOB NOT NULL)`;
+      // Past the backpressure ceiling a write waits until the worker checkpoints,
+      // so the locked attempts must have been retried, not handed to the writer.
+      for (let batch = 0; batch < 12; batch++) {
+        yield* sql`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000)
+          INSERT INTO pages SELECT randomblob(4000) FROM n`;
+      }
+      const [autocheckpoint] = yield* sql<{
+        wal_autocheckpoint: number;
+      }>`PRAGMA wal_autocheckpoint`;
+      assert.equal(autocheckpoint?.wal_autocheckpoint, 0);
+      const [wal] = yield* sql<{ log: number; checkpointed: number }>`PRAGMA wal_checkpoint(NOOP)`;
+      assert.isBelow(wal?.log ?? Infinity, 10_000);
+    }).pipe(Effect.provide(SqliteClient.layer({ filename, checkpointWorker: true })));
+  }).pipe(
+    Effect.ensuring(Effect.sync(() => (lockedCheckpointStatements.count = 0))),
+    Effect.scoped,
+    Effect.provide(NodeServices.layer),
+  ),
 );
