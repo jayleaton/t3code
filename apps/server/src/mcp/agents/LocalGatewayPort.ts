@@ -22,7 +22,9 @@ import {
   PrimaryConnectionTarget,
 } from "@t3tools/client-runtime/connection";
 import {
+  createGatewayRuntimeEventSourceFromContext,
   createGatewayRuntimePortFromContext,
+  type GatewayRuntimeEventSource,
   type GatewayRuntimePort,
 } from "@t3tools/client-runtime/gateway";
 import { EnvironmentRpcUnavailableError } from "@t3tools/client-runtime/rpc";
@@ -52,6 +54,8 @@ export class LocalGatewayPort extends Context.Service<
     readonly environmentId: EnvironmentId;
     readonly label: string;
     readonly port: GatewayRuntimePort;
+    /** This environment's thread events, as an app's gateway runtime forwards them. */
+    readonly events: GatewayRuntimeEventSource;
   }
 >()("t3/mcp/agents/LocalGatewayPort") {}
 
@@ -198,6 +202,7 @@ export const layer = Layer.effect(
       environmentId,
       label: descriptor.label,
       port: { ...base, threadTask: makeThreadTask(environmentId, tasks, base.threadTask) },
+      events: createGatewayRuntimeEventSourceFromContext(context),
     });
   }),
 );

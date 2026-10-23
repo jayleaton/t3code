@@ -16,6 +16,7 @@ import {
   TodoId,
   WS_METHODS,
   McpGatewayProfile,
+  type BackgroundPolicySnapshot,
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
@@ -33,7 +34,6 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
-import { ShellSnapshotLoader } from "../state/shellSnapshotHttp.ts";
 import {
   interruptThreadTurn,
   stopThreadSession,
@@ -57,6 +57,7 @@ import {
 import { derivePendingThreadRequests } from "../state/threadRequests.ts";
 import type {
   GatewayDevice,
+  GatewayPresence,
   GatewayProfile,
   GatewayProfileModelSelection,
   GatewayRuntimeEvent,
@@ -162,6 +163,45 @@ const listGatewayDevices = Effect.fn("gateway.listGatewayDevices")(function* (
     connectedAt: DateTime.formatIso(client.connectedAt),
   }));
 });
+
+/**
+ * Presence from the server's client activity leases. Leases outlive their client by their TTL
+ * (45s by default), so a lease that has already expired is dropped rather than reported.
+ */
+export function gatewayPresenceFromBackgroundPolicy(
+  environmentId: string,
+  snapshot: Pick<BackgroundPolicySnapshot, "leases">,
+  now: DateTime.Utc,
+): GatewayPresence {
+  const live = snapshot.leases.filter((lease) => DateTime.isGreaterThan(lease.expiresAt, now));
+  const latest = live.reduce<DateTime.Utc | null>(
+    (current, lease) =>
+      current === null || DateTime.isGreaterThan(lease.updatedAt, current)
+        ? lease.updatedAt
+        : current,
+    null,
+  );
+  const anyVisible = live.some((lease) => lease.visible);
+  const anyFocused = live.some((lease) => lease.focused);
+  return {
+    environmentId,
+    present: anyVisible || anyFocused,
+    anyVisible,
+    anyFocused,
+    anyRecentlyInteracted: live.some((lease) => lease.recentlyInteracted),
+    lastActivityAt: latest === null ? null : DateTime.formatIso(latest),
+    clients: live.map((lease) => ({
+      clientKind: lease.clientKind,
+      visible: lease.visible,
+      focused: lease.focused,
+      recentlyInteracted: lease.recentlyInteracted,
+      ...(lease.appState === undefined ? {} : { appState: lease.appState }),
+      updatedAt: DateTime.formatIso(lease.updatedAt),
+      expiresAt: DateTime.formatIso(lease.expiresAt),
+    })),
+    observedAt: DateTime.formatIso(now),
+  };
+}
 
 /**
  * The model and modes a scheduled task stores for its agent profile, or why the profile cannot
@@ -435,7 +475,7 @@ const decodeProfile = Schema.decodeUnknownSync(McpGatewayProfile);
 const decodeProfiles = Schema.decodeUnknownEffect(Schema.Array(McpGatewayProfile));
 
 export function createGatewayRuntimeEventSourceFromContext(
-  context: Context.Context<EnvironmentRegistry | Crypto.Crypto | ShellSnapshotLoader>,
+  context: Context.Context<EnvironmentRegistry | Crypto.Crypto>,
 ): GatewayRuntimeEventSource {
   return {
     subscribe: (listener, subscription) => {
@@ -1003,6 +1043,18 @@ export function createGatewayRuntimePort(
           const environmentId = EnvironmentId.make(rawEnvironmentId);
           const state = yield* registry.state(environmentId);
           return { environmentId, ...state } as Record<string, unknown>;
+        }),
+      ),
+    getPresence: (rawEnvironmentId) =>
+      run(
+        Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry;
+          const environmentId = EnvironmentId.make(rawEnvironmentId);
+          const snapshot = yield* registry.run(
+            environmentId,
+            gatewayRequest(WS_METHODS.serverGetBackgroundPolicy, {}),
+          );
+          return gatewayPresenceFromBackgroundPolicy(environmentId, snapshot, yield* DateTime.now);
         }),
       ),
     listProfiles: (rawEnvironmentId) =>

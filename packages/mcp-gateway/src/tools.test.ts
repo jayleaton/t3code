@@ -1756,6 +1756,36 @@ describe("gateway v3 event delivery tools", () => {
     ).rejects.toMatchObject({ code: "not_configured" });
   });
 
+  it("reports presence from the host and requires read scope", async () => {
+    const presence = {
+      environmentId: "local",
+      present: true,
+      anyVisible: true,
+      anyFocused: false,
+      anyRecentlyInteracted: false,
+      lastActivityAt: "2026-10-23T07:00:00.000Z",
+      clients: [],
+      observedAt: "2026-10-23T07:00:10.000Z",
+    };
+    const requested: Array<string> = [];
+    const port = {
+      ...makePort(),
+      getPresence: async (environmentId: string) => {
+        requested.push(environmentId);
+        return presence;
+      },
+    };
+    await expect(
+      callGatewayTool({ port, grants }, "t3_get_presence", { environmentId: "local" }),
+    ).resolves.toEqual(presence);
+    await expect(
+      callGatewayTool({ port, grants: { local: ["send"] as const } }, "t3_get_presence", {
+        environmentId: "local",
+      }),
+    ).rejects.toMatchObject({ code: "scope_required" });
+    expect(requested).toEqual(["local"]);
+  });
+
   it("reports degraded bridge health instead of claiming a healthy connection", async () => {
     const health = await callGatewayTool(
       {

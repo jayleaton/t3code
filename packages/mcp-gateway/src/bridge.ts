@@ -155,6 +155,7 @@ export function createBridgeRuntimePort(input: {
   // installed after startup so a degraded companion cannot terminate its host process.
   server.on("error", () => undefined);
   let client: WebSocket | null = null;
+  let clientStandby = false;
   let latestAuthenticatedGeneration = 0;
   let grants = input.initialGrants ?? {};
   let profiles: ReadonlyArray<GatewayProfile> = [];
@@ -222,7 +223,8 @@ export function createBridgeRuntimePort(input: {
       if (!configured) socket.close(1008, "Gateway bridge authentication timed out.");
     };
     authenticationSignal.addEventListener("abort", onAuthenticationTimeout, { once: true });
-    socket.send(JSON.stringify({ type: "challenge", nonce }));
+    // Advertising standby lets a headless host join only owners that will not let it evict an app.
+    socket.send(JSON.stringify({ type: "challenge", nonce, capabilities: { standby: true } }));
 
     socket.on("message", (raw) => {
       try {
@@ -251,19 +253,28 @@ export function createBridgeRuntimePort(input: {
           }
           const nextGrants = parseGrants(response.grants);
           const nextProfiles = parseProfiles(response.profiles);
+          const capabilities = response.capabilities;
+          const capability = (name: string) =>
+            typeof capabilities === "object" &&
+            capabilities !== null &&
+            !Array.isArray(capabilities) &&
+            (capabilities as Record<string, unknown>)[name] === true;
+          // A standby runtime (the headless server host) serves only while no app does, so an
+          // open desktop app keeps the runtime role and the two never trade it back and forth.
+          const nextStandby = capability("standby");
+          if (nextStandby && client !== null && client !== socket && !clientStandby) {
+            socket.close(1013, "A T3 app runtime is connected; standing by.");
+            return;
+          }
           if (client !== null && client !== socket) {
             rejectPending("T3 gateway client was replaced.");
             client.close(1012, "Replaced by a newly configured T3 client runtime.");
           }
           grants = nextGrants;
           profiles = nextProfiles;
-          const capabilities = response.capabilities;
-          supportsStatusSnapshots =
-            typeof capabilities === "object" &&
-            capabilities !== null &&
-            !Array.isArray(capabilities) &&
-            (capabilities as Record<string, unknown>).statusSnapshots === true;
+          supportsStatusSnapshots = capability("statusSnapshots");
           client = socket;
+          clientStandby = nextStandby;
           configured = true;
           releaseClientWaiters();
           authenticationSignal.removeEventListener("abort", onAuthenticationTimeout);
@@ -434,6 +445,7 @@ export function createBridgeRuntimePort(input: {
       threadTask: (environmentId, request) => invoke("threadTask", [environmentId, request]),
       listEnvironments: () => invoke("listEnvironments", []),
       getEnvironmentStatus: (environmentId) => invoke("getEnvironmentStatus", [environmentId]),
+      getPresence: (environmentId) => invoke("getPresence", [environmentId]),
       listProfiles: (environmentId) => invoke("listProfiles", [environmentId]),
       resolveProfileModelSelection: (environmentId, profile) =>
         invoke("resolveProfileModelSelection", [environmentId, profile]),

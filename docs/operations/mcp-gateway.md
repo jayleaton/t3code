@@ -57,6 +57,24 @@ Agents board is closed. Disabling the gateway or closing its desktop window stop
 In-flight mutations are never replayed on reconnect; use the same idempotency key to recover
 their durable receipts.
 
+## Headless servers
+
+Without a desktop app, nothing feeds thread events to the owner, so `thread.*` events and
+webhooks stay silent. A server started with `T3_MCP_HEADLESS_GATEWAY=1` (and not in desktop
+mode) hosts the runtime itself ([HeadlessGatewayHost.ts](../../apps/server/src/mcp/agents/HeadlessGatewayHost.ts)).
+It reads `T3_MCP_BRIDGE_TOKEN` and the other launcher variables from its environment, then from
+`~/.config/t3code/mcp-gateway.env` (owner-only, mode 0600), and grants its own environment
+`T3_MCP_HEADLESS_SCOPES` (default `read,delivery`).
+
+It runs the owner in the server process when the bridge port is free, without the idle
+shutdown, and otherwise joins the owner already there; it retries the port every 15 seconds,
+so it takes over when a desktop app's owner exits. Its runtime connection is a standby: the
+owner turns it away while an app is configured, and an app that connects replaces it, so the
+two never trade the runtime back and forth. A standby runtime refuses to authenticate to an
+owner whose challenge does not advertise standby, since an older owner would let it evict the
+app. Either way there is one owner, one store and one delivery worker, and the store ignores
+an event id it already has, so an event replayed by both runtimes is delivered once.
+
 ## Upgrade from a gateway that binds once per MCP session
 
 1. Pull the branch containing shared gateway support. For a source launch, keep the existing

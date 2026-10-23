@@ -6,11 +6,12 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { describe, expect, it, vi } from "@effect/vitest";
-import WebSocket from "ws";
+import { connectGatewayBridge } from "@t3tools/client-runtime/gateway";
+import WebSocket, { WebSocketServer } from "ws";
 
 import { createBridgeRuntimePort } from "./bridge.ts";
 import { createGatewayEventStore } from "./events.ts";
-import type { GatewayMutationResult } from "./port.ts";
+import type { GatewayMutationResult, GatewayRuntimePort } from "./port.ts";
 import { callGatewayTool } from "./tools.ts";
 
 const TOKEN = "test-token-123456789";
@@ -721,5 +722,121 @@ describe("gateway bridge", () => {
     await expect(bridge.port.listEnvironments()).rejects.toThrow("timed out");
     client.close();
     await bridge.close();
+  });
+});
+
+describe("standby gateway runtime", () => {
+  type State = "connecting" | "running" | "degraded" | "disabled";
+  function trackStates() {
+    const seen: Array<State> = [];
+    const waiters: Array<{ state: State; after: number; resolve: () => void }> = [];
+    return {
+      seen,
+      onState: (state: State) => {
+        seen.push(state);
+        const due = waiters.filter(
+          (waiter) => waiter.state === state && seen.length > waiter.after,
+        );
+        for (const waiter of due) {
+          waiters.splice(waiters.indexOf(waiter), 1);
+          waiter.resolve();
+        }
+      },
+      /** Resolves on the next `state` after the states seen so far. */
+      next: (state: State) => {
+        const after = seen.length;
+        return new Promise<void>((resolve) => waiters.push({ state, after, resolve }));
+      },
+    };
+  }
+  const runtimePort = (environmentId: string) =>
+    ({
+      listEnvironments: async () => [{ environmentId }],
+    }) as unknown as GatewayRuntimePort;
+
+  it("stands by while an app runtime is connected and serves once the app leaves", async () => {
+    const port = await unusedPort();
+    const bridge = createBridgeRuntimePort({ port, token: TOKEN });
+    await bridge.ready;
+    const url = `ws://127.0.0.1:${port}`;
+    const appStates = trackStates();
+    const appRunning = appStates.next("running");
+    const app = connectGatewayBridge({
+      port: runtimePort("app"),
+      url,
+      token: TOKEN,
+      onState: appStates.onState,
+    });
+    await appRunning;
+
+    const standbyStates = trackStates();
+    const turnedAway = standbyStates.next("degraded");
+    const standby = connectGatewayBridge({
+      port: runtimePort("headless"),
+      url,
+      token: TOKEN,
+      standby: true,
+      reconnectDelayMs: 0,
+      onState: standbyStates.onState,
+    });
+    try {
+      await turnedAway;
+      expect(standbyStates.seen).not.toContain("running");
+      await expect(bridge.port.listEnvironments()).resolves.toEqual([{ environmentId: "app" }]);
+
+      const standbyServing = standbyStates.next("running");
+      app.stop();
+      await standbyServing;
+      await expect(bridge.port.listEnvironments()).resolves.toEqual([
+        { environmentId: "headless" },
+      ]);
+
+      // An app that opens later takes the runtime back from the standby host.
+      const replaced = standbyStates.next("degraded");
+      const returningStates = trackStates();
+      const returningRunning = returningStates.next("running");
+      const returning = connectGatewayBridge({
+        port: runtimePort("app"),
+        url,
+        token: TOKEN,
+        onState: returningStates.onState,
+      });
+      await Promise.all([replaced, returningRunning]);
+      await expect(bridge.port.listEnvironments()).resolves.toEqual([{ environmentId: "app" }]);
+      returning.stop();
+    } finally {
+      standby.stop();
+      await bridge.close();
+    }
+  });
+
+  it("never authenticates to an owner that cannot honor standby", async () => {
+    const port = await unusedPort();
+    const legacy = new WebSocketServer({ host: "127.0.0.1", port });
+    await new Promise<void>((resolve) => legacy.once("listening", () => resolve()));
+    const received: Array<unknown> = [];
+    const socketClosed = new Promise<void>((resolve) => {
+      legacy.on("connection", (socket) => {
+        socket.on("message", (raw) => received.push(JSON.parse(raw.toString())));
+        socket.once("close", () => resolve());
+        socket.send(
+          JSON.stringify({ type: "challenge", nonce: NodeCrypto.randomBytes(32).toString("hex") }),
+        );
+      });
+    });
+    const standby = connectGatewayBridge({
+      port: runtimePort("headless"),
+      url: `ws://127.0.0.1:${port}`,
+      token: TOKEN,
+      standby: true,
+      reconnectDelayMs: 60_000,
+    });
+    try {
+      await socketClosed;
+      expect(received).toEqual([]);
+    } finally {
+      standby.stop();
+      await new Promise<void>((resolve) => legacy.close(() => resolve()));
+    }
   });
 });

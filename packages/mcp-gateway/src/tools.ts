@@ -1270,6 +1270,13 @@ export async function callGatewayTool(
       const environmentId = environmentWithScope(context, input, "read");
       return context.port.getEnvironmentStatus(environmentId);
     }
+    case "t3_get_presence": {
+      const environmentId = environmentWithScope(context, input, "read");
+      if (context.port.getPresence === undefined) {
+        throw new Error("Presence is unavailable from this T3 host.");
+      }
+      return context.port.getPresence(environmentId);
+    }
     case "t3_get_environment_health": {
       const environmentId = environmentWithScope(context, input, "read");
       const status = await context.port.getEnvironmentStatus(environmentId);

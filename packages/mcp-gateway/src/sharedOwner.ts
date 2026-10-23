@@ -9,7 +9,7 @@ import type WebSocket from "ws";
 import { createBridgeRuntimePort, type GatewayGrants } from "./bridge.ts";
 import { startWebhookDeliveryWorker } from "./deliver.ts";
 import { createGatewayEventStore, type GatewayEventStore } from "./events.ts";
-import { hasGatewayScopes } from "./port.ts";
+import { GATEWAY_SCOPE_VALUES, hasGatewayScopes, type GatewayScope } from "./port.ts";
 import { createMcpGateway } from "./server.ts";
 import { acceptMcpSession, rejectRetiring, type GatewayBuild } from "./sharedTransport.ts";
 
@@ -20,6 +20,64 @@ export interface SharedGatewayConfig {
   readonly retentionEvents: number;
   readonly repositoryAllowlist: ReadonlyArray<string>;
   readonly initialGrants: GatewayGrants;
+}
+
+function parseGrants(raw: string | undefined): GatewayGrants {
+  if (raw === undefined || raw.trim() === "") return {};
+  const value = JSON.parse(raw) as Record<string, unknown>;
+  const grants: Record<string, ReadonlyArray<GatewayScope>> = {};
+  for (const [environmentId, scopes] of Object.entries(value)) {
+    if (
+      !Array.isArray(scopes) ||
+      scopes.some(
+        (scope) =>
+          typeof scope !== "string" || !GATEWAY_SCOPE_VALUES.includes(scope as GatewayScope),
+      )
+    ) {
+      throw new Error(`Invalid scopes for environment ${environmentId}.`);
+    }
+    grants[environmentId] = scopes as ReadonlyArray<GatewayScope>;
+  }
+  return grants;
+}
+
+/**
+ * Every host of the shared owner (stdio launchers, the desktop, a headless server) must derive
+ * the same configuration from the same variables, or launchers cannot authenticate to it.
+ */
+export function sharedGatewayConfigFromEnvironment(
+  env: Readonly<Record<string, string | undefined>>,
+  homeDirectory: string,
+): SharedGatewayConfig {
+  const port = Number.parseInt(env.T3_MCP_BRIDGE_PORT ?? "47631", 10);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error("T3_MCP_BRIDGE_PORT must be a valid TCP port.");
+  }
+  const token = env.T3_MCP_BRIDGE_TOKEN;
+  if (token === undefined || token.length < 16) {
+    throw new Error("T3_MCP_BRIDGE_TOKEN must contain at least 16 characters.");
+  }
+  const repositoryAllowlist = (env.T3_MCP_REPOSITORY_ALLOWLIST ?? "jayleaton/t3code")
+    .split(",")
+    .map((repository) => repository.trim())
+    .filter((repository) => /^[^/\s]+\/[^/\s]+$/u.test(repository));
+  if (repositoryAllowlist.length === 0) {
+    throw new Error("T3_MCP_REPOSITORY_ALLOWLIST must contain owner/repository entries.");
+  }
+  const retentionEvents = Number.parseInt(env.T3_MCP_EVENT_RETENTION ?? "100000", 10);
+  if (!Number.isInteger(retentionEvents) || retentionEvents < 1) {
+    throw new Error("T3_MCP_EVENT_RETENTION must be a positive integer.");
+  }
+  // Same T3 home as the desktop, whose managed launcher every manual launcher must share an owner with.
+  const stateDirectory = env.T3CODE_HOME ?? NodePath.join(homeDirectory, ".t3");
+  return {
+    port,
+    token,
+    stateFile: env.T3_MCP_STATE_FILE ?? NodePath.join(stateDirectory, "mcp-gateway-v3.sqlite"),
+    retentionEvents,
+    repositoryAllowlist,
+    initialGrants: parseGrants(env.T3_MCP_GRANTS),
+  };
 }
 
 export function sharedGatewayConfiguration(config: SharedGatewayConfig): string {
@@ -68,6 +126,8 @@ export async function startSharedGatewayOwner(
     readonly onIdle?: () => void;
     /** Launchers from a newer install retire this owner once its own script is replaced. */
     readonly build?: GatewayBuild;
+    /** Replaces the HTTPS sender; tests observe signed deliveries without a public receiver. */
+    readonly webhookSender?: Parameters<typeof startWebhookDeliveryWorker>[1]["sender"];
   } = {},
 ) {
   const configuration = sharedGatewayConfiguration(config);
@@ -180,6 +240,7 @@ export async function startSharedGatewayOwner(
     for (const listener of statusListeners) listener();
   });
   delivery = startWebhookDeliveryWorker(events, {
+    ...(options.webhookSender === undefined ? {} : { sender: options.webhookSender }),
     isAuthorized: (id) => hasGatewayScopes(bridge.getGrants(), id, ["read", "delivery"]),
   });
   scheduleIdle();
