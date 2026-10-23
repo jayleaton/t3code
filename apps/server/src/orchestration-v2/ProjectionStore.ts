@@ -3873,7 +3873,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           readonly failure_payload_json: string;
           readonly last_error: string | null;
         }>`
-          SELECT json_remove(t.payload_json, '$.profileSnapshot.skills') AS payload_json,
+          SELECT slim.payload_json,
             r.run_id, r.completed_at,
             item.payload_json AS failure_payload_json,
             (
@@ -3883,7 +3883,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               CROSS JOIN orchestration_v2_projection_provider_sessions session
               WHERE binding.thread_id = t.thread_id
                 AND session.provider_session_id = binding.provider_session_id
-                AND session.provider_instance_id = t.provider_instance_id
+                AND session.provider_instance_id = slim.provider_instance_id
               ORDER BY session.updated_at DESC, session.provider_session_id DESC
               LIMIT 1
             ) AS last_error
@@ -3893,6 +3893,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           FROM orchestration_v2_projection_turn_items item
           CROSS JOIN orchestration_v2_projection_runs r ON r.run_id = item.run_id
           CROSS JOIN orchestration_v2_projection_threads t ON t.thread_id = r.thread_id
+          CROSS JOIN orchestration_v2_projection_thread_slim_payloads slim
+            ON slim.thread_id = t.thread_id
           WHERE item.type = 'error' AND item.status = 'failed'
             AND r.status = 'failed'
             AND r.run_id = (
@@ -3917,26 +3919,26 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               LIMIT 1
             )
             AND t.deleted_at IS NULL
-            AND json_extract(t.payload_json, '$.archivedAt') IS NULL
-            AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
+            AND json_extract(slim.payload_json, '$.archivedAt') IS NULL
+            AND json_extract(slim.payload_json, '$.settledOverride') IS NOT 'settled'
             AND json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
             AND json_extract(item.payload_json, '$.failure.resetAt') IS NOT NULL
-            AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) > julianday(COALESCE(r.completed_at, json_extract(t.payload_json, '$.updatedAt')))
+            AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) > julianday(COALESCE(r.completed_at, json_extract(slim.payload_json, '$.updatedAt')))
             AND (
               (
-                json_extract(t.payload_json, '$.limitRecovery.runId') IS r.run_id
-                AND json_extract(t.payload_json, '$.limitRecovery.resetAt') IS json_extract(item.payload_json, '$.failure.resetAt')
-                AND json_extract(t.payload_json, '$.limitRecovery.autoResume') = 1
+                json_extract(slim.payload_json, '$.limitRecovery.runId') IS r.run_id
+                AND json_extract(slim.payload_json, '$.limitRecovery.resetAt') IS json_extract(item.payload_json, '$.failure.resetAt')
+                AND json_extract(slim.payload_json, '$.limitRecovery.autoResume') = 1
                 AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) <= julianday(${DateTime.formatIso(options.now)})
                 AND (
-                  json_extract(t.payload_json, '$.snoozedUntil') IS NULL
-                  OR julianday(json_extract(t.payload_json, '$.snoozedUntil')) <= julianday(${DateTime.formatIso(options.now)})
+                  json_extract(slim.payload_json, '$.snoozedUntil') IS NULL
+                  OR julianday(json_extract(slim.payload_json, '$.snoozedUntil')) <= julianday(${DateTime.formatIso(options.now)})
                 )
               )
               OR (
                 (
-                  json_extract(t.payload_json, '$.limitRecovery.runId') IS NOT r.run_id
-                  OR json_extract(t.payload_json, '$.limitRecovery.resetAt') IS NOT json_extract(item.payload_json, '$.failure.resetAt')
+                  json_extract(slim.payload_json, '$.limitRecovery.runId') IS NOT r.run_id
+                  OR json_extract(slim.payload_json, '$.limitRecovery.resetAt') IS NOT json_extract(item.payload_json, '$.failure.resetAt')
                 )
                 AND (
                   ${booleanInt(options.autoResume)}
@@ -5803,15 +5805,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       sql<ShellThreadRow>`
             SELECT
               t.thread_id,
-              -- Shells drop profile skills and instructions; leaving them in SQLite avoids decoding ~150 KB per thread.
-              json_remove(
-                t.payload_json,
-                '$.profileSnapshot.skills',
-                '$.profileSnapshot.systemPrompt'
-              ) AS payload_json,
+              -- Shells drop profile instructions too; the slim copy already lacks skills.
+              json_remove(slim.payload_json, '$.profileSnapshot.systemPrompt') AS payload_json,
               CASE
-                WHEN json_extract(t.payload_json, '$.forkedFrom.type') = 'run'
-                  THEN json_extract(t.payload_json, '$.forkedFrom.threadId')
+                WHEN json_extract(slim.payload_json, '$.forkedFrom.type') = 'run'
+                  THEN json_extract(slim.payload_json, '$.forkedFrom.threadId')
                 ELSE NULL
               END AS forked_from_run_source_thread_id,
               presented.run_id AS latest_run_id,
@@ -5856,7 +5854,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 CROSS JOIN orchestration_v2_projection_provider_sessions session
                 WHERE binding.thread_id = t.thread_id
                   AND session.provider_session_id = binding.provider_session_id
-                  AND session.provider_instance_id = t.provider_instance_id
+                  AND session.provider_instance_id = slim.provider_instance_id
                 ORDER BY session.updated_at DESC, session.provider_session_id DESC
                 LIMIT 1
               ) AS last_error,
@@ -5957,6 +5955,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   AND i.run_id IS NULL
               ) AS runless_item_count
             FROM orchestration_v2_projection_threads t
+            -- Every payload and provider read goes through the slim copy; the
+            -- thread row is touched only for columns stored before its payload.
+            INNER JOIN orchestration_v2_projection_thread_slim_payloads slim
+              ON slim.thread_id = t.thread_id
             LEFT JOIN orchestration_v2_projection_runs active ON active.run_id = (
               SELECT r.run_id
               FROM orchestration_v2_projection_runs r
@@ -6005,13 +6007,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               projectId === undefined ? sql`` : sql` AND t.project_id = ${projectId}`
             }${
               location === "active"
-                ? sql` AND json_extract(t.payload_json, '$.archivedAt') IS NULL`
+                ? sql` AND json_extract(slim.payload_json, '$.archivedAt') IS NULL`
                 : location === "archive"
-                  ? sql` AND json_extract(t.payload_json, '$.archivedAt') IS NOT NULL`
+                  ? sql` AND json_extract(slim.payload_json, '$.archivedAt') IS NOT NULL`
                   : sql``
             }${
               unsettledOnly
-                ? sql` AND json_extract(t.payload_json, '$.settledAt') IS NULL AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'`
+                ? sql` AND json_extract(slim.payload_json, '$.settledAt') IS NULL AND json_extract(slim.payload_json, '$.settledOverride') IS NOT 'settled'`
                 : sql``
             }
             ORDER BY t.updated_at ASC, t.thread_id ASC
@@ -6157,7 +6159,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           Effect.gen(function* () {
             const rows = yield* sql<SettlementThreadRow>`
             SELECT t.thread_id,
-              json_remove(t.payload_json, '$.profileSnapshot.skills') AS payload_json,
+              slim.payload_json,
               r.run_id AS latest_run_id,
               r.status AS latest_run_status,
               r.requested_at AS latest_run_requested_at,
@@ -6186,6 +6188,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 LIMIT 1
               ) AS latest_user_authored_message_at
             FROM orchestration_v2_projection_threads t
+            INNER JOIN orchestration_v2_projection_thread_slim_payloads slim
+              ON slim.thread_id = t.thread_id
             LEFT JOIN orchestration_v2_projection_runs r ON r.run_id = (
               SELECT latest.run_id FROM orchestration_v2_projection_runs latest
               WHERE latest.thread_id = t.thread_id
@@ -6193,10 +6197,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               LIMIT 1
             )
             WHERE t.deleted_at IS NULL${threadId === undefined ? sql`` : sql` AND t.thread_id = ${threadId}`}
-              AND json_extract(t.payload_json, '$.archivedAt') IS NULL
-              AND COALESCE(json_extract(t.payload_json, '$.settledOverride'), '') != 'settled'
-              AND json_extract(t.payload_json, '$.pinnedAt') IS NULL
-              AND json_extract(t.payload_json, '$.autoSettleDisabledAt') IS NULL
+              AND json_extract(slim.payload_json, '$.archivedAt') IS NULL
+              AND COALESCE(json_extract(slim.payload_json, '$.settledOverride'), '') != 'settled'
+              AND json_extract(slim.payload_json, '$.pinnedAt') IS NULL
+              AND json_extract(slim.payload_json, '$.autoSettleDisabledAt') IS NULL
               AND NOT EXISTS (
                 SELECT 1 FROM orchestration_v2_projection_runs active
                 WHERE active.thread_id = t.thread_id
@@ -6286,12 +6290,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       Effect.fn("ProjectionStore.getThreadsWithPullRequests")(
         function* (threadId) {
           const rows = yield* sql<PayloadRow>`
-          SELECT json_remove(payload_json, '$.profileSnapshot.skills') AS payload_json
-          FROM orchestration_v2_projection_threads
-          WHERE deleted_at IS NULL${threadId === undefined ? sql`` : sql` AND thread_id = ${threadId}`}
-            AND json_extract(payload_json, '$.archivedAt') IS NULL
-            AND json_array_length(payload_json, '$.pullRequests') > 0
-          ORDER BY updated_at ASC, thread_id ASC
+          SELECT slim.payload_json
+          FROM orchestration_v2_projection_threads t
+          INNER JOIN orchestration_v2_projection_thread_slim_payloads slim
+            ON slim.thread_id = t.thread_id
+          WHERE t.deleted_at IS NULL${threadId === undefined ? sql`` : sql` AND t.thread_id = ${threadId}`}
+            AND json_extract(slim.payload_json, '$.archivedAt') IS NULL
+            AND json_array_length(slim.payload_json, '$.pullRequests') > 0
+          ORDER BY t.updated_at ASC, t.thread_id ASC
         `;
           return yield* Effect.forEach(rows, (row) =>
             decodeThreadPayload(row.payload_json).pipe(
@@ -6709,13 +6715,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         hasActiveDescendants(
           (parentId) =>
             sql<PayloadRow>`
-          SELECT json_remove(payload_json, '$.profileSnapshot.skills') AS payload_json
-          FROM orchestration_v2_projection_threads
-          WHERE deleted_at IS NULL AND (
-            (json_extract(payload_json, '$.parentThreadId') = ${parentId}
-              AND json_extract(payload_json, '$.parentEnvironmentId') IS NULL)
-            OR (json_extract(payload_json, '$.lineage.relationshipToParent') = 'subagent'
-              AND json_extract(payload_json, '$.lineage.parentThreadId') = ${parentId})
+          SELECT slim.payload_json
+          FROM orchestration_v2_projection_threads t
+          INNER JOIN orchestration_v2_projection_thread_slim_payloads slim
+            ON slim.thread_id = t.thread_id
+          WHERE t.deleted_at IS NULL AND (
+            (json_extract(slim.payload_json, '$.parentThreadId') = ${parentId}
+              AND json_extract(slim.payload_json, '$.parentEnvironmentId') IS NULL)
+            OR (json_extract(slim.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+              AND json_extract(slim.payload_json, '$.lineage.parentThreadId') = ${parentId})
           )
         `.pipe(
               Effect.flatMap((rows) =>
