@@ -21,6 +21,10 @@
     "./managedHost": {
       "types": "./src/managedHost.ts",
       "default": "./src/managedHost.ts"
+    },
+    "./sharedOwner": {
+      "types": "./src/sharedOwner.ts",
+      "default": "./src/sharedOwner.ts"
     }
   },
   "scripts": {

@@ -11,8 +11,11 @@ import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/typ
 import * as DateTime from "effect/DateTime";
 import { afterEach, describe, expect, it, vi } from "@effect/vitest";
 import WebSocket, { WebSocketServer } from "ws";
+import { connectGatewayBridge } from "@t3tools/client-runtime/gateway";
 
 import { createBridgeRuntimePort, type GatewayGrants } from "./bridge.ts";
+import type { WebhookTarget } from "./events.ts";
+import type { GatewayRuntimeEvent, GatewayRuntimePort } from "./port.ts";
 import { createManagedGatewayHost } from "./managedHost.ts";
 import { connectSharedGateway, launchSharedOwner } from "./sharedLauncher.ts";
 import {
@@ -734,4 +737,115 @@ it("shares lifecycle grant updates and chat focus across already-connected MCP s
     expect(body(await client.callTool(stop("revoked"))).error?.code).toBe("scope_required");
   }
   expect(controls).toBe(2);
+});
+
+describe("headless gateway runtime", () => {
+  /** A runtime whose source can replay any event, as a desktop app and a headless host both could. */
+  function eventRuntime(input: SharedGatewayConfig, standby: boolean) {
+    const listeners = new Set<(event: GatewayRuntimeEvent) => void>();
+    let resolveRunning!: () => void;
+    const running = new Promise<void>((resolve) => {
+      resolveRunning = resolve;
+    });
+    const bridge = connectGatewayBridge({
+      port: {
+        listEnvironments: async () => [
+          {
+            environmentId: "local",
+            label: "Local",
+            connectionState: "connected",
+            targetKind: "primary",
+          },
+        ],
+        getEnvironmentStatus: async () => ({
+          environmentId: "local",
+          connectionState: "connected",
+        }),
+      } as unknown as GatewayRuntimePort,
+      events: {
+        subscribe: (listener) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+      grants: { local: ["read", "delivery"] },
+      url: `ws://127.0.0.1:${input.port}`,
+      token: input.token,
+      standby,
+      reconnectDelayMs: 0,
+      onState: (state) => {
+        if (state === "running") resolveRunning();
+      },
+    });
+    cleanup.push(() => bridge.stop());
+    return {
+      running,
+      stop: () => bridge.stop(),
+      emit: (event: GatewayRuntimeEvent) => {
+        for (const listener of listeners) listener(event);
+      },
+    };
+  }
+  const threadUpdated = (sequence: number): GatewayRuntimeEvent => ({
+    eventId: `local:${sequence}`,
+    sequence,
+    occurredAt: "2026-10-23T07:00:00.000Z",
+    environmentId: "local",
+    type: "thread.updated",
+    threadId: "chat",
+    data: { status: "completed" },
+  });
+
+  it("delivers signed webhooks from a standby runtime, once per event across runtimes", async () => {
+    const input = await config();
+    const deliveries: Array<WebhookTarget> = [];
+    const waiters: Array<{ count: number; resolve: () => void }> = [];
+    await owner(input, {
+      webhookSender: async (target) => {
+        deliveries.push(target);
+        for (const waiter of waiters.filter((candidate) => deliveries.length >= candidate.count)) {
+          waiters.splice(waiters.indexOf(waiter), 1);
+          waiter.resolve();
+        }
+        return { ok: true, retryable: false };
+      },
+    });
+    const delivered = (count: number) =>
+      new Promise<void>((resolve) => {
+        if (deliveries.length >= count) resolve();
+        else waiters.push({ count, resolve });
+      });
+
+    const headless = eventRuntime(input, true);
+    await headless.running;
+    const client = await mcp(input);
+    const registered = body(
+      await client.callTool({
+        name: "t3_register_webhook",
+        arguments: { environmentId: "local", url: "https://hooks.example.com/t3" },
+      }),
+    ).data as { webhookId: string; secret: string };
+
+    headless.emit(threadUpdated(1));
+    await delivered(1);
+    const [first] = deliveries;
+    expect(first?.url).toBe("https://hooks.example.com/t3");
+    expect(first?.headers["X-T3-Event-Id"]).toBe("local:1");
+    expect(first?.headers["X-T3-Signature"]).toBe(
+      `sha256=${NodeCrypto.createHmac("sha256", registered.secret).update(first!.body).digest("hex")}`,
+    );
+
+    // A desktop app opening takes the runtime over and may replay what the host already sent.
+    const app = eventRuntime(input, false);
+    await app.running;
+    app.emit(threadUpdated(1));
+    app.emit(threadUpdated(2));
+    await delivered(2);
+    expect(deliveries.map((target) => target.headers["X-T3-Event-Id"])).toEqual([
+      "local:1",
+      "local:2",
+    ]);
+    app.stop();
+    headless.stop();
+  });
 });

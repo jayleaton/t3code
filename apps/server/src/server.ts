@@ -6,6 +6,7 @@ import * as StorageCleanup from "./storageCleanup.ts";
 import * as WorktreeReclamation from "./workspace/WorktreeReclamation.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as McpGatewayBroker from "./mcp/McpGatewayBroker.ts";
+import * as HeadlessGatewayHost from "./mcp/agents/HeadlessGatewayHost.ts";
 import * as LocalGatewayPort from "./mcp/agents/LocalGatewayPort.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQuestionReactor.ts";
@@ -738,11 +739,16 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer,
   ),
-  McpHttpServer.layer.pipe(
-    Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+  Layer.mergeAll(
+    McpHttpServer.layer.pipe(
+      Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+      Layer.provide(McpOAuth.layerMcpClientAuthenticator),
+    ),
+    // Fork: thread events reach T3 Agents webhooks without a desktop app.
+    HeadlessGatewayHost.layer,
+  ).pipe(
     // Fork: T3 Agents tools run against this server's own RPC API.
     Layer.provide(LocalGatewayPort.layer),
-    Layer.provide(McpOAuth.layerMcpClientAuthenticator),
   ),
 ).pipe(
   Layer.provide(

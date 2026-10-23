@@ -197,7 +197,12 @@ const makeLayer = (macbook: ReturnType<typeof makeMacBook>, record: TestRecord) 
   ).pipe(Layer.provide(NodeServices.layer));
   return Layer.mergeAll(
     broker,
-    Layer.succeed(LocalGatewayPort, { environmentId: devBox, label: "dev-box", port: localPort }),
+    Layer.succeed(LocalGatewayPort, {
+      environmentId: devBox,
+      label: "dev-box",
+      port: localPort,
+      events: { subscribe: () => () => undefined },
+    }),
     Layer.succeed(McpInvocationContext.McpInvocationContext, {
       environmentId: devBox,
       requestNamespace: "thread:captain",

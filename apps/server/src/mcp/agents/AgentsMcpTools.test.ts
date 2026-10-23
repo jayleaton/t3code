@@ -87,7 +87,12 @@ const makeLayer = (
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
     Layer.provide(
-      Layer.succeed(LocalGatewayPort, { environmentId: localId, label: "Local", port }),
+      Layer.succeed(LocalGatewayPort, {
+        environmentId: localId,
+        label: "Local",
+        port,
+        events: { subscribe: () => () => undefined },
+      }),
     ),
   );
   if (relayed === undefined) return base;

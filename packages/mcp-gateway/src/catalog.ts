@@ -231,6 +231,10 @@ export const TOOL_SPECS = {
     "Get connection state for one T3 environment.",
     { environmentId, ...optionalRequestContext },
   ],
+  t3_get_presence: [
+    "Whether someone is at a T3 client of this environment right now: present is true when any live client is visible or focused. Also reports recent interaction, lastActivityAt (ISO time of the latest client report, or null), and each live client's state. Use it to hold back notifications while the user is at the computer. Requires read scope.",
+    { environmentId, ...optionalRequestContext },
+  ],
   t3_get_environment_health: [
     "Get authoritative runtime health for one environment.",
     { environmentId, ...optionalRequestContext },

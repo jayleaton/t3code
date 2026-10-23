@@ -54,6 +54,7 @@ export const GATEWAY_PORT_METHODS: ReadonlySet<keyof GatewayRuntimePort> = new S
   "syncAgentLibrary",
   "listEnvironments",
   "getEnvironmentStatus",
+  "getPresence",
   "listProfiles",
   "resolveProfileModelSelection",
   "listProjects",
@@ -97,6 +98,12 @@ export function connectGatewayBridge(input: {
   readonly onState?: (state: GatewayBridgeState) => void;
   readonly onStatusSnapshot?: (snapshot: GatewayStatusSnapshot | null) => void;
   readonly reconnectDelayMs?: number;
+  /**
+   * Serve only while no other runtime is configured: the owner turns this client away while an
+   * app is connected, and an app that connects later replaces it. A standby client never
+   * authenticates to an owner that cannot honor this, so it cannot evict an app there.
+   */
+  readonly standby?: boolean;
 }) {
   let socket: GatewayBridgeSocket | null = null;
   let reconnectFiber: Fiber.Fiber<void, never> | null = null;
@@ -186,6 +193,11 @@ export function connectGatewayBridge(input: {
             ) {
               throw new Error("Invalid gateway bridge challenge.");
             }
+            const capabilities = candidate.capabilities as Record<string, unknown> | undefined;
+            if (input.standby === true && capabilities?.standby !== true) {
+              next.close();
+              return;
+            }
             expectedServerProof = await proof(input.token, `server:${candidate.nonce}`);
             next.send(
               JSON.stringify({
@@ -212,7 +224,10 @@ export function connectGatewayBridge(input: {
                 type: "configure",
                 grants: input.grants ?? {},
                 profiles: input.profiles ?? [],
-                capabilities: { statusSnapshots: true },
+                capabilities: {
+                  statusSnapshots: true,
+                  ...(input.standby === true ? { standby: true } : {}),
+                },
               }),
             );
             return;

@@ -416,6 +416,29 @@ export function parseGatewayStatusSnapshot(value: unknown): GatewayStatusSnapsho
 
 export type GatewaySkillInput = Pick<AgentSkill, "name" | "description" | "content" | "resources">;
 
+export interface GatewayPresenceClient {
+  readonly clientKind: string;
+  readonly visible: boolean;
+  readonly focused: boolean;
+  readonly recentlyInteracted: boolean;
+  readonly appState?: string;
+  readonly updatedAt: string;
+  readonly expiresAt: string;
+}
+
+export interface GatewayPresence {
+  readonly environmentId: string;
+  /** A client is visible or focused right now. */
+  readonly present: boolean;
+  readonly anyVisible: boolean;
+  readonly anyFocused: boolean;
+  readonly anyRecentlyInteracted: boolean;
+  /** Latest report from any live client, or null when none has reported. */
+  readonly lastActivityAt: string | null;
+  readonly clients: ReadonlyArray<GatewayPresenceClient>;
+  readonly observedAt: string;
+}
+
 export interface GatewayRuntimePort {
   listSkills?(environmentId: string): Promise<ReadonlyArray<AgentSkill>>;
   createSkill?(environmentId: string, input: GatewaySkillInput): Promise<AgentSkill>;
@@ -495,6 +518,8 @@ export interface GatewayRuntimePort {
     | ThreadTaskBoard
   >;
   getEnvironmentStatus(environmentId: string): Promise<Record<string, unknown>>;
+  /** Whether a person is at a client of this environment, from its client activity leases. */
+  getPresence?(environmentId: string): Promise<GatewayPresence>;
   listProfiles?(environmentId: string): Promise<ReadonlyArray<GatewayProfile>>;
   /** Resolve readable profile labels against the environment's live provider catalog. */
   resolveProfileModelSelection?(
