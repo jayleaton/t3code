@@ -475,6 +475,8 @@ const makeReader = Effect.fnUntraced(function* (options: SqliteClientConfig) {
 const CHECKPOINT_FRAMES = 1000;
 const CHECKPOINT_IDLE_MS = 100;
 const CHECKPOINT_BACKPRESSURE_FRAMES = 10 * CHECKPOINT_FRAMES;
+// Each locked attempt already waited out the worker's 5 s busy_timeout.
+const CHECKPOINT_LOCK_RETRY_MS = 250;
 
 const readSafeSqliteInteger = (value: unknown) => {
   const number = typeof value === "bigint" ? Number(value) : value;
@@ -496,25 +498,52 @@ let nextTruncateId = 0;
 let pendingTruncate;
 let pendingBarriers = 0;
 let idle;
+// SQLITE_BUSY and SQLITE_LOCKED, including their extended codes. Another process
+// holding the file (WAL recovery after a crash, an exclusive-mode connection)
+// outlasts busy_timeout; that is transient, so the worker retries instead of
+// failing and handing every checkpoint back to the main thread for good.
+const isLockError = (error) =>
+  typeof error?.errcode === "number" && ((error.errcode & 0xff) === 5 || (error.errcode & 0xff) === 6);
 const initialize = () => {
   if (db !== undefined) return;
   // The writer switches to WAL after constructing the client.
-  db = new DatabaseSync(workerData.filename);
-  db.exec("PRAGMA busy_timeout = 5000;");
-  const mode = String(db.prepare("PRAGMA journal_mode").get().journal_mode).toLowerCase();
-  if (mode !== "wal") throw new Error("database uses journal_mode " + mode + ", not wal");
-  // macOS requires F_FULLFSYNC to flush the drive cache.
-  db.exec("PRAGMA checkpoint_fullfsync = ON;");
-  frames = db.prepare("PRAGMA wal_checkpoint(NOOP)");
-  checkpoint = db.prepare("PRAGMA wal_checkpoint(PASSIVE)");
-  truncate = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)");
+  const opened = new DatabaseSync(workerData.filename);
+  try {
+    opened.exec("PRAGMA busy_timeout = 5000;");
+    const mode = String(opened.prepare("PRAGMA journal_mode").get().journal_mode).toLowerCase();
+    if (mode !== "wal") throw new Error("database uses journal_mode " + mode + ", not wal");
+    // macOS requires F_FULLFSYNC to flush the drive cache.
+    opened.exec("PRAGMA checkpoint_fullfsync = ON;");
+    frames = opened.prepare("PRAGMA wal_checkpoint(NOOP)");
+    checkpoint = opened.prepare("PRAGMA wal_checkpoint(PASSIVE)");
+    truncate = opened.prepare("PRAGMA wal_checkpoint(TRUNCATE)");
+  } catch (error) {
+    opened.close();
+    throw error;
+  }
+  db = opened;
+};
+const retryLater = () => {
+  clearTimeout(idle);
+  idle = setTimeout(() => attempt(undefined, undefined, true), workerData.retryMs);
+};
+// A locked attempt still retires its request, without a generation, so the
+// parent keeps its own WAL state and can send the next check.
+const attempt = (id, nextJournalSizeLimit, force, nextGeneration) => {
+  try {
+    check(id, nextJournalSizeLimit, force, nextGeneration);
+  } catch (error) {
+    if (!isLockError(error)) throw error;
+    parentPort.postMessage({ type: "checkpoint", id });
+    retryLater();
+  }
 };
 const atCeiling = (state) => state.log >= workerData.backpressureFrames;
 const exceedsSizeLimit = () =>
   journalSizeLimit >= 0 && statSync(workerData.filename + "-wal").size > journalSizeLimit;
 const schedule = (state, blocked) => {
   if (blocked || state.log - state.checkpointed >= workerData.frames) {
-    idle = setTimeout(() => check(undefined, undefined, true), workerData.idleMs);
+    idle = setTimeout(() => attempt(undefined, undefined, true), workerData.idleMs);
   }
 };
 const check = (id, nextJournalSizeLimit, force, nextGeneration = generation) => {
@@ -547,14 +576,20 @@ const finishTruncate = (truncateId) => {
   const pending = pendingTruncate;
   parentPort.postMessage({ type: "truncate-start", truncateId });
   let busy;
+  let state;
   // Admission is paused here; a pinned reader must not make truncation wait.
   db.exec("PRAGMA busy_timeout = 0;");
   try {
     busy = truncate.get().busy !== 0;
+    state = frames.get();
+  } catch (error) {
+    if (!isLockError(error)) throw error;
+    // Admission stays paused until this reply, so report the last snapshot as busy.
+    busy = true;
+    state = pending.state;
   } finally {
     db.exec("PRAGMA busy_timeout = 5000;");
   }
-  const state = frames.get();
   const blocked = (atCeiling(state) && (busy || state.checkpointed < state.log)) || exceedsSizeLimit();
   pendingTruncate = undefined;
   parentPort.postMessage({
@@ -593,7 +628,7 @@ parentPort.on("message", (request) => {
     return;
   }
   const input = request && typeof request === "object" ? request : {};
-  check(input.id, input.journalSizeLimit, input.force, input.generation);
+  attempt(input.id, input.journalSizeLimit, input.force, input.generation);
   if (isBarrier) {
     if (pendingTruncate !== undefined) pendingBarriers++;
     else parentPort.postMessage("barrier");
@@ -632,6 +667,7 @@ const startCheckpointWorker = Effect.fnUntraced(function* (
         frames: CHECKPOINT_FRAMES,
         backpressureFrames: CHECKPOINT_BACKPRESSURE_FRAMES,
         idleMs: CHECKPOINT_IDLE_MS,
+        retryMs: CHECKPOINT_LOCK_RETRY_MS,
       },
     });
   } catch (cause) {
