@@ -52,7 +52,7 @@ const readSettings = Effect.gen(function* () {
 
 const seedV1Database = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  yield* runMigrations({ toMigrationInclusive: 54 });
+  yield* runMigrations({ toMigrationInclusive: 52 });
   const events = [
     {
       type: "project.created",

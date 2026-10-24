@@ -14,7 +14,7 @@ for (const upstreamColumnExists of [false, true]) {
         () =>
           Effect.gen(function* () {
             const sql = yield* SqlClient.SqlClient;
-            yield* runMigrations({ toMigrationInclusive: 53 });
+            yield* runMigrations({ toForkMigrationInclusive: 2 });
             if (upstreamColumnExists) {
               yield* sql`ALTER TABLE projection_threads ADD COLUMN title_state_json TEXT`;
             }

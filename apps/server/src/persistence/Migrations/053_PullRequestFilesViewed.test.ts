@@ -10,7 +10,7 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("055_PullRequestFiles
     () =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        yield* runMigrations({ toMigrationInclusive: 54 });
+        yield* runMigrations({ toMigrationInclusive: 52 });
         yield* runMigrations();
         yield* sql`INSERT INTO pull_request_files_viewed
         (provider, host, repository, number, viewer, path, revision, viewed_at)

@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import { runMigrations } from "../Migrations.ts";
+import { runMigrations } from "../../Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
@@ -47,7 +47,7 @@ layer("050_ProjectionThreadProfileSnapshot", (it) => {
       const sql = yield* SqlClient.SqlClient;
 
       yield* runMigrations({ toMigrationInclusive: 47 });
-      yield* runMigrations({ toMigrationInclusive: 52 });
+      yield* runMigrations({ toForkMigrationInclusive: 1 });
 
       const columns = yield* sql<{ readonly name: string; readonly notnull: number }>`
         PRAGMA table_info(projection_threads)
@@ -67,7 +67,7 @@ layer("gateway migration upgrade", (it) => {
       yield* runMigrations({ toMigrationInclusive: 47 });
       yield* sql`ALTER TABLE projection_threads ADD COLUMN profile_snapshot_json TEXT`;
       yield* sql`INSERT INTO effect_sql_migrations (migration_id, name, created_at) VALUES (48, 'ProjectionThreadProfileSnapshot', CURRENT_TIMESTAMP)`;
-      yield* runMigrations({ toMigrationInclusive: 52 });
+      yield* runMigrations({ toForkMigrationInclusive: 1 });
       const columns = yield* sql<{ readonly name: string }>`PRAGMA table_info(projection_threads)`;
       assert.isTrue(columns.some((column) => column.name === "profile_snapshot_json"));
       assert.isTrue(columns.some((column) => column.name === "branch_pull_request_json"));
