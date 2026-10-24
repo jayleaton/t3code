@@ -66,6 +66,7 @@ interface TrackedRenderer {
   creationTimeMs: number | null;
   memory: RendererMemory | null;
   gone: boolean;
+  deadSampleRecorded: boolean;
   readonly removeListeners: () => void;
 }
 
@@ -218,6 +219,7 @@ const make = Effect.fn("DesktopRendererHistory.make")(function* () {
         creationTimeMs: null,
         memory: null,
         gone: false,
+        deadSampleRecorded: false,
         removeListeners: () => {
           webContents.removeListener("dom-ready", onDomReady);
           webContents.removeListener("devtools-opened", onDevToolsOpened);
@@ -259,6 +261,14 @@ const make = Effect.fn("DesktopRendererHistory.make")(function* () {
             workingSetBytes: nonnegative(metric.memory.workingSetSize * 1024) ?? 0,
             peakWorkingSetBytes: nonnegative(metric.memory.peakWorkingSetSize * 1024) ?? 0,
           };
+        }
+        // A dead renderer would otherwise log an identical row every 30 s and
+        // rotate the record of how it died out of the bounded history.
+        if (pidSource !== "current") {
+          if (renderer.deadSampleRecorded) continue;
+          renderer.deadSampleRecorded = true;
+        } else {
+          renderer.deadSampleRecorded = false;
         }
         // A process can host multiple contents; these rows must not be summed.
         record(renderer, "sample");
