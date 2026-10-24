@@ -16,7 +16,9 @@ test("healthy when the newest nightly is within 36 h of main and runs pass", () 
     evaluateReleaseHealth({
       mainHead,
       nightlies: [nightly("2026-10-21T00:00:00Z"), nightly("2026-10-23T00:00:00Z")],
-      runs: { Release: [run("failure", 3), run("success", 2)] },
+      workflows: [
+        { name: "Release", cancelledIsFailure: true, runs: [run("failure", 3), run("success", 2)] },
+      ],
     }),
     [],
   );
@@ -26,26 +28,51 @@ test("fails when nothing merged in the last 36 h has shipped (the 10-22 to 10-24
   const problems = evaluateReleaseHealth({
     mainHead,
     nightlies: [nightly("2026-10-22T14:53:32Z")],
-    runs: {},
+    workflows: [],
   });
   assert.equal(problems.length, 1);
   assert.match(problems[0], /is 39 h older than main 5c5b58ae80/);
 });
 
-test("fails on two failures in a row, ignoring skipped and cancelled runs", () => {
+test("fails on two failures in a row, ignoring skipped runs and a cancelled sync", () => {
   const problems = evaluateReleaseHealth({
     mainHead,
     nightlies: [nightly("2026-10-24T05:00:00Z")],
-    runs: {
-      Sync: [run("failure", 4), run("skipped", 3), run("cancelled", 2), run("failure", 1)],
-      Release: [run("failure", 4), run("success", 3), run("failure", 2)],
-    },
+    workflows: [
+      {
+        name: "Sync",
+        cancelledIsFailure: false,
+        runs: [run("failure", 4), run("skipped", 3), run("cancelled", 2), run("failure", 1)],
+      },
+      {
+        name: "Release",
+        cancelledIsFailure: true,
+        runs: [run("failure", 4), run("success", 3), run("failure", 2)],
+      },
+    ],
   });
   assert.deepEqual(problems, ["Sync failed twice in a row: run/4 and run/1."]);
 });
 
+// Branch pushes once evicted main's pending nightly from its concurrency group twice,
+// so a release that was cancelled never shipped.
+test("counts a cancelled main nightly as a failure", () => {
+  const problems = evaluateReleaseHealth({
+    mainHead,
+    nightlies: [nightly("2026-10-24T05:00:00Z")],
+    workflows: [
+      {
+        name: "Fork nightly release",
+        cancelledIsFailure: true,
+        runs: [run("cancelled", 4), run("skipped", 3), run("cancelled", 2), run("success", 1)],
+      },
+    ],
+  });
+  assert.deepEqual(problems, ["Fork nightly release failed twice in a row: run/4 and run/2."]);
+});
+
 test("fails when no nightly has ever been published", () => {
-  assert.deepEqual(evaluateReleaseHealth({ mainHead, nightlies: [], runs: {} }), [
+  assert.deepEqual(evaluateReleaseHealth({ mainHead, nightlies: [], workflows: [] }), [
     "No nightly release has been published.",
   ]);
 });

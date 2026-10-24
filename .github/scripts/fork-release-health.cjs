@@ -5,11 +5,13 @@ const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 
 const MAX_NIGHTLY_LAG_MS = 36 * 60 * 60 * 1000;
+// A cancelled main nightly is a nightly that did not ship (other runs once evicted it from
+// its concurrency group), so it counts as a failure there. A cancelled sync, and any skipped
+// run, says nothing about whether the workflow works.
 const WATCHED_WORKFLOWS = [
-  { file: "fork-nightly-release.yml", name: "Fork nightly release" },
-  { file: "fork-nightly-sync.yml", name: "Fork nightly sync" },
+  { file: "fork-nightly-release.yml", name: "Fork nightly release", cancelledIsFailure: true },
+  { file: "fork-nightly-sync.yml", name: "Fork nightly sync", cancelledIsFailure: false },
 ];
-// Skipped and cancelled runs say nothing about whether the workflow works.
 const FAILED_CONCLUSIONS = new Set(["failure", "timed_out", "startup_failure"]);
 
 const hours = (ms) => `${Math.round(ms / (60 * 60 * 1000))} h`;
@@ -18,11 +20,15 @@ const hours = (ms) => `${Math.round(ms / (60 * 60 * 1000))} h`;
  * @param {{
  *   mainHead: { sha: string, committedAt: string },
  *   nightlies: Array<{ tagName: string, publishedAt: string }>,
- *   runs: Record<string, Array<{ conclusion: string, createdAt: string, url: string }>>,
- * }} input runs are newest first, per workflow name.
+ *   workflows: Array<{
+ *     name: string,
+ *     cancelledIsFailure: boolean,
+ *     runs: Array<{ conclusion: string, createdAt: string, url: string }>,
+ *   }>,
+ * }} input runs are newest first.
  * @returns {string[]} one message per problem; empty when healthy.
  */
-function evaluateReleaseHealth({ mainHead, nightlies, runs }) {
+function evaluateReleaseHealth({ mainHead, nightlies, workflows }) {
   const problems = [];
   const newest = nightlies.toSorted((a, b) => b.publishedAt.localeCompare(a.publishedAt))[0];
   const headAt = Date.parse(mainHead.committedAt);
@@ -37,17 +43,12 @@ function evaluateReleaseHealth({ mainHead, nightlies, runs }) {
     }
   }
 
-  for (const [name, workflowRuns] of Object.entries(runs)) {
-    const decisive = workflowRuns.filter(
-      (run) => run.conclusion === "success" || FAILED_CONCLUSIONS.has(run.conclusion),
-    );
-    const [latest, previous] = decisive;
-    if (
-      latest !== undefined &&
-      previous !== undefined &&
-      FAILED_CONCLUSIONS.has(latest.conclusion) &&
-      FAILED_CONCLUSIONS.has(previous.conclusion)
-    ) {
+  for (const { name, cancelledIsFailure, runs } of workflows) {
+    const failed = (run) =>
+      FAILED_CONCLUSIONS.has(run.conclusion) ||
+      (cancelledIsFailure && run.conclusion === "cancelled");
+    const [latest, previous] = runs.filter((run) => run.conclusion === "success" || failed(run));
+    if (latest !== undefined && previous !== undefined && failed(latest) && failed(previous)) {
       problems.push(`${name} failed twice in a row: ${latest.url} and ${previous.url}.`);
     }
   }
@@ -72,32 +73,31 @@ function main() {
     "--json",
     "tagName,publishedAt,isDraft",
   ]).filter((release) => !release.isDraft && release.tagName.includes("-nightly."));
-  const runs = Object.fromEntries(
-    WATCHED_WORKFLOWS.map(({ file, name }) => [
-      name,
-      gh([
-        "run",
-        "list",
-        "--repo",
-        repo,
-        "--workflow",
-        file,
-        "--branch",
-        branch,
-        "--status",
-        "completed",
-        "--limit",
-        "30",
-        "--json",
-        "conclusion,createdAt,url",
-      ]),
+  const workflows = WATCHED_WORKFLOWS.map(({ file, name, cancelledIsFailure }) => ({
+    name,
+    cancelledIsFailure,
+    runs: gh([
+      "run",
+      "list",
+      "--repo",
+      repo,
+      "--workflow",
+      file,
+      "--branch",
+      branch,
+      "--status",
+      "completed",
+      "--limit",
+      "30",
+      "--json",
+      "conclusion,createdAt,url",
     ]),
-  );
+  }));
 
   const problems = evaluateReleaseHealth({
     mainHead: { sha: head.sha, committedAt: head.commit.committer.date },
     nightlies,
-    runs,
+    workflows,
   });
   const summary =
     problems.length === 0
