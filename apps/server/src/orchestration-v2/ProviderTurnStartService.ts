@@ -233,6 +233,23 @@ export const layer: Layer.Layer<
       };
     };
 
+    // A missing row fails the turn: running an agent without its instructions would ignore
+    // whatever limits they set.
+    const loadProfileContent = Effect.fn("ProviderTurnStartService.loadProfileContent")(function* (
+      contentHash: string | undefined,
+      runId: RunId,
+    ) {
+      if (contentHash === undefined) return undefined;
+      const content = yield* projectionStore.getProfileSnapshotContent(contentHash);
+      if (Option.isNone(content)) {
+        return yield* new ProviderTurnStartError({
+          runId,
+          cause: `Agent profile content ${contentHash} is missing.`,
+        });
+      }
+      return content.value;
+    });
+
     const start = Effect.fn("orchestrationV2.providerTurnStart.start")(function* (input: {
       readonly threadId: ThreadId;
       readonly runId: RunId;
@@ -1032,13 +1049,17 @@ export const layer: Layer.Layer<
         threadId: projection.thread.id,
         cwd: resolvedRuntimePolicy.cwd ?? undefined,
       });
-      const skillIndex = projection.thread.profileSnapshot?.skills?.length
+      const profileContent = yield* loadProfileContent(
+        projection.thread.profileSnapshot?.contentHash,
+        run.id,
+      );
+      const skillIndex = profileContent?.skills.length
         ? yield* syncAgentSkillFiles({
             cwd:
               resolvedRuntimePolicy.cwd ??
               Option.getOrThrow(yield* projects.getById(projection.thread.projectId)).workspaceRoot,
             threadId: projection.thread.id,
-            skills: projection.thread.profileSnapshot.skills,
+            skills: profileContent.skills,
           }).pipe(
             Effect.provideService(FileSystem.FileSystem, fileSystem),
             Effect.provideService(Path.Path, path),
@@ -1047,7 +1068,7 @@ export const layer: Layer.Layer<
       const userText = projectComposerContextForProvider({
         text: agentProfilePrompt(
           skillIndex ? `${skillIndex}\n\n${message.text}` : message.text,
-          projection.thread.profileSnapshot,
+          profileContent?.systemPrompt,
         ),
         records: message.context?.records ?? [],
       });

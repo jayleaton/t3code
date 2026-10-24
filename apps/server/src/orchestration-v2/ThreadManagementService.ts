@@ -55,6 +55,7 @@ import * as Stream from "effect/Stream";
 
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { projectedRowEncodedBytes } from "./threadHistoryPaging.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
@@ -523,6 +524,7 @@ const make = Effect.gen(function* () {
   const legacyImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+  const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
 
   const assertProviderInstanceEnabled: ThreadManagementServiceShape["assertProviderInstanceEnabled"] =
     (input) =>
@@ -812,8 +814,21 @@ const make = Effect.gen(function* () {
           }),
       ),
     );
-    yield* assertDispatchTargetEnabled(resolved);
-    return yield* orchestrator.dispatch(resolved);
+    const { profileContent, ...resolvedCommand } = resolved;
+    yield* assertDispatchTargetEnabled(resolvedCommand);
+    if (profileContent !== undefined) {
+      yield* projectionStore.putProfileSnapshotContent(profileContent).pipe(
+        Effect.mapError(
+          (cause) =>
+            new Orchestrator.OrchestratorCommandRejectedError({
+              commandId: command.commandId,
+              commandType: command.type,
+              cause,
+            }),
+        ),
+      );
+    }
+    return yield* orchestrator.dispatch(resolvedCommand);
   });
 
   const getProjectThread: ThreadManagementServiceShape["getProjectThread"] = (input) =>
@@ -1351,6 +1366,7 @@ export const layer: Layer.Layer<
   | ProviderSessionManager.ProviderSessionManagerV2
   | ServerSettings.ServerSettingsService
   | CommandReceiptStore.CommandReceiptStoreV2
+  | ProjectionStore.ProjectionStoreV2
 > = Layer.effect(ThreadManagementService, make).pipe(
   Layer.provide(layerLegacyV1ThreadImporterNoop),
   Layer.provide(ThreadCommandExecutor.layer),
@@ -1364,4 +1380,5 @@ export const layerWithLegacyImporter: Layer.Layer<
   | ProviderSessionManager.ProviderSessionManagerV2
   | ServerSettings.ServerSettingsService
   | CommandReceiptStore.CommandReceiptStoreV2
+  | ProjectionStore.ProjectionStoreV2
 > = Layer.effect(ThreadManagementService, make).pipe(Layer.provide(ThreadCommandExecutor.layer));

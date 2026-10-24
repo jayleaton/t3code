@@ -29,12 +29,9 @@ describe("V2 profile association", () => {
     });
     const edited = { ...profile, revision: 4, systemPrompt: "New instructions" };
     expect(() => resolveThreadCreateProfile(command, [edited])).toThrow(/stale/);
-    expect(agentProfilePrompt("Check this patch", resolved.profileSnapshot)).toContain(
-      "Review changes carefully.",
-    );
-    expect(agentProfilePrompt("Check this patch", resolved.profileSnapshot)).not.toContain(
-      "New instructions",
-    );
+    const prompt = resolved.profileContent?.systemPrompt;
+    expect(agentProfilePrompt("Check this patch", prompt)).toContain("Review changes carefully.");
+    expect(agentProfilePrompt("Check this patch", prompt)).not.toContain("New instructions");
     expect(agentProfilePrompt("Normal chat", undefined)).toBe("Normal chat");
   });
   it("freezes only the selected skill bundles with the profile", () => {
@@ -54,9 +51,9 @@ describe("V2 profile association", () => {
       [],
       [skill, { ...skill, skillId: "unrelated" }],
     );
-    expect(resolved.profileSnapshot?.skills).toEqual([skill]);
+    expect(resolved.profileContent?.skills).toEqual([skill]);
     expect(
-      resolveThreadCreateProfile(command, [profile], [], [skill]).profileSnapshot?.skills,
+      resolveThreadCreateProfile(command, [profile], [], [skill]).profileContent?.skills,
     ).toEqual([]);
   });
   it("rejects missing, stale, read-only profiles and incomplete overrides", () => {
@@ -85,6 +82,6 @@ describe("V2 profile association", () => {
     );
     expect(resolved.modelSelection).toEqual(modelSelection);
     expect(resolved.profileSnapshot?.effectiveSource.modelSelection).toBe("thread-override");
-    expect(resolved.profileSnapshot?.systemPrompt).toBe(profile.systemPrompt);
+    expect(resolved.profileContent?.systemPrompt).toBe(profile.systemPrompt);
   });
 });

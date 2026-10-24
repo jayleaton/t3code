@@ -7,6 +7,11 @@ import {
   OrchestrationDispatchCommandError,
 } from "@t3tools/contracts";
 
+import {
+  type ProfileSnapshotContent,
+  profileSnapshotContentHash,
+} from "./ProfileSnapshotContent.ts";
+
 /**
  * Selects an agent's current revision for a new thread. Fields the caller set
  * explicitly stay thread overrides; everything else follows the agent.
@@ -53,7 +58,10 @@ export function resolveThreadCreateProfile<
   profiles: ReadonlyArray<McpGatewayProfile>,
   providers: ReadonlyArray<ServerProvider> = [],
   skills: ReadonlyArray<AgentSkill> = [],
-): T & { readonly profileSnapshot?: ThreadProfileSnapshot } {
+): T & {
+  readonly profileSnapshot?: ThreadProfileSnapshot;
+  readonly profileContent?: ProfileSnapshotContent;
+} {
   const selection = command.profileSelection;
   if (selection === undefined) return command;
   const profile = profiles.find((candidate) => candidate.profileId === selection.profileId);
@@ -136,17 +144,21 @@ export function resolveThreadCreateProfile<
   const source = (
     field: "modelSelection" | "runtimeMode" | "interactionMode" | "reasoningEffort",
   ) => (overrides.has(field) ? ("thread-override" as const) : ("profile" as const));
+  const profileContent: ProfileSnapshotContent = {
+    ...(profile.systemPrompt === undefined ? {} : { systemPrompt: profile.systemPrompt }),
+    skills: skills.filter((skill) => profile.skillIds?.includes(skill.skillId)),
+  };
   return {
     ...command,
     modelSelection,
     runtimeMode,
     interactionMode,
+    profileContent,
     profileSnapshot: {
-      skills: skills.filter((skill) => profile.skillIds?.includes(skill.skillId)),
       profileId: profile.profileId,
       profileName: profile.name,
-      ...(profile.systemPrompt === undefined ? {} : { systemPrompt: profile.systemPrompt }),
       revision: profile.revision,
+      contentHash: profileSnapshotContentHash(profileContent),
       ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
       effectiveSource: {
         modelSelection: source("modelSelection"),
@@ -159,11 +171,8 @@ export function resolveThreadCreateProfile<
 }
 
 /** Frozen per-thread instructions follow the thread through provider switches. */
-export function agentProfilePrompt(
-  text: string,
-  profile: ThreadProfileSnapshot | undefined,
-): string {
-  const instructions = profile?.systemPrompt?.trim();
+export function agentProfilePrompt(text: string, systemPrompt: string | undefined): string {
+  const instructions = systemPrompt?.trim();
   return instructions
     ? `<agent_profile_instructions>\n${instructions}\n</agent_profile_instructions>\n\n${text}`
     : text;

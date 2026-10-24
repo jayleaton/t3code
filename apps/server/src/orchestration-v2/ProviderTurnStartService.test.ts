@@ -41,6 +41,7 @@ import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import type { ProfileSnapshotContent } from "./ProfileSnapshotContent.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnStart from "./ProviderTurnStartService.ts";
@@ -272,6 +273,8 @@ function makeLocalCommandHarness(input: {
   readonly interruptRunBeforeOpenFailure?: boolean;
   readonly writeFailure?: unknown;
   readonly failReadsAfterRunning?: boolean;
+  /** Frozen agent content the thread references; `null` references a missing row. */
+  readonly profileContent?: ProfileSnapshotContent | null;
   readonly previousTurn?: {
     readonly runStatus: "failed" | "completed";
     readonly turnStatus: "running" | "completed" | "interrupted";
@@ -348,6 +351,9 @@ function makeLocalCommandHarness(input: {
       projectId: ProjectId.make("project-native-account-command"),
       branch: input.worktreePath === undefined ? null : "feature/restore",
       worktreePath: input.worktreePath ?? null,
+      ...(input.profileContent === undefined
+        ? {}
+        : { profileSnapshot: { contentHash: "sha256:agent" } }),
     } as OrchestrationV2ThreadProjection["thread"],
     runs: [
       ...(input.previousNativeSession
@@ -705,6 +711,8 @@ function makeLocalCommandHarness(input: {
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getThreadRecords,
           getTurnStartContext,
+          getProfileSnapshotContent: () =>
+            Effect.succeed(Option.fromNullishOr(input.profileContent)),
           getRuntimeRecoveryProjection: () =>
             Effect.as(failReadIfRunning, {
               ...projection,
@@ -773,6 +781,39 @@ function makeLocalCommandHarness(input: {
     }).pipe(Effect.provide(layer)),
   };
 }
+
+effectIt.effect("prefixes an agent turn with the instructions its thread references", () =>
+  Effect.gen(function* () {
+    const harness = makeLocalCommandHarness({
+      text: "Continue",
+      previousTurn: { runStatus: "completed", turnStatus: "completed" },
+      profileContent: { systemPrompt: "Review every change.", skills: [] },
+    });
+
+    yield* harness.start;
+
+    expect(harness.startRootRun.mock.calls[0]?.[0].message.text).toBe(
+      "<agent_profile_instructions>\nReview every change.\n</agent_profile_instructions>\n\nContinue",
+    );
+  }),
+);
+
+effectIt.effect(
+  "fails an agent turn whose instructions are missing instead of running without them",
+  () =>
+    Effect.gen(function* () {
+      const harness = makeLocalCommandHarness({
+        text: "Continue",
+        previousTurn: { runStatus: "completed", turnStatus: "completed" },
+        profileContent: null,
+      });
+
+      const exit = yield* Effect.exit(harness.start);
+
+      expect(exit._tag).toBe("Failure");
+      expect(harness.startRootRun).not.toHaveBeenCalled();
+    }),
+);
 
 effectIt.effect("recovers an abandoned failed turn before continuing its native conversation", () =>
   Effect.gen(function* () {

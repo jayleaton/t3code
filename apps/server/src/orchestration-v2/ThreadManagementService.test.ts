@@ -22,6 +22,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 
@@ -32,6 +33,7 @@ const layerReceiptsTest = CommandReceiptStore.layer.pipe(
 const layerDispatchChokepointTest =
   (settingsLayer: ReturnType<typeof ServerSettings.layerTest>) => (dispatched: Array<string>) =>
     ThreadManagementService.layer.pipe(
+      Layer.provide(ProjectionStore.layerMemory),
       Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
       Layer.provide(
         Layer.mock(Orchestrator.OrchestratorV2)({
@@ -159,6 +161,7 @@ it.effect("uses thread-not-found only after a projection loads outside the proje
     },
   } as OrchestrationV2ThreadProjection;
   const layerTest = ThreadManagementService.layer.pipe(
+    Layer.provide(ProjectionStore.layerMemory),
     Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
     Layer.provide(
       Layer.mock(Orchestrator.OrchestratorV2)({
@@ -196,6 +199,7 @@ it.effect("waitForThread follows a restart continuation instead of the cut run",
     const stored = (sequence: number, event: object) =>
       ({ sequence, event: { threadId, ...event } }) as unknown as OrchestrationV2StoredEvent;
     const layerTest = ThreadManagementService.layer.pipe(
+      Layer.provide(ProjectionStore.layerMemory),
       Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
       Layer.provide(
         Layer.mock(Orchestrator.OrchestratorV2)({
@@ -259,6 +263,7 @@ it.effect("waitForThread returns the cut run once its continuation is declined",
     const declined = yield* Deferred.make<void>();
     let pending = true;
     const layerTest = ThreadManagementService.layer.pipe(
+      Layer.provide(ProjectionStore.layerMemory),
       Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
       Layer.provide(
         Layer.mock(Orchestrator.OrchestratorV2)({
@@ -308,6 +313,7 @@ it.effect.each([
     const runId = RunId.make("run:thread-management:settle-after-run");
     const dispatched: Array<string> = [];
     const layerTest = ThreadManagementService.layer.pipe(
+      Layer.provide(ProjectionStore.layerMemory),
       Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
       Layer.provide(
         Layer.mock(Orchestrator.OrchestratorV2)({

@@ -184,24 +184,12 @@ describe("Gateway Runtime Port", () => {
     }
   });
 
-  it("exposes V2 association and bounded messages without profile instructions or provider session secrets", () => {
+  it("exposes V2 association and bounded messages without provider session secrets", () => {
     const profileSnapshot = {
       profileId: "code",
       profileName: "Cody",
       revision: 1,
-      systemPrompt: "private specialization instructions",
-      skills: [
-        {
-          skillId: "private-skill",
-          name: "Private skill",
-          description: "Test",
-          content: "private skill resource",
-          resources: [],
-          revision: 1,
-          createdAt: "2026-09-23T00:00:00.000Z",
-          updatedAt: "2026-09-23T00:00:00.000Z",
-        },
-      ],
+      contentHash: "sha256:code",
       effectiveSource: {
         modelSelection: "profile",
         runtimeMode: "profile",
@@ -231,8 +219,6 @@ describe("Gateway Runtime Port", () => {
     });
     expect(result.profileSnapshot?.profileId).toBe("code");
     expect(result.messages[0]?.text).toHaveLength(120_000);
-    expect(JSON.stringify(result)).not.toContain("private specialization instructions");
-    expect(JSON.stringify(result)).not.toContain("private skill resource");
     expect(result).not.toHaveProperty("providerSessions");
   });
 

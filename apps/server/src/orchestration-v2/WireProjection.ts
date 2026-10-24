@@ -1,5 +1,4 @@
 import type {
-  OrchestrationV2AppThread,
   OrchestrationV2DomainEvent,
   OrchestrationV2ContextHandoff,
   OrchestrationV2ThreadProjection,
@@ -214,23 +213,6 @@ export function projectContextHandoffForWire(
   return { ...projected, summaryText: "" };
 }
 
-// Profile skills carry whole SKILL.md bodies and resources, often 95% of a
-// thread record. Only provider turns read them, so every whole-thread event (a
-// read receipt included) would otherwise ship ~120 KB to each subscriber.
-function projectThreadForWire(thread: OrchestrationV2AppThread): OrchestrationV2AppThread {
-  if (thread.profileSnapshot?.skills === undefined) return thread;
-  const { skills: _skills, ...profileSnapshot } = thread.profileSnapshot;
-  return { ...thread, profileSnapshot };
-}
-
-type ThreadRecordEvent = Extract<
-  OrchestrationV2DomainEvent,
-  { readonly payload: OrchestrationV2AppThread }
->;
-
-const carriesThread = (event: OrchestrationV2DomainEvent): event is ThreadRecordEvent =>
-  "profileSnapshot" in event.payload;
-
 export function projectThreadProjectionForWire(
   projection: OrchestrationV2ThreadProjection,
 ): OrchestrationV2ThreadProjection {
@@ -245,7 +227,6 @@ export function projectThreadProjectionForWire(
   };
   return {
     ...projection,
-    thread: projectThreadForWire(projection.thread),
     contextHandoffs: projection.contextHandoffs.map(projectContextHandoffForWire),
     turnItems: projection.turnItems.map(project),
     visibleTurnItems: projection.visibleTurnItems.map((row) => ({
@@ -263,9 +244,6 @@ export function projectDomainEventForWire(
   }
   if (event.type === "context-handoff.updated") {
     return { ...event, payload: projectContextHandoffForWire(event.payload) };
-  }
-  if (carriesThread(event)) {
-    return { ...event, payload: projectThreadForWire(event.payload) };
   }
   return event;
 }

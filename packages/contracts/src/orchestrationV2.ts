@@ -1879,13 +1879,7 @@ export type OrchestrationV2LatestVisibleMessageSummary =
   typeof OrchestrationV2LatestVisibleMessageSummary.Type;
 
 export const OrchestrationV2ThreadShell = Schema.Struct({
-  // The shell lists every active thread; instructions and skills repeat on each
-  // one and are only read when a turn starts, from the full thread.
-  profileSnapshot: Schema.optional(
-    ThreadProfileSnapshot.mapFields(
-      ({ skills: _skills, systemPrompt: _systemPrompt, ...fields }) => fields,
-    ),
-  ),
+  profileSnapshot: Schema.optional(ThreadProfileSnapshot),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
   parentRelationship: Schema.optional(Schema.NullOr(OrchestrationV2ParentRelationship)),

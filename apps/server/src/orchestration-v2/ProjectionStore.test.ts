@@ -4153,7 +4153,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
     }),
   );
 
-  it.effect("builds shell snapshots without turn items, profile skills or instructions", () =>
+  it.effect("builds shell snapshots without decoding full turn item payloads", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
       const sql = yield* SqlClient.SqlClient;
@@ -4177,19 +4177,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             profileId: "review",
             profileName: "Reviewer",
             revision: 1,
-            systemPrompt: "Review every change line by line.",
-            skills: [
-              {
-                skillId: "review",
-                name: "Review",
-                description: "Rules",
-                content: "private resource body",
-                resources: [],
-                revision: 1,
-                createdAt: nowIso,
-                updatedAt: nowIso,
-              },
-            ],
+            contentHash: "sha256:review",
             effectiveSource: {
               modelSelection: "profile",
               runtimeMode: "profile",
@@ -4269,25 +4257,12 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           })}
         )
       `;
-      yield* sql`
-        UPDATE orchestration_v2_projection_threads
-        SET payload_json = json_set(payload_json, '$.profileSnapshot.skills', json('[{"unreadable":true}]'))
-        WHERE thread_id = ${threadId}
-      `;
 
       const shell = yield* projectionStore.getShellSnapshot();
       const fullProjectionExit = yield* Effect.exit(projectionStore.getThreadProjection(threadId));
       assert.equal(
         shell.threads.find((thread) => thread.id === threadId)?.profileSnapshot?.profileId,
         "review",
-      );
-      assert.notProperty(
-        shell.threads.find((thread) => thread.id === threadId)?.profileSnapshot,
-        "skills",
-      );
-      assert.notProperty(
-        shell.threads.find((thread) => thread.id === threadId)?.profileSnapshot,
-        "systemPrompt",
       );
 
       assert.deepEqual(
