@@ -8,12 +8,14 @@ import {
   buildTailscaleHttpsBaseUrl,
   disableTailscaleServe,
   ensureTailscaleServe,
+  inspectTailscaleServePort,
   readTailscaleStatus,
   type TailscaleCommandError,
   type TailscaleStderrDiagnostic,
 } from "@t3tools/tailscale";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 
 /**
@@ -82,27 +84,51 @@ export class DevServeFailedError extends Schema.TaggedError<DevServeFailedError>
   }
 }
 
+export class DevSharePortTakenError extends Schema.TaggedError<DevSharePortTakenError>()(
+  "DevSharePortTakenError",
+  { webPort: Schema.Number, target: Schema.String },
+) {
+  override get message(): string {
+    return `tailnet port ${String(this.webPort)} already forwards to ${this.target}, which is still answering`;
+  }
+
+  get hint(): string {
+    return `Another server owns that mapping, so it was left alone. Stop that server, or run \`tailscale serve --https=${String(this.webPort)} off\` if the mapping is yours.`;
+  }
+}
+
 export type DevShareError =
   | TailscaleUnavailableError
   | TailnetNameMissingError
+  | DevSharePortTakenError
   | DevServeFailedError;
 
-/**
- * Runs uninterruptibly: this is called from a finalizer on the way out of an
- * interrupted program, and cancelling the cleanup subprocess would leave
- * exactly the stale mapping it exists to remove.
- */
-export const unshareDevServer = (
+export interface DevShareTarget {
+  readonly webPort: number;
+  /** Where the tailnet port forwards; the web port on Vite's host unless `--built`. */
+  readonly localTarget?: { readonly port: number; readonly host: string };
+}
+
+// Proxy to the hostname Vite binds rather than the package default of
+// 127.0.0.1. Vite listens on `localhost`, which Node 17+ resolves to `::1`
+// first, so it only binds the IPv6 loopback and a 127.0.0.1 target has
+// nothing behind it (tailscale answers 502).
+const localTargetOf = (input: DevShareTarget) => ({
+  localPort: input.localTarget?.port ?? input.webPort,
+  localHost: input.localTarget?.host ?? "localhost",
+});
+
+interface UnshareResult {
+  readonly cleared: boolean;
+  readonly explanation?: string | undefined;
+  readonly cause?: TailscaleCommandError | undefined;
+  /** The port forwards to another server, so its mapping was left in place. */
+  readonly notOurs?: boolean;
+}
+
+const clearServePort = (
   webPort: number,
-): Effect.Effect<
-  {
-    readonly cleared: boolean;
-    readonly explanation?: string | undefined;
-    readonly cause?: TailscaleCommandError | undefined;
-  },
-  never,
-  ChildProcessSpawner.ChildProcessSpawner
-> =>
+): Effect.Effect<UnshareResult, never, ChildProcessSpawner.ChildProcessSpawner> =>
   disableTailscaleServe({ servePort: webPort }).pipe(
     Effect.as({ cleared: true } as const),
     Effect.catch((error: TailscaleCommandError) =>
@@ -119,6 +145,36 @@ export const unshareDevServer = (
             } as const),
       ),
     ),
+  );
+
+/**
+ * Removes the mapping only while it still forwards to this dev server. Another
+ * server may have taken the port since (or owned it all along), and removing
+ * its mapping would cut off every client reaching it over the tailnet.
+ *
+ * Runs uninterruptibly: this is called from a finalizer on the way out of an
+ * interrupted program, and cancelling the cleanup subprocess would leave
+ * exactly the stale mapping it exists to remove.
+ */
+export const unshareDevServer = (
+  input: DevShareTarget,
+): Effect.Effect<
+  UnshareResult,
+  never,
+  ChildProcessSpawner.ChildProcessSpawner | HttpClient.HttpClient
+> =>
+  inspectTailscaleServePort({ ...localTargetOf(input), servePort: input.webPort }).pipe(
+    Effect.matchEffect({
+      onFailure: () =>
+        Effect.succeed({
+          cleared: false,
+          explanation: "could not read `tailscale serve status`, so the mapping was left in place",
+        }),
+      onSuccess: (ownership) =>
+        ownership._tag === "ours"
+          ? clearServePort(input.webPort)
+          : Effect.succeed({ cleared: true, notOurs: ownership._tag !== "free" }),
+    }),
     Effect.uninterruptible,
   );
 
@@ -132,10 +188,9 @@ export interface DevShareResult {
  * port so the URL is stable; `localTarget` points it at the backend instead
  * when the backend serves a built client (`--built`).
  */
-export const shareDevServer = Effect.fn("devShare.shareDevServer")(function* (input: {
-  readonly webPort: number;
-  readonly localTarget?: { readonly port: number; readonly host: string };
-}) {
+export const shareDevServer = Effect.fn("devShare.shareDevServer")(function* (
+  input: DevShareTarget,
+) {
   const status = yield* readTailscaleStatus.pipe(
     Effect.mapError((error) => new TailscaleUnavailableError({ cause: error })),
   );
@@ -143,7 +198,17 @@ export const shareDevServer = Effect.fn("devShare.shareDevServer")(function* (in
     return yield* new TailnetNameMissingError();
   }
 
-  const cleared = yield* unshareDevServer(input.webPort);
+  const local = localTargetOf(input);
+  const ownership = yield* inspectTailscaleServePort({ ...local, servePort: input.webPort }).pipe(
+    Effect.mapError((error) => new TailscaleUnavailableError({ cause: error })),
+  );
+  if (ownership._tag === "taken") {
+    return yield* new DevSharePortTakenError({ webPort: input.webPort, target: ownership.target });
+  }
+
+  // Only our own or a stale mapping reaches here. Clearing first drops any
+  // path handlers (/api, /ws) an older mapping left on the port.
+  const cleared = yield* clearServePort(input.webPort);
   if (!cleared.cleared) {
     // Serving over routes we failed to remove would hand out a URL that is
     // broken in a way the user cannot see: the page loads while /ws and /api
@@ -156,15 +221,7 @@ export const shareDevServer = Effect.fn("devShare.shareDevServer")(function* (in
     });
   }
 
-  // Proxy to the hostname Vite binds rather than the package default of
-  // 127.0.0.1. Vite listens on `localhost`, which Node 17+ resolves to `::1`
-  // first, so it only binds the IPv6 loopback and a 127.0.0.1 target has
-  // nothing behind it (tailscale answers 502).
-  yield* ensureTailscaleServe({
-    localPort: input.localTarget?.port ?? input.webPort,
-    servePort: input.webPort,
-    localHost: input.localTarget?.host ?? "localhost",
-  }).pipe(
+  yield* ensureTailscaleServe({ ...local, servePort: input.webPort }).pipe(
     Effect.mapError((error) => {
       const explanation = explainCommandFailure(error);
       return new DevServeFailedError({

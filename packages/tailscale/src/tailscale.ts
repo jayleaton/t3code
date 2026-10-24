@@ -222,7 +222,7 @@ export const parseTailscaleStatus = (
   );
 
 const readTailscaleOutput = Effect.fn("tailscale.readTailscaleOutput")(function* (
-  subcommand: "status" | "debug",
+  subcommand: "status" | "debug" | "serve",
   args: readonly string[],
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -465,4 +465,125 @@ export const probeTailscaleHttpsEndpoint = Effect.fn("tailscale.probeTailscaleHt
     });
   },
   Effect.orElseSucceed(() => false),
+);
+
+const TailscaleServeStatusJson = Schema.Struct({
+  TCP: Schema.optional(
+    Schema.Record(Schema.String, Schema.Struct({ TCPForward: Schema.optional(Schema.String) })),
+  ),
+  Web: Schema.optional(
+    Schema.Record(
+      Schema.String,
+      Schema.Struct({
+        Handlers: Schema.optional(
+          Schema.Record(Schema.String, Schema.Struct({ Proxy: Schema.optional(Schema.String) })),
+        ),
+      }),
+    ),
+  ),
+});
+const decodeTailscaleServeStatusJson = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(TailscaleServeStatusJson),
+);
+
+/** What one tailnet port forwards to: an `http://` proxy target or a `tcp://` forward. */
+export interface TailscaleServeHandler {
+  readonly servePort: number;
+  readonly target: string;
+}
+
+export const parseTailscaleServeHandlers = (
+  rawServeStatusJson: string,
+): Effect.Effect<ReadonlyArray<TailscaleServeHandler>, TailscaleStatusParseError> =>
+  decodeTailscaleServeStatusJson(rawServeStatusJson).pipe(
+    Effect.mapError((cause) => new TailscaleStatusParseError({ cause })),
+    Effect.map((parsed) => {
+      const handlers = new Map<number, string>();
+      for (const [hostPort, site] of Object.entries(parsed.Web ?? {})) {
+        const servePort = Number(hostPort.slice(hostPort.lastIndexOf(":") + 1));
+        const proxies = Object.entries(site.Handlers ?? {}).flatMap(([path, handler]) =>
+          handler.Proxy === undefined ? [] : [[path, handler.Proxy] as const],
+        );
+        const target = (proxies.find(([path]) => path === "/") ?? proxies[0])?.[1];
+        if (Number.isInteger(servePort) && target !== undefined) handlers.set(servePort, target);
+      }
+      for (const [port, forward] of Object.entries(parsed.TCP ?? {})) {
+        if (forward.TCPForward !== undefined && !handlers.has(Number(port))) {
+          handlers.set(Number(port), `tcp://${forward.TCPForward}`);
+        }
+      }
+      return Array.from(handlers, ([servePort, target]) => ({ servePort, target }));
+    }),
+  );
+
+export const readTailscaleServeHandlers = readTailscaleOutput("serve", [
+  "serve",
+  "status",
+  "--json",
+]).pipe(Effect.flatMap(parseTailscaleServeHandlers));
+
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
+
+/** Loopback aliases count as one host: tailscale reaches a dual-stack listener through any of them. */
+export function isServeTargetFor(
+  target: string,
+  local: { readonly localPort: number; readonly localHost?: string },
+): boolean {
+  const url = URL.parse(target);
+  if (url === null || url.protocol !== "http:" || Number(url.port) !== local.localPort) {
+    return false;
+  }
+  const localHost = local.localHost ?? "127.0.0.1";
+  return (
+    url.hostname === localHost ||
+    (LOOPBACK_HOSTS.has(url.hostname) && LOOPBACK_HOSTS.has(localHost))
+  );
+}
+
+/**
+ * Whether anything answers at a mapping's target. Any HTTP status counts: only a refused or
+ * silent target is stale. A raw TCP forward cannot be probed this way, so it counts as live.
+ */
+const isServeTargetLive = (target: string) =>
+  target.startsWith("tcp://")
+    ? Effect.succeed(true)
+    : Effect.gen(function* () {
+        const client = yield* HttpClient.HttpClient;
+        return yield* client.execute(HttpClientRequest.get(target)).pipe(
+          Effect.scoped,
+          Effect.timeoutOption(TAILSCALE_PROBE_TIMEOUT),
+          Effect.map(Option.isSome),
+          Effect.orElseSucceed(() => false),
+        );
+      });
+
+/**
+ * Who owns a tailnet port, from the point of view of a server on `localPort`.
+ * - `free`: nothing is mapped there.
+ * - `ours`: it already forwards to `localPort`.
+ * - `stale`: it forwards to a target nothing answers on, so replacing it harms no one.
+ * - `taken`: it forwards to another live server, which must not be replaced or removed.
+ */
+export type TailscaleServePortOwnership =
+  | { readonly _tag: "free" }
+  | { readonly _tag: "ours"; readonly target: string }
+  | { readonly _tag: "stale"; readonly target: string }
+  | { readonly _tag: "taken"; readonly target: string };
+
+export const inspectTailscaleServePort = Effect.fn("tailscale.inspectTailscaleServePort")(
+  function* (input: {
+    readonly localPort: number;
+    readonly servePort?: number;
+    readonly localHost?: string;
+  }) {
+    const servePort = input.servePort ?? DEFAULT_TAILSCALE_SERVE_PORT;
+    const handlers = yield* readTailscaleServeHandlers;
+    const existing = handlers.find((handler) => handler.servePort === servePort);
+    if (existing === undefined) return { _tag: "free" } as TailscaleServePortOwnership;
+    const { target } = existing;
+    if (isServeTargetFor(target, input)) return { _tag: "ours", target } as const;
+    return (yield* isServeTargetLive(target))
+      ? ({ _tag: "taken", target } as const)
+      : ({ _tag: "stale", target } as const);
+  },
 );

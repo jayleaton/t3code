@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Hash from "effect/Hash";
 import * as Layer from "effect/Layer";
+import { FetchHttpClient } from "effect/http";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -782,30 +783,37 @@ export const runDevRunnerWithInput = Effect.fn("dev-runner.runDevRunnerWithInput
       // process (and reboots), so the cleanup has to be registered atomically
       // with creating it. An interrupt landing in between would otherwise
       // leave a mapping pointing at a port nothing is listening on.
+      const shareTarget = {
+        webPort: sharedWebPort,
+        // The backend binds 127.0.0.1 unless --host changes it. A wildcard
+        // still answers there; `--host ::1` binds only the IPv6 loopback.
+        ...(input.built
+          ? {
+              localTarget: {
+                port: Number(env.T3CODE_PORT),
+                host: ["::1", "[::1]"].includes(input.host?.trim() ?? "") ? "[::1]" : "127.0.0.1",
+              },
+            }
+          : {}),
+      };
+      // Both probe a port's current target before touching its mapping.
       const shared = yield* Effect.acquireRelease(
-        shareDevServer({
-          webPort: sharedWebPort,
-          // The backend binds 127.0.0.1 unless --host changes it. A wildcard
-          // still answers there; `--host ::1` binds only the IPv6 loopback.
-          ...(input.built
-            ? {
-                localTarget: {
-                  port: Number(env.T3CODE_PORT),
-                  host: ["::1", "[::1]"].includes(input.host?.trim() ?? "") ? "[::1]" : "127.0.0.1",
-                },
-              }
-            : {}),
-        }),
+        shareDevServer(shareTarget).pipe(Effect.provide(FetchHttpClient.layer)),
         () =>
-          unshareDevServer(sharedWebPort).pipe(
+          unshareDevServer(shareTarget).pipe(
+            Effect.provide(FetchHttpClient.layer),
             Effect.flatMap((result) =>
-              result.cleared
-                ? Effect.void
-                : Effect.logWarning(
+              !result.cleared
+                ? Effect.logWarning(
                     `[dev-runner] could not remove the tailnet mapping for port ${String(sharedWebPort)}${
                       result.explanation ? `: ${result.explanation}` : ""
                     }. Remove it with \`tailscale serve --https=${String(sharedWebPort)} off\`.`,
-                  ),
+                  )
+                : result.notOurs
+                  ? Effect.logInfo(
+                      `[dev-runner] tailnet port ${String(sharedWebPort)} now forwards to another server; left its mapping in place.`,
+                    )
+                  : Effect.void,
             ),
           ),
       ).pipe(

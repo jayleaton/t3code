@@ -8,6 +8,8 @@ import { ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import {
+  isServeTargetFor,
+  parseTailscaleServeHandlers,
   ensureTailscaleServe,
   parseTailscaleExitNode,
   parseTailscaleSshEnabled,
@@ -244,5 +246,44 @@ describe("tailscale", () => {
       yield* readTailscaleSshEnabled.pipe(Effect.provide(layer));
       assert.deepEqual(killGraces, [500, 500]);
     });
+  });
+});
+
+describe("tailscale serve ownership", () => {
+  it.effect("reads each port's target from serve status", () =>
+    Effect.gen(function* () {
+      const handlers = yield* parseTailscaleServeHandlers(
+        JSON.stringify({
+          TCP: {
+            "443": { HTTPS: true },
+            "5555": { HTTPS: true },
+            "2222": { TCPForward: "127.0.0.1:22" },
+          },
+          Web: {
+            "host.example.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:4077" } } },
+            "host.example.ts.net:5555": {
+              Handlers: { "/api": { Proxy: "http://127.0.0.1:5555" } },
+            },
+          },
+        }),
+      );
+      assert.deepEqual(handlers, [
+        { servePort: 443, target: "http://127.0.0.1:4077" },
+        { servePort: 5555, target: "http://127.0.0.1:5555" },
+        { servePort: 2222, target: "tcp://127.0.0.1:22" },
+      ]);
+      assert.deepEqual(yield* parseTailscaleServeHandlers("{}"), []);
+    }),
+  );
+
+  it("matches a target by port across loopback aliases only", () => {
+    assert.isTrue(
+      isServeTargetFor("http://localhost:5788", { localPort: 5788, localHost: "localhost" }),
+    );
+    assert.isTrue(
+      isServeTargetFor("http://127.0.0.1:3773", { localPort: 3773, localHost: "[::1]" }),
+    );
+    assert.isFalse(isServeTargetFor("http://127.0.0.1:4077", { localPort: 3773 }));
+    assert.isFalse(isServeTargetFor("tcp://127.0.0.1:3773", { localPort: 3773 }));
   });
 });
