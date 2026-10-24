@@ -1655,6 +1655,56 @@ it.effect("un-settling follows provenance, not a shared settle time", () =>
   }).pipe(Effect.provide(testLayer)),
 );
 
+it.effect(
+  "a finished child settles with its sub-runs, leaves its parent, and un-settles them",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const projections = yield* ProjectionStoreV2;
+      const thread = (id: string) => projections.getThread(ThreadId.make(id));
+      const finishedChild = (id: string, snapshotAt: DateTime.Utc) =>
+        orchestrator.dispatch({
+          type: "thread.auto-settle",
+          commandId: CommandId.make(`auto:finished:${id}`),
+          threadId: ThreadId.make(id),
+          snapshotAt,
+          settledAt: snapshotAt,
+          reason: "finished-child",
+        });
+
+      yield* createUnder("lead");
+      yield* createUnder("worker", { threadId: "lead" });
+      yield* createUnder("helper", { threadId: "worker" });
+
+      // Only a thread with a parent is a child.
+      const lead = yield* thread("lead");
+      yield* finishedChild("lead", lead.updatedAt).pipe(Effect.flip);
+      assert.isNull((yield* thread("lead")).settledAt);
+
+      const worker = yield* thread("worker");
+      yield* finishedChild("worker", worker.updatedAt);
+      yield* drainEffects;
+      const settled = yield* thread("worker");
+      assert.equal(settled.settledOverride, "settled");
+      assert.equal(settled.settlementReason, "finished-child");
+      assert.equal(settled.settlementSource, "manual");
+      assert.equal((yield* thread("helper")).settledBy, "worker");
+      assert.isNull((yield* thread("lead")).settledAt);
+      assert.notEqual((yield* thread("lead")).settledOverride, "settled");
+
+      yield* orchestrator.dispatch({
+        type: "thread.unsettle",
+        commandId: CommandId.make("unsettle:worker"),
+        threadId: ThreadId.make("worker"),
+        reason: "user",
+      });
+      yield* drainEffects;
+      assert.isNull((yield* thread("worker")).settledAt);
+      assert.isNull((yield* thread("worker")).settlementReason);
+      assert.isNull((yield* thread("helper")).settledAt);
+    }).pipe(Effect.provide(testLayer)),
+);
+
 it.effect("a cascade cut short resumes where it left off, settling each sub-run once", () =>
   Effect.gen(function* () {
     const orchestrator = yield* OrchestratorV2;

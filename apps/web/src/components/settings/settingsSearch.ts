@@ -57,8 +57,10 @@ export interface SettingsSearchItem {
   readonly wslAvailableOnly?: boolean;
   readonly managedTunnelOnly?: boolean;
   readonly secondary?: boolean;
-  readonly requiresThreadAutoSettlement?: boolean;
+  readonly requiresCapability?: AutoSettlementCapability;
 }
+
+type AutoSettlementCapability = "threadAutoSettlement" | "threadAutoSettleFinishedChildren";
 
 export interface SettingsSearchAvailability {
   readonly localEnvironmentDisabled?: boolean;
@@ -69,6 +71,7 @@ export interface SettingsSearchAvailability {
   readonly canManageLocalBackend: boolean;
   readonly isWslSettingsRowVisible: boolean;
   readonly hasThreadAutoSettlement: boolean;
+  readonly hasThreadAutoSettleFinishedChildren?: boolean;
   readonly managedTunnelActive?: boolean;
 }
 
@@ -335,7 +338,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Auto-settle inactive threads",
     to: "/settings/general",
     searchTerms: ["sidebar inactivity days no activity automatically"],
-    requiresThreadAutoSettlement: true,
+    requiresCapability: "threadAutoSettlement",
     scope: "project-defaults",
   },
   {
@@ -351,8 +354,25 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
     targetId: "auto-settle-inactive-threads",
     searchTerms: ["thread timeout activity sidebar"],
-    requiresThreadAutoSettlement: true,
+    requiresCapability: "threadAutoSettlement",
     scope: "project-defaults",
+  },
+  {
+    id: "auto-settle-finished-child-chats",
+    title: "Auto-settle finished child chats",
+    to: "/settings/general",
+    searchTerms: ["subagent delegated sub-thread parent done idle hours automatically"],
+    requiresCapability: "threadAutoSettleFinishedChildren",
+    scope: "environment-defaults",
+  },
+  {
+    id: "hours-before-child-auto-settle",
+    title: "Hours before a finished child chat settles",
+    to: "/settings/general",
+    targetId: "auto-settle-finished-child-chats",
+    searchTerms: ["subagent delegated sub-thread timeout"],
+    requiresCapability: "threadAutoSettleFinishedChildren",
+    scope: "environment-defaults",
   },
   {
     id: "thread-notifications",
@@ -1034,7 +1054,7 @@ export function getSettingsSearchTargetScope(targetId: string) {
     ? {
         title: item.title,
         scope: item.scope ?? SETTINGS_CATEGORY_SCOPES[item.to],
-        ...(item.requiresThreadAutoSettlement ? { requiresThreadAutoSettlement: true } : {}),
+        ...(item.requiresCapability ? { requiresCapability: item.requiresCapability } : {}),
       }
     : null;
 }
@@ -1044,7 +1064,7 @@ interface AutoSettlementSearchEnvironment {
   readonly connection: { readonly phase: EnvironmentConnectionPhase };
   readonly serverConfig: {
     readonly environment: {
-      readonly capabilities: { readonly threadAutoSettlement?: boolean };
+      readonly capabilities: Partial<Record<AutoSettlementCapability, boolean>>;
     };
   } | null;
 }
@@ -1052,6 +1072,7 @@ interface AutoSettlementSearchEnvironment {
 export function getThreadAutoSettlementSearchAvailability(
   environments: readonly AutoSettlementSearchEnvironment[],
   scope?: Pick<ResolvedSettingsScope, "kind" | "environmentIds">,
+  capability: AutoSettlementCapability = "threadAutoSettlement",
 ) {
   const connected = environments.filter(
     (environment) =>
@@ -1059,8 +1080,7 @@ export function getThreadAutoSettlementSearchAvailability(
   );
   const eligibleEnvironmentIds = connected
     .filter(
-      (environment) =>
-        environment.serverConfig?.environment.capabilities.threadAutoSettlement === true,
+      (environment) => environment.serverConfig?.environment.capabilities[capability] === true,
     )
     .map((environment) => environment.environmentId);
   const selected = connected.filter((environment) =>
@@ -1134,7 +1154,10 @@ export function filterAvailableSettingsSearchItems(
       (!item.localBackendManagementOnly || availability.canManageLocalBackend) &&
       (!item.localEnvironmentOnly || !availability.localEnvironmentDisabled) &&
       (!item.wslAvailableOnly || availability.isWslSettingsRowVisible) &&
-      (!item.requiresThreadAutoSettlement || availability.hasThreadAutoSettlement) &&
+      (item.requiresCapability !== "threadAutoSettlement" ||
+        availability.hasThreadAutoSettlement) &&
+      (item.requiresCapability !== "threadAutoSettleFinishedChildren" ||
+        availability.hasThreadAutoSettleFinishedChildren === true) &&
       (!item.managedTunnelOnly || availability.managedTunnelActive === true),
   );
 }

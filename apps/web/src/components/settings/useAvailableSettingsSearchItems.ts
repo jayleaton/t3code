@@ -43,6 +43,12 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
     ) === true;
   const hasThreadAutoSettlement =
     getThreadAutoSettlementSearchAvailability(environments).eligibleEnvironmentIds.length > 0;
+  const hasThreadAutoSettleFinishedChildren =
+    getThreadAutoSettlementSearchAvailability(
+      environments,
+      undefined,
+      "threadAutoSettleFinishedChildren",
+    ).eligibleEnvironmentIds.length > 0;
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const canMaintain = useEnvironmentScope(primaryEnvironmentId, AuthEnvironmentMaintainScope);
   const cloudLinkState = usePrimaryCloudLinkState().data;
@@ -68,6 +74,7 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
     canManageLocalBackend,
     isWslSettingsRowVisible: wslSettingsRowVisible,
     hasThreadAutoSettlement,
+    hasThreadAutoSettleFinishedChildren,
     managedTunnelActive,
   });
 }

@@ -34,7 +34,8 @@ import * as ThreadSettlementService from "./ThreadSettlementService.ts";
 import * as AutoSettlement from "./autoSettlement.ts";
 
 const NOW_MS = Date.parse("2026-06-10T12:00:00.000Z");
-const DAY_MS = 24 * 60 * 60 * 1_000;
+const HOUR_MS = 60 * 60 * 1_000;
+const DAY_MS = 24 * HOUR_MS;
 
 function at(offsetMs: number): DateTime.Utc {
   return DateTime.makeUnsafe(NOW_MS + offsetMs);
@@ -376,6 +377,82 @@ describe("age settlement", () => {
   });
 });
 
+describe("finished child settlement", () => {
+  const parentThreadId = ThreadId.make("parent");
+  // Created and last changed long ago; only the run completion moves the clock.
+  const child = (overrides: Partial<SettlementShell> = {}) =>
+    shell({
+      id: ThreadId.make("child"),
+      parentThreadId,
+      status: "completed",
+      latestRunCompletedAt: at(-12 * HOUR_MS),
+      ...overrides,
+    });
+  const settleAt = (thread: SettlementShell, afterHours = 12, nowMs = NOW_MS) =>
+    AutoSettlement.resolveFinishedChildSettlementAt({ thread, nowMs, afterHours });
+
+  it("settles a child done for the full period, including the boundary", () => {
+    expect(settleAt(child(), 12, NOW_MS - 1)).toBeNull();
+    expect(settleAt(child())).toEqual(at(-12 * HOUR_MS));
+    expect(settleAt(child({ status: "idle", latestRunCompletedAt: null }))).toEqual(
+      at(-10 * DAY_MS),
+    );
+  });
+
+  it("applies only to threads with a parent", () => {
+    expect(settleAt(child({ parentThreadId: null }))).toBeNull();
+  });
+
+  it.each([
+    "queued",
+    "preparing",
+    "starting",
+    "running",
+    "waiting",
+    "failed",
+    "interrupted",
+  ] as const)("never settles a %s child", (status) => {
+    expect(settleAt(child({ status }))).toBeNull();
+  });
+
+  it("never settles a child that needs input or that its parent keeps", () => {
+    expect(
+      settleAt(
+        child({
+          pendingRuntimeRequest: {
+            id: RuntimeRequestId.make("question"),
+            kind: "user_input",
+            createdAt: at(-DAY_MS),
+          },
+        }),
+      ),
+    ).toBeNull();
+    expect(settleAt(child({ autoSettleDisabledAt: at(-DAY_MS) }))).toBeNull();
+    expect(settleAt(child({ pinnedAt: at(-DAY_MS) }))).toBeNull();
+    expect(
+      settleAt(child({ pendingBackgroundTasks: [{ taskId: "review", kind: "subagent" }] })),
+    ).toBeNull();
+  });
+
+  it("is off at 0 hours", () => {
+    expect(settleAt(child(), 0)).toBeNull();
+  });
+
+  it("restarts the clock on any change to the child", () => {
+    for (const activity of [
+      { updatedAt: at(-HOUR_MS) },
+      { latestUserMessageAt: at(-HOUR_MS) },
+      { latestRunRequestedAt: at(-HOUR_MS) },
+      { latestRunCompletedAt: at(-HOUR_MS) },
+      { unsettledAt: at(-HOUR_MS), settledOverride: "active" as const },
+    ]) {
+      const thread = child(activity);
+      expect(settleAt(thread)).toBeNull();
+      expect(settleAt(thread, 12, NOW_MS + 11 * HOUR_MS)).toEqual(at(-HOUR_MS));
+    }
+  });
+});
+
 const makeHarness = Effect.fn(function* (input: {
   threads: ReadonlyArray<SettlementShell>;
   settings?: ContractServerSettings;
@@ -682,3 +759,130 @@ it.effect("an unsettled card gets a full new idle period on the sweep clock", ()
     }),
   ),
 );
+
+describe("finished child sweep", () => {
+  const parent = ThreadId.make("parent");
+  const child = (id: string, overrides: Partial<SettlementShell> = {}) =>
+    shell({
+      id: ThreadId.make(id),
+      parentThreadId: parent,
+      status: "completed",
+      latestRunCompletedAt: at(-12 * HOUR_MS),
+      ...overrides,
+    });
+  const settledIds = (commands: ReadonlyArray<OrchestrationV2ServerCommand>) =>
+    commands.map((command) => ("threadId" in command ? command.threadId : null));
+
+  it.effect("settles children done for 12 hours by default and leaves their parent", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW_MS);
+        const fixture = yield* makeHarness({
+          threads: [
+            shell({ id: parent, status: "completed", latestRunCompletedAt: at(-13 * HOUR_MS) }),
+            child("done"),
+            child("recent", { latestRunCompletedAt: at(-11 * HOUR_MS) }),
+            child("running", { status: "running" }),
+            child("asking", {
+              pendingRuntimeRequest: {
+                id: RuntimeRequestId.make("question"),
+                kind: "user_input",
+                createdAt: at(-DAY_MS),
+              },
+            }),
+            child("kept", { autoSettleDisabledAt: at(-DAY_MS) }),
+            child("busy-descendants"),
+          ],
+          activeDescendants: new Set(["busy-descendants"]),
+        });
+        yield* Effect.gen(function* () {
+          yield* fixture.start(yield* ThreadSettlementService.ThreadSettlementServiceV2);
+          const commands = yield* Ref.get(fixture.commands);
+          assert.deepEqual(settledIds(commands), [ThreadId.make("done")]);
+          const [command] = commands;
+          assert.equal(command?.type, "thread.auto-settle");
+          if (command?.type === "thread.auto-settle") {
+            assert.equal(command.reason, "finished-child");
+            assert.deepEqual(command.settledAt, at(-12 * HOUR_MS));
+          }
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect("activity at 11 hours restarts the 12 hour clock", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW_MS);
+        const fixture = yield* makeHarness({
+          threads: [child("child", { latestRunCompletedAt: at(-11 * HOUR_MS) })],
+        });
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          yield* fixture.start(service);
+          // A new message lands 11 hours after the child finished.
+          yield* Ref.update(fixture.candidates, (all) =>
+            all.map((thread) => ({ ...thread, latestUserMessageAt: at(0) })),
+          );
+          yield* TestClock.adjust(12 * HOUR_MS - 60_000);
+          yield* Queue.take(fixture.reads);
+          yield* service.drain;
+          assert.deepEqual(yield* Ref.get(fixture.commands), []);
+          yield* TestClock.adjust("1 minute");
+          yield* Queue.take(fixture.reads);
+          yield* service.drain;
+          const commands = yield* Ref.get(fixture.commands);
+          assert.deepEqual(settledIds(commands), [ThreadId.make("child")]);
+          if (commands[0]?.type === "thread.auto-settle") {
+            assert.deepEqual(commands[0].settledAt, at(0));
+          }
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect("the setting at 0 leaves children to the age rule", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW_MS);
+        const fixture = yield* makeHarness({
+          settings: { ...DEFAULT_SERVER_SETTINGS, autoSettleFinishedChildrenAfterHours: 0 },
+          threads: [child("child", { latestRunCompletedAt: at(-2 * DAY_MS) })],
+        });
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          yield* fixture.start(service);
+          assert.deepEqual(yield* Ref.get(fixture.commands), []);
+          yield* TestClock.adjust(DAY_MS);
+          yield* Queue.take(fixture.reads);
+          yield* service.drain;
+          const [command] = yield* Ref.get(fixture.commands);
+          assert.equal(command?.type, "thread.auto-settle");
+          if (command?.type === "thread.auto-settle") assert.isUndefined(command.reason);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect("a restart recomputes the pending deadline from persisted activity", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const threads = [child("child", { latestRunCompletedAt: at(-6 * HOUR_MS) })];
+      const run = Effect.fn(function* () {
+        const fixture = yield* makeHarness({ threads });
+        return yield* Effect.gen(function* () {
+          yield* fixture.start(yield* ThreadSettlementService.ThreadSettlementServiceV2);
+          return yield* Ref.get(fixture.commands);
+        }).pipe(Effect.provide(fixture.layer));
+      });
+      assert.deepEqual(yield* Effect.scoped(run()), []);
+      // The server is down past the deadline; the first sweep after start settles at once.
+      yield* TestClock.adjust(7 * HOUR_MS);
+      const commands = yield* Effect.scoped(run());
+      assert.deepEqual(settledIds(commands), [ThreadId.make("child")]);
+      if (commands[0]?.type === "thread.auto-settle") {
+        assert.deepEqual(commands[0].settledAt, at(-6 * HOUR_MS));
+      }
+    }),
+  );
+});

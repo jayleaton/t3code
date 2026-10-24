@@ -79,4 +79,27 @@ describe("auto-settle settings sync", () => {
       otherCheckout,
     ]);
   });
+
+  it("syncs finished child auto-settle only when the caller includes it", () => {
+    const target = {
+      environmentId: EnvironmentId.make("remote"),
+      label: "Remote",
+      settings: { ...reference.settings, autoSettleFinishedChildrenAfterHours: 0 },
+    };
+
+    expect(planAutoSettleSettingsSync(reference, [target])).toEqual({
+      patch: { sidebarAutoSettleAfterDays: 7 },
+      mismatches: [],
+    });
+    expect(
+      planAutoSettleSettingsSync(reference, [target], { includeFinishedChildren: true }),
+    ).toEqual({
+      patch: {
+        sidebarAutoSettleAfterDays: 7,
+        autoSettleFinishedChildrenAfterHours:
+          reference.settings.autoSettleFinishedChildrenAfterHours,
+      },
+      mismatches: [target],
+    });
+  });
 });

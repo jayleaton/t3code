@@ -17,6 +17,7 @@ import {
   IsoDateTime,
   MessageId,
   NodeId,
+  ForwardCompatibleNullable,
   ForwardCompatibleUnion,
   ForwardCompatibleUnionArray,
   hasUnknownUnionTag,
@@ -444,6 +445,14 @@ export const OrchestrationV2AppThread = Schema.Struct({
   ),
   // Only manual settlement can complete a deferred parent cascade.
   settlementSource: Schema.optional(Schema.NullOr(Schema.Literals(["manual", "inactivity"]))),
+  /**
+   * What settled the thread when no one asked: `"finished-child"` is the rule that settles a
+   * child chat left done for the configured hours. It settles like a manual settle, so its
+   * sub-runs follow and un-settling brings them back. Read it only while settled. A separate
+   * field rather than a `settlementSource` value, because older clients decode that one as a
+   * closed set.
+   */
+  settlementReason: Schema.optional(ForwardCompatibleNullable(Schema.Literals(["finished-child"]))),
   /**
    * The ancestor whose manual settle this thread followed; null when it settled on its own.
    * Un-settling that ancestor brings back exactly these. Absent on records from before it was
@@ -2707,6 +2716,8 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     snapshotAt: Schema.DateTimeUtc,
     settledAt: Schema.optional(Schema.DateTimeUtc),
+    /** Absent for age settlement, which settles the card alone. */
+    reason: Schema.optional(Schema.Literals(["finished-child"])),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.unsettle"),

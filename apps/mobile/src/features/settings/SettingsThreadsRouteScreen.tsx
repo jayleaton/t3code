@@ -1,7 +1,7 @@
 import { Button } from "../../components/ui/Button";
 import { AuthSettingsWriteScope } from "@t3tools/contracts";
 import { readEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
-import { AutoSettleDaysField } from "./components/AutoSettleDaysField";
+import { AutoSettleDurationField } from "./components/AutoSettleDurationField";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
@@ -9,7 +9,10 @@ import { useRef, useState } from "react";
 import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
+import {
+  DEFAULT_AUTO_SETTLE_FINISHED_CHILDREN_AFTER_HOURS,
+  DEFAULT_SERVER_SETTINGS,
+} from "@t3tools/contracts";
 import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
 import { AppText as Text } from "../../components/ui/AppText";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
@@ -111,6 +114,13 @@ function AutoSettleSettingsRows() {
     });
   };
 
+  const supportsFinishedChildAutoSettlement =
+    !projectSelected &&
+    syncTargets.every(
+      (target) =>
+        target.environment.serverConfig.environment.capabilities
+          .threadAutoSettleFinishedChildren === true,
+    );
   const { patch: autoSettlePatch, mismatches } = planAutoSettleSettingsSync(
     {
       environmentId: reference.environment.environmentId,
@@ -123,6 +133,7 @@ function AutoSettleSettingsRows() {
       label: target.environment.label,
       settings: target.settings,
     })),
+    { includeFinishedChildren: supportsFinishedChildAutoSettlement },
   );
 
   const supportsProjectOverrides = syncTargets.every(
@@ -155,6 +166,7 @@ function AutoSettleSettingsRows() {
   };
 
   const afterDays = referenceSettings.sidebarAutoSettleAfterDays;
+  const childAfterHours = referenceSettings.autoSettleFinishedChildrenAfterHours;
 
   return (
     <View className="gap-6">
@@ -200,10 +212,41 @@ function AutoSettleSettingsRows() {
           <View className="flex-row items-center gap-4 px-4 py-4 android:min-h-14 android:py-3">
             <View className="w-[22px] android:w-6" />
             <Text className="flex-1 text-foreground text-lg android:text-base">Inactive days</Text>
-            <AutoSettleDaysField
+            <AutoSettleDurationField
+              unit="day"
               value={afterDays}
               disabled={disabled}
               onValueChange={(value) => writeToAll({ sidebarAutoSettleAfterDays: value })}
+            />
+          </View>
+        ) : null}
+        {supportsFinishedChildAutoSettlement ? (
+          <SettingsSwitchRow
+            icon="clock"
+            label="Auto-settle finished child chats"
+            subtitle="Child chats that finished their work settle after this many hours without changes. Their parent stays."
+            value={childAfterHours > 0}
+            disabled={disabled}
+            onValueChange={(value) =>
+              writeToAll({
+                autoSettleFinishedChildrenAfterHours: value
+                  ? DEFAULT_AUTO_SETTLE_FINISHED_CHILDREN_AFTER_HOURS
+                  : 0,
+              })
+            }
+          />
+        ) : null}
+        {supportsFinishedChildAutoSettlement && childAfterHours > 0 ? (
+          <View className="flex-row items-center gap-4 px-4 py-4 android:min-h-14 android:py-3">
+            <View className="w-[22px] android:w-6" />
+            <Text className="flex-1 text-foreground text-lg android:text-base">
+              Child chat hours
+            </Text>
+            <AutoSettleDurationField
+              unit="hour"
+              value={childAfterHours}
+              disabled={disabled}
+              onValueChange={(value) => writeToAll({ autoSettleFinishedChildrenAfterHours: value })}
             />
           </View>
         ) : null}
