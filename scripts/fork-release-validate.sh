@@ -4,6 +4,8 @@
 # is caught before it merges. Add fork feature tests here rather than in either workflow.
 set -euo pipefail
 
+node scripts/check-patch-pins.ts
+
 NODE_ENV=test vp test run \
   apps/web/src/components/agents \
   packages/client-runtime/src/gateway \
