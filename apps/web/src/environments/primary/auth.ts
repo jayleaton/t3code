@@ -136,7 +136,7 @@ type ServerAuthGateState =
     };
 
 let bootstrapPromise: Promise<ServerAuthGateState> | null = null;
-let resolvedAuthenticatedGateState: ServerAuthGateState | null = null;
+let resolvedGateState: ServerAuthGateState | null = null;
 let explicitPairingRequested = false;
 const AUTH_SESSION_ESTABLISH_TIMEOUT_MS = 2_000;
 const AUTH_SESSION_ESTABLISH_STEP_MS = 100;
@@ -174,12 +174,18 @@ function getDesktopBootstrapCredential(): string | null {
     : null;
 }
 
+// An unpaired browser waits on this fetch before it can show pairing, so a
+// stalled or restarting server fails into the boot error instead of the splash.
+const SESSION_STATE_FETCH_TIMEOUT_MS = 5_000;
+const SESSION_STATE_RETRY_TIMEOUT_MS = 3_000;
+
 export async function fetchSessionState(): Promise<AuthSessionState> {
   return retryTransientBootstrap(async () => {
     try {
       return await runPrimaryHttp(
         PrimaryEnvironmentHttpClient.pipe(
           Effect.flatMap((client) => client.auth.session({ headers: {} })),
+          Effect.timeout(SESSION_STATE_FETCH_TIMEOUT_MS),
         ),
       );
     } catch (error) {
@@ -188,7 +194,7 @@ export async function fetchSessionState(): Promise<AuthSessionState> {
         cause: error,
       });
     }
-  });
+  }, SESSION_STATE_RETRY_TIMEOUT_MS);
 }
 
 function readHttpApiStatus(error: unknown): number | null {
@@ -268,7 +274,10 @@ const TRANSIENT_BOOTSTRAP_STATUS_CODES = new Set([502, 503, 504]);
 const BOOTSTRAP_RETRY_TIMEOUT_MS = 15_000;
 const BOOTSTRAP_RETRY_STEP_MS = 500;
 
-export async function retryTransientBootstrap<T>(operation: () => Promise<T>): Promise<T> {
+export async function retryTransientBootstrap<T>(
+  operation: () => Promise<T>,
+  timeoutMs = BOOTSTRAP_RETRY_TIMEOUT_MS,
+): Promise<T> {
   const startedAt = Date.now();
   while (true) {
     try {
@@ -278,7 +287,7 @@ export async function retryTransientBootstrap<T>(operation: () => Promise<T>): P
         throw error;
       }
 
-      if (Date.now() - startedAt >= BOOTSTRAP_RETRY_TIMEOUT_MS) {
+      if (Date.now() - startedAt >= timeoutMs) {
         throw error;
       }
 
@@ -340,10 +349,10 @@ export async function submitServerAuthCredential(credential: string): Promise<vo
     });
   }
 
-  resolvedAuthenticatedGateState = null;
+  resolvedGateState = null;
   await exchangeBootstrapCredential(trimmedCredential);
   await waitForAuthenticatedSessionAfterBootstrap();
-  resolvedAuthenticatedGateState = { status: "authenticated" };
+  resolvedGateState = { status: "authenticated" };
   bootstrapPromise = null;
   explicitPairingRequested = false;
   stripPairingTokenFromUrl();
@@ -443,14 +452,14 @@ export async function resolveInitialServerAuthGateState(): Promise<ServerAuthGat
   const urlCredential = takePairingTokenFromUrl();
   const previousPromise = bootstrapPromise;
   if (urlCredential) {
-    resolvedAuthenticatedGateState = null;
+    resolvedGateState = null;
   } else {
     if (previousPromise) {
       return previousPromise;
     }
 
-    if (resolvedAuthenticatedGateState?.status === "authenticated") {
-      return resolvedAuthenticatedGateState;
+    if (resolvedGateState) {
+      return resolvedGateState;
     }
   }
 
@@ -458,15 +467,21 @@ export async function resolveInitialServerAuthGateState(): Promise<ServerAuthGat
     ? previousPromise
         .catch(() => undefined)
         .then(() => {
-          resolvedAuthenticatedGateState = null;
+          resolvedGateState = null;
           return bootstrapServerAuth(urlCredential);
         })
     : bootstrapServerAuth(urlCredential);
   bootstrapPromise = nextPromise;
   return nextPromise
     .then((result) => {
-      if (bootstrapPromise === nextPromise && result.status === "authenticated") {
-        resolvedAuthenticatedGateState = result;
+      // The /_chat redirect to /pair reloads this gate; reusing a plain
+      // requires-auth result avoids a second session fetch. A failed credential
+      // is not cached so the next load retries the silent bootstrap.
+      if (
+        bootstrapPromise === nextPromise &&
+        (result.status === "authenticated" || result.errorMessage === undefined)
+      ) {
+        resolvedGateState = result;
       }
       return result;
     })
@@ -479,6 +494,6 @@ export async function resolveInitialServerAuthGateState(): Promise<ServerAuthGat
 
 export function __resetServerAuthBootstrapForTests() {
   bootstrapPromise = null;
-  resolvedAuthenticatedGateState = null;
+  resolvedGateState = null;
   explicitPairingRequested = false;
 }

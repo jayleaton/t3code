@@ -8,6 +8,7 @@ import {
 import { createBrowserHistory } from "@tanstack/react-router";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import { HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { installEnvironmentHttpTest } from "../test/environmentHttpTest";
@@ -163,6 +164,74 @@ describe("resolveInitialServerAuthGateState", () => {
 
     expect(testApi.calls.session).toBe(2);
     expect(testApi.calls.browserSession).toEqual([{ credential: "desktop-bootstrap-token" }]);
+  });
+
+  it("reuses an unpaired result when the router redirects to pairing", async () => {
+    const testApi = await installAuthApi({ session: () => unauthenticatedSession(LOOPBACK_AUTH) });
+    const { resolveInitialServerAuthGateState } = await import("./environments/primary");
+    const requiresAuth = { status: "requires-auth", auth: LOOPBACK_AUTH };
+
+    await expect(resolveInitialServerAuthGateState()).resolves.toEqual(requiresAuth);
+    await expect(resolveInitialServerAuthGateState()).resolves.toEqual(requiresAuth);
+
+    expect(testApi.calls.session).toBe(1);
+  });
+
+  it("times out a stalled session fetch instead of holding the splash", async () => {
+    const requestStarted = createSignal();
+    const testApi = await installEnvironmentHttpTest({
+      session: () => Effect.sync(requestStarted.resolve).pipe(Effect.andThen(Effect.never)),
+    });
+    disposeHttpTest = testApi.dispose;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const { fetchSessionState } = await import("./environments/primary/auth");
+
+    let failure: unknown;
+    const settled = fetchSessionState().then(
+      () => {},
+      (error: unknown) => {
+        failure = error;
+      },
+    );
+    await requestStarted.promise;
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(failure).toMatchObject({
+      _tag: "PrimaryEnvironmentRequestError",
+      operation: "fetch-session-state",
+    });
+    expect(testApi.calls.session).toBe(1);
+    await settled;
+  });
+
+  it("stops retrying an unavailable session endpoint after three seconds", async () => {
+    const request = HttpClientRequest.get("http://localhost/api/auth/session");
+    const unavailable = new HttpClientError.HttpClientError({
+      reason: new HttpClientError.StatusCodeError({
+        request,
+        response: HttpClientResponse.fromWeb(request, new Response(null, { status: 503 })),
+      }),
+    });
+    let attempts = 0;
+    __setPrimaryHttpRunnerForTests(() => {
+      attempts += 1;
+      return Promise.reject(unavailable);
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const { fetchSessionState } = await import("./environments/primary/auth");
+
+    let failure: unknown;
+    const settled = fetchSessionState().then(
+      () => {},
+      (error: unknown) => {
+        failure = error;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(failure).toMatchObject({ _tag: "PrimaryEnvironmentRequestError", status: 503 });
+    expect(attempts).toBe(7);
+    await settled;
   });
 
   it("takes a pairing token from the location hash and strips it immediately", async () => {
