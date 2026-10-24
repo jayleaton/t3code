@@ -34,6 +34,10 @@ import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 const INITIAL_RESTART_DELAY = Duration.millis(500);
 const MAX_RESTART_DELAY = Duration.seconds(10);
 const MAX_PREFLIGHT_FAILURE_ATTEMPTS = 5;
+// The usual owner is the previous instance's backend, still stopping its
+// agents after a restart. With the restart backoff this waits about 25 s
+// before telling the user that another server holds the T3 home.
+const STATE_DIR_OWNED_RESTART_ATTEMPTS = 6;
 const DEFAULT_BACKEND_READINESS_TIMEOUT = Duration.minutes(1);
 const DEFAULT_BACKEND_READINESS_INTERVAL = Duration.millis(100);
 const DEFAULT_BACKEND_READINESS_REQUEST_TIMEOUT = Duration.seconds(1);
@@ -879,7 +883,11 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               }
 
               if (isCurrentRun && nextState.desiredRunning) {
-                if (stateDirOwned && !stopRequested) {
+                if (
+                  stateDirOwned &&
+                  !stopRequested &&
+                  nextState.restartAttempt >= STATE_DIR_OWNED_RESTART_ATTEMPTS
+                ) {
                   yield* Ref.update(state, (latest) => ({ ...latest, desiredRunning: false }));
                   yield* (spec.onStateDirOwned?.() ?? Effect.void).pipe(Effect.ignore);
                   return;

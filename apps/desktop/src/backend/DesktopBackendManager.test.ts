@@ -571,9 +571,10 @@ describe("DesktopBackendManager", () => {
     ),
   );
 
-  it.effect("reports state-directory ownership once without scheduling another backend", () =>
+  it.effect("reports state-directory ownership only after waiting out a stopping owner", () =>
     Effect.scoped(
       Effect.gen(function* () {
+        const starts = yield* Queue.unbounded<number>();
         let startCount = 0;
         const refused = yield* Deferred.make<void>();
         const instance = yield* makeTestInstance({
@@ -582,6 +583,7 @@ describe("DesktopBackendManager", () => {
             ChildProcessSpawner.make(() =>
               Effect.sync(() => {
                 startCount += 1;
+                Queue.offerUnsafe(starts, startCount);
                 return makeProcess({
                   exitCode: Effect.succeed(
                     ChildProcessSpawner.ExitCode(SERVER_EXIT_CODE_STATE_DIR_OWNED),
@@ -594,12 +596,58 @@ describe("DesktopBackendManager", () => {
           onStateDirOwned: Deferred.succeed(refused, undefined).pipe(Effect.asVoid),
         });
         yield* instance.start;
+        assert.equal(yield* Queue.take(starts), 1);
+        for (const [index, delayMs] of [500, 1000, 2000, 4000, 8000, 10000].entries()) {
+          assert.isFalse(yield* Deferred.isDone(refused));
+          yield* TestClock.adjust(Duration.millis(delayMs));
+          assert.equal(yield* Queue.take(starts), index + 2);
+        }
         yield* Deferred.await(refused);
         const snapshot = yield* instance.snapshot;
         assert.isFalse(snapshot.desiredRunning);
         assert.isFalse(snapshot.restartScheduled);
         yield* TestClock.adjust(Duration.minutes(1));
-        assert.equal(startCount, 1);
+        assert.equal(startCount, 7);
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
+  );
+
+  it.effect("starts once a previous server releases the state directory", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const starts = yield* Queue.unbounded<number>();
+        let startCount = 0;
+        const ready = yield* Deferred.make<void>();
+        const instance = yield* makeTestInstance({
+          spawnerLayer: Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() =>
+              Effect.sync(() => {
+                startCount += 1;
+                Queue.offerUnsafe(starts, startCount);
+                return makeProcess({
+                  exitCode:
+                    startCount <= 2
+                      ? Effect.succeed(
+                          ChildProcessSpawner.ExitCode(SERVER_EXIT_CODE_STATE_DIR_OWNED),
+                        )
+                      : Effect.never,
+                });
+              }),
+            ),
+          ),
+          httpClientLayer: layerHealthyHttpClient,
+          onReady: Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+          onStateDirOwned: Effect.die("the owner released the state directory"),
+        });
+        yield* instance.start;
+        assert.equal(yield* Queue.take(starts), 1);
+        yield* TestClock.adjust(Duration.millis(500));
+        assert.equal(yield* Queue.take(starts), 2);
+        yield* TestClock.adjust(Duration.millis(1000));
+        assert.equal(yield* Queue.take(starts), 3);
+        yield* Deferred.await(ready);
+        assert.isTrue((yield* instance.snapshot).desiredRunning);
       }).pipe(Effect.provide(TestClock.layer())),
     ),
   );

@@ -7,6 +7,7 @@ import * as Ref from "effect/Ref";
 import type * as Electron from "electron";
 
 import * as ElectronApp from "../electron/ElectronApp.ts";
+import * as DesktopConfig from "./DesktopConfig.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
@@ -18,6 +19,7 @@ import * as DesktopWindow from "../window/DesktopWindow.ts";
 function layerElectronApp(
   appListeners: Map<string, (...args: readonly unknown[]) => void>,
   quit: Effect.Effect<void> = Effect.void,
+  overrides: Partial<ElectronApp.ElectronApp["Service"]> = {},
 ) {
   const registerListener = (eventName: string, listener: (...args: readonly unknown[]) => void) =>
     Effect.acquireRelease(
@@ -52,6 +54,7 @@ function layerElectronApp(
     onBeforeQuitForUpdate: (listener) => registerListener("before-quit-for-update", listener),
     on: (eventName, listener) =>
       registerListener(eventName, listener as unknown as (...args: readonly unknown[]) => void),
+    ...overrides,
   } satisfies ElectronApp.ElectronApp["Service"]);
 }
 
@@ -104,6 +107,50 @@ function layerDesktopWindow(
 }
 
 describe("DesktopLifecycle", () => {
+  it.effect.each([
+    { supervised: true, expected: { relaunched: false, exitCode: 75 } },
+    { supervised: false, expected: { relaunched: true, exitCode: 0 } },
+  ])("relaunches through the supervisor when supervised=$supervised", ({ supervised, expected }) =>
+    Effect.gen(function* () {
+      let relaunched = false;
+      const exited = yield* Deferred.make<number>();
+      const layer = DesktopLifecycle.layer.pipe(
+        Layer.provideMerge(
+          layerElectronApp(new Map(), Effect.void, {
+            relaunch: () =>
+              Effect.sync(() => {
+                relaunched = true;
+              }),
+            exit: (code) => Deferred.succeed(exited, code ?? 0).pipe(Effect.asVoid),
+          }),
+        ),
+        Layer.provideMerge(layerElectronTheme),
+        Layer.provideMerge(layerElectronWindow()),
+        Layer.provideMerge(layerDesktopWindow()),
+        Layer.provideMerge(
+          Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
+            platform: "linux",
+            isDevelopment: false,
+          } as DesktopEnvironment.DesktopEnvironment["Service"]),
+        ),
+        Layer.provideMerge(DesktopShutdown.layer),
+        Layer.provideMerge(DesktopState.layer),
+        Layer.provideMerge(
+          DesktopConfig.layerTest(supervised ? { T3CODE_SUPERVISED_RELAUNCH: "true" } : {}),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
+        const shutdown = yield* DesktopShutdown.DesktopShutdown;
+        // Stands in for the backend pool, which completes shutdown once it stops.
+        yield* shutdown.awaitRequest.pipe(Effect.andThen(shutdown.markComplete), Effect.forkScoped);
+        yield* lifecycle.relaunch("test");
+        assert.equal(yield* Deferred.await(exited), expected.exitCode);
+      }).pipe(Effect.provide(layer), Effect.scoped);
+      assert.equal(relaunched, expected.relaunched);
+    }),
+  );
+
   it.effect.each(["darwin", "win32", "linux"] satisfies ReadonlyArray<NodeJS.Platform>)(
     "lets the updater's quit event proceed on %s",
     (platform) => {
