@@ -17,6 +17,7 @@ import * as Schema from "effect/Schema";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
+import { AgentTempDir } from "@t3tools/shared/AgentTempDir";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { IdAllocatorV2 } from "@t3tools/provider-core/server/IdAllocator";
 import {
@@ -169,6 +170,7 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const ids = yield* IdAllocatorV2;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+  const agentTempDir = yield* AgentTempDir;
   const unsupported = (detail: string) =>
     Effect.fail(new ProviderAdapterProtocolError({ driver: DRIVER, detail }));
   return {
@@ -335,12 +337,14 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
             yield* fs.writeFileString(mod, COMMAND_CODE_MCP_MOD);
             args.push("--mod", mod);
           }
+          const cwd = turn.runtimePolicy.cwd ?? options.cwd;
           const child = yield* spawnCommandCode({
             binaryPath: settings.binaryPath,
             args,
-            cwd: turn.runtimePolicy.cwd ?? options.cwd,
+            cwd,
             environment: {
               ...McpProviderSession.withAgentDeviceEnvironment(options.environment, mcpSession),
+              ...(yield* agentTempDir.environment({ threadId: turn.threadId, cwd })),
               T3_COMMANDCODE_MCP_SERVERS: yield* encodeMcpServers(
                 McpProviderSession.mcpHttpServers(mcpSession),
               ),

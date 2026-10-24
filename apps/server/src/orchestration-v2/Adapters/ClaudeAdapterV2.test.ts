@@ -68,6 +68,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { Tool } from "effect/ai";
 import { formatClaudeResumeCompactionQuestion } from "@t3tools/shared/claudeCompaction";
+import { AgentTempDir } from "@t3tools/shared/AgentTempDir";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
@@ -987,6 +988,7 @@ const captureSdkExecutablePaths = Effect.fn("captureSdkExecutablePaths")(functio
 ) {
   const executablePaths: Array<string | undefined> = [];
   const taskToolEnvironment: Array<string | undefined> = [];
+  const tempDirectories: Array<readonly [string | undefined, string | undefined]> = [];
   const adapter = yield* ClaudeAdapterV2.createClaudeAdapterV2(
     {
       instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
@@ -1008,6 +1010,7 @@ const captureSdkExecutablePaths = Effect.fn("captureSdkExecutablePaths")(functio
         Effect.sync(() => {
           executablePaths.push(input.options.pathToClaudeCodeExecutable);
           taskToolEnvironment.push(input.options.env?.CLAUDE_CODE_ENABLE_TODO_TOOLS);
+          tempDirectories.push([input.options.env?.TMPDIR, input.options.env?.CLAUDE_CODE_TMPDIR]);
           return {
             messages: Stream.never,
             offer: () => Effect.void,
@@ -1047,7 +1050,7 @@ const captureSdkExecutablePaths = Effect.fn("captureSdkExecutablePaths")(functio
       attachments: [],
     }),
   );
-  return { executablePaths, taskToolEnvironment };
+  return { executablePaths, taskToolEnvironment, tempDirectories };
 });
 
 describe("ClaudeAdapterV2 executable path", () => {
@@ -1063,6 +1066,31 @@ describe("ClaudeAdapterV2 executable path", () => {
         );
 
         assert.deepEqual(executablePaths, [packageExe]);
+      }),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
+  );
+});
+
+describe("ClaudeAdapterV2 agent temp folder", () => {
+  it.effect("launches Claude Code with the thread's disk-backed temp folder", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { tempDirectories } = yield* captureSdkExecutablePaths("claude").pipe(
+          Effect.provideService(AgentTempDir, {
+            environment: ({ threadId }) =>
+              Effect.succeed({
+                TMPDIR: `/disk/tmp/${threadId}`,
+                CLAUDE_CODE_TMPDIR: `/disk/tmp/${threadId}`,
+              }),
+          }),
+        );
+
+        const expected = "/disk/tmp/thread-claude-binary-path";
+        assert.deepEqual(tempDirectories, [[expected, expected]]);
       }),
     ).pipe(
       Effect.provide(

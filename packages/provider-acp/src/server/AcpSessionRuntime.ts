@@ -28,6 +28,7 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { AgentScope, AgentScopeThreadId, RAISE_OOM_SCORE_LINE } from "@t3tools/shared/AgentScope";
+import { AgentTempDir } from "@t3tools/shared/AgentTempDir";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import { signalProcessGroup } from "@t3tools/provider-core/server/processGroup";
@@ -1257,12 +1258,31 @@ interface AcpActivePrompt {
 }
 
 export const make = Effect.fn("AcpSessionRuntime.make")(function* (
-  options: AcpSessionRuntimeOptions,
+  requestedOptions: AcpSessionRuntimeOptions,
 ): Effect.fn.Return<
   AcpSessionRuntime["Service"],
   EffectAcpErrors.AcpError,
   ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
 > {
+  // One ACP process per session, so it gets the thread's own temp folder.
+  const scopeThreadId = yield* AgentScopeThreadId;
+  const agentTempEnvironment =
+    scopeThreadId === undefined
+      ? {}
+      : yield* (yield* AgentTempDir).environment({
+          threadId: scopeThreadId,
+          cwd: requestedOptions.spawn.cwd ?? requestedOptions.cwd,
+        });
+  const options: AcpSessionRuntimeOptions =
+    Object.keys(agentTempEnvironment).length === 0
+      ? requestedOptions
+      : {
+          ...requestedOptions,
+          spawn: {
+            ...requestedOptions.spawn,
+            env: { ...requestedOptions.spawn.env, ...agentTempEnvironment },
+          },
+        };
   const crypto = yield* Crypto.Crypto;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const runtimeScope = yield* Scope.fork(yield* Scope.Scope);

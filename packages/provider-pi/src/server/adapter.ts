@@ -1,5 +1,6 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import { AgentTempDir } from "@t3tools/shared/AgentTempDir";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { readToolOutputImage } from "@t3tools/shared/toolOutput";
 import * as Predicate from "effect/Predicate";
@@ -421,6 +422,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const agentScope = yield* AgentScope;
+  const agentTempDir = yield* AgentTempDir;
   const fileSystem = yield* FileSystem.FileSystem;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const host = yield* ProviderHost.ProviderHost;
@@ -474,18 +476,22 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         extensionPath,
         runtimeMode: input.runtimePolicy.runtimeMode,
       });
+      const env = {
+        ...launch.env,
+        ...(yield* agentTempDir.environment({ threadId: input.threadId, cwd })),
+      };
       const scopedLaunch = yield* agentScope.wrap({
         command: options.settings.binaryPath || "pi",
         args: launch.args,
         name: "pi",
         threadId: input.threadId,
-        env: launch.env,
+        env,
       });
       const connection: PiRpcConnection = yield* makePiRpcConnection({
         command: scopedLaunch.command,
         args: scopedLaunch.args,
         cwd,
-        env: launch.env,
+        env,
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.mapError(

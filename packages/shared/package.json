@@ -335,6 +335,10 @@
       "types": "./src/AgentScope.ts",
       "import": "./src/AgentScope.ts"
     },
+    "./AgentTempDir": {
+      "types": "./src/AgentTempDir.ts",
+      "import": "./src/AgentTempDir.ts"
+    },
     "./HostProcess": {
       "types": "./src/HostProcess.ts",
       "import": "./src/HostProcess.ts"
