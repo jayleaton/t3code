@@ -5,6 +5,7 @@
 set -euo pipefail
 
 node scripts/check-patch-pins.ts
+node scripts/check-upstream-migrations.ts
 
 NODE_ENV=test vp test run \
   apps/web/src/components/agents \
