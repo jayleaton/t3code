@@ -55,6 +55,7 @@ import * as NodeUtil from "node:util";
 import { parseCliArgs } from "@t3tools/shared/cliArgs";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import { AgentTempDir } from "@t3tools/shared/AgentTempDir";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
 import {
@@ -3914,6 +3915,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
   adapterOptions: ClaudeAdapterV2Options,
 ) {
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+  const agentTempDir = yield* AgentTempDir;
   const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
   const { attachmentsDir, fileSystem, path, crypto, idAllocator, queryRunner } = adapterOptions;
   const subagentModelCatalog = scopeClaudeModelCatalog(
@@ -4027,7 +4029,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           string,
           { readonly fiber: Fiber.Fiber<void>; readonly stop: Deferred.Deferred<void> }
         >();
-        const taskOutputRoot = claudeTaskOutputRoot(adapterOptions.environment, path);
+        // The CLI writes task output under CLAUDE_CODE_TMPDIR, so the tail reads the same folder.
+        const agentTempEnvironment = yield* agentTempDir.environment({
+          threadId: input.threadId,
+          cwd: input.runtimePolicy.cwd ?? undefined,
+        });
+        const taskOutputRoot = claudeTaskOutputRoot(
+          { ...adapterOptions.environment, ...agentTempEnvironment },
+          path,
+        );
         // Waits for the tail's last read so its output lands before the call settles.
         const stopTaskOutputTail = (toolUseId: string) =>
           Effect.suspend(() => {
@@ -9323,7 +9333,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             attachmentsDir,
             settings: adapterOptions.settings,
             environment: claudeQueryEnvironment(
-              adapterOptions.environment,
+              {
+                ...adapterOptions.environment,
+                // Recreated per turn: settling the thread deleted it.
+                ...(yield* agentTempDir.environment({
+                  threadId: input.threadId,
+                  cwd: turnInput.runtimePolicy.cwd ?? undefined,
+                })),
+              },
               turnInput.appThread,
               turnInput.appThread.lineage.relationshipToParent === "subagent"
                 ? yield* resolveSubagentPromptCacheTtl(turnInput.runtimePolicy.cwd)

@@ -10,6 +10,7 @@ import type {
   ToolPart,
 } from "@opencode-ai/sdk/v2";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { AgentTempDir } from "@t3tools/shared/AgentTempDir";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import {
@@ -930,6 +931,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const host = yield* ProviderHost.ProviderHost;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+  const agentTempDir = yield* AgentTempDir;
   const messageIdClock = yield* Ref.make({ epochMillis: -1, counter: 0 });
 
   return ProviderAdapter.ProviderAdapterV2.of({
@@ -945,7 +947,11 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           binaryPath: options.settings.binaryPath,
           directory: cwd,
           serverUrl: options.settings.serverUrl,
-          environment: options.environment,
+          // OpenCode 1 starts one `opencode serve` per session, so its tools get the thread's folder.
+          environment: {
+            ...options.environment,
+            ...(yield* agentTempDir.environment({ threadId: input.threadId, cwd })),
+          },
         });
         const client = runtime.createOpenCodeSdkClient({
           baseUrl: connection.url,

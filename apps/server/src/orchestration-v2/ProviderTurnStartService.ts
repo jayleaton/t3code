@@ -18,6 +18,7 @@ import {
 import * as Context from "effect/Context";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
+import { AgentTempDir } from "@t3tools/shared/AgentTempDir";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -122,6 +123,7 @@ export const layer: Layer.Layer<
     const contextHandoffService = yield* ContextHandoffService.ContextHandoffServiceV2;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const fileSystem = yield* FileSystem.FileSystem;
+    const agentTempDir = yield* AgentTempDir;
     const path = yield* Path.Path;
     const serverConfig = yield* ServerConfig.ServerConfig;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -1024,6 +1026,12 @@ export const layer: Layer.Layer<
       const routableSubagents = projection.subagents.filter((subagent) =>
         RunExecutionService.canRouteRelatedSubagent(subagent.status),
       );
+      // Settling deletes the thread's temp folder; a session kept alive since then
+      // still points its processes there, so every turn puts it back.
+      yield* agentTempDir.environment({
+        threadId: projection.thread.id,
+        cwd: resolvedRuntimePolicy.cwd ?? undefined,
+      });
       const skillIndex = projection.thread.profileSnapshot?.skills?.length
         ? yield* syncAgentSkillFiles({
             cwd:
