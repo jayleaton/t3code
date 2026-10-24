@@ -125,6 +125,7 @@ import * as Observability from "./observability/Observability.ts";
 import * as HeapSnapshot from "./observability/HeapSnapshot.ts";
 import * as EventLoopMonitor from "./observability/EventLoopMonitor.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import { watchTailnetRoute } from "./environment/TailnetRouteCheck.ts";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as AuthHttp from "./auth/http.ts";
@@ -197,7 +198,11 @@ import * as OrchestrationHttp from "./orchestration-v2/http.ts";
 import * as ProjectHttp from "./project/http.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
-import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
+import {
+  disableTailscaleServe,
+  ensureTailscaleServe,
+  inspectTailscaleServePort,
+} from "@t3tools/tailscale";
 import * as ServerActivation from "./serverActivation.ts";
 
 // MCP handoff thread IDs include escaped provenance and can exceed find-my-way's
@@ -829,12 +834,35 @@ const layerMakeServer = Layer.unwrap(
               }
 
               const localPort = address.port;
-              return yield* ensureTailscaleServe({
+              const local = {
                 localPort,
                 servePort: config.tailscaleServePort,
                 localHost: loopbackUrlHostForAddress(address),
-              }).pipe(
-                Effect.as({ localPort, servePort: config.tailscaleServePort }),
+              };
+              // Another live server on this tailnet port (the machine's main
+              // T3, say, when this one is a second instance) keeps its mapping:
+              // replacing it cuts off every remote client reaching it.
+              const ownership = yield* inspectTailscaleServePort(local).pipe(Effect.option);
+              if (Option.isNone(ownership)) {
+                yield* Effect.logWarning(
+                  "Could not read Tailscale Serve status; not configuring Tailscale Serve",
+                  { servePort: config.tailscaleServePort, localPort },
+                );
+                return null;
+              }
+              if (ownership.value._tag === "taken") {
+                yield* Effect.logWarning(
+                  "Tailscale Serve port already forwards to another live server; leaving it alone",
+                  {
+                    servePort: config.tailscaleServePort,
+                    target: ownership.value.target,
+                    localPort,
+                  },
+                );
+                return null;
+              }
+              return yield* ensureTailscaleServe(local).pipe(
+                Effect.as(local),
                 Effect.tap(() =>
                   Effect.logInfo("Tailscale Serve configured", {
                     localPort,
@@ -852,11 +880,20 @@ const layerMakeServer = Layer.unwrap(
             }),
             (configured) =>
               configured
-                ? disableTailscaleServe({ servePort: configured.servePort }).pipe(
-                    Effect.tap(() =>
-                      Effect.logInfo("Tailscale Serve disabled", {
-                        servePort: configured.servePort,
-                      }),
+                ? inspectTailscaleServePort(configured).pipe(
+                    Effect.flatMap((ownership) =>
+                      ownership._tag === "ours"
+                        ? disableTailscaleServe({ servePort: configured.servePort }).pipe(
+                            Effect.tap(() =>
+                              Effect.logInfo("Tailscale Serve disabled", {
+                                servePort: configured.servePort,
+                              }),
+                            ),
+                          )
+                        : Effect.logInfo(
+                            "Tailscale Serve port no longer forwards here; leaving its mapping",
+                            { servePort: configured.servePort },
+                          ),
                     ),
                     Effect.catch((cause) =>
                       Effect.logWarning("Failed to disable Tailscale Serve", {
@@ -869,6 +906,29 @@ const layerMakeServer = Layer.unwrap(
           ),
         )
       : Layer.empty;
+    // Dev servers never own the machine's tailnet route, so only a production
+    // server reports when that route stops reaching it.
+    const layerTailnetRouteCheck =
+      config.devUrl === undefined
+        ? Layer.effectDiscard(
+            Effect.gen(function* () {
+              const address = (yield* HttpServer.HttpServer).address;
+              if (typeof address === "string" || !("port" in address)) return;
+              const environment = yield* ServerEnvironment.ServerEnvironment;
+              yield* awaitActivation.pipe(
+                Effect.andThen(environment.getEnvironmentId),
+                Effect.flatMap((environmentId) =>
+                  watchTailnetRoute({
+                    servePort: config.tailscaleServePort,
+                    localPort: address.port,
+                    environmentId,
+                  }),
+                ),
+                Effect.forkScoped,
+              );
+            }),
+          )
+        : Layer.empty;
     const layerCloudDesiredLinkReconcile = Layer.effectDiscard(
       Effect.gen(function* () {
         const cloudLink = yield* CloudLink.CloudLink;
@@ -1082,6 +1142,7 @@ const layerMakeServer = Layer.unwrap(
       layerHttpListening,
       layerRuntimeState.pipe(Layer.provide(layerLauncher)),
       layerTailscaleServe,
+      layerTailnetRouteCheck,
       layerCloudDesiredLinkReconcile,
       HeapSnapshot.layer,
     );
