@@ -27,25 +27,7 @@ const SYNC_COMMAND = "node scripts/check-upstream-migrations.ts --sync upstream/
  * Upstream id -> fork id for upstream migrations the fork ledger still runs under another id.
  * Restoring upstream's ids (fix/fork-migration-ledger) empties this list; do not add to it.
  */
-export const KNOWN_RENUMBERED: ReadonlyMap<number, number> = new Map([
-  [52, 54],
-  [53, 55],
-  [54, 57],
-  [55, 59],
-  [56, 60],
-  [57, 63],
-  [58, 64],
-  [59, 66],
-  [60, 67],
-  [61, 68],
-  [62, 69],
-  [63, 70],
-  [64, 71],
-  [65, 72],
-  [66, 73],
-  [67, 74],
-  [68, 76],
-]);
+export const KNOWN_RENUMBERED: ReadonlyMap<number, number> = new Map();
 
 // Upstream entries are `[id, "Name", Migration00NN]`. The fork's own ledger uses other
 // tuple shapes, so only upstream-style entries are read.
