@@ -131,7 +131,7 @@ import {
   type ProjectionCheckpointContext,
   type ShellSnapshotOptions,
 } from "./ProjectionStore.ts";
-import { RemoteParentSettlement } from "./RemoteParentSettlement.ts";
+import { manualSettlementAbove as manualSettlementAboveIn } from "./SubRunSettlement.ts";
 import { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
 import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
@@ -938,7 +938,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const projectionStore = yield* ProjectionStoreV2;
-  const remoteParents = yield* Effect.serviceOption(RemoteParentSettlement);
   const effectOutbox = yield* EffectOutbox.EffectOutboxV2;
   const nextTurnItemOrdinal = (
     projection: Pick<OrchestrationV2ThreadProjection, "thread"> &
@@ -9040,42 +9039,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
-  /**
-   * What a sub-run's settle follows: the settle time of its nearest manually
-   * settled ancestor here, or the ancestor on another machine the walk
-   * reaches, which only that machine can answer for. Ancestors that only
-   * aged out are looked past, since age settlement never cascades and must
-   * not cut a manual cascade short.
-   */
-  const manualSettlementAbove = Effect.fn("orchestrationV2.dispatch.manualSettlementAbove")(
-    function* (thread: OrchestrationV2AppThread) {
-      const seen = new Set<ThreadId>([thread.id]);
-      let current = thread;
-      while (current.parentThreadId != null) {
-        if (current.parentEnvironmentId != null) {
-          return {
-            remote: {
-              environmentId: current.parentEnvironmentId,
-              threadId: current.parentThreadId,
-            },
-          } as const;
-        }
-        if (seen.has(current.parentThreadId)) return null;
-        seen.add(current.parentThreadId);
-        const parent = yield* projectionStore
-          .getThread(current.parentThreadId)
-          .pipe(Effect.orElseSucceed(() => null));
-        if (parent === null || parent.deletedAt !== null || parent.settledOverride !== "settled") {
-          return null;
-        }
-        if (parent.settlementSource !== "inactivity") {
-          return parent.settledAt === null ? null : ({ settledAt: parent.settledAt } as const);
-        }
-        current = parent;
-      }
-      return null;
-    },
-  );
+  const manualSettlementAbove = (thread: OrchestrationV2AppThread) =>
+    manualSettlementAboveIn(projectionStore, thread);
 
   /** Completes the deferred cascade of a manually settled parent, never ordinary run completion. */
   const dispatchSubRunSettle = Effect.fn("orchestrationV2.dispatch.subRunSettle")(function* (
@@ -12249,31 +12214,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const thread = yield* projectionStore.getThread(threadId);
     if (thread.settledOverride !== null) return;
     const above = yield* manualSettlementAbove(thread);
-    if (above === null) return;
-    let parentSettledAt: DateTime.Utc | undefined;
-    if ("remote" in above) {
-      // Ask the other machine only once nothing here keeps the sub-run active.
-      const shell = yield* projectionStore.getThreadShell(threadId);
-      if (
-        Option.isNone(remoteParents) ||
-        shell === null ||
-        threadShellHasActiveWork(shell) ||
-        (shell.pendingBackgroundTasks?.length ?? 0) > 0
-      ) {
-        return;
-      }
-      const settledAt = yield* remoteParents.value.manualSettledAt(
-        above.remote.environmentId,
-        above.remote.threadId,
-      );
-      if (settledAt === null) return;
-      parentSettledAt = settledAt;
-    }
+    // Only the other machine can say how a remote parent settled. RemoteParentSettlement asks it
+    // off this path, so a slow or missing relay never holds up run endings here.
+    if (above === null || "remote" in above) return;
     yield* dispatchWithReceipt({
       type: "thread.sub-run.settle",
       commandId: CommandId.make(`server:sub-run-settle:${threadId}:${completion}`),
       threadId,
-      ...(parentSettledAt === undefined ? {} : { parentSettledAt }),
     });
   });
 

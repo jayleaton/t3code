@@ -3,7 +3,6 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -27,18 +26,6 @@ export interface SettlementChange {
   /** The settle time the change applies or reverses. */
   readonly settledAt: DateTime.Utc;
 }
-
-const RemoteThreads = Schema.Struct({
-  items: Schema.Array(
-    Schema.Struct({
-      id: ThreadId,
-      parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
-      parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
-      settledAt: Schema.optional(Schema.NullOr(Schema.String)),
-    }),
-  ),
-});
-const decodeRemoteThreads = Schema.decodeUnknownEffect(RemoteThreads);
 
 /**
  * The chat and the local sub-runs under it that the local cascade passes through without an
@@ -83,7 +70,7 @@ export const cascadeToOtherEnvironments = Effect.fn("RemoteSettlementCascade.cas
     .filter(
       ([id, scopes]) => id !== local && scopes.includes("read") && scopes.includes("lifecycle"),
     )
-    .map(([id]) => id);
+    .map(([id]) => EnvironmentId.make(id));
   if (remotes.length === 0) return;
   // Each remote child follows the change of the local chat it sits under.
   const owners = new Map<ThreadId, SettlementChange>();
@@ -91,8 +78,7 @@ export const cascadeToOtherEnvironments = Effect.fn("RemoteSettlementCascade.cas
     for (const threadId of yield* passThroughSubtree(change)) owners.set(threadId, change);
   }
   for (const environmentId of remotes) {
-    const listed = yield* broker.invoke("listThreads", [environmentId], [environmentId]).pipe(
-      Effect.flatMap(decodeRemoteThreads),
+    const listed = yield* broker.call("listThreads", [environmentId]).pipe(
       Effect.catchCause((cause) =>
         Effect.logDebug("Could not list another environment's chats", {
           environmentId,
@@ -108,17 +94,17 @@ export const cascadeToOtherEnvironments = Effect.fn("RemoteSettlementCascade.cas
       if (
         change.action === "unsettle" &&
         (thread.settledAt == null ||
-          Date.parse(thread.settledAt) < DateTime.toEpochMillis(change.settledAt) - CLOCK_SKEW_MS)
+          DateTime.toEpochMillis(thread.settledAt) <
+            DateTime.toEpochMillis(change.settledAt) - CLOCK_SKEW_MS)
       ) {
         continue;
       }
       // Settling a settled child again still cascades on its environment to what is under it.
       yield* broker
-        .invoke(
-          change.action === "settle" ? "settleThread" : "unsettleThread",
-          [environmentId, thread.id],
-          [environmentId],
-        )
+        .call(change.action === "settle" ? "settleThread" : "unsettleThread", [
+          environmentId,
+          thread.id,
+        ])
         .pipe(
           Effect.catchCause((cause) =>
             Effect.logDebug("Remote child kept its settlement", {

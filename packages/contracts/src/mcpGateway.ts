@@ -1,5 +1,10 @@
 import * as Schema from "effect/Schema";
 
+import { EnvironmentId, MessageId, ProjectId, RunId, ThreadId } from "./baseSchemas.ts";
+import { OrchestrationV2RunStatus } from "./orchestrationV2.ts";
+import { ProviderInstanceId } from "./providerInstance.ts";
+import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
+
 export class McpGatewayUnavailableError extends Schema.TaggedError<McpGatewayUnavailableError>()(
   "McpGatewayUnavailableError",
   { message: Schema.String },
@@ -39,3 +44,92 @@ export type McpGatewayRelayResponse = typeof McpGatewayRelayResponse.Type;
 export function toMcpGatewayRelayJson(value: unknown): unknown {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 }
+
+const RelayIso = Schema.optional(Schema.NullOr(Schema.String));
+const RelaySettledAt = Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString));
+
+/**
+ * A thread as a relaying app's `getThread` reports it (`gatewayThreadProjection`). Fields an
+ * older app or environment may not send are optional.
+ */
+export const McpGatewayRelayThread = Schema.Struct({
+  id: ThreadId,
+  projectId: ProjectId,
+  title: Schema.String,
+  modelSelection: Schema.Struct({ instanceId: ProviderInstanceId, model: Schema.String }),
+  runtimeMode: Schema.optional(RuntimeMode),
+  interactionMode: Schema.optional(ProviderInteractionMode),
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
+  settledAt: RelaySettledAt,
+  settlementSource: Schema.optional(Schema.NullOr(Schema.Literals(["manual", "inactivity"]))),
+  runs: Schema.Array(
+    Schema.Struct({
+      id: RunId,
+      status: OrchestrationV2RunStatus,
+      providerInstanceId: ProviderInstanceId,
+      requestedAt: RelayIso,
+      completedAt: RelayIso,
+    }),
+  ),
+  messages: Schema.Array(
+    Schema.Struct({
+      id: MessageId,
+      role: Schema.String,
+      text: Schema.String,
+      runId: Schema.optional(Schema.NullOr(RunId)),
+      updatedAt: RelayIso,
+    }),
+  ),
+  runtimeRequests: Schema.optional(Schema.Array(Schema.Unknown)),
+  createdAt: RelayIso,
+  updatedAt: RelayIso,
+});
+export type McpGatewayRelayThread = typeof McpGatewayRelayThread.Type;
+
+/** The small per-thread summaries a relaying app's `listThreads` reports. */
+export const McpGatewayRelayThreadList = Schema.Struct({
+  items: Schema.Array(
+    Schema.Struct({
+      id: ThreadId,
+      parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+      parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
+      settledAt: RelaySettledAt,
+      activeRunId: Schema.optional(Schema.NullOr(RunId)),
+    }),
+  ),
+});
+export type McpGatewayRelayThreadList = typeof McpGatewayRelayThreadList.Type;
+
+/** A call between a task's owner and worker environments. Inputs are encoded task contracts. */
+export const McpGatewayRelayThreadTaskRequest = Schema.Struct({
+  action: Schema.Literals([
+    "remoteAssign",
+    "remoteDeliver",
+    "remoteOwnerAction",
+    "projectSnapshot",
+  ]),
+  input: Schema.Unknown,
+});
+export type McpGatewayRelayThreadTaskRequest = typeof McpGatewayRelayThreadTaskRequest.Type;
+
+/**
+ * The runtime port calls a server makes through a connected app for itself, each with the
+ * schema of its arguments and of its answer. The first argument is always the environment the
+ * call acts on. Settle and task answers are read by their callers, so they stay unknown here.
+ */
+export const McpGatewayRelayCalls = {
+  getThread: { args: Schema.Tuple([EnvironmentId, ThreadId]), result: McpGatewayRelayThread },
+  listThreads: { args: Schema.Tuple([EnvironmentId]), result: McpGatewayRelayThreadList },
+  settleThread: { args: Schema.Tuple([EnvironmentId, ThreadId]), result: Schema.Unknown },
+  unsettleThread: { args: Schema.Tuple([EnvironmentId, ThreadId]), result: Schema.Unknown },
+  threadTask: {
+    args: Schema.Tuple([EnvironmentId, McpGatewayRelayThreadTaskRequest]),
+    result: Schema.Unknown,
+  },
+} as const;
+export type McpGatewayRelayMethod = keyof typeof McpGatewayRelayCalls;
+export type McpGatewayRelayArgs<M extends McpGatewayRelayMethod> =
+  (typeof McpGatewayRelayCalls)[M]["args"]["Type"];
+export type McpGatewayRelayResult<M extends McpGatewayRelayMethod> =
+  (typeof McpGatewayRelayCalls)[M]["result"]["Type"];

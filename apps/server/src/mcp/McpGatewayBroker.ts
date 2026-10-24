@@ -1,10 +1,15 @@
+import type { GatewayRuntimePort } from "@t3tools/client-runtime/gateway";
 import type * as Cause from "effect/Cause";
 import {
+  McpGatewayRelayCalls,
   McpGatewayUnavailableError,
   toMcpGatewayRelayJson,
+  type McpGatewayRelayArgs,
   type McpGatewayRelayEvent,
   type McpGatewayRelayGrants,
+  type McpGatewayRelayMethod,
   type McpGatewayRelayResponse,
+  type McpGatewayRelayResult,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -13,9 +18,30 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 const unavailable = (message: string) => new McpGatewayUnavailableError({ message });
+
+interface RelayCodec {
+  readonly encodeArgs: (args: unknown) => Effect.Effect<unknown, Schema.SchemaError>;
+  readonly decodeResult: (answer: unknown) => Effect.Effect<unknown, Schema.SchemaError>;
+}
+const relayCodec = (spec: {
+  readonly args: Schema.Codec<unknown, unknown>;
+  readonly result: Schema.Codec<unknown, unknown>;
+}): RelayCodec => ({
+  encodeArgs: Schema.encodeUnknownEffect(spec.args),
+  decodeResult: Schema.decodeUnknownEffect(spec.result),
+});
+/** Each relay call's argument encoder and answer decoder, compiled once. */
+const relayCodecs: { readonly [M in McpGatewayRelayMethod]: RelayCodec } = {
+  getThread: relayCodec(McpGatewayRelayCalls.getThread),
+  listThreads: relayCodec(McpGatewayRelayCalls.listThreads),
+  settleThread: relayCodec(McpGatewayRelayCalls.settleThread),
+  unsettleThread: relayCodec(McpGatewayRelayCalls.unsettleThread),
+  threadTask: relayCodec(McpGatewayRelayCalls.threadTask),
+};
 
 interface Host {
   readonly owner: string;
@@ -77,7 +103,7 @@ export const make = Effect.gen(function* () {
     return Object.fromEntries(Object.entries(merged).map(([id, scopes]) => [id, [...scopes]]));
   };
   const invoke = Effect.fn("McpGatewayBroker.invoke")(function* (
-    method: string,
+    method: keyof GatewayRuntimePort,
     args: ReadonlyArray<unknown>,
     environmentIds: ReadonlyArray<string>,
   ): Effect.fn.Return<unknown, McpGatewayUnavailableError> {
@@ -121,6 +147,36 @@ export const make = Effect.gen(function* () {
       Effect.ensuring(Effect.sync(() => pending.delete(invocationId))),
     );
   });
+  /**
+   * One of this server's own calls on another environment, with its arguments and answer checked
+   * against the contract, so an app that answers in another shape fails here, not in the caller.
+   */
+  const call = <M extends McpGatewayRelayMethod>(
+    method: M,
+    args: McpGatewayRelayArgs<M>,
+  ): Effect.Effect<McpGatewayRelayResult<M>, McpGatewayUnavailableError> => {
+    const codec = relayCodecs[method];
+    const environmentId = args[0];
+    return codec.encodeArgs(args).pipe(
+      Effect.mapError(() => unavailable(`The arguments of ${method} do not match its contract.`)),
+      Effect.flatMap((encoded) =>
+        invoke(method, encoded as ReadonlyArray<unknown>, [environmentId]),
+      ),
+      Effect.flatMap((answer) =>
+        codec
+          .decodeResult(answer)
+          .pipe(
+            Effect.mapError(() =>
+              unavailable(
+                `Environment ${environmentId} answered ${method} in a shape this server cannot read.`,
+              ),
+            ),
+          ),
+      ),
+      Effect.map((result) => result as McpGatewayRelayResult<M>),
+      Effect.withSpan("McpGatewayBroker.call", { attributes: { method } }),
+    );
+  };
   const respond = Effect.fn("McpGatewayBroker.respond")(function* (
     owner: string,
     input: McpGatewayRelayResponse,
@@ -139,7 +195,12 @@ export const make = Effect.gen(function* () {
   return {
     connect,
     grants,
-    invoke,
+    call,
+    /**
+     * Runs a gateway tool's runtime port call on another environment as it is. Only the tool
+     * catalog uses this: its calls are the port's own surface, typed by the port.
+     */
+    forward: invoke,
     respond,
     available: () => hosts.size > 0,
     hostConnected: Stream.fromPubSub(connected),

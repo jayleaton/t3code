@@ -1,6 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import { McpGatewayRelayEvent, type McpGatewayRelayGrants } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  McpGatewayRelayEvent,
+  type McpGatewayRelayGrants,
+  ThreadId,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -45,10 +51,12 @@ it.effect("runs calls on the newest app that reaches every environment in them",
       }));
       expect(broker.available()).toBe(true);
       expect(broker.grants()).toEqual({ remote: ["read", "send"], other: ["read"] });
-      expect(yield* broker.invoke("listProjects", ["remote"], ["remote"])).toBe(
+      expect(yield* broker.forward("listProjects", ["remote"], ["remote"])).toBe(
         "desktop:listProjects",
       );
-      expect(yield* broker.invoke("listThreads", ["other"], ["other"])).toBe("desktop:listThreads");
+      expect(yield* broker.forward("listThreads", ["other"], ["other"])).toBe(
+        "desktop:listThreads",
+      );
     }),
   ).pipe(Effect.provide(NodeServices.layer)),
 );
@@ -57,13 +65,13 @@ it.effect("fails calls no connected app can run, and reports app errors", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const broker = yield* make;
-      const none = yield* Effect.exit(broker.invoke("listProjects", ["remote"], ["remote"]));
+      const none = yield* Effect.exit(broker.forward("listProjects", ["remote"], ["remote"]));
       expect(Exit.isFailure(none)).toBe(true);
       yield* serve(broker, "desktop", { remote: ["read"] }, () => ({ error: "not granted" }));
-      expect(yield* failureMessage(broker.invoke("listProjects", ["other"], ["other"]))).toContain(
+      expect(yield* failureMessage(broker.forward("listProjects", ["other"], ["other"]))).toContain(
         "other",
       );
-      expect(yield* failureMessage(broker.invoke("listProjects", ["remote"], ["remote"]))).toBe(
+      expect(yield* failureMessage(broker.forward("listProjects", ["remote"], ["remote"]))).toBe(
         "not granted",
       );
     }),
@@ -78,7 +86,7 @@ it.effect("rejects answers from another app and fails calls when their app disco
         .connect("desktop", { remote: ["read"] })
         .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped({ startImmediately: true }));
       const call = yield* broker
-        .invoke("listProjects", ["remote"], ["remote"])
+        .forward("listProjects", ["remote"], ["remote"])
         .pipe(Effect.forkScoped({ startImmediately: true }));
       const [event] = yield* Fiber.join(events);
       const spoofed = yield* Effect.exit(
@@ -121,9 +129,9 @@ it.effect("relays calls whose arguments hold undefined fields in a form the wire
       // Profile sharing sends profiles whose optional model selection is undefined.
       const profiles = [{ name: "Builder", modelSelection: undefined, runtimeMode: "auto" }];
       expect(
-        yield* broker.invoke("replicateProfiles", ["remote", profiles, undefined], ["remote"]),
+        yield* broker.forward("replicateProfiles", ["remote", profiles, undefined], ["remote"]),
       ).toBe("replicateProfiles");
-      expect(yield* broker.invoke("listThreads", ["remote"], ["remote"])).toBe("listThreads");
+      expect(yield* broker.forward("listThreads", ["remote"], ["remote"])).toBe("listThreads");
       expect(received).toEqual([
         ["remote", [{ name: "Builder", runtimeMode: "auto" }]],
         ["remote"],
@@ -132,9 +140,33 @@ it.effect("relays calls whose arguments hold undefined fields in a form the wire
       const cyclic: Record<string, unknown> = {};
       cyclic.self = cyclic;
       expect(
-        yield* failureMessage(broker.invoke("createSkill", ["remote", cyclic], ["remote"])),
+        yield* failureMessage(broker.forward("createSkill", ["remote", cyclic], ["remote"])),
       ).toContain("cannot be relayed");
       expect(broker.available()).toBe(true);
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("checks this server's own calls against their contract both ways", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* make;
+      const remote = EnvironmentId.make("remote");
+      yield* serve(broker, "desktop", { remote: ["read"] }, (method, args) =>
+        method === "listThreads"
+          ? {
+              result: {
+                items: [{ id: "child", settledAt: "2026-10-22T09:00:00.000Z", extra: true }],
+              },
+            }
+          : { result: { id: args[1], runs: "not a list" } },
+      );
+      const listed = yield* broker.call("listThreads", [remote]);
+      expect(listed.items.map((item) => item.id)).toEqual(["child"]);
+      expect(DateTime.isDateTime(listed.items[0]?.settledAt)).toBe(true);
+      expect(
+        yield* failureMessage(broker.call("getThread", [remote, ThreadId.make("child")])),
+      ).toContain("cannot read");
     }),
   ).pipe(Effect.provide(NodeServices.layer)),
 );

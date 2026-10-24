@@ -310,12 +310,15 @@ const makeSteppedClock = Effect.gen(function* () {
   }>();
   const stepped: Clock.Clock = {
     ...clock,
+    // Relayed calls run under the waiting chat's clock too; their timeout stays on the real one.
     sleep: (duration) =>
-      Effect.gen(function* () {
-        const wake = yield* Deferred.make<void>();
-        yield* Queue.offer(sleeps, { duration, wake });
-        yield* Deferred.await(wake);
-      }),
+      Duration.toMillis(duration) >= 60_000
+        ? clock.sleep(duration)
+        : Effect.gen(function* () {
+            const wake = yield* Deferred.make<void>();
+            yield* Queue.offer(sleeps, { duration, wake });
+            yield* Deferred.await(wake);
+          }),
   };
   /** Waits for the next poll's sleep, releases it, and returns how long it asked for. */
   const step = Effect.gen(function* () {

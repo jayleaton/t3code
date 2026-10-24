@@ -1,15 +1,17 @@
 import {
   createRoutedGatewayPort,
   GATEWAY_SCOPE_VALUES,
+  type GatewayPortRelay,
   type GatewayScope,
 } from "@t3tools/client-runtime/gateway";
 import { GatewayError, type GatewayToolContext } from "@t3tools/mcp-gateway";
 import { runGatewayTool } from "@t3tools/mcp-gateway/catalog";
 import {
   EnvironmentId,
+  McpGatewayRelayThread,
+  McpGatewayRelayThreadList,
   MessageId,
   ModelSelection,
-  OrchestrationV2RunStatus,
   OrchestratorMcpFailure,
   type OrchestratorMcpRemoteThreadReadResult,
   type OrchestratorMcpThreadReadInput,
@@ -17,7 +19,6 @@ import {
   type OrchestratorMcpThreadWaitInput,
   type OrchestratorMcpThreadWaitResult,
   ProjectId,
-  ProviderInstanceId,
   ProviderInteractionMode,
   RunId,
   RuntimeMode,
@@ -56,9 +57,11 @@ export const gatewayToolContext = Effect.gen(function* () {
   const local = Option.getOrUndefined(yield* Effect.serviceOption(LocalGatewayPort));
   if (local === undefined) return undefined;
   const broker = Option.getOrUndefined(yield* Effect.serviceOption(McpGatewayBroker));
-  const relay = broker && {
-    invoke: (method: string, args: ReadonlyArray<unknown>, environmentIds: ReadonlyArray<string>) =>
-      Effect.runPromise(broker.invoke(method, args, environmentIds)),
+  // The tool catalog is promise-based; its relayed calls still run under this server's services.
+  const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+  const relay: GatewayPortRelay | undefined = broker && {
+    invoke: (method, args, environmentIds) =>
+      runPromise(broker.forward(method, args, environmentIds)),
   };
   const grants = (): Record<string, ReadonlyArray<GatewayScope>> => {
     const relayed = Object.entries(broker?.grants() ?? {}).map(
@@ -68,7 +71,7 @@ export const gatewayToolContext = Effect.gen(function* () {
   };
   const context: GatewayToolContext = {
     port: createRoutedGatewayPort(local.environmentId, local.port, () =>
-      relay && broker.available() ? relay : undefined,
+      broker?.available() === true ? relay : undefined,
     ),
     grants,
   };
@@ -163,46 +166,7 @@ const callRemote = (remote: RemoteEnvironment, name: string, args: Record<string
     ),
   );
 
-const NullableString = Schema.optional(Schema.NullOr(Schema.String));
-
-/**
- * The thread as the relaying app's `getThread` reports it (gatewayThreadProjection). Fields
- * an older app may not send are optional.
- */
-const RemoteThread = Schema.Struct({
-  id: ThreadId,
-  projectId: ProjectId,
-  title: Schema.String,
-  modelSelection: Schema.Struct({ instanceId: ProviderInstanceId, model: Schema.String }),
-  runtimeMode: Schema.optional(RuntimeMode),
-  interactionMode: Schema.optional(ProviderInteractionMode),
-  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
-  parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
-  settledAt: NullableString,
-  runs: Schema.Array(
-    Schema.Struct({
-      id: RunId,
-      status: OrchestrationV2RunStatus,
-      providerInstanceId: ProviderInstanceId,
-      requestedAt: NullableString,
-      completedAt: NullableString,
-    }),
-  ),
-  messages: Schema.Array(
-    Schema.Struct({
-      id: MessageId,
-      role: Schema.String,
-      text: Schema.String,
-      runId: Schema.optional(Schema.NullOr(RunId)),
-      updatedAt: NullableString,
-    }),
-  ),
-  runtimeRequests: Schema.optional(Schema.Array(Schema.Unknown)),
-  createdAt: NullableString,
-  updatedAt: NullableString,
-});
-
-const decodeRemoteThread = Schema.decodeUnknownEffect(RemoteThread);
+const decodeRemoteThread = Schema.decodeUnknownEffect(McpGatewayRelayThread);
 
 const getRemoteThread = (remote: RemoteEnvironment, threadId: ThreadId) =>
   callRemote(remote, "t3_get_thread", { threadId }).pipe(
@@ -313,12 +277,7 @@ const FIRST_POLL = Duration.seconds(1);
 const MAX_POLL = Duration.seconds(5);
 const RELAY_FAILURES_TOLERATED = 3;
 
-const RemoteThreadSummaries = Schema.Struct({
-  items: Schema.Array(
-    Schema.Struct({ id: ThreadId, activeRunId: Schema.optional(Schema.NullOr(RunId)) }),
-  ),
-});
-const decodeSummaries = Schema.decodeUnknownEffect(RemoteThreadSummaries);
+const decodeSummaries = Schema.decodeUnknownEffect(McpGatewayRelayThreadList);
 
 /** Whether the environment's thread list still shows this run active: a small read per poll. */
 const stillActive = (remote: RemoteEnvironment, threadId: ThreadId, runId: RunId) =>

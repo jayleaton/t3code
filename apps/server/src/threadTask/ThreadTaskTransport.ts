@@ -1,4 +1,4 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, type McpGatewayRelayThreadTaskRequest } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -7,11 +7,7 @@ import * as Stream from "effect/Stream";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { McpGatewayBroker } from "../mcp/McpGatewayBroker.ts";
 
-/** A call between a task's owner and worker environments. Inputs are encoded contracts. */
-export interface ThreadTaskRemoteRequest {
-  readonly action: "remoteAssign" | "remoteDeliver" | "remoteOwnerAction" | "projectSnapshot";
-  readonly input: unknown;
-}
+export type ThreadTaskRemoteRequest = McpGatewayRelayThreadTaskRequest;
 
 /**
  * Reaches another environment through a connected T3 app. The receiving server
@@ -42,7 +38,7 @@ export const layerFromBroker = Layer.effect(
       localEnvironmentId: descriptor.environmentId,
       call: (environmentId, request) =>
         broker
-          .invoke("threadTask", [environmentId, request], [environmentId])
+          .call("threadTask", [environmentId, request])
           .pipe(Effect.mapError((error) => error.message)),
       peers: () =>
         Object.keys(broker.grants())

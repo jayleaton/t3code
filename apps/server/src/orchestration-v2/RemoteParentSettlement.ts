@@ -1,71 +1,164 @@
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import * as Context from "effect/Context";
-import * as DateTime from "effect/DateTime";
+import {
+  CommandId,
+  type EnvironmentId,
+  type OrchestrationV2StoredEvent,
+  type ThreadId,
+} from "@t3tools/contracts";
+import {
+  threadShellHasActiveWork,
+  turnItemUpdateCanEndBackgroundWork,
+} from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import type * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FiberMap from "effect/FiberMap";
 import * as Layer from "effect/Layer";
-import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import { McpGatewayBroker } from "../mcp/McpGatewayBroker.ts";
+import { EventSinkV2 } from "./EventSink.ts";
+import { OrchestratorV2 } from "./Orchestrator.ts";
+import { ProjectionStoreV2 } from "./ProjectionStore.ts";
+import { manualSettlementAbove } from "./SubRunSettlement.ts";
 
 /**
- * Whether a parent on another environment was settled by hand, read through a connected T3
- * app. A sub-run that was still working when that card settled follows it from this.
+ * A sub-run under a card on another environment follows that card's manual settle once it
+ * finishes. Only that environment can say how its card settled, through a connected T3 app that
+ * may take a minute per hop or never answer, so this asks beside the orchestrator: its run-ending
+ * handler, which also starts every thread's next queued run, never waits on a relay. The answer
+ * comes back as the same `thread.sub-run.settle` command a local parent's cascade sends.
  */
-export class RemoteParentSettlement extends Context.Service<
-  RemoteParentSettlement,
-  {
-    /**
-     * The manual settle time of the thread, or of its nearest manually settled ancestor past
-     * ones that only aged out. Null when none is, or when it cannot be told: no app reaches
-     * the environment, or the environment or app predates reporting how a thread settled.
-     */
-    readonly manualSettledAt: (
-      environmentId: EnvironmentId,
-      threadId: ThreadId,
-    ) => Effect.Effect<DateTime.Utc | null>;
-  }
->()("t3/orchestration-v2/RemoteParentSettlement") {}
-
-const RemoteThread = Schema.Struct({
-  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
-  parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
-  settledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
-  settlementSource: Schema.optional(Schema.NullOr(Schema.Literals(["manual", "inactivity"]))),
-});
-const decodeRemoteThread = Schema.decodeUnknownEffect(RemoteThread);
 
 // Parent links are acyclic; this only bounds a corrupt or adversarial chain.
 const MAX_HOPS = 16;
 
-export const layerFromBroker = Layer.effect(
-  RemoteParentSettlement,
+/**
+ * The manual settle time of the thread, or of its nearest manually settled ancestor past ones
+ * that only aged out. Null when none is, or when it cannot be told: no app reaches the
+ * environment, or the environment or app predates reporting how a thread settled.
+ */
+export const manualSettledAt = Effect.fn("RemoteParentSettlement.manualSettledAt")(function* (
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+): Effect.fn.Return<DateTime.Utc | null, never, McpGatewayBroker> {
+  const broker = yield* McpGatewayBroker;
+  let environment = environmentId;
+  let current = threadId;
+  for (let hop = 0; hop < MAX_HOPS; hop++) {
+    if (broker.grants()[environment]?.includes("read") !== true) return null;
+    const found = yield* broker.call("getThread", [environment, current]).pipe(Effect.option);
+    if (found._tag === "None" || found.value.settledAt == null) return null;
+    const thread = found.value;
+    if (thread.settlementSource === "manual") return thread.settledAt ?? null;
+    if (thread.settlementSource !== "inactivity" || thread.parentThreadId == null) return null;
+    environment = thread.parentEnvironmentId ?? environment;
+    current = thread.parentThreadId;
+  }
+  return null;
+});
+
+export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
+    const engine = yield* OrchestratorV2;
+    const projections = yield* ProjectionStoreV2;
+    const eventSink = yield* EventSinkV2;
     const broker = yield* McpGatewayBroker;
-    const read = (environmentId: EnvironmentId, threadId: ThreadId) =>
-      broker.grants()[environmentId]?.includes("read") === true
-        ? broker
-            .invoke("getThread", [environmentId, threadId], [environmentId])
-            .pipe(Effect.flatMap(decodeRemoteThread), Effect.option)
-        : Effect.succeedNone;
-    return RemoteParentSettlement.of({
-      manualSettledAt: Effect.fn("RemoteParentSettlement.manualSettledAt")(
-        function* (environmentId, threadId) {
-          let environment = environmentId;
-          let current = threadId;
-          for (let hop = 0; hop < MAX_HOPS; hop++) {
-            const found = yield* read(environment, current);
-            if (found._tag === "None" || found.value.settledAt == null) return null;
-            const thread = found.value;
-            if (thread.settlementSource === "manual") return thread.settledAt ?? null;
-            if (thread.settlementSource !== "inactivity" || thread.parentThreadId == null) {
-              return null;
-            }
-            environment = thread.parentEnvironmentId ?? environment;
-            current = thread.parentThreadId;
-          }
+    // One lookup per sub-run at a time; it reads the latest state when it answers.
+    const lookups = yield* FiberMap.make<ThreadId>();
+
+    const settle = (
+      threadId: ThreadId,
+      completion: string,
+      environmentId: EnvironmentId,
+      parent: ThreadId,
+    ) =>
+      manualSettledAt(environmentId, parent).pipe(
+        Effect.flatMap((parentSettledAt) =>
+          parentSettledAt === null
+            ? Effect.void
+            : engine.dispatch({
+                type: "thread.sub-run.settle",
+                commandId: CommandId.make(`server:sub-run-settle:${threadId}:${completion}`),
+                threadId,
+                parentSettledAt,
+              }),
+        ),
+        Effect.provideService(McpGatewayBroker, broker),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Could not follow a parent on another environment", {
+            threadId,
+            cause,
+          }),
+        ),
+      );
+
+    const onEnding = Effect.fn("RemoteParentSettlement.onEnding")(
+      function* (threadId: ThreadId, completion: string) {
+        const thread = yield* projections.getThread(threadId);
+        if (thread.settledOverride !== null) return;
+        const above = yield* manualSettlementAbove(projections, thread);
+        if (above === null || !("remote" in above)) return;
+        // Ask the other machine only once nothing here keeps the sub-run active.
+        const shell = yield* projections.getThreadShell(threadId);
+        if (
+          shell === null ||
+          threadShellHasActiveWork(shell) ||
+          (shell.pendingBackgroundTasks?.length ?? 0) > 0
+        ) {
+          return;
+        }
+        yield* FiberMap.run(
+          lookups,
+          threadId,
+          settle(threadId, completion, above.remote.environmentId, above.remote.threadId),
+          { onlyIfMissing: true },
+        );
+      },
+      (effect, threadId) =>
+        effect.pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Could not check a sub-run's remote parent", { threadId, cause }),
+          ),
+        ),
+    );
+
+    // The same endings the orchestrator settles local sub-runs on: a finished run, or background
+    // work its last turn left open ending on its own.
+    const completionOf = (stored: OrchestrationV2StoredEvent): string | null => {
+      const { event } = stored;
+      switch (event.type) {
+        case "run.updated":
+          return !String(stored.commandId).startsWith("command:runtime-reconcile:") &&
+            (event.payload.status === "completed" ||
+              event.payload.status === "interrupted" ||
+              event.payload.status === "cancelled")
+            ? String(event.payload.id)
+            : null;
+        case "turn-item.updated":
+          return turnItemUpdateCanEndBackgroundWork(event.payload)
+            ? `event:${stored.sequence}`
+            : null;
+        case "provider-thread.updated":
+          return `event:${stored.sequence}`;
+        default:
           return null;
-        },
+      }
+    };
+
+    const afterSequence = yield* eventSink.latestSequence().pipe(Effect.orDie);
+    yield* Stream.mergeAll(
+      (["run.updated", "turn-item.updated", "provider-thread.updated"] as const).map((eventType) =>
+        eventSink.stream({ afterSequence, eventType }),
       ),
-    });
+      { concurrency: "unbounded" },
+    ).pipe(
+      Stream.runForEach((stored) => {
+        const completion = completionOf(stored);
+        return completion === null ? Effect.void : onEnding(stored.event.threadId, completion);
+      }),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Remote parent settlement event stream failed", { cause }),
+      ),
+      Effect.forkScoped,
+    );
   }),
 );
