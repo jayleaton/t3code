@@ -13,8 +13,10 @@ import {
   type SidebarProjectGroupingMode,
 } from "@t3tools/contracts";
 import {
+  DEFAULT_AUTO_SETTLE_FINISHED_CHILDREN_AFTER_HOURS,
   DEFAULT_UNIFIED_SETTINGS,
   type DiffLayout,
+  MAX_AUTO_SETTLE_FINISHED_CHILDREN_AFTER_HOURS,
   MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   type ResponseStreamingMode,
@@ -443,6 +445,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests
       ? ["Keep threads with a PR"]
       : []),
+    ...(settings.autoSettleFinishedChildrenAfterHours !==
+    DEFAULT_UNIFIED_SETTINGS.autoSettleFinishedChildrenAfterHours
+      ? ["Auto-settle finished child chats"]
+      : []),
     ...(settings.autoResumeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads
       ? ["Auto-resume limited threads"]
       : []),
@@ -604,6 +610,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
+      autoSettleFinishedChildrenAfterHours:
+        DEFAULT_UNIFIED_SETTINGS.autoSettleFinishedChildrenAfterHours,
       autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
       snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
@@ -653,12 +661,18 @@ export function useSettingsRestore(onRestored?: () => void) {
 
 const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays ?? 3;
 
-function AutoSettleDaysInput({
+function SettingIntegerInput({
   value,
+  min,
+  max,
   onCommit,
+  "aria-label": ariaLabel,
 }: {
   value: number;
-  onCommit: (days: number) => void;
+  min: number;
+  max: number;
+  onCommit: (value: number) => void;
+  "aria-label": string;
 }) {
   const [draft, setDraft] = useState(String(value));
   const [draftSource, setDraftSource] = useState(value);
@@ -671,23 +685,19 @@ function AutoSettleDaysInput({
     <Input
       size="sm"
       type="number"
-      min={MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
-      max={MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
+      min={min}
+      max={max}
       className="w-full sm:w-24"
       value={draft}
       onChange={(event) => {
         setDraft(event.target.value);
         const parsed = Number(event.target.value);
-        if (
-          Number.isInteger(parsed) &&
-          parsed >= MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS &&
-          parsed <= MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS
-        ) {
+        if (Number.isInteger(parsed) && parsed >= min && parsed <= max) {
           onCommit(parsed);
         }
       }}
       onBlur={() => setDraft(String(value))}
-      aria-label="Days of inactivity before auto-settle"
+      aria-label={ariaLabel}
     />
   );
 }
@@ -805,6 +815,12 @@ export function GeneralSettingsPanel() {
   const supportsAutoSettlementScope = connectedEnvironments.every(
     (target) => target.serverConfig?.environment.capabilities.threadAutoSettlementScope === true,
   );
+  const supportsFinishedChildAutoSettlement =
+    connectedEnvironments.length > 0 &&
+    connectedEnvironments.every(
+      (target) =>
+        target.serverConfig?.environment.capabilities.threadAutoSettleFinishedChildren === true,
+    );
   const supportsRestartContinuation =
     connectedEnvironments.length > 0 &&
     connectedEnvironments.every(
@@ -1084,9 +1100,12 @@ export function GeneralSettingsPanel() {
                 title={searchableSetting("days-before-auto-settle").title}
                 description="Any new activity un-settles a thread automatically."
                 control={
-                  <AutoSettleDaysInput
+                  <SettingIntegerInput
                     value={settings.sidebarAutoSettleAfterDays}
+                    min={MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
+                    max={MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
                     onCommit={(days) => updateSettings({ sidebarAutoSettleAfterDays: days })}
+                    aria-label="Days of inactivity before auto-settle"
                   />
                 }
               />
@@ -1105,6 +1124,64 @@ export function GeneralSettingsPanel() {
                       updateSettings({ sidebarAutoSettleKeepPullRequests: checked })
                     }
                     aria-label="Keep threads with a PR"
+                  />
+                }
+              />
+            ) : null}
+          </>
+        ) : null}
+        {supportsFinishedChildAutoSettlement ? (
+          <>
+            <SettingsRow
+              serverScoped
+              settingKeys={["autoSettleFinishedChildrenAfterHours"]}
+              {...searchableSetting("auto-settle-finished-child-chats")}
+              description="Child chats that finished their work settle after this many hours without changes. Their parent stays."
+              resetAction={
+                settings.autoSettleFinishedChildrenAfterHours !==
+                DEFAULT_UNIFIED_SETTINGS.autoSettleFinishedChildrenAfterHours ? (
+                  <SettingResetButton
+                    label="child chat auto-settle"
+                    onClick={() =>
+                      updateSettings({
+                        autoSettleFinishedChildrenAfterHours:
+                          DEFAULT_UNIFIED_SETTINGS.autoSettleFinishedChildrenAfterHours,
+                      })
+                    }
+                  />
+                ) : null
+              }
+              control={
+                <ScopedSwitch
+                  settingKeys={["autoSettleFinishedChildrenAfterHours"]}
+                  checked={settings.autoSettleFinishedChildrenAfterHours > 0}
+                  onCheckedChange={(checked) =>
+                    updateSettings({
+                      autoSettleFinishedChildrenAfterHours: checked
+                        ? DEFAULT_AUTO_SETTLE_FINISHED_CHILDREN_AFTER_HOURS
+                        : 0,
+                    })
+                  }
+                  aria-label="Auto-settle finished child chats"
+                />
+              }
+            />
+            {settings.autoSettleFinishedChildrenAfterHours > 0 ? (
+              <SettingsRow
+                serverScoped
+                settingKeys={["autoSettleFinishedChildrenAfterHours"]}
+                title={searchableSetting("hours-before-child-auto-settle").title}
+                description="Any change to a child chat restarts the wait."
+                control={
+                  <SettingIntegerInput
+                    value={settings.autoSettleFinishedChildrenAfterHours}
+                    // 0 is the off state, owned by the switch above.
+                    min={1}
+                    max={MAX_AUTO_SETTLE_FINISHED_CHILDREN_AFTER_HOURS}
+                    onCommit={(hours) =>
+                      updateSettings({ autoSettleFinishedChildrenAfterHours: hours })
+                    }
+                    aria-label="Hours before a finished child chat settles"
                   />
                 }
               />

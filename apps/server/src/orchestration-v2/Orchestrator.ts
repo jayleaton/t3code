@@ -95,6 +95,7 @@ import {
 } from "./CheckpointRestoreSafety.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
 import { planThreadParentRepairs } from "./threadParentLinks.ts";
+import { isFinishedChild } from "./autoSettlement.ts";
 import {
   CommandPolicyV2,
   isNativeMaintenanceCommand,
@@ -2738,6 +2739,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     options?: {
       readonly keepProviderSession?: boolean;
       readonly settlementSource?: "manual" | "inactivity";
+      readonly settlementReason?: "finished-child";
       /** The ancestor whose manual settle this one follows. */
       readonly settledBy?: ThreadId | null;
     },
@@ -3170,6 +3172,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...thread,
             settledOverride: "settled",
             settlementSource: options?.settlementSource ?? "manual",
+            settlementReason: options?.settlementReason ?? null,
             settledBy: options?.settledBy ?? (alreadySettled ? (thread.settledBy ?? null) : null),
             settledAt: alreadySettled ? thread.settledAt : (command.settledAt ?? now),
             unsettledAt: null,
@@ -3189,6 +3192,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...thread,
             settledOverride: "active",
             settlementSource: null,
+            settlementReason: null,
             settledBy: null,
             settledAt: null,
             // Each new explicit unsettle restarts the full idle period.
@@ -11629,7 +11633,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           DateTime.toEpochMillis(thread.updatedAt) > DateTime.toEpochMillis(command.snapshotAt) ||
           !candidates.some(
             (candidate) =>
-              !threadShellHasActiveWork(candidate) && !threadHasPullRequestWatch(candidate),
+              !threadShellHasActiveWork(candidate) &&
+              !threadHasPullRequestWatch(candidate) &&
+              (command.reason !== "finished-child" || isFinishedChild(candidate)),
           ) ||
           (yield* projectionStore
             .hasActiveDescendants(command.threadId)
@@ -11641,17 +11647,25 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             cause: `Thread ${command.threadId} changed before automatic settlement.`,
           });
         }
-        yield* dispatchThreadMutation(
-          {
-            type: "thread.settle",
-            commandId: command.commandId,
-            threadId: command.threadId,
-            ...(command.settledAt === undefined ? {} : { settledAt: command.settledAt }),
-          },
-          events,
-          effects,
-          { settlementSource: "inactivity" },
-        );
+        const settle = {
+          type: "thread.settle",
+          commandId: command.commandId,
+          threadId: command.threadId,
+          ...(command.settledAt === undefined ? {} : { settledAt: command.settledAt }),
+        } as const;
+        if (command.reason === "finished-child") {
+          // A finished child settles like a manual settle, so its own sub-runs follow and
+          // un-settling it brings them back. Settlement never moves up the tree, so the
+          // parent stays as it is.
+          yield* dispatchThreadMutation(settle, events, effects, {
+            settlementReason: "finished-child",
+          });
+          yield* planSettlementCascade(settle, null, events, effects);
+        } else {
+          yield* dispatchThreadMutation(settle, events, effects, {
+            settlementSource: "inactivity",
+          });
+        }
         break;
       }
       case "thread.delete": {

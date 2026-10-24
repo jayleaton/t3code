@@ -206,6 +206,42 @@ describe("auto-settlement search availability", () => {
     ]);
   });
 
+  it("gates finished child auto-settle on its own capability", () => {
+    const childCapable = {
+      ...capable,
+      environmentId: EnvironmentId.make("child-capable"),
+      serverConfig: {
+        environment: {
+          capabilities: { threadAutoSettlement: true, threadAutoSettleFinishedChildren: true },
+        },
+      },
+    };
+    const mixed = [capable, childCapable];
+    const availability = getThreadAutoSettlementSearchAvailability(
+      mixed,
+      { kind: "all", environmentIds: mixed.map((entry) => entry.environmentId) },
+      "threadAutoSettleFinishedChildren",
+    );
+    expect(availability).toEqual({
+      eligibleEnvironmentIds: [childCapable.environmentId],
+      isTargetAvailable: false,
+    });
+    const items = filterAvailableSettingsSearchItems({
+      hasCloudPublicConfig: false,
+      hasEnvironment: true,
+      hasProviderSettingsEnvironment: true,
+      hasMacProviderSettingsEnvironment: false,
+      canManageLocalBackend: false,
+      isWslSettingsRowVisible: false,
+      hasThreadAutoSettlement: true,
+      hasThreadAutoSettleFinishedChildren: true,
+    });
+    expect(searchSettings("finished child", items).map((item) => item.id)).toEqual([
+      "auto-settle-finished-child-chats",
+      "hours-before-child-auto-settle",
+    ]);
+  });
+
   it("offers only capable environments when an aggregate has mixed capabilities", () => {
     expect(
       getThreadAutoSettlementSearchAvailability(environments, {

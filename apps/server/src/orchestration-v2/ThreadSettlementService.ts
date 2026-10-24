@@ -18,7 +18,7 @@ import { forkParked } from "../serverActivation.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
-import { resolveAutoSettlementAt } from "./autoSettlement.ts";
+import { resolveAutoSettlementAt, resolveFinishedChildSettlementAt } from "./autoSettlement.ts";
 
 export class ThreadSettlementServiceV2 extends Context.Service<
   ThreadSettlementServiceV2,
@@ -31,6 +31,7 @@ export class ThreadSettlementServiceV2 extends Context.Service<
 /** Identity of age settings; unrelated edits do not trigger a sweep. */
 function autoSettlementSettingsKey(settings: import("@t3tools/contracts").ServerSettings): string {
   return JSON.stringify([
+    settings.autoSettleFinishedChildrenAfterHours,
     settings.sidebarAutoSettleAfterDays,
     settings.sidebarAutoSettleKeepPullRequests,
     Object.entries(settings.projectSettingsOverrides)
@@ -64,6 +65,7 @@ export const make = Effect.gen(function* () {
     const settings = yield* settingsService.getSettings;
     const enabled = (days: number | null | undefined) => days != null && days > 0;
     if (
+      !enabled(settings.autoSettleFinishedChildrenAfterHours) &&
       !enabled(settings.sidebarAutoSettleAfterDays) &&
       !Object.values(settings.projectSettingsOverrides).some((entry) =>
         enabled(entry.sidebarAutoSettleAfterDays),
@@ -80,15 +82,26 @@ export const make = Effect.gen(function* () {
             thread.projectId,
           ).settings;
           const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
-          const settledAt = resolveAutoSettlementAt({
+          // The deadline is recomputed from persisted activity on every sweep, so a
+          // restart neither loses nor restarts a child's clock.
+          const finishedChildAt = resolveFinishedChildSettlementAt({
             thread,
             nowMs,
-            autoSettleAfterDays: current.sidebarAutoSettleAfterDays,
+            afterHours: current.autoSettleFinishedChildrenAfterHours,
             autoSettleKeepPullRequests: current.sidebarAutoSettleKeepPullRequests,
           });
+          const settledAt =
+            finishedChildAt ??
+            resolveAutoSettlementAt({
+              thread,
+              nowMs,
+              autoSettleAfterDays: current.sidebarAutoSettleAfterDays,
+              autoSettleKeepPullRequests: current.sidebarAutoSettleKeepPullRequests,
+            });
           if (settledAt === null || (yield* projections.hasActiveDescendants(thread.id))) return;
-          // Age settlement belongs to this card alone. Child chats and subagents
-          // retain their own clocks; only manual settlement cascades.
+          // Age settlement belongs to this card alone: child chats and subagents
+          // retain their own clocks. A finished child settles like a manual settle,
+          // taking its sub-runs along; its parent is never touched.
           yield* orchestrator.dispatch({
             type: "thread.auto-settle",
             commandId: CommandId.make(
@@ -97,6 +110,7 @@ export const make = Effect.gen(function* () {
             threadId: thread.id,
             snapshotAt: thread.updatedAt,
             settledAt,
+            ...(finishedChildAt === null ? {} : { reason: "finished-child" as const }),
           });
         }).pipe(
           Effect.catchCause((cause) =>

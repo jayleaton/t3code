@@ -92,6 +92,17 @@ export const SidebarAutoSettleAfterDays = Schema.Number.check(
 );
 export type SidebarAutoSettleAfterDays = typeof SidebarAutoSettleAfterDays.Type;
 const DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS: SidebarAutoSettleAfterDays = 3;
+const MIN_AUTO_SETTLE_FINISHED_CHILDREN_AFTER_HOURS = 0;
+export const MAX_AUTO_SETTLE_FINISHED_CHILDREN_AFTER_HOURS = 720;
+/** Hours a finished child chat sits unchanged before it settles; 0 turns the rule off. */
+export const AutoSettleFinishedChildrenAfterHours = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_AUTO_SETTLE_FINISHED_CHILDREN_AFTER_HOURS,
+    maximum: MAX_AUTO_SETTLE_FINISHED_CHILDREN_AFTER_HOURS,
+  }),
+);
+export type AutoSettleFinishedChildrenAfterHours = typeof AutoSettleFinishedChildrenAfterHours.Type;
+export const DEFAULT_AUTO_SETTLE_FINISHED_CHILDREN_AFTER_HOURS: AutoSettleFinishedChildrenAfterHours = 12;
 export const MIN_GLASS_OPACITY = 40;
 export const MAX_GLASS_OPACITY = 100;
 export const GlassOpacity = Schema.Int.check(
@@ -1310,6 +1321,9 @@ export const ServerSettings = Schema.Struct({
   sidebarAutoSettleKeepPullRequests: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
+  autoSettleFinishedChildrenAfterHours: AutoSettleFinishedChildrenAfterHours.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_SETTLE_FINISHED_CHILDREN_AFTER_HOURS)),
+  ),
   // Legacy field accepted from deployed clients; settlement now uses only idle age.
   sidebarAutoSettleOnMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   backgroundActivity: BackgroundActivitySettings,
@@ -1685,6 +1699,7 @@ export const ServerSettingsPatch = Schema.Struct({
   idleCompaction: Schema.optionalKey(IdleCompactionMode),
   sidebarAutoSettleKeepPullRequests: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
+  autoSettleFinishedChildrenAfterHours: Schema.optionalKey(AutoSettleFinishedChildrenAfterHours),
   autoResumeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(

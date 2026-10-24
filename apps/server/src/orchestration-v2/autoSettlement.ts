@@ -4,7 +4,8 @@ import { threadHasPullRequestWatch } from "@t3tools/shared/threadPullRequests";
 import * as DateTime from "effect/DateTime";
 import type * as ProjectionStore from "./ProjectionStore.ts";
 
-const DAY_MS = 24 * 60 * 60 * 1_000;
+const HOUR_MS = 60 * 60 * 1_000;
+const DAY_MS = 24 * HOUR_MS;
 export const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
 
 function toMillis(value: DateTime.Utc | null | undefined): number | null {
@@ -76,9 +77,43 @@ export function resolveAutoSettlementAt(input: {
   readonly autoSettleAfterDays: number | null;
   readonly autoSettleKeepPullRequests?: boolean;
 }): DateTime.Utc | null {
+  if (input.autoSettleAfterDays === null || input.autoSettleAfterDays <= 0) return null;
+  return resolveIdleSince(input, input.autoSettleAfterDays * DAY_MS);
+}
+
+/**
+ * When a child chat that finished its work settles: it has a parent, its last run completed (or
+ * it never ran), and nothing about it changed for the period. A failed or interrupted child is
+ * not done; it waits for someone to look at it under the age rule instead.
+ */
+export function resolveFinishedChildSettlementAt(input: {
+  readonly thread: ProjectionStore.ProjectionSettlementCandidate;
+  readonly nowMs: number;
+  readonly afterHours: number;
+  readonly autoSettleKeepPullRequests?: boolean;
+}): DateTime.Utc | null {
+  if (input.afterHours <= 0 || !isFinishedChild(input.thread)) return null;
+  return resolveIdleSince(input, input.afterHours * HOUR_MS);
+}
+
+export function isFinishedChild(
+  thread: Pick<ProjectionStore.ProjectionSettlementCandidate, "parentThreadId" | "status">,
+): boolean {
+  return (
+    thread.parentThreadId != null && (thread.status === "completed" || thread.status === "idle")
+  );
+}
+
+function resolveIdleSince(
+  input: {
+    readonly thread: ProjectionStore.ProjectionSettlementCandidate;
+    readonly nowMs: number;
+    readonly autoSettleKeepPullRequests?: boolean;
+  },
+  periodMs: number,
+): DateTime.Utc | null {
   const { thread } = input;
   if (!isAutoSettlementCandidate(thread, input.nowMs)) return null;
-  if (input.autoSettleAfterDays === null || input.autoSettleAfterDays <= 0) return null;
   const hasPullRequest =
     (thread.pullRequests?.length ?? 0) > 0 ||
     thread.linkedPullRequest != null ||
@@ -101,7 +136,7 @@ export function resolveAutoSettlementAt(input: {
     toMillis(thread.latestRunStartedAt),
     toMillis(thread.latestRunCompletedAt),
   ]);
-  return activityAtMs !== null && activityAtMs <= input.nowMs - input.autoSettleAfterDays * DAY_MS
+  return activityAtMs !== null && activityAtMs <= input.nowMs - periodMs
     ? DateTime.makeUnsafe(activityAtMs)
     : null;
 }

@@ -153,6 +153,12 @@ automatic settlement. New activity and un-settling reset the idle clock. Pull re
 not trigger automatic settlement. Turn on **Keep threads with a PR** in **Settings → General** to
 also keep threads that have a pull request out of inactivity settlement.
 
+Child chats, such as delegated tasks, settle sooner: once one has finished its work and gone 12
+hours without changes, it settles on its own, along with its own idle child chats. Its parent
+stays where it is, and un-settling the child brings its children back. Change the hours with
+**Auto-settle finished child chats** in **Settings → General**, or turn it off. This rule applies to the whole
+environment, not to single projects.
+
 To keep one thread out of the settled shelf no matter how long it sits idle, open its menu,
 choose **Auto-settle behavior**, and pick **Disabled**. The current option is checked. Pick
 **Enabled** to return to the usual rules. Manual settle, snooze, and archive still work while it

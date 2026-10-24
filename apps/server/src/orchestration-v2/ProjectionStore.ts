@@ -233,7 +233,7 @@ export type ProjectionSettlementCandidate = Pick<
   | "pendingRuntimeRequest"
   | "pendingBackgroundTasks"
 > &
-  Pick<OrchestrationV2AppThread, "lastSnoozeWakeAt"> & {
+  Pick<OrchestrationV2AppThread, "lastSnoozeWakeAt" | "parentThreadId"> & {
     readonly latestUserAuthoredMessageAt: DateTime.Utc | null;
     readonly latestBackgroundActivityAt?: DateTime.Utc | null;
   };

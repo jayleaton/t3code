@@ -43,7 +43,7 @@ vi.mock("../../state/preferences", () => ({
   mobilePreferencesAtom: {},
   updateMobilePreferencesAtom: {},
 }));
-vi.mock("./components/AutoSettleDaysField", () => ({ AutoSettleDaysField: () => null }));
+vi.mock("./components/AutoSettleDurationField", () => ({ AutoSettleDurationField: () => null }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ bottom: 0 }) }));
 vi.mock("@react-navigation/native", () => ({ useNavigation: () => ({}) }));
 vi.mock("../../state/session", () => ({

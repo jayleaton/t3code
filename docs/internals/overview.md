@@ -92,7 +92,9 @@ notification, so the [PR sync reactor](../../apps/server/src/orchestration-v2/Pu
 re-reads a thread's open links when a run that ran a merge or close command ends. The guarded
 `thread.auto-settle` command rejects newer activity, explicit settlement overrides, and live or
 blocked work. It records the activity timestamp for stable
-sorting and detaches idle provider sessions. Clients render the persisted result; they do not
+sorting and detaches idle provider sessions. Age settlement settles one card and never cascades.
+The finished-child rule (`reason: "finished-child"`) settles a done child like a manual settle,
+so its sub-runs follow and un-settling returns them; settlement never moves up to the parent. Clients render the persisted result; they do not
 derive settlement from their own clocks or PR caches.
 
 ## Waiting for asynchronous work

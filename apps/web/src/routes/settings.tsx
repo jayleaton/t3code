@@ -48,8 +48,12 @@ function SettingsScopeBoundary({ pathname, children }: { pathname: string; child
   const { environments } = useEnvironments();
   const hash = useLocation({ select: (location) => location.hash });
   const searchTarget = getSettingsSearchTargetScope(hash);
-  const autoSettlementAvailability = searchTarget?.requiresThreadAutoSettlement
-    ? getThreadAutoSettlementSearchAvailability(environments, scope)
+  const autoSettlementAvailability = searchTarget?.requiresCapability
+    ? getThreadAutoSettlementSearchAvailability(
+        environments,
+        scope,
+        searchTarget.requiresCapability,
+      )
     : null;
   if (
     scope.kind !== "unavailable" &&

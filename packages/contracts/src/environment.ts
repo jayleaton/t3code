@@ -127,6 +127,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadPinReorder: Schema.optionalKey(Schema.Boolean),
   threadActiveReorder: Schema.optionalKey(Schema.Boolean),
   threadAutoSettleOptOut: Schema.optionalKey(Schema.Boolean),
+  /** Server settles finished child chats after `autoSettleFinishedChildrenAfterHours`. */
+  threadAutoSettleFinishedChildren: Schema.optionalKey(Schema.Boolean),
   threadTitleRegeneration: Schema.optionalKey(Schema.Boolean),
   threadVisitedTracking: Schema.optionalKey(Schema.Boolean),
   threadPullRequestLinking: Schema.optionalKey(Schema.Boolean),
