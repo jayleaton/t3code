@@ -444,6 +444,12 @@ export const OrchestrationV2AppThread = Schema.Struct({
   ),
   // Only manual settlement can complete a deferred parent cascade.
   settlementSource: Schema.optional(Schema.NullOr(Schema.Literals(["manual", "inactivity"]))),
+  /**
+   * The ancestor whose manual settle this thread followed; null when it settled on its own.
+   * Un-settling that ancestor brings back exactly these. Absent on records from before it was
+   * kept, which fall back to matching the ancestor's settle time.
+   */
+  settledBy: Schema.optional(Schema.NullOr(ThreadId)),
   unsettledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -3162,6 +3168,19 @@ const OrchestrationV2InternalCommand = Schema.Union([
      * manual settle time, as its environment reported it. Ignored otherwise.
      */
     parentSettledAt: Schema.optional(Schema.DateTimeUtc),
+  }),
+  /**
+   * One step of a settlement cascade, sent by the effect worker to each sub-run that follows
+   * `settledBy`'s manual settle or un-settle. Applies `thread.settle`, `thread.sub-run.settle`
+   * or `thread.unsettle` to this thread alone; the cascade walks the rest.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.settlement.follow"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    action: Schema.Literals(["settle", "sub-run.settle", "unsettle"]),
+    settledBy: ThreadId,
+    settledAt: Schema.DateTimeUtc,
   }),
   /**
    * Sets a thread's owner and parent relationship outright: records the kind

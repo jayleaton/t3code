@@ -19,6 +19,7 @@ import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as EffectWorker from "./EffectWorker.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { OrchestratorV2 } from "./Orchestrator.ts";
 import { ProjectionStoreV2, layer as projectionLayer } from "./ProjectionStore.ts";
@@ -140,6 +141,12 @@ const harness = Effect.gen(function* () {
       });
     });
   return { orchestrator, projections, create, setParent, thread, kindOf, legacySpawned };
+});
+
+/** Runs what the commands so far left in the outbox, settlement cascades among them. */
+const drainEffects = Effect.gen(function* () {
+  const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+  yield* worker.drain();
 });
 
 it.effect("chats created under a parent are children; detaching makes them top-level", () =>
@@ -301,6 +308,7 @@ it.effect("settling a parent settles its children and its subagents; unsettle re
       commandId: CommandId.make("settle:captain"),
       threadId: ThreadId.make("captain"),
     });
+    yield* drainEffects;
     const captainAt = yield* settledAt("captain");
     assert.isNotNull(captainAt);
     assert.deepEqual(yield* settledAt("doug"), captainAt);
@@ -312,6 +320,7 @@ it.effect("settling a parent settles its children and its subagents; unsettle re
       threadId: ThreadId.make("captain"),
       reason: "user",
     });
+    yield* drainEffects;
     assert.isNull(yield* settledAt("doug"));
     assert.isNull(yield* settledAt("helper"));
   }).pipe(

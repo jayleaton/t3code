@@ -504,6 +504,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "checkpoint.rollback.fail":
     case "thread.background-work.settle":
     case "thread.sub-run.settle":
+    case "thread.settlement.follow":
     case "thread.parent-link.repair":
     case "thread.stop":
     case "provider.switch":
@@ -2737,6 +2738,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     options?: {
       readonly keepProviderSession?: boolean;
       readonly settlementSource?: "manual" | "inactivity";
+      /** The ancestor whose manual settle this one follows. */
+      readonly settledBy?: ThreadId | null;
     },
   ) {
     const thread = yield* projectionStore.getThread(command.threadId).pipe(
@@ -3167,6 +3170,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...thread,
             settledOverride: "settled",
             settlementSource: options?.settlementSource ?? "manual",
+            settledBy: options?.settledBy ?? (alreadySettled ? (thread.settledBy ?? null) : null),
             settledAt: alreadySettled ? thread.settledAt : (command.settledAt ?? now),
             unsettledAt: null,
             pinnedAt: null,
@@ -3185,6 +3189,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...thread,
             settledOverride: "active",
             settlementSource: null,
+            settledBy: null,
             settledAt: null,
             // Each new explicit unsettle restarts the full idle period.
             unsettledAt: now,
@@ -9047,6 +9052,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     command: Extract<OrchestrationV2ServerCommand, { readonly type: "thread.sub-run.settle" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    settledBy?: ThreadId,
   ) {
     const records = yield* projectionStore
       .getThreadRecords(command.threadId, ["runs", "runtimeRequests"])
@@ -9088,9 +9094,110 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       },
       events,
       effects,
-      { keepProviderSession: true },
+      {
+        keepProviderSession: true,
+        // A parent on another machine cannot be named here; its own cascade reaches this one.
+        settledBy: settledBy ?? (above !== null && "settledBy" in above ? above.settledBy : null),
+      },
     );
   });
+
+  /** One step of a cascade the effect worker walks; see SettlementCascade. */
+  const dispatchSettlementFollow = Effect.fn("orchestrationV2.dispatch.settlementFollow")(
+    function* (
+      command: Extract<OrchestrationV2ServerCommand, { readonly type: "thread.settlement.follow" }>,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+      effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    ) {
+      const { commandId, threadId } = command;
+      switch (command.action) {
+        case "settle":
+          return yield* dispatchThreadMutation(
+            { type: "thread.settle", commandId, threadId, settledAt: command.settledAt },
+            events,
+            effects,
+            { settledBy: command.settledBy },
+          );
+        case "unsettle":
+          return yield* dispatchThreadMutation(
+            { type: "thread.unsettle", commandId, threadId, reason: "user" },
+            events,
+            effects,
+          );
+        case "sub-run.settle":
+          return yield* dispatchSubRunSettle(
+            { type: "thread.sub-run.settle", commandId, threadId },
+            events,
+            effects,
+            command.settledBy,
+          );
+      }
+    },
+  );
+
+  /**
+   * A manual settle, a finished sub-run following one, or an un-settle reversing one carries on
+   * down the sub-run tree after it commits, as an effect the worker drains (SettlementCascade).
+   * The user's request returns at once and a restart mid-cascade resumes it.
+   */
+  const planSettlementCascade = Effect.fn("orchestrationV2.dispatch.planSettlementCascade")(
+    function* (
+      command: Extract<
+        OrchestrationV2ServerCommand,
+        { readonly type: "thread.settle" | "thread.sub-run.settle" | "thread.unsettle" }
+      >,
+      before: OrchestrationV2AppThread | null,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+      effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    ) {
+      const planned = yield* Ref.get(events);
+      let cascade: { readonly settledBy: ThreadId; readonly settledAt: DateTime.Utc } | null = null;
+      if (command.type === "thread.unsettle") {
+        const unsettled = planned.some(
+          (event) => event.type === "thread.unsettled" && event.threadId === command.threadId,
+        );
+        if (
+          unsettled &&
+          before !== null &&
+          before.settledOverride === "settled" &&
+          before.settlementSource !== "inactivity" &&
+          before.settledAt !== null
+        ) {
+          cascade = { settledBy: before.settledBy ?? before.id, settledAt: before.settledAt };
+        }
+      } else {
+        const settled = planned.findLast(
+          (event) => event.type === "thread.settled" && event.threadId === command.threadId,
+        );
+        if (settled?.type === "thread.settled" && settled.payload.settledAt != null) {
+          cascade = {
+            settledBy: settled.payload.settledBy ?? command.threadId,
+            settledAt: settled.payload.settledAt,
+          };
+        }
+      }
+      if (cascade === null) return;
+      const request = {
+        type: "thread-settlement.cascade",
+        action:
+          command.type === "thread.unsettle"
+            ? "unsettle"
+            : command.type === "thread.settle"
+              ? "settle"
+              : "sub-run.settle",
+        ...cascade,
+      } as const;
+      yield* Ref.update(effects, (existing) => [
+        ...existing,
+        {
+          id: `effect:${command.commandId}:thread-settlement.cascade`,
+          commandId: command.commandId,
+          threadId: command.threadId,
+          request,
+        } satisfies PendingOrchestrationEffectV2,
+      ]);
+    },
+  );
   // A successful Stop may have no terminal event to ingest: the session or
   // native turn already died, or its final write failed when storage filled.
   const settleInterruptedRun = Effect.fn("Orchestrator.settleInterruptedRun")(function* (input: {
@@ -11574,10 +11681,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           }),
         );
       }
+      case "thread.settle":
+      case "thread.unsettle": {
+        // Only reverse a manual cascade; independently aged cards keep their clocks.
+        const before =
+          command.type === "thread.unsettle"
+            ? yield* projectionStore
+                .getThread(command.threadId)
+                .pipe(Effect.orElseSucceed(() => null))
+            : null;
+        yield* dispatchThreadMutation(command, events, effects);
+        yield* planSettlementCascade(command, before, events, effects);
+        break;
+      }
+      case "thread.settlement.follow":
+        yield* dispatchSettlementFollow(command, events, effects);
+        break;
       case "thread.archive":
       case "thread.unarchive":
-      case "thread.settle":
-      case "thread.unsettle":
       case "thread.snooze":
       case "thread.unsnooze":
       case "thread.auto-settle.set":
@@ -11792,6 +11913,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "thread.sub-run.settle":
         yield* dispatchSubRunSettle(command, events, effects);
+        yield* planSettlementCascade(command, null, events, effects);
         break;
       case "thread.parent-link.repair":
         yield* dispatchParentLinkRepair(command, events);
@@ -11910,6 +12032,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         planned.events.length > 0 ||
         command.type === "thread.background-work.settle" ||
         command.type === "thread.sub-run.settle" ||
+        command.type === "thread.settlement.follow" ||
         command.type === "thread.stop" ||
         command.type === "subagent.stop"
           ? Effect.succeed(planned)
@@ -12061,72 +12184,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   });
 
   /**
-   * Settlement follows the sub-run tree. A thread that settles takes its
-   * unsettled sub-runs with it, and a user un-settle brings back the sub-runs
-   * that settled with it (same settledAt). Each sub-run gets its own command,
-   * dispatched after the parent's lock is released, and recurses from there,
-   * so its own guard applies: a working child chat or subagent stays active
-   * and follows the manual cascade once its run completes. Age-based
-   * automatic settlement never cascades.
-   */
-  const cascadeSettlement = Effect.fn("orchestrationV2.dispatch.cascadeSettlement")(function* (
-    command: Extract<
-      OrchestrationV2ServerCommand,
-      {
-        readonly type:
-          | "thread.settle"
-          | "thread.auto-settle"
-          | "thread.sub-run.settle"
-          | "thread.unsettle";
-      }
-    >,
-    settledAt: DateTime.Utc,
-  ) {
-    const settledAtMs = DateTime.toEpochMillis(settledAt);
-    const visited = new Set<ThreadId>([command.threadId]);
-    const pending = [command.threadId];
-    for (let index = 0; index < pending.length; index++) {
-      const children = yield* projectionStore
-        .getChildThreads(pending[index]!)
-        .pipe(Effect.orElseSucceed(() => []));
-      // Child chats are the cards the user sees; subagents only show in Lineage.
-      for (const child of children.toSorted(
-        (left, right) =>
-          Number(left.parentRelationship === "subagent") -
-          Number(right.parentRelationship === "subagent"),
-      )) {
-        if (child.parentEnvironmentId != null || visited.has(child.id)) continue;
-        visited.add(child.id);
-        const settled = child.settledOverride === "settled";
-        const follows =
-          command.type === "thread.unsettle"
-            ? settled &&
-              child.settlementSource !== "inactivity" &&
-              child.settledAt != null &&
-              DateTime.toEpochMillis(child.settledAt) === settledAtMs
-            : !settled;
-        if (!follows) {
-          // A card settled on its own keeps its clock, but its sub-runs still follow.
-          if (settled) pending.push(child.id);
-          continue;
-        }
-        const commandId = CommandId.make(`${command.commandId}:cascade:${child.id}`);
-        yield* dispatchWithReceipt(
-          command.type === "thread.unsettle"
-            ? { type: "thread.unsettle", commandId, threadId: child.id, reason: "user" }
-            : command.type === "thread.settle"
-              ? { type: "thread.settle", commandId, threadId: child.id, settledAt }
-              : { type: "thread.sub-run.settle", commandId, threadId: child.id },
-        ).pipe(
-          Effect.catch((cause) =>
-            Effect.logDebug("Sub-run kept its settlement", { threadId: child.id, cause }),
-          ),
-        );
-      }
-    }
-  });
-
-  /**
    * The cycle check reads the new parent's ancestors, which other threads'
    * locks guard. Two crossing moves (A under B, B under A) each pass alone,
    * so every parent change takes this one permit as well.
@@ -12161,7 +12218,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   });
 
   // dispatchWithReceiptEffect owns the dispatch span; this wrapper adds the parent-link
-  // lock and the settlement cascade. The annotation breaks the cascade's recursive inference.
+  // lock and detaches a deleted chat's children. The annotation breaks recursive inference.
   const dispatchWithReceipt = Effect.fnUntraced(function* (
     command: OrchestrationV2ServerCommand,
   ): Effect.fn.Return<OrchestratorV2DispatchResult, OrchestratorV2Error> {
@@ -12176,31 +12233,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       yield* detachChildren(command);
       return result;
     }
-    if (command.type !== "thread.unsettle") {
-      const result = yield* dispatchLocked(command);
-      if (command.type === "thread.settle" || command.type === "thread.sub-run.settle") {
-        const settled = result.storedEvents.find(
-          (stored) =>
-            stored.event.type === "thread.settled" && stored.event.threadId === command.threadId,
-        );
-        if (settled?.event.type === "thread.settled" && settled.event.payload.settledAt != null) {
-          yield* cascadeSettlement(command, settled.event.payload.settledAt);
-        }
-      }
-      return result;
-    }
-    // Only reverse a manual cascade; independently aged cards keep their clocks.
-    const settledAt = yield* projectionStore.getThread(command.threadId).pipe(
-      Effect.map((thread) =>
-        thread.settledOverride === "settled" && thread.settlementSource !== "inactivity"
-          ? thread.settledAt
-          : null,
-      ),
-      Effect.orElseSucceed(() => null),
-    );
-    const result = yield* dispatchLocked(command);
-    if (settledAt != null) yield* cascadeSettlement(command, settledAt);
-    return result;
+    return yield* dispatchLocked(command);
   });
 
   /**

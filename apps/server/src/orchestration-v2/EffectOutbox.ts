@@ -117,6 +117,15 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     type: Schema.Literal("delegated-tasks.stop"),
     reason: Schema.optional(Schema.String),
   }),
+  /** Carries a manual settle or un-settle of the effect's thread down its local sub-run tree. */
+  Schema.Struct({
+    type: Schema.Literal("thread-settlement.cascade"),
+    action: Schema.Literals(["settle", "sub-run.settle", "unsettle"]),
+    /** The ancestor whose manual settle the tree follows. */
+    settledBy: ThreadId,
+    /** The settle time applied, or for an un-settle the one reversed. */
+    settledAt: Schema.DateTimeUtcFromString,
+  }),
 ]);
 export type OrchestrationEffectRequestV2 = typeof OrchestrationEffectRequestV2.Type;
 
@@ -131,6 +140,7 @@ export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
   "attachment.cleanup",
   "thread-title.generate",
   "delegated-tasks.stop",
+  "thread-settlement.cascade",
 ] as const satisfies ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
 
 export const PROCESS_BOUND_EFFECT_TYPES = [
