@@ -7,6 +7,7 @@ import * as Scope from "effect/Scope";
 
 import type * as Electron from "electron";
 
+import * as DesktopConfig from "./DesktopConfig.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import { makeComponentLogger } from "./DesktopObservability.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
@@ -159,6 +160,10 @@ function quitFromSignal(
   );
 }
 
+const isSupervisedRelaunch = Effect.gen(function* () {
+  return (yield* DesktopConfig.DesktopConfig).supervisedRelaunch;
+}).pipe(Effect.orElseSucceed(() => false));
+
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = DesktopLifecycle.of({
   relaunch: Effect.fn("desktop.lifecycle.relaunch")(function* (reason) {
@@ -170,7 +175,9 @@ export const make = DesktopLifecycle.of({
       yield* Effect.yieldNow;
       yield* Ref.set(state.quitting, true);
       yield* requestDesktopShutdownAndWait();
-      if (environment.isDevelopment) {
+      // A supervisor (the dev runner, or a systemd unit with Restart=) owns the
+      // relaunch. A copy Electron spawns runs outside it, without its limits.
+      if (environment.isDevelopment || (yield* isSupervisedRelaunch)) {
         yield* electronApp.exit(75);
         return;
       }

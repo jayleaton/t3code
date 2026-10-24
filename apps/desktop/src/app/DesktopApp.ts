@@ -14,6 +14,7 @@ import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
 import { installDesktopIpcHandlers } from "../ipc/DesktopIpcHandlers.ts";
 import * as DesktopAppActivation from "./DesktopAppActivation.ts";
+import * as DesktopRealtimeLimit from "./DesktopRealtimeLimit.ts";
 import * as DesktopAppIdentity from "./DesktopAppIdentity.ts";
 import * as DesktopClerk from "./DesktopClerk.ts";
 import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
@@ -269,6 +270,7 @@ const startup = Effect.gen(function* () {
   const previewPasskeys = yield* PreviewPasskeys.PreviewPasskeys;
 
   yield* shellEnvironment.installIntoProcess;
+  if (environment.platform === "linux") yield* DesktopRealtimeLimit.protectRealtimeLimit();
   const hasCommandLinePasswordStore =
     preReadyElectronOptions.linuxPasswordStoreCommandLine !== null;
   const linuxElectronOptions =
