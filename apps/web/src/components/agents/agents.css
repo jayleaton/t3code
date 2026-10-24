@@ -1540,7 +1540,7 @@
   flex-shrink: 0;
   color: var(--muted-foreground);
 }
-.agent-thread-children-settled {
+.agent-thread-children-toggle {
   display: block;
   width: 100%;
   margin-top: 2px;
@@ -1553,7 +1553,7 @@
   text-transform: uppercase;
   color: var(--muted-foreground);
 }
-.agent-thread-children-settled:hover {
+.agent-thread-children-toggle:hover {
   background: var(--accent);
   color: var(--foreground);
 }
