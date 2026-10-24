@@ -107,6 +107,14 @@ jobs:
       - name: Check patched dependencies are pinned
         run: node scripts/check-patch-pins.ts
 
+      # Upstream migration ids must stay upstream's, or fork and upstream databases
+      # stop opening each other. Upstream's file also keeps the manifest honest.
+      - name: Check upstream migrations keep their ids
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/upstream-Migrations.ts" \
+            https://raw.githubusercontent.com/pingdotgg/t3code/main/apps/server/src/persistence/Migrations.ts
+          node scripts/check-upstream-migrations.ts --upstream "$RUNNER_TEMP/upstream-Migrations.ts"
+
       # Files/dependencies are repo-wide; export checks cover clean workspaces only.
       - name: Check unused code
         run: vp run knip:check
