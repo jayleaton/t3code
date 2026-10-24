@@ -1,12 +1,13 @@
 import * as Schema from "effect/Schema";
 
-import { AgentSkill } from "./agentSkills.ts";
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
-/** Agent profile frozen onto a thread at creation, with where each effective setting came from. */
+/**
+ * Agent profile frozen onto a thread at creation, with where each effective setting came from.
+ * Its instructions and skills are stored once on the server under `contentHash`: every
+ * whole-thread event repeats this record, so it must stay a few hundred bytes.
+ */
 export const ThreadProfileSnapshot = Schema.Struct({
-  skills: Schema.optional(Schema.Array(AgentSkill)),
-  systemPrompt: Schema.optional(Schema.String.check(Schema.isMaxLength(32_000))),
   profileId: Schema.NullOr(TrimmedNonEmptyString),
   profileName: Schema.NullOr(TrimmedNonEmptyString),
   revision: Schema.NullOr(NonNegativeInt),
@@ -17,6 +18,7 @@ export const ThreadProfileSnapshot = Schema.Struct({
     interactionMode: Schema.Literals(["profile", "thread-override", "fallback"]),
     reasoningEffort: Schema.Literals(["profile", "thread-override", "fallback"]),
   }),
+  contentHash: Schema.optional(TrimmedNonEmptyString),
 });
 export type ThreadProfileSnapshot = typeof ThreadProfileSnapshot.Type;
 

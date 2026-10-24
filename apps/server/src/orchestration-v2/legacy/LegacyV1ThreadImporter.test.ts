@@ -4,12 +4,11 @@ import {
   EventId,
   type OrchestrationMessageContext,
   ThreadId,
-  ThreadProfileSnapshot,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
@@ -21,8 +20,7 @@ import * as EventStore from "../EventStore.ts";
 import * as LegacyV1ThreadImporter from "./LegacyV1ThreadImporter.ts";
 import * as ProjectionMaintenance from "../ProjectionMaintenance.ts";
 import * as ProjectionStore from "../ProjectionStore.ts";
-
-const encodeProfileSnapshot = Schema.encodeEffect(Schema.fromJsonString(ThreadProfileSnapshot));
+import { profileSnapshotContentHash } from "../ProfileSnapshotContent.ts";
 
 const layerDatabase = SqlitePersistence.layerMemory;
 const layerEventStoreProvided = EventStore.layer.pipe(Layer.provideMerge(layerDatabase));
@@ -333,7 +331,6 @@ it.layer(layerTest)("LegacyV1ThreadImporter", (it) => {
         profileId: "review",
         profileName: "Reviewer",
         revision: 3,
-        systemPrompt: "Review changes carefully",
         effectiveSource: {
           modelSelection: "profile",
           runtimeMode: "profile",
@@ -341,7 +338,9 @@ it.layer(layerTest)("LegacyV1ThreadImporter", (it) => {
           reasoningEffort: "profile",
         },
       } as const;
-      yield* sql`UPDATE projection_threads SET profile_snapshot_json = ${yield* encodeProfileSnapshot(profileSnapshot)} WHERE thread_id = ${threadId}`;
+      // V1 snapshots carry the instructions inline.
+      const profileContent = { systemPrompt: "Review changes carefully", skills: [] };
+      yield* sql`UPDATE projection_threads SET profile_snapshot_json = ${JSON.stringify({ ...profileSnapshot, ...profileContent })} WHERE thread_id = ${threadId}`;
       yield* sql`UPDATE projection_threads SET parent_thread_id = 'thread:coordinator' WHERE thread_id = ${threadId}`;
       const shellImport = yield* importer.reconcileShells;
       assert.equal(yield* importer.pendingThreadCount, 1);
@@ -442,7 +441,15 @@ it.layer(layerTest)("LegacyV1ThreadImporter", (it) => {
         importedMessageCount: 2,
       });
       const projection = yield* projections.getThreadProjection(threadId);
-      assert.deepStrictEqual(projection.thread.profileSnapshot, profileSnapshot);
+      const contentHash = profileSnapshotContentHash(profileContent);
+      assert.deepStrictEqual(projection.thread.profileSnapshot, {
+        ...profileSnapshot,
+        contentHash,
+      });
+      assert.deepStrictEqual(
+        Option.getOrUndefined(yield* projections.getProfileSnapshotContent(contentHash)),
+        profileContent,
+      );
       assert.equal(projection.thread.parentThreadId, "thread:coordinator");
       assert.equal(projection.thread.title, "Renamed after shell import");
       assert.isNull(projection.thread.lastVisitedAt);

@@ -84,6 +84,7 @@ import ForkMigration007 from "./Migrations/fork/007_ThreadTasks.ts";
 import ForkMigration008 from "./Migrations/fork/008_ProjectionThreadSlimPayloads.ts";
 import ForkMigration009 from "./Migrations/fork/009_ShellRunlessRootTurnIndex.ts";
 import ForkMigration010 from "./Migrations/fork/010_ProjectionThreadParentIndex.ts";
+import ForkMigration011 from "./Migrations/fork/011_ProfileSnapshots.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -177,6 +178,7 @@ const forkMigrationEntries = [
   [8, "ProjectionThreadSlimPayloads", ForkMigration008, 67],
   [9, "ShellRunlessRootTurnIndex", ForkMigration009, 68],
   [10, "ProjectionThreadParentIndex", ForkMigration010, 68],
+  [11, "ProfileSnapshots", ForkMigration011, 68],
 ] as const;
 
 export const forkMigrationManifest = forkMigrationEntries.map(

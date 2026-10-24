@@ -472,19 +472,6 @@ type GatewayListPage = {
   readonly snapshotAt: string;
 };
 
-/**
- * Drops the system prompt from a listed thread's profile snapshot. Listings repeat the same
- * few-KB prompt per chat; t3_get_thread still returns it for one chat.
- */
-function withoutSystemPrompt(thread: Record<string, unknown>): Record<string, unknown> {
-  const snapshot = thread.profileSnapshot;
-  if (typeof snapshot !== "object" || snapshot === null || !("systemPrompt" in snapshot)) {
-    return thread;
-  }
-  const { systemPrompt: _systemPrompt, ...rest } = snapshot as Record<string, unknown>;
-  return { ...thread, profileSnapshot: rest };
-}
-
 function tagged(target: DiscoveryTarget, page: GatewayListPage): GatewayListPage {
   return { ...page, items: page.items.map((item) => ({ ...item, ...target })) };
 }
@@ -504,22 +491,20 @@ async function listGatewayThreads(
     typeof input.parentThreadId === "string" ? input.parentThreadId : undefined;
   const parentEnvironmentId =
     typeof input.parentEnvironmentId === "string" ? input.parentEnvironmentId : undefined;
-  const items = page.items
-    .filter((thread) => {
-      const snapshot = thread.profileSnapshot as { profileId?: string } | undefined;
-      return (
-        (projectId === undefined || thread.projectId === projectId) &&
-        (parentThreadId === undefined ||
-          (thread.parentThreadId === parentThreadId &&
-            (parentEnvironmentId === undefined ||
-              (thread.parentEnvironmentId ?? environmentId) === parentEnvironmentId))) &&
-        (profileId === undefined || snapshot?.profileId === profileId) &&
-        (state === "all" ||
-          (state === "settled" ? thread.settledAt != null : thread.settledAt == null)) &&
-        (executionState === undefined || readThreadExecutionState(thread) === executionState)
-      );
-    })
-    .map(withoutSystemPrompt);
+  const items = page.items.filter((thread) => {
+    const snapshot = thread.profileSnapshot as { profileId?: string } | undefined;
+    return (
+      (projectId === undefined || thread.projectId === projectId) &&
+      (parentThreadId === undefined ||
+        (thread.parentThreadId === parentThreadId &&
+          (parentEnvironmentId === undefined ||
+            (thread.parentEnvironmentId ?? environmentId) === parentEnvironmentId))) &&
+      (profileId === undefined || snapshot?.profileId === profileId) &&
+      (state === "all" ||
+        (state === "settled" ? thread.settledAt != null : thread.settledAt == null)) &&
+      (executionState === undefined || readThreadExecutionState(thread) === executionState)
+    );
+  });
   if (input.includeQuestions !== true) return tagged(target, { ...page, items });
   // Only chats waiting on a question need a detail read; the rest pass through.
   return tagged(target, {

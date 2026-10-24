@@ -27,6 +27,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { replayAndBufferProjectedLiveEvents } from "../orchestration-v2/LiveStreamBudget.ts";
+import { withoutLegacyProfileContent } from "../orchestration-v2/ProfileSnapshotContent.ts";
 
 import {
   toPersistenceDecodeError,
@@ -233,7 +234,7 @@ function metadataForV2Event(event: OrchestrationV2DomainEvent): Record<string, u
 const rowToV2StoredEvent = Effect.fn("OrchestrationEventStore.rowToV2StoredEvent")(function* (
   row: ApplicationEventRow,
 ) {
-  const payload = yield* decodeJson(row.payload_json);
+  const payload = withoutLegacyProfileContent(yield* decodeJson(row.payload_json));
   const metadata = yield* decodeJson(row.metadata_json);
   const values =
     typeof metadata === "object" && metadata !== null ? (metadata as Record<string, unknown>) : {};

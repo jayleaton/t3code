@@ -20,6 +20,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  OrchestrationV2AppThreadJson,
   OrchestrationV2ThreadProjectionJson,
   ScheduledTaskId,
   type ServerProvider,
@@ -55,6 +56,8 @@ import { ClaudeProviderCapabilitiesV2 } from "./Adapters/ClaudeAdapterV2.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
+import * as EventSink from "./EventSink.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ThreadLaunch from "./ThreadLaunchService.ts";
@@ -67,6 +70,7 @@ import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAda
 const projectId = ProjectId.make("project:launch-test");
 const otherProjectId = ProjectId.make("project:launch-other");
 const encodeThreadProjection = Schema.encodeEffect(OrchestrationV2ThreadProjectionJson);
+const encodeThreadJson = Schema.encodeEffect(Schema.fromJsonString(OrchestrationV2AppThreadJson));
 const modelSelection = {
   instanceId: ProviderInstanceId.make("codex"),
   model: "gpt-5.1-codex",
@@ -266,6 +270,7 @@ function makeHarness(options: HarnessOptions = {}) {
   return {
     layer: Layer.mergeAll(
       layerLaunch,
+      layerOrchestrator,
       layerRegistry,
       layerThreadManagement,
       layerTitleRegeneration,
@@ -1197,9 +1202,92 @@ it.effect("launches an agent thread whose first run keeps the agent's model", ()
         profileSelection: { profileId: "doug", revision: 1, overrideFields: [] },
       });
       assert.equal(launched.projection.thread.profileSnapshot?.profileId, "doug");
-      assert.equal(launched.projection.thread.profileSnapshot?.systemPrompt, "You are Doug.");
       assert.deepEqual(launched.projection.thread.modelSelection, agentModel);
       assert.deepEqual(launched.projection.runs[0]?.modelSelection, agentModel);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("keeps an agent's instructions and skills out of its thread events", () =>
+  Effect.gen(function* () {
+    const at = "2026-10-03T00:00:00.000Z";
+    const skills = Array.from({ length: 4 }, (_, index) => ({
+      skillId: `skill-${index}`,
+      name: `Skill ${index}`,
+      description: "Project rules",
+      content: Array.from({ length: 4_000 }, () => `rule ${index}`).join("\n"),
+      resources: [{ path: "references/notes.md", contentBase64: "bm90ZXM=" }],
+      revision: 1,
+      createdAt: at,
+      updatedAt: at,
+    }));
+    const systemPrompt = "Review every change line by line.\n".repeat(800);
+    const harness = makeHarness({
+      serverSettings: {
+        agentSkills: skills,
+        mcpGatewayProfiles: [
+          {
+            profileId: "reviewer",
+            name: "Reviewer",
+            revision: 1,
+            createdAt: at,
+            updatedAt: at,
+            systemPrompt,
+            skillIds: skills.map((skill) => skill.skillId),
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
+        ],
+      },
+    });
+    yield* Effect.gen(function* () {
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const threadId = ThreadId.make("thread:agent-events");
+      const createId = CommandId.make("command:agent-events:create");
+      const visitId = CommandId.make("command:agent-events:visit");
+      yield* threads.dispatch({
+        type: "thread.create",
+        commandId: createId,
+        threadId,
+        projectId,
+        title: "Review",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+        profileSelection: { profileId: "reviewer", revision: 1, overrideFields: [] },
+      });
+      yield* threads.dispatch({
+        type: "thread.visit",
+        commandId: visitId,
+        threadId,
+        visitedAt: "2026-10-03T00:01:00.000Z",
+      });
+      const events = [
+        ...(yield* Stream.runCollect(eventSink.readByCommandId({ commandId: createId }))),
+        ...(yield* Stream.runCollect(eventSink.readByCommandId({ commandId: visitId }))),
+      ].map((stored) => stored.event);
+      const threadEvents = events.flatMap((event) =>
+        event.type === "thread.created" || event.type === "thread.visited" ? [event] : [],
+      );
+      assert.deepEqual(
+        threadEvents.map((event) => event.type),
+        ["thread.created", "thread.visited"],
+      );
+      for (const event of threadEvents) {
+        assert.isBelow(Buffer.byteLength(yield* encodeThreadJson(event.payload)), 2_000);
+      }
+
+      const contentHash = threadEvents[0]?.payload.profileSnapshot?.contentHash;
+      assert.isDefined(contentHash);
+      const content = yield* projectionStore.getProfileSnapshotContent(contentHash!);
+      assert.deepEqual(Option.getOrUndefined(content), { systemPrompt, skills });
     }).pipe(Effect.provide(harness.layer));
   }),
 );

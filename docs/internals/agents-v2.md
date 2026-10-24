@@ -79,7 +79,12 @@ upstream protections for active, pinned, or explicitly unsettled work.
 The old local workspace MCP toolkit, V1 lifecycle/approval-batch orchestration,
 and provider-specific profile instruction injection are superseded. Skill resources
 remain content-addressed, thread-scoped files, materialized at the common V2 turn
-boundary; their bodies never enter shell projections or gateway summaries. Keep the profile
+boundary. The thread's profile snapshot names its instructions and skills by `contentHash`;
+the content lives once in `profile_snapshots`, because every whole-thread event (a read
+receipt included) repeats the snapshot. The thread-create path stores the row before
+dispatching, so no committed event references a missing one. Events written before the
+split still carry the content inline: the event store hashes it while decoding, and fork
+migration 11 stored every such content, so replay resolves the same row. Keep the profile
 snapshot, profile revision/tombstone settings merge, client grant/delivery store,
 and machine-aware navigation. Desktop branding, fork release feed, bundled build
 version, and branded startup route remain independent of orchestration. Official

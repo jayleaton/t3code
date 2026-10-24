@@ -209,6 +209,8 @@ it.effect(
         ProjectionStore.ProjectionStoreV2,
         ProjectionStore.ProjectionStoreV2.of({
           apply: () => Effect.void,
+          putProfileSnapshotContent: () => Effect.die("unused putProfileSnapshotContent"),
+          getProfileSnapshotContent: () => Effect.die("unused getProfileSnapshotContent"),
           getLimitRecoveryCandidates: () => Effect.die("unused getLimitRecoveryCandidates"),
           getShellSnapshot: () => Effect.die("unused getShellSnapshot"),
           readShellSnapshot: () => Effect.die("unused readShellSnapshot"),

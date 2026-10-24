@@ -248,7 +248,7 @@ export const TOOL_SPECS = {
     { environmentId: discoveryEnvironmentId, ...optionalRequestContext },
   ],
   t3_list_threads: [
-    "List chats across every connected T3 environment (or one), optionally filtered by agent profileId, project, parentThreadId, active/settled state, and executionState. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly. Finished chats remain active until manually settled or automatically settled after their idle age (3 days by default); new activity and un-settling reset the idle clock. Manually settling a parent chat also settles its child chats. hasPendingUserInput marks a chat waiting on a question; pass includeQuestions to attach each one's pendingQuestions (full text and options, as t3_get_pending_questions returns). profileSnapshot omits systemPrompt; read it with t3_list_agents includeSystemPrompt.",
+    "List chats across every connected T3 environment (or one), optionally filtered by agent profileId, project, parentThreadId, active/settled state, and executionState. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly. Finished chats remain active until manually settled or automatically settled after their idle age (3 days by default); new activity and un-settling reset the idle clock. Manually settling a parent chat also settles its child chats. hasPendingUserInput marks a chat waiting on a question; pass includeQuestions to attach each one's pendingQuestions (full text and options, as t3_get_pending_questions returns). profileSnapshot names the chat's agent; read its instructions with t3_list_agents includeSystemPrompt.",
     {
       environmentId: discoveryEnvironmentId,
       state: z.enum(["all", "active", "settled"]).optional(),
@@ -407,7 +407,7 @@ export const TOOL_SPECS = {
     { environmentId, ...threadTaskInputFields.settleAfterTurn },
   ],
   t3_get_thread: [
-    "Read one T3 chat and its messages, including the full profileSnapshot with its systemPrompt.",
+    "Read one T3 chat and its messages, including its profileSnapshot.",
     { environmentId, threadId, ...optionalRequestContext },
   ],
   t3_summarize_thread: [

@@ -326,20 +326,12 @@ export function gatewayStatusFromThread(
   return thread.status;
 }
 
-function profileAssociation(
-  profile: import("@t3tools/contracts").ThreadProfileSnapshot | undefined,
-) {
-  if (!profile) return undefined;
-  const { systemPrompt: _instructions, skills: _skills, ...association } = profile;
-  return association;
-}
-
 function gatewayThreadShellProjection(thread: OrchestrationV2ThreadShell) {
   return {
     id: thread.id,
     projectId: thread.projectId,
     title: thread.title,
-    profileSnapshot: profileAssociation(thread.profileSnapshot),
+    profileSnapshot: thread.profileSnapshot,
     parentThreadId: thread.parentThreadId ?? null,
     parentEnvironmentId: thread.parentEnvironmentId ?? null,
     settledAt: iso(thread.settledAt),
@@ -371,7 +363,7 @@ export function gatewayThreadProjection(projection: OrchestrationV2ThreadProject
     hasPendingUserInput: pending?.kind === "user_input",
     pendingQuestions: gatewayPendingQuestions(projection),
     modelSelection: thread.modelSelection,
-    profileSnapshot: profileAssociation(thread.profileSnapshot),
+    profileSnapshot: thread.profileSnapshot,
     parentThreadId: thread.parentThreadId ?? null,
     parentEnvironmentId: thread.parentEnvironmentId ?? null,
     settledAt: iso(thread.settledAt),

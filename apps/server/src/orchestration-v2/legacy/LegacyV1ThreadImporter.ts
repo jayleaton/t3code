@@ -33,6 +33,10 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as EventSink from "../EventSink.ts";
+import {
+  splitLegacyProfileSnapshot,
+  storeProfileSnapshotContent,
+} from "../ProfileSnapshotContent.ts";
 import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 
 const IMPORT_EVENT_PREFIX = "migration:v1";
@@ -198,6 +202,12 @@ function nullableDateTime(value: string | null): DateTime.Utc | null {
 
 const decodeProfileSnapshot = Schema.decodeUnknownSync(ThreadProfileSnapshot);
 
+// V1 snapshots hold instructions and skills inline.
+const legacyProfile = (row: Pick<LegacyThreadRow, "profile_snapshot_json">) =>
+  row.profile_snapshot_json === null
+    ? undefined
+    : splitLegacyProfileSnapshot(parseJson(row.profile_snapshot_json));
+
 function importedThread(row: LegacyThreadRow): OrchestrationV2AppThread {
   const threadId = ThreadId.make(row.thread_id);
   const modelSelection = modelSelectionFor(row);
@@ -217,9 +227,7 @@ function importedThread(row: LegacyThreadRow): OrchestrationV2AppThread {
   return {
     ...(row.profile_snapshot_json === null
       ? {}
-      : {
-          profileSnapshot: decodeProfileSnapshot(parseJson(row.profile_snapshot_json)),
-        }),
+      : { profileSnapshot: decodeProfileSnapshot(legacyProfile(row)?.snapshot) }),
     ...(row.parent_thread_id === null
       ? {}
       : { parentThreadId: ThreadId.make(row.parent_thread_id) }),
@@ -635,6 +643,12 @@ const make = Effect.gen(function* () {
               `,
             { discard: true },
           );
+          const profileContent = legacyProfile(row)?.content;
+          if (profileContent !== undefined) {
+            yield* storeProfileSnapshotContent(profileContent).pipe(
+              Effect.provideService(SqlClient.SqlClient, sql),
+            );
+          }
           // Preserve legacy ordinals before the sink normalizes and projects the shell.
           yield* eventSink.write({ events });
           yield* sql`
