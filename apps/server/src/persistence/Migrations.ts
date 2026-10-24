@@ -84,6 +84,7 @@ import Migration0075 from "./Migrations/075_ProjectionThreadSlimPayloads.ts";
 // Upstream ships this as 68; the fork ledger had already used that id.
 import Migration0076 from "./Migrations/068_ShellStopRequestIndex.ts";
 import Migration0077 from "./Migrations/077_ShellRunlessRootTurnIndex.ts";
+import Migration0078 from "./Migrations/078_ProjectionThreadParentIndex.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -168,6 +169,7 @@ const migrationEntries = [
   // Upstream ships this as 68; the fork ledger had already used that id.
   [76, "ShellStopRequestIndex", Migration0076],
   [77, "ShellRunlessRootTurnIndex", Migration0077],
+  [78, "ProjectionThreadParentIndex", Migration0078],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
