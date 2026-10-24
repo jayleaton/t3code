@@ -123,13 +123,7 @@ export function useAgentThreadContextMenu(
           const shell = readThreadShell(scopeThreadRef(item.environmentId, item.id));
           return shell ? [shell] : [];
         });
-      // A child moves among its parent's children; a card moves on the board.
-      const plan = planAgentThreadMove(
-        refresh(siblings ?? visible),
-        refresh(threads),
-        current,
-        direction,
-      );
+      const plan = planAgentThreadMove(refresh(visible), refresh(threads), current, direction);
       return plan?.every(({ thread }) => readEnvironmentSupportsActiveReorder(thread.environmentId))
         ? plan
         : null;
@@ -146,7 +140,8 @@ export function useAgentThreadContextMenu(
                 },
           ]
         : []),
-      ...(!pinned && !settled
+      // Children sort by status (see arrangeAgentChildRuns), so only cards move by hand.
+      ...(!pinned && !settled && !siblings
         ? [
             {
               id: "move-up" as const,

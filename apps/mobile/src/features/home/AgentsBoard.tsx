@@ -1,6 +1,6 @@
 import { useAtom, useAtomValue } from "@effect/atom-react";
 import { LegendList } from "@legendapp/list/react-native";
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
@@ -9,8 +9,10 @@ import {
   type McpGatewayProfile,
 } from "@t3tools/contracts";
 import {
+  AGENT_CHILD_RESORT_MS,
   agentThreadStatus,
   agentThreadStatusLabel,
+  arrangeAgentChildRuns,
   excludePinnedAgentThreads,
   agentRunLinkTargets,
   agentRunParentKey,
@@ -19,6 +21,7 @@ import {
   selectAgentSidebarThreads,
   selectAgentWorkspaceThreads,
   selectPinnedAgentThreads,
+  type AgentChildOrder,
   type AgentRunPendingWork,
 } from "@t3tools/client-runtime/state/agents";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -47,7 +50,7 @@ import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
-import { agentsBoardSelectionAtom } from "./agents-board-state";
+import { agentsBoardExpandedChildrenAtom, agentsBoardSelectionAtom } from "./agents-board-state";
 import {
   AgentCardDragProvider,
   AgentCardDragSource,
@@ -138,7 +141,7 @@ type BoardRow =
       readonly pendingWork: AgentRunPendingWork | null;
     }
   | {
-      readonly kind: "settled" | "card-settled";
+      readonly kind: "settled" | "card-settled" | "card-more";
       readonly key: string;
       readonly count: number;
       readonly open: boolean;
@@ -260,6 +263,55 @@ export function AgentsBoard(props: {
       }),
     [],
   );
+  const [expandedChildren, setExpandedChildren] = useAtom(agentsBoardExpandedChildrenAtom);
+  // Child order is held between ticks so rows stay put while the user reads or taps them.
+  const [childOrders, setChildOrders] = useState<ReadonlyMap<string, AgentChildOrder>>(
+    () => new Map(),
+  );
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), AGENT_CHILD_RESORT_MS);
+    return () => clearInterval(id);
+  }, []);
+  const toggleChildren = useCallback(
+    (key: string) => {
+      // Opening or closing the list re-sorts it.
+      setChildOrders((current) => {
+        const next = new Map(current);
+        next.delete(key);
+        return next;
+      });
+      setExpandedChildren((current) => {
+        const next = new Set(current);
+        if (!next.delete(key)) next.add(key);
+        return next;
+      });
+    },
+    [setExpandedChildren],
+  );
+  const arrangedChildren = useMemo(() => {
+    const arranged = new Map<
+      string,
+      ReturnType<typeof arrangeAgentChildRuns<EnvironmentThreadShell>>
+    >();
+    for (const [key, children] of board.childrenByKey) {
+      arranged.set(
+        key,
+        arrangeAgentChildRuns({
+          live: children.live,
+          statusOf: (child) =>
+            agentThreadStatus(child, pendingWork.get(`${child.environmentId}:${child.id}`) ?? null),
+          previous: childOrders.get(key) ?? null,
+          now,
+          expanded: expandedChildren.has(key),
+        }),
+      );
+    }
+    return arranged;
+  }, [board, childOrders, now, expandedChildren, pendingWork]);
+  if ([...arrangedChildren].some(([key, { order }]) => childOrders.get(key) !== order)) {
+    setChildOrders(new Map([...arrangedChildren].map(([key, { order }]) => [key, order])));
+  }
   const rows = useMemo((): BoardRow[] => {
     const workOf = (thread: EnvironmentThreadShell) =>
       pendingWork.get(`${thread.environmentId}:${thread.id}`) ?? null;
@@ -270,6 +322,8 @@ export function AgentsBoard(props: {
         const settledChildren = children?.settled ?? [];
         const open = expandedCards.has(key);
         const live = children?.live ?? [];
+        const childrenOpen = expandedChildren.has(key);
+        const arranged = arrangedChildren.get(key);
         return [
           {
             thread,
@@ -277,12 +331,22 @@ export function AgentsBoard(props: {
             rollup: live.length > 0 ? childRollup(live) : null,
             pendingWork: workOf(thread),
           },
-          ...live.map((child) => ({
+          ...(arranged?.rows ?? []).map((child) => ({
             thread: child.thread,
             depth: child.depth + 1,
             rollup: null,
             pendingWork: workOf(child.thread),
           })),
+          ...(arranged && arranged.overflow > 0
+            ? [
+                {
+                  kind: "card-more" as const,
+                  key,
+                  count: arranged.overflow,
+                  open: childrenOpen,
+                },
+              ]
+            : []),
           ...(settledChildren.length > 0
             ? [{ kind: "card-settled" as const, key, count: settledChildren.length, open }]
             : []),
@@ -306,7 +370,7 @@ export function AgentsBoard(props: {
         : []),
       ...(settledOpen ? append(board.lists.settled) : []),
     ];
-  }, [board, settledOpen, expandedCards, pendingWork]);
+  }, [board, settledOpen, expandedCards, expandedChildren, arrangedChildren, pendingWork]);
   const jumpItems = useMemo(
     () =>
       rows.flatMap((row) =>
@@ -415,17 +479,23 @@ export function AgentsBoard(props: {
   const renderRow = useCallback(
     ({ item }: { item: (typeof rows)[number] }) => {
       if ("kind" in item) {
+        const showOrHide = `${item.open ? "Hide" : "Show"} ${item.count}`;
         return item.kind === "settled" ? (
-          <SettledToggle
-            label={item.count === 1 ? "settled chat" : "settled chats"}
-            count={item.count}
+          <ListToggle
+            text={`${showOrHide} ${item.count === 1 ? "settled chat" : "settled chats"}`}
             open={item.open}
             onToggle={() => setSettledOpen((open) => !open)}
           />
+        ) : item.kind === "card-more" ? (
+          <ListToggle
+            text={item.open ? "Show less" : `Show ${item.count} more`}
+            open={item.open}
+            nested
+            onToggle={() => toggleChildren(item.key)}
+          />
         ) : (
-          <SettledToggle
-            label={item.count === 1 ? "settled child agent" : "settled child agents"}
-            count={item.count}
+          <ListToggle
+            text={`${showOrHide} ${item.count === 1 ? "settled child agent" : "settled child agents"}`}
             open={item.open}
             nested
             onToggle={() => toggleCard(item.key)}
@@ -458,6 +528,7 @@ export function AgentsBoard(props: {
     },
     [
       toggleCard,
+      toggleChildren,
       moveTargetsFor,
       moveUnder,
       removeFromParent,
@@ -608,9 +679,8 @@ export function AgentsBoard(props: {
   );
 }
 
-function SettledToggle(props: {
-  readonly label: string;
-  readonly count: number;
+function ListToggle(props: {
+  readonly text: string;
   readonly open: boolean;
   /** Under a card, indented to its child agents. */
   readonly nested?: boolean;
@@ -633,9 +703,7 @@ function SettledToggle(props: {
           tintColorClassName="accent-icon-muted"
           type="monochrome"
         />
-        <Text className="text-sm font-t3-medium text-foreground-muted">
-          {`${props.open ? "Hide" : "Show"} ${props.count} ${props.label}`}
-        </Text>
+        <Text className="text-sm font-t3-medium text-foreground-muted">{props.text}</Text>
       </Pressable>
     </View>
   );

@@ -40,6 +40,8 @@ import { isInsideComposerFloatingLayer } from "../chat/composerEventScope";
 import {
   agentThreadStatus,
   agentThreadStatusLabel,
+  arrangeAgentChildRuns,
+  type AgentChildOrder,
   type AgentCardChildren,
   type AgentChildRun,
   type AgentRunContextMenu,
@@ -144,9 +146,13 @@ function DraggableAgentChildRun(props: ChildRunRowProps & { anchorKey: string })
   );
 }
 
+/** Cards whose full child list is open, kept for the session across remounts. */
+const expandedChildLists = new Set<string>();
+
 /**
  * This card's child chats, each linking to its own chat with its own live
- * status and the same menu as a card. Settled children collapse at the bottom.
+ * status and the same menu as a card, ordered by arrangeAgentChildRuns.
+ * Settled children collapse at the bottom.
  * Subagents never appear here; they live in their owner's Lineage panel.
  */
 function AgentChildRuns({
@@ -164,6 +170,29 @@ function AgentChildRuns({
 }) {
   const { childDragEnabled } = useContext(AgentRunDragContext);
   const [settledOpen, setSettledOpen] = useState(false);
+  const [expanded, setExpanded] = useState(() => expandedChildLists.has(anchorKey));
+  const [order, setOrder] = useState<AgentChildOrder | null>(null);
+  // Re-sorts ride the shared minute tick instead of every status change, so rows
+  // hold still while the user reads or clicks them.
+  const now = Date.parse(`${useNowMinute()}Z`);
+  const arranged = arrangeAgentChildRuns({
+    live: runs.live,
+    statusOf: (thread) =>
+      agentThreadStatus(
+        thread,
+        childPendingWork?.get(`${thread.environmentId}:${thread.id}`) ?? null,
+      ),
+    previous: order,
+    now,
+    expanded,
+  });
+  if (arranged.order !== order) setOrder(arranged.order);
+  const toggleExpanded = () => {
+    if (expanded) expandedChildLists.delete(anchorKey);
+    else expandedChildLists.add(anchorKey);
+    setExpanded(!expanded);
+    setOrder(null);
+  };
   const row = (child: AgentChildRun<EnvironmentThreadShell>) => {
     const key = `${child.thread.environmentId}:${child.thread.id}`;
     return childDragEnabled ? (
@@ -189,12 +218,24 @@ function AgentChildRuns({
   const settledCount = runs.settled.filter((child) => child.depth === 0).length;
   return (
     <ul className="agent-thread-children" aria-label="Child chats">
-      {runs.live.map(row)}
+      {arranged.rows.map(row)}
+      {arranged.overflow > 0 && (
+        <li>
+          <button
+            type="button"
+            className="agent-thread-children-toggle"
+            aria-expanded={expanded}
+            onClick={toggleExpanded}
+          >
+            {expanded ? "Show less" : `Show ${arranged.overflow} more`}
+          </button>
+        </li>
+      )}
       {runs.settled.length > 0 && (
         <li>
           <button
             type="button"
-            className="agent-thread-children-settled"
+            className="agent-thread-children-toggle"
             aria-expanded={settledOpen}
             onClick={() => setSettledOpen((open) => !open)}
           >

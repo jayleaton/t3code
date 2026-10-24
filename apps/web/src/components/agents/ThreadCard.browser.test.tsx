@@ -143,18 +143,30 @@ describe("agent card linked chats", () => {
     settled: [child("Settled worker", { settledAt: "2026-09-10T00:00:00Z" })],
   };
 
-  it("keeps linked Agent chats and supports expanding and collapsing settled chats", async () => {
+  it("lists children needing input first, caps the list, and expands settled chats", async () => {
     await using screen = await renderCard(
       <ThreadCard thread={parent} childRuns={runs} onContextMenu={vi.fn()} />,
     );
     const { container } = screen;
-    expect(container.textContent).toContain("Finished worker 19");
+    const titles = () =>
+      [...container.querySelectorAll(".agent-thread-child-title")].map(
+        (title) => title.textContent,
+      );
+    const button = (label: string) =>
+      [...container.querySelectorAll<HTMLButtonElement>(".agent-thread-children-toggle")].find(
+        (candidate) => candidate.textContent?.startsWith(label),
+      )!;
+    expect(titles().slice(0, 2)).toEqual(["Waiting worker", "Running worker"]);
+    expect(titles()).toHaveLength(8);
     expect(container.textContent).toContain("Cody");
+    await act(async () => button("Show 14 more").click());
+    expect(titles()).toHaveLength(22);
+    await act(async () => button("Show less").click());
+    expect(titles()).toHaveLength(8);
     expect(container.textContent).not.toContain("Settled worker");
-    const toggle = container.querySelector<HTMLButtonElement>(".agent-thread-children-settled")!;
-    await act(async () => toggle.click());
+    await act(async () => button("Settled children").click());
     expect(container.textContent).toContain("Settled worker");
-    await act(async () => toggle.click());
+    await act(async () => button("Settled children").click());
     expect(container.textContent).not.toContain("Settled worker");
   });
 });

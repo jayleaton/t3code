@@ -95,7 +95,9 @@ export function agentThreadStatus(
   return "idle";
 }
 
-export function agentThreadStatusLabel(status: ReturnType<typeof agentThreadStatus>) {
+export type AgentThreadStatus = ReturnType<typeof agentThreadStatus>;
+
+export function agentThreadStatusLabel(status: AgentThreadStatus) {
   return {
     done: "Done",
     running: "In progress",
@@ -355,6 +357,123 @@ export function nestAgentRuns<T extends AgentRun>(input: {
     },
     childrenByKey,
   };
+}
+
+/**
+ * A card's live children, top to bottom: questions and approvals for the user,
+ * then work still in flight (running, queued, or waiting on a run, a child, or
+ * a wake), then failures, idle chats, and finished ones.
+ */
+const AGENT_CHILD_GROUP_RANK: Record<AgentThreadStatus, number> = {
+  attention: 0,
+  running: 1,
+  queued: 1,
+  waiting: 1,
+  error: 2,
+  idle: 3,
+  done: 4,
+};
+
+/** Child subtrees a card lists before "Show more". Ones needing input always show. */
+const AGENT_CHILD_LIMIT = 8;
+/** Children re-sort at most this often, so rows hold still while the user reads or clicks. */
+export const AGENT_CHILD_RESORT_MS = 60_000;
+
+/** The order a card last showed its unpinned top-level children in, and when it sorted them. */
+export interface AgentChildOrder {
+  readonly keys: readonly string[];
+  readonly sortedAt: number;
+}
+
+/**
+ * Arranges a card's live children (`AgentCardChildren.live`). Pinned children
+ * stay on top in pin order; the rest sort by status group, then most recently
+ * updated, each carrying its own children along. A subtree ranks by its most
+ * urgent row, so a grandchild that needs input lifts its branch. Between
+ * re-sorts the previous order holds and new children slot in where a fresh
+ * sort would put them. Collapsed, only the first `AGENT_CHILD_LIMIT` subtrees
+ * show, plus any that need input. `previous: null` sorts now; the returned
+ * order is `previous` itself while nothing moved.
+ */
+export function arrangeAgentChildRuns<
+  T extends {
+    readonly environmentId: string;
+    readonly id: string;
+    readonly updatedAt: string;
+    readonly pinnedAt?: string | null | undefined;
+  },
+>(input: {
+  readonly live: readonly AgentChildRun<T>[];
+  readonly statusOf: (thread: T) => AgentThreadStatus;
+  readonly previous: AgentChildOrder | null;
+  readonly now: number;
+  readonly expanded: boolean;
+}): {
+  readonly order: AgentChildOrder;
+  readonly rows: readonly AgentChildRun<T>[];
+  /** Rows the collapsed list hides; the list offers a toggle while this is above zero. */
+  readonly overflow: number;
+} {
+  interface Subtree {
+    readonly key: string;
+    readonly top: T;
+    readonly rows: AgentChildRun<T>[];
+    rank: number;
+  }
+  const subtrees: Subtree[] = [];
+  for (const child of input.live) {
+    const rank = AGENT_CHILD_GROUP_RANK[input.statusOf(child.thread)];
+    const last = subtrees[subtrees.length - 1];
+    if (child.depth === 0 || !last) {
+      subtrees.push({ key: threadKey(child.thread), top: child.thread, rows: [child], rank });
+    } else {
+      last.rows.push(child);
+      last.rank = Math.min(last.rank, rank);
+    }
+  }
+  const byKey = new Map(subtrees.map((subtree) => [subtree.key, subtree]));
+  const pinned = subtrees.filter((subtree) => subtree.top.pinnedAt != null);
+  const fresh = subtrees
+    .filter((subtree) => subtree.top.pinnedAt == null)
+    .sort((a, b) => a.rank - b.rank || b.top.updatedAt.localeCompare(a.top.updatedAt))
+    .map((subtree) => subtree.key);
+  const previous = input.previous;
+  let order: AgentChildOrder;
+  if (previous === null || input.now - previous.sortedAt >= AGENT_CHILD_RESORT_MS) {
+    order = { keys: fresh, sortedAt: input.now };
+  } else {
+    const present = new Set(fresh);
+    const keys = previous.keys.filter((key) => present.has(key));
+    const placed = new Set(keys);
+    fresh.forEach((key, index) => {
+      if (placed.has(key)) return;
+      // After the nearest child a fresh sort puts above this one, else first.
+      let at = 0;
+      for (let above = index - 1; above >= 0; above -= 1) {
+        const position = keys.indexOf(fresh[above]!);
+        if (position >= 0) {
+          at = position + 1;
+          break;
+        }
+      }
+      keys.splice(at, 0, key);
+      placed.add(key);
+    });
+    order =
+      keys.length === previous.keys.length && keys.every((key, i) => key === previous.keys[i])
+        ? previous
+        : { keys, sortedAt: previous.sortedAt };
+  }
+  const rows: AgentChildRun<T>[] = [];
+  let overflow = 0;
+  [...pinned, ...order.keys.map((key) => byKey.get(key)!)].forEach((subtree, index) => {
+    if (index < AGENT_CHILD_LIMIT || subtree.rank === 0) rows.push(...subtree.rows);
+    else {
+      overflow += subtree.rows.length;
+      if (input.expanded) rows.push(...subtree.rows);
+    }
+  });
+  return { order, rows, overflow };
 }
 
 type AgentRunLink = Pick<

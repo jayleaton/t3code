@@ -26,6 +26,10 @@ import {
   agentColorFor,
   agentColors,
   agentIconKey,
+  arrangeAgentChildRuns,
+  type AgentChildOrder,
+  type AgentChildRun,
+  type AgentThreadStatus,
 } from "./agents.ts";
 const profile: McpGatewayProfile = {
   profileId: "write",
@@ -814,5 +818,115 @@ describe("agent appearance", () => {
     expect(agentIconKey(undefined)).toBe("orb");
     expect(agentIconKey("rocket")).toBe("orb");
     expect(agentIconKey("toString")).toBe("orb");
+  });
+});
+
+describe("arrangeAgentChildRuns", () => {
+  type Run = {
+    environmentId: string;
+    id: string;
+    updatedAt: string;
+    pinnedAt: string | null;
+    status: AgentThreadStatus;
+  };
+  const run = (id: string, status: AgentThreadStatus, minute: number, pinned = false): Run => ({
+    environmentId: "local",
+    id,
+    updatedAt: `2026-09-06T00:${String(minute).padStart(2, "0")}:00.000Z`,
+    pinnedAt: pinned ? "2026-09-06T00:00:00.000Z" : null,
+    status,
+  });
+  const live = (...rows: readonly (Run | [Run, number])[]): AgentChildRun<Run>[] =>
+    rows.map((row) => {
+      const [thread, depth] = Array.isArray(row) ? row : [row, 0];
+      return { thread, depth, siblings: [] };
+    });
+  const arrange = (
+    children: readonly AgentChildRun<Run>[],
+    options: { previous?: AgentChildOrder | null; now?: number; expanded?: boolean } = {},
+  ) =>
+    arrangeAgentChildRuns({
+      live: children,
+      statusOf: (thread) => thread.status,
+      previous: options.previous ?? null,
+      now: options.now ?? 0,
+      expanded: options.expanded ?? false,
+    });
+  const ids = (result: ReturnType<typeof arrange>) => result.rows.map((row) => row.thread.id);
+
+  it("orders by status group, newest first within a group, keeping pins and subtrees", () => {
+    const result = arrange(
+      live(
+        run("done", "done", 9),
+        run("idle", "idle", 8),
+        run("error", "error", 1),
+        run("old-running", "running", 2),
+        run("queued", "queued", 3),
+        run("waiting", "waiting", 4),
+        run("asking", "attention", 1),
+        run("parent", "idle", 5),
+        [run("grandchild", "attention", 0), 1],
+        run("pinned", "done", 0, true),
+      ),
+      { expanded: true },
+    );
+    expect(ids(result)).toEqual([
+      "pinned",
+      // The grandchild that needs input lifts its branch, and the branch moves whole.
+      "parent",
+      "grandchild",
+      "asking",
+      "waiting",
+      "queued",
+      "old-running",
+      "error",
+      "idle",
+      "done",
+    ]);
+  });
+
+  it("shows eight subtrees collapsed, but never hides one that needs input", () => {
+    const working = Array.from({ length: 10 }, (_, i) => run(`working-${i}`, "running", 50 - i));
+    const collapsed = arrange(live(...working, run("late-question", "attention", 0)));
+    expect(ids(collapsed)).toEqual(["late-question", ...working.slice(0, 7).map((r) => r.id)]);
+    expect(collapsed.overflow).toBe(3);
+    expect(arrange(live(...working), { expanded: true }).rows).toHaveLength(10);
+
+    const questions = Array.from({ length: 10 }, (_, i) => run(`q-${i}`, "attention", i));
+    const crowded = arrange(live(...questions, run("idle", "idle", 59)));
+    expect(crowded.rows).toHaveLength(10);
+    expect(crowded.overflow).toBe(1);
+    expect(arrange(live(...working.slice(0, 8))).overflow).toBe(0);
+  });
+
+  it("holds the order between re-sorts, slotting new children in, and keeps questions visible", () => {
+    const a = run("a", "running", 1);
+    const b = run("b", "idle", 2);
+    const first = arrange(live(a, b), { now: 0 });
+    expect(ids(first)).toEqual(["a", "b"]);
+
+    // b now needs input and c arrives, 59 s later: rows stay put, and c lands below b,
+    // the nearest child a fresh sort puts above it.
+    const c = run("c", "running", 3);
+    const asking = { ...b, status: "attention" as const };
+    const held = arrange(live(a, asking, c), { previous: first.order, now: 59_000 });
+    expect(ids(held)).toEqual(["a", "b", "c"]);
+    expect(held.order.sortedAt).toBe(0);
+    expect(arrange(live(a, asking, c), { previous: held.order, now: 59_500 }).order).toBe(
+      held.order,
+    );
+
+    // A full minute after the last sort, the new status takes effect.
+    const resorted = arrange(live(a, asking, c), { previous: held.order, now: 60_000 });
+    expect(ids(resorted)).toEqual(["b", "c", "a"]);
+    expect(resorted.order.sortedAt).toBe(60_000);
+
+    // A question still shows while the order is held, even past the cap.
+    const filler = Array.from({ length: 8 }, (_, i) => run(`f-${i}`, "running", 40 - i));
+    const base = arrange(live(...filler, run("quiet", "idle", 0)), { now: 0 });
+    const loud = run("quiet", "attention", 0);
+    expect(ids(arrange(live(...filler, loud), { previous: base.order, now: 1_000 }))).toContain(
+      "quiet",
+    );
   });
 });

@@ -482,9 +482,12 @@ On the Agents board, children appear inside the card of the chat that created th
 chats by other agents, on the full board and in the side list next to an open chat. Subagents are
 not cards: they appear only in the **Lineage** panel of the chat that owns them. Each one shows its
 agent, title, and status; click it to open that chat.
-Right-click a child for the same actions as a card. **Pin to top of parent** keeps it first in
-its parent's list, **Move up** and **Move down** arrange it among its siblings, and settling moves
-it into its parent's collapsed **Settled** group. A live child chat whose parent is settled keeps its
+Children that need your input come first, then ones still working or waiting, then failed, idle,
+and finished ones, newest first within each group. The list re-sorts at most once a minute so rows
+stay put while you read them. A card shows eight children until you choose **Show more**, but a
+child that needs input always shows. Right-click a child for the same actions as a card.
+**Pin to top of parent** keeps it first in its parent's list, and settling moves it into its
+parent's collapsed **Settled** group. A live child chat whose parent is settled keeps its
 own card, which names its parent's agent and chat; click that name to open the parent.
 
 A card reads **In progress** while any child chat or subagent below it is still working, even
