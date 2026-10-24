@@ -262,11 +262,28 @@ describe("DesktopRendererHistory", () => {
           assert.equal(crash.rendererPidSource, "last-known");
           assert.equal(crash.reason, "oom");
           assert.equal(crash.exitCode, -7);
+          const deadSampled = yield* Deferred.make<Record>();
+          milestone = {
+            matches: (row) => row.event === "sample" && row.webContentsId === 2,
+            written: deadSampled,
+          };
+          yield* TestClock.adjust(Duration.seconds(30));
+          yield* history.recordMetrics(metrics);
+          assert.equal((yield* Deferred.await(deadSampled)).rendererPidSource, "last-known");
+          const afterDeadSample = persisted.length;
+          yield* TestClock.adjust(Duration.seconds(30));
+          yield* history.recordMetrics(metrics);
           const restarted = yield* Deferred.make<Record>();
           milestone = { matches: (row) => row.event === "dom-ready", written: restarted };
           previewPid = 7_003;
           preview.emit("dom-ready");
           const restart = yield* Deferred.await(restarted);
+          // Records are written in order, so the dom-ready row lands after any repeat sample.
+          assert.isFalse(
+            persisted
+              .slice(afterDeadSample)
+              .some((row) => row.event === "sample" && row.webContentsId === 2),
+          );
           assert.equal(restart.rendererPid, 7_003);
           assert.equal(restart.rendererPidSource, "current");
           assert.isNull(restart.rendererCreationTimeMs);

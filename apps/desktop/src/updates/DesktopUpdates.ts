@@ -760,7 +760,10 @@ export const make = Effect.gen(function* () {
           );
           yield* electronUpdater.quitAndInstall({
             isSilent: true,
-            isForceRunAfter: true,
+            // A supervisor that restarts the app on exit (a systemd unit with
+            // Restart=) must own the relaunch: a copy the updater spawns runs
+            // outside the unit, without its limits, and the unit loses track of it.
+            isForceRunAfter: !config.supervisedRelaunch,
           });
           return { accepted: true, completed: false, failed: false };
         }).pipe(

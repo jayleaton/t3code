@@ -295,6 +295,34 @@ describe("DesktopBackendManager", () => {
     }),
   );
 
+  it.effect("keeps the underlying cause when an exit status cannot be read", () =>
+    Effect.gen(function* () {
+      const exitCause = PlatformError.systemError({
+        _tag: "Unknown",
+        module: "ChildProcess",
+        method: "exitCode",
+        cause: new Error("waitpid failed: ECHILD"),
+      });
+      const layerSpawner = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.succeed(makeProcess({ exitCode: Effect.fail(exitCause) })),
+        ),
+      );
+
+      const error = yield* DesktopBackendManager.runBackendProcess({
+        ...baseConfig,
+        desktopTelemetryStream: Stream.empty,
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(Layer.merge(layerSpawner, layerHealthyHttpClient)),
+        Effect.flip,
+      );
+
+      assert.include(error.message, "waitpid failed: ECHILD");
+    }),
+  );
+
   it.effect("reports child exit before waiting for trailing output to drain", () =>
     Effect.scoped(
       Effect.gen(function* () {

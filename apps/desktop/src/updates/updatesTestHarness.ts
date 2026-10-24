@@ -40,6 +40,7 @@ export interface UpdatesHarnessOptions {
 export function makeHarness(options: UpdatesHarnessOptions = {}) {
   let checkCount = 0;
   let quitAndInstallCount = 0;
+  const quitAndInstallOptions: Array<{ readonly isForceRunAfter: boolean }> = [];
   let downloadCount = 0;
   let allowDowngrade = false;
   let fullChangelog = false;
@@ -90,9 +91,10 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     downloadUpdate: Effect.sync(() => {
       downloadCount += 1;
     }).pipe(Effect.andThen(options.downloadUpdate ?? Effect.void)),
-    quitAndInstall: () =>
+    quitAndInstall: (installOptions) =>
       Effect.sync(() => {
         quitAndInstallCount += 1;
+        quitAndInstallOptions.push({ isForceRunAfter: installOptions.isForceRunAfter });
         installSteps.push("quitAndInstall");
       }).pipe(Effect.andThen(options.quitAndInstall ?? Effect.void)),
     on: (eventName, listener) =>
@@ -273,6 +275,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     layer,
     checkCount: () => checkCount,
     quitAndInstalls: () => quitAndInstallCount,
+    quitAndInstallOptions,
     installSteps,
     updateRestartMarkers,
     installRecords,

@@ -165,6 +165,17 @@ export type BackendProcessOutputError =
   | BackendProcessOutputReadError
   | BackendProcessOutputHandlingError;
 
+// The spawner wraps the useful detail (errno, signal text) a level or two down.
+function describeErrorChain(error: unknown): string {
+  const messages: string[] = [];
+  let current = error;
+  while (current instanceof Error && messages.length < 3) {
+    if (current.message !== "") messages.push(current.message);
+    current = current.cause;
+  }
+  return messages.length > 0 ? messages.join(": ") : String(error);
+}
+
 export class BackendProcessExitStatusError extends Schema.TaggedError<BackendProcessExitStatusError>()(
   "BackendProcessExitStatusError",
   {
@@ -174,7 +185,7 @@ export class BackendProcessExitStatusError extends Schema.TaggedError<BackendPro
   },
 ) {
   override get message(): string {
-    return `Failed to read the exit status of desktop backend process ${this.pid}.`;
+    return `Failed to read the exit status of desktop backend process ${this.pid}: ${describeErrorChain(this.cause)}`;
   }
 }
 
