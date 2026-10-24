@@ -71,6 +71,9 @@ function makeFakeBrowserWindow() {
     copyImageAt: vi.fn(),
     focus: vi.fn(),
     isDestroyed: vi.fn(() => false),
+    isCrashed: vi.fn(() => false),
+    getOSProcessId: vi.fn(() => 4242),
+    forcefullyCrashRenderer: vi.fn(),
     getURL: vi.fn(() => "t3code-dev://app/"),
     getZoomLevel: vi.fn(() => zoomLevel),
     getZoomFactor: vi.fn(() => 1.2 ** zoomLevel),
@@ -143,6 +146,8 @@ function makeFakeBrowserWindow() {
     setAutoHideCursor: window.setAutoHideCursor,
     setFullScreen: window.setFullScreen,
     setOpacity: window.setOpacity,
+    getOSProcessId: webContents.getOSProcessId,
+    forcefullyCrashRenderer: webContents.forcefullyCrashRenderer,
     webContentsListeners,
     webContentsOnce: webContents.once,
     windowListeners,
@@ -617,6 +622,92 @@ describe("DesktopWindow", () => {
           [0.5, 0, -0.5],
         );
         assert.deepEqual(previewZoomReapplies, [0.5, 0, -0.5]);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("recovers killed renderers within the reload budget and skips clean exits", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = layerTest({ window: fakeWindow.window, createCount, mainWindow });
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.createMain;
+        const onGone = fakeWindow.webContentsListeners.get("render-process-gone");
+        if (!onGone) return yield* Effect.die("render-process-gone listener missing");
+
+        onGone({}, { reason: "clean-exit", exitCode: 0 });
+        yield* TestClock.adjust(500);
+        assert.equal(fakeWindow.loadURL.mock.calls.length, 1);
+
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          onGone({}, { reason: "killed", exitCode: 9 });
+          yield* TestClock.adjust(500);
+        }
+        assert.equal(fakeWindow.loadURL.mock.calls.length, 4);
+
+        yield* TestClock.adjust(60_000);
+        onGone({}, { reason: "launch-failed", exitCode: 1 });
+        yield* TestClock.adjust(500);
+        assert.equal(fakeWindow.loadURL.mock.calls.length, 5);
+        assert.equal(yield* Ref.get(createCount), 1);
+
+        onGone({}, { reason: "killed", exitCode: 9 });
+        fakeWindow.isDestroyed.mockReturnValue(true);
+        yield* TestClock.adjust(500);
+        assert.equal(fakeWindow.loadURL.mock.calls.length, 5);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("revives a main window whose renderer vanished when the backend comes back", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = layerTest({ window: fakeWindow.window, createCount, mainWindow });
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        const backendUrl = new URL("http://127.0.0.1:3773");
+        yield* desktopWindow.handleBackendReady(backendUrl);
+        assert.equal(fakeWindow.loadURL.mock.calls.length, 1);
+
+        yield* desktopWindow.handleBackendNotReady;
+        fakeWindow.getOSProcessId.mockReturnValue(0);
+        yield* desktopWindow.handleBackendReady(backendUrl);
+        yield* TestClock.adjust(500);
+        assert.equal(fakeWindow.loadURL.mock.calls.length, 2);
+        assert.equal(yield* Ref.get(createCount), 1);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("crashes and reloads a renderer that stays unresponsive", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = layerTest({ window: fakeWindow.window, createCount, mainWindow });
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.createMain;
+        const onUnresponsive = fakeWindow.windowListeners.get("unresponsive");
+        const onResponsive = fakeWindow.windowListeners.get("responsive");
+        if (!onUnresponsive || !onResponsive)
+          return yield* Effect.die("responsiveness listeners missing");
+
+        onUnresponsive();
+        yield* TestClock.adjust(10_000);
+        onResponsive();
+        yield* TestClock.adjust(30_000);
+        assert.equal(fakeWindow.forcefullyCrashRenderer.mock.calls.length, 0);
+
+        onUnresponsive();
+        yield* TestClock.adjust(30_500);
+        assert.equal(fakeWindow.forcefullyCrashRenderer.mock.calls.length, 1);
+        assert.equal(fakeWindow.loadURL.mock.calls.length, 2);
       }).pipe(Effect.provide(layer));
     }),
   );

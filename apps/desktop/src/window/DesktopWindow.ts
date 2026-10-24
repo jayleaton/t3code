@@ -5,6 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
 
 import * as Electron from "electron";
 
@@ -53,6 +54,17 @@ function syncMacosWindowButtons(window: Electron.BrowserWindow): void {
   });
 }
 
+// A renderer can disappear without render-process-gone reaching our listener,
+// leaving the window mapped but blank. Asking for the process catches that.
+function isRendererDead(window: Electron.BrowserWindow): boolean {
+  if (window.isDestroyed()) return false;
+  const contents = window.webContents;
+  if (contents.isDestroyed()) return false;
+  return (
+    contents.isCrashed() || (!contents.isLoadingMainFrame() && contents.getOSProcessId() === 0)
+  );
+}
+
 const TITLEBAR_COLOR = "#01000000"; // #00000000 does not work correctly on Linux
 const TITLEBAR_LIGHT_SYMBOL_COLOR = "#1f2937";
 const TITLEBAR_DARK_SYMBOL_COLOR = "#f8fafc";
@@ -61,6 +73,8 @@ const DEVELOPMENT_LOAD_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
 const RENDERER_RECOVERY_RELOAD_DELAY_MS = 500;
 const RENDERER_RECOVERY_MAX_ATTEMPTS = 3;
 const RENDERER_RECOVERY_WINDOW_MS = 60_000;
+const RENDERER_LIVENESS_CHECK_INTERVAL_MS = 30_000;
+const RENDERER_UNRESPONSIVE_CRASH_DELAY_MS = 30_000;
 const DEVELOPMENT_RETRYABLE_LOAD_ERROR_CODES = new Set([-2, -7, -9, -102, -105, -106, -118]);
 
 type WindowTitleBarOptions = Pick<
@@ -307,6 +321,7 @@ export const make = Effect.gen(function* () {
   const runFork = Effect.runForkWith(context);
   const runPromise = Effect.runPromiseWith(context);
   let flushMainWindowBounds: Effect.Effect<void> = Effect.void;
+  const rendererRecovery = new WeakMap<Electron.BrowserWindow, (trigger: string) => void>();
 
   const dismissConnectingSplash = Effect.gen(function* () {
     const splash = yield* Ref.getAndSet(splashWindowRef, Option.none());
@@ -787,41 +802,70 @@ export const make = Effect.gen(function* () {
         );
       },
     );
-    window.webContents.on("render-process-gone", (_event, details) => {
-      const recoverable =
-        details.reason === "crashed" ||
-        details.reason === "oom" ||
-        details.reason === "killed" ||
-        details.reason === "abnormal-exit";
-      // Recovery attempts are bounded so a renderer that dies immediately on
-      // boot cannot reload-loop forever.
-
+    let rendererRecoveryPending = false;
+    // Every trigger shares one budget so a renderer that dies immediately on
+    // boot cannot reload-loop forever, and overlapping triggers reload once.
+    const recoverRenderer = (trigger: string) => {
+      if (rendererRecoveryPending || window.isDestroyed()) return;
+      rendererRecoveryPending = true;
       runFork(
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
           rendererRecoveryTimestamps = rendererRecoveryTimestamps.filter(
             (timestamp) => now - timestamp < RENDERER_RECOVERY_WINDOW_MS,
           );
-          const shouldRecover =
-            recoverable &&
-            !window.isDestroyed() &&
-            rendererRecoveryTimestamps.length < RENDERER_RECOVERY_MAX_ATTEMPTS;
-          yield* logWindowWarning("main window render process gone", {
-            reason: details.reason,
-            exitCode: details.exitCode,
-            recovering: shouldRecover,
-          });
-          if (!shouldRecover) {
+          if (rendererRecoveryTimestamps.length >= RENDERER_RECOVERY_MAX_ATTEMPTS) {
+            yield* logWindowWarning("main window renderer recovery budget exhausted", { trigger });
             return;
           }
           rendererRecoveryTimestamps.push(now);
+          yield* logWindowWarning("recovering main window renderer", { trigger });
           yield* Effect.sleep(RENDERER_RECOVERY_RELOAD_DELAY_MS);
-          if (!window.isDestroyed()) {
-            loadApplication();
-          }
+          loadApplication();
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              rendererRecoveryPending = false;
+            }),
+          ),
+        ),
+      );
+    };
+    rendererRecovery.set(window, recoverRenderer);
+
+    window.webContents.on("render-process-gone", (_event, details) => {
+      void runPromise(
+        logWindowWarning("main window render process gone", {
+          reason: details.reason,
+          exitCode: details.exitCode,
         }),
       );
+      if (details.reason !== "clean-exit") recoverRenderer(`render-process-gone:${details.reason}`);
     });
+
+    let unresponsiveFiber: Fiber.Fiber<void, never> | undefined;
+    const clearUnresponsive = () => {
+      if (unresponsiveFiber === undefined) return;
+      const fiber = unresponsiveFiber;
+      unresponsiveFiber = undefined;
+      runFork(Fiber.interrupt(fiber));
+    };
+    window.on("unresponsive", () => {
+      if (unresponsiveFiber !== undefined) return;
+      unresponsiveFiber = runFork(
+        Effect.sleep(RENDERER_UNRESPONSIVE_CRASH_DELAY_MS).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              unresponsiveFiber = undefined;
+              if (window.isDestroyed() || window.webContents.isDestroyed()) return;
+              window.webContents.forcefullyCrashRenderer();
+              recoverRenderer("unresponsive");
+            }),
+          ),
+        ),
+      );
+    });
+    window.on("responsive", clearUnresponsive);
 
     const revealSubscribers: RevealSubscription[] = [(fire) => window.once("ready-to-show", fire)];
     if (environment.platform === "linux") {
@@ -844,6 +888,7 @@ export const make = Effect.gen(function* () {
 
     window.on("closed", () => {
       clearDevelopmentLoadRetry();
+      clearUnresponsive();
       clearBoundsPersist();
       void runPromise(electronWindow.clearMain(Option.some(window)));
     });
@@ -893,6 +938,18 @@ export const make = Effect.gen(function* () {
     if (Option.isSome(existingWindow)) return;
     yield* createMain;
   }).pipe(Effect.withSpan("desktop.window.createMainIfBackendReady"));
+
+  const reviveDeadMainRenderer = Effect.gen(function* () {
+    if (yield* Ref.get(desktopState.quitting)) return;
+    const existingWindow = yield* currentMainWindow;
+    if (Option.isNone(existingWindow) || !isRendererDead(existingWindow.value)) return;
+    rendererRecovery.get(existingWindow.value)?.("liveness-check");
+  });
+  yield* reviveDeadMainRenderer.pipe(
+    Effect.ignoreCause,
+    Effect.repeat(Schedule.spaced(RENDERER_LIVENESS_CHECK_INTERVAL_MS)),
+    Effect.forkScoped,
+  );
 
   const showConnectingSplash = Effect.gen(function* () {
     if (yield* Ref.get(desktopState.quitting)) return;
@@ -1003,6 +1060,8 @@ export const make = Effect.gen(function* () {
     handleBackendReady: Effect.fn("desktop.window.handleBackendReady")(function* (httpBaseUrl) {
       yield* Ref.set(backendReadyRef, true);
       yield* logWindowInfo("backend ready", { source: "http", url: httpBaseUrl.href });
+      // A backend restart is often the first sign the renderer died with it.
+      yield* reviveDeadMainRenderer;
       yield* createMainIfBackendReady;
     }),
     handleBackendNotReady: Ref.set(backendReadyRef, false).pipe(
