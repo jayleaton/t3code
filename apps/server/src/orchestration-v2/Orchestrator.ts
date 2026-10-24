@@ -12124,7 +12124,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const children = yield* projectionStore
         .getChildThreads(pending[index]!)
         .pipe(Effect.orElseSucceed(() => []));
-      for (const child of children) {
+      // Child chats are the cards the user sees; subagents only show in Lineage.
+      for (const child of children.toSorted(
+        (left, right) =>
+          Number(left.parentRelationship === "subagent") -
+          Number(right.parentRelationship === "subagent"),
+      )) {
         if (child.parentEnvironmentId != null || visited.has(child.id)) continue;
         visited.add(child.id);
         const settled = child.settledOverride === "settled";

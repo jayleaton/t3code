@@ -455,6 +455,68 @@ it.effect(
     ),
 );
 
+it.effect(
+  "settling a Captain settles its named child and grandchild ahead of its subagent listeners",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const projections = yield* ProjectionStoreV2;
+      const sink = yield* EventSinkV2;
+      const create = (id: string, parentThreadId?: string) =>
+        orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`create:${id}`),
+          threadId: ThreadId.make(id),
+          projectId: ProjectId.make("project:parents"),
+          title: id,
+          modelSelection: { instanceId, model: "gpt-5.1-codex" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "agent",
+          creationSource: "mcp",
+          ...(parentThreadId === undefined
+            ? {}
+            : { parentThreadId: ThreadId.make(parentThreadId) }),
+        });
+
+      yield* create("captain");
+      // A Captain's delegate_task listeners pile up under it long before most of its children.
+      const listeners = ["listen:1", "listen:2", "listen:3"];
+      for (const id of listeners) {
+        yield* create(id, "captain");
+        yield* orchestrator.dispatch({
+          type: "thread.parent-link.repair",
+          commandId: CommandId.make(`subagent:${id}`),
+          threadId: ThreadId.make(id),
+          parentThreadId: ThreadId.make("captain"),
+          parentRelationship: "subagent",
+        });
+      }
+      yield* create("mcp:named-child", "captain");
+      yield* create("mcp:grandchild", "mcp:named-child");
+
+      const before = yield* sink.latestSequence();
+      yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("settle:captain"),
+        threadId: ThreadId.make("captain"),
+      });
+      const settled = Array.from(
+        yield* sink
+          .stream({ afterSequence: before, eventType: "thread.settled" })
+          .pipe(Stream.take(6), Stream.runCollect),
+        (stored) => stored.event.threadId,
+      );
+      assert.deepEqual(settled.slice(0, 3), ["captain", "mcp:named-child", "mcp:grandchild"]);
+      assert.sameMembers(settled.slice(3), listeners);
+      const captainAt = (yield* projections.getThread(ThreadId.make("captain"))).settledAt;
+      for (const id of [...listeners, "mcp:named-child", "mcp:grandchild"]) {
+        assert.deepEqual((yield* projections.getThread(ThreadId.make(id))).settledAt, captainAt);
+      }
+    }).pipe(Effect.provide(testLayer)),
+);
 it("a sub-run nests under the chat that spawned it, not that chat's parent", () => {
   const now = DateTime.makeUnsafe("2026-10-01T00:00:00.000Z");
   const parentThread = {

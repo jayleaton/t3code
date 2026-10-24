@@ -2375,6 +2375,27 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
     }),
   );
 
+  it.effect("looks up a card's sub-runs through the parent index", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const { statements, tracer } = traceSqlStatements();
+      yield* projectionStore
+        .getChildThreads(ThreadId.make("parent-index-card"))
+        .pipe(Effect.withTracer(tracer));
+
+      const childQuery = statements.find((statement) => statement.includes("$.parentThreadId"));
+      assert.isDefined(childQuery);
+      const plan = (yield* sql.unsafe<{ readonly detail: string }>(
+        `EXPLAIN QUERY PLAN ${childQuery}`,
+        ["parent-index-card"],
+      )).map((row) => row.detail);
+      assert.deepEqual(plan, [
+        "SEARCH orchestration_v2_projection_threads USING INDEX orchestration_v2_projection_threads_parent_idx (<expr>=?)",
+      ]);
+    }),
+  );
+
   it.effect("reads only the requested project's threads into a scoped shell snapshot", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
