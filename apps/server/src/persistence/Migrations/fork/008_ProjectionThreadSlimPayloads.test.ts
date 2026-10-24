@@ -3,7 +3,7 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import { runMigrations } from "../Migrations.ts";
+import { runMigrations } from "../../Migrations.ts";
 
 const layer = it.layer(NodeSqliteClient.layer({ filename: ":memory:" }));
 
@@ -17,11 +17,11 @@ const payload = (title: string) =>
     },
   });
 
-layer("075_ProjectionThreadSlimPayloads", (it) => {
+layer("fork/008_ProjectionThreadSlimPayloads", (it) => {
   it.effect("keeps a copy of each thread payload without profile skills", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 74 });
+      yield* runMigrations({ toMigrationInclusive: 67 });
       const insertThread = (threadId: string, title: string) => sql`
         INSERT INTO orchestration_v2_projection_threads
           (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
@@ -32,7 +32,7 @@ layer("075_ProjectionThreadSlimPayloads", (it) => {
       `;
       yield* insertThread("thread-existing", "existing");
 
-      yield* runMigrations({ toMigrationInclusive: 75 });
+      yield* runMigrations({ toForkMigrationInclusive: 8 });
       yield* insertThread("thread-new", "new");
       yield* insertThread("thread-existing", "renamed");
       yield* sql`

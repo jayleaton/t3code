@@ -13,17 +13,20 @@ needs acceptance testing.
 
 V2 landed upstream as pingdotgg/t3code#2829 (squash commit `de34391427`), and
 upstream main is an ancestor of this work, so track upstream main with ordinary
-merges. The fork keeps its own migration numbering (below); do not adopt
-upstream's V2 migration ids. A V1 client/server mixture is not a supported
+merges. Upstream migrations keep upstream's ids and names; fork migrations have
+their own ledger (below). A V1 client/server mixture is not a supported
 deployment.
 
 ## Data boundary
 
-Fork releases own migrations through 58, including its upgrade repair, title
-state, viewed PR files, scheduled tasks, auto-settle, and thread parents. V2 is
-registered as **59**, followed by upstream index cleanup as **60**. A preflight guard rejects V2 migration numbers from earlier preview builds before writes.
-This is a fork migration history, not interchangeable with an upstream V2 database.
-Fork 56 created a differently shaped `scheduled_tasks`; migration 59 renames it to
+Fork-only migrations live in `Migrations/fork/` and record in
+`effect_sql_fork_migrations`, because the migrator skips every id at or below the highest
+recorded one: any fork id in upstream's table masks a future upstream migration. Each fork
+migration names the upstream migration it runs after, so a fresh database replays the order
+existing ones ran in. Fork builds before the split recorded both in one table (fork ids 52,
+53, 56, 58, 61, 62, 65, 75, 77, 78); `splitLegacyForkLedger` moves those rows once, keeping
+exactly the applied set, and refuses ledgers that mix in V2 preview numbering.
+Fork migration 3 created a differently shaped `scheduled_tasks`; the fork's V2 migration (upstream 55) renames it to
 `legacy_scheduled_tasks` before upstream's `CREATE TABLE IF NOT EXISTS` would keep the
 wrong columns, and `ScheduledTaskService` imports and drops it at startup, when profiles
 can be resolved. Scheduled tasks otherwise run on upstream's service; the fork adds an

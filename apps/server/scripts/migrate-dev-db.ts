@@ -17,10 +17,12 @@ import { Command, Flag } from "effect/cli";
 
 import * as ProjectionStore from "../src/orchestration-v2/ProjectionStore.ts";
 import {
+  forkMigrationManifest,
   isKnownMigrationName,
   migrationManifest,
   runMigrations,
 } from "../src/persistence/Migrations.ts";
+import { FORK_MIGRATIONS_TABLE } from "../src/persistence/splitLegacyForkLedger.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 export class MigrateDevDbNotInWorktreeError extends Schema.TaggedError<MigrateDevDbNotInWorktreeError>()(
@@ -403,13 +405,28 @@ const pruneSnapshot = Effect.fn("pruneDevDbSnapshot")(function* (input: RunMigra
 
 const verifyMigrationSlots = Effect.fn("verifyMigrationSlots")(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const applied = yield* sql<{ migration_id: number; name: string }>`
-    SELECT migration_id, name FROM effect_sql_migrations`;
-  const appliedById = new Map(applied.map((row) => [Number(row.migration_id), row.name]));
-  for (const [slot, codeName] of migrationManifest) {
-    const appliedName = appliedById.get(slot);
-    if (appliedName !== undefined && !isKnownMigrationName(slot, appliedName)) {
-      return yield* new MigrateDevDbSlotCollisionError({ slot, codeName, appliedName });
+  const ledgers = [
+    { ledger: "upstream", table: "effect_sql_migrations", manifest: migrationManifest, prefix: "" },
+    {
+      ledger: "fork",
+      table: FORK_MIGRATIONS_TABLE,
+      manifest: forkMigrationManifest.map(([id, name]) => [id, name] as const),
+      prefix: "fork/",
+    },
+  ] as const;
+  for (const { ledger, table, manifest, prefix } of ledgers) {
+    const applied = yield* sql<{ migration_id: number; name: string }>`
+      SELECT migration_id, name FROM ${sql(table)}`;
+    const appliedById = new Map(applied.map((row) => [Number(row.migration_id), row.name]));
+    for (const [slot, codeName] of manifest) {
+      const appliedName = appliedById.get(slot);
+      if (appliedName !== undefined && !isKnownMigrationName(ledger, slot, appliedName)) {
+        return yield* new MigrateDevDbSlotCollisionError({
+          slot,
+          codeName: `${prefix}${codeName}`,
+          appliedName,
+        });
+      }
     }
   }
 });

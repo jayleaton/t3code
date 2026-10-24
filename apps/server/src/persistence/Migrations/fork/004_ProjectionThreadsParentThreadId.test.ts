@@ -3,16 +3,16 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-import { runMigrations } from "../Migrations.ts";
-import migrateParentThreadId from "./058_ProjectionThreadsParentThreadId.ts";
+import { runMigrations } from "../../Migrations.ts";
+import migrateParentThreadId from "./004_ProjectionThreadsParentThreadId.ts";
 
 it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))(
-  "058_ProjectionThreadsParentThreadId",
+  "fork/004_ProjectionThreadsParentThreadId",
   (it) => {
     it.effect("adds an empty parent link to existing threads and is safe to re-run", () =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        yield* runMigrations({ toMigrationInclusive: 57 });
+        yield* runMigrations({ toMigrationInclusive: 54 });
         const now = "2026-01-01T00:00:00.000Z";
         yield* sql`
           INSERT INTO projection_threads (
@@ -23,7 +23,7 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))(
             '{"instanceId":"codex","model":"gpt-5.4"}', 'full-access', ${now}, ${now}
           )
         `;
-        yield* runMigrations({ toMigrationInclusive: 58 });
+        yield* runMigrations({ toForkMigrationInclusive: 4 });
         const migrated = yield* sql<{ readonly parentThreadId: string | null }>`
           SELECT parent_thread_id AS "parentThreadId" FROM projection_threads
         `;

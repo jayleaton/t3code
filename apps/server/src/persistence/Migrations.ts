@@ -2,14 +2,7 @@ import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
-
-import Migration0059 from "./Migrations/059_ForkOrchestrationV2.ts";
-import Migration0060 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
-import Migration0061 from "./Migrations/061_ProjectionTodos.ts";
-import Migration0062 from "./Migrations/062_ThreadSettlementActivityIndexes.ts";
-import Migration0063 from "./Migrations/057_ScheduledTaskWebhooks.ts";
-import Migration0064 from "./Migrations/058_WebhookRelayDeliveries.ts";
-import Migration0065 from "./Migrations/065_ThreadTasks.ts";
+import { FORK_MIGRATIONS_TABLE, splitLegacyForkLedger } from "./splitLegacyForkLedger.ts";
 
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
 import Migration0002 from "./Migrations/002_OrchestrationCommandReceipts.ts";
@@ -58,33 +51,39 @@ import Migration0044 from "./Migrations/044_ClearAutomaticProjectModelDefaults.t
 import Migration0045 from "./Migrations/045_ProjectionProjectsAutoPull.ts";
 import Migration0046 from "./Migrations/046_RepairAutomaticSettlementTimestamps.ts";
 import Migration0047 from "./Migrations/047_ProjectionProjectIcon.ts";
-import Migration0052 from "./Migrations/052_AgentProfileAndPullRequestCompatibility.ts";
 import Migration0048 from "./Migrations/048_ProjectionThreadBranchPullRequest.ts";
 import Migration0049 from "./Migrations/049_ProjectionThreadsActiveOrderKey.ts";
 import Migration0050 from "./Migrations/050_ProjectionThreadPullRequests.ts";
 import Migration0051 from "./Migrations/051_ProjectionThreadMessageContext.ts";
-import Migration0053 from "./Migrations/053_RepairAgentUpgradeSchema.ts";
-import Migration0054 from "./Migrations/054_ProjectionThreadTitleState.ts";
-import Migration0055 from "./Migrations/055_PullRequestFilesViewed.ts";
-import Migration0056 from "./Migrations/056_ScheduledTasks.ts";
-import Migration0057 from "./Migrations/057_ProjectionThreadsAutoSettleDisabledAt.ts";
-import Migration0058 from "./Migrations/058_ProjectionThreadsParentThreadId.ts";
-import Migration0066 from "./Migrations/059_McpAppModelContext.ts";
-import Migration0067 from "./Migrations/060_ThreadSnapshotWindowIndexes.ts";
-// Upstream ships these as 61 and 62; the fork ledger had already used those ids.
-import Migration0068 from "./Migrations/061_PullRequestReviewGuides.ts";
-import Migration0069 from "./Migrations/062_ThreadFailureLookupIndex.ts";
-// Upstream ships these as 63 through 67; the fork ledger had already used those ids.
-import Migration0070 from "./Migrations/063_DropUnusedV1Projections.ts";
-import Migration0071 from "./Migrations/064_CanonicalizeThreadPullRequestLinks.ts";
-import Migration0072 from "./Migrations/065_CodexUsageNativeTurnIndex.ts";
-import Migration0073 from "./Migrations/066_RepairClientSettlementTimestamps.ts";
-import Migration0074 from "./Migrations/067_WebhookDedupe.ts";
-import Migration0075 from "./Migrations/075_ProjectionThreadSlimPayloads.ts";
-// Upstream ships this as 68; the fork ledger had already used that id.
-import Migration0076 from "./Migrations/068_ShellStopRequestIndex.ts";
-import Migration0077 from "./Migrations/077_ShellRunlessRootTurnIndex.ts";
-import Migration0078 from "./Migrations/078_ProjectionThreadParentIndex.ts";
+import Migration0052 from "./Migrations/052_ProjectionThreadTitleState.ts";
+import Migration0053 from "./Migrations/053_PullRequestFilesViewed.ts";
+import Migration0054 from "./Migrations/054_ProjectionThreadsAutoSettleDisabledAt.ts";
+// The fork moves its own scheduled_tasks aside before upstream creates one.
+import Migration0055 from "./Migrations/055_ForkOrchestrationV2.ts";
+import Migration0056 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
+import Migration0057 from "./Migrations/057_ScheduledTaskWebhooks.ts";
+import Migration0058 from "./Migrations/058_WebhookRelayDeliveries.ts";
+import Migration0059 from "./Migrations/059_McpAppModelContext.ts";
+import Migration0060 from "./Migrations/060_ThreadSnapshotWindowIndexes.ts";
+import Migration0061 from "./Migrations/061_PullRequestReviewGuides.ts";
+import Migration0062 from "./Migrations/062_ThreadFailureLookupIndex.ts";
+import Migration0063 from "./Migrations/063_DropUnusedV1Projections.ts";
+import Migration0064 from "./Migrations/064_CanonicalizeThreadPullRequestLinks.ts";
+import Migration0065 from "./Migrations/065_CodexUsageNativeTurnIndex.ts";
+import Migration0066 from "./Migrations/066_RepairClientSettlementTimestamps.ts";
+import Migration0067 from "./Migrations/067_WebhookDedupe.ts";
+import Migration0068 from "./Migrations/068_ShellStopRequestIndex.ts";
+
+import ForkMigration001 from "./Migrations/fork/001_AgentProfileAndPullRequestCompatibility.ts";
+import ForkMigration002 from "./Migrations/fork/002_RepairAgentUpgradeSchema.ts";
+import ForkMigration003 from "./Migrations/fork/003_ScheduledTasks.ts";
+import ForkMigration004 from "./Migrations/fork/004_ProjectionThreadsParentThreadId.ts";
+import ForkMigration005 from "./Migrations/fork/005_ProjectionTodos.ts";
+import ForkMigration006 from "./Migrations/fork/006_ThreadSettlementActivityIndexes.ts";
+import ForkMigration007 from "./Migrations/fork/007_ThreadTasks.ts";
+import ForkMigration008 from "./Migrations/fork/008_ProjectionThreadSlimPayloads.ts";
+import ForkMigration009 from "./Migrations/fork/009_ShellRunlessRootTurnIndex.ts";
+import ForkMigration010 from "./Migrations/fork/010_ProjectionThreadParentIndex.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -138,69 +137,111 @@ const migrationEntries = [
   [49, "ProjectionThreadsActiveOrderKey", Migration0049],
   [50, "ProjectionThreadPullRequests", Migration0050],
   [51, "ProjectionThreadMessageContext", Migration0051],
-  [52, "AgentProfileAndPullRequestCompatibility", Migration0052],
-  [53, "RepairAgentUpgradeSchema", Migration0053],
-  [54, "ProjectionThreadTitleState", Migration0054],
-  [55, "PullRequestFilesViewed", Migration0055],
-  [56, "ScheduledTasks", Migration0056],
-  [57, "ProjectionThreadsAutoSettleDisabledAt", Migration0057],
-  [58, "ProjectionThreadsParentThreadId", Migration0058],
-  [59, "OrchestrationV2", Migration0059],
-  [60, "RemoveRedundantProjectionIndexes", Migration0060],
-  [61, "ProjectionTodos", Migration0061],
-  [62, "ThreadSettlementActivityIndexes", Migration0062],
-  // Upstream ships these as 57 and 58; the fork ledger had already used those ids.
-  [63, "ScheduledTaskWebhooks", Migration0063],
-  [64, "WebhookRelayDeliveries", Migration0064],
-  [65, "ThreadTasks", Migration0065],
-  // Upstream ships these as 59 and 60; the fork ledger had already used those ids.
-  [66, "McpAppModelContext", Migration0066],
-  [67, "ThreadSnapshotWindowIndexes", Migration0067],
-  // Upstream ships these as 61 and 62; the fork ledger had already used those ids.
-  [68, "PullRequestReviewGuides", Migration0068],
-  [69, "ThreadFailureLookupIndex", Migration0069],
-  // Upstream ships these as 63 through 67; the fork ledger had already used those ids.
-  [70, "DropUnusedV1Projections", Migration0070],
-  [71, "CanonicalizeThreadPullRequestLinks", Migration0071],
-  [72, "CodexUsageNativeTurnIndex", Migration0072],
-  [73, "RepairClientSettlementTimestamps", Migration0073],
-  [74, "WebhookDedupe", Migration0074],
-  [75, "ProjectionThreadSlimPayloads", Migration0075],
-  // Upstream ships this as 68; the fork ledger had already used that id.
-  [76, "ShellStopRequestIndex", Migration0076],
-  [77, "ShellRunlessRootTurnIndex", Migration0077],
-  [78, "ProjectionThreadParentIndex", Migration0078],
+  [52, "ProjectionThreadTitleState", Migration0052],
+  [53, "PullRequestFilesViewed", Migration0053],
+  [54, "ProjectionThreadsAutoSettleDisabledAt", Migration0054],
+  [55, "OrchestrationV2", Migration0055],
+  [56, "RemoveRedundantProjectionIndexes", Migration0056],
+  [57, "ScheduledTaskWebhooks", Migration0057],
+  [58, "WebhookRelayDeliveries", Migration0058],
+  [59, "McpAppModelContext", Migration0059],
+  [60, "ThreadSnapshotWindowIndexes", Migration0060],
+  [61, "PullRequestReviewGuides", Migration0061],
+  [62, "ThreadFailureLookupIndex", Migration0062],
+  [63, "DropUnusedV1Projections", Migration0063],
+  [64, "CanonicalizeThreadPullRequestLinks", Migration0064],
+  [65, "CodexUsageNativeTurnIndex", Migration0065],
+  [66, "RepairClientSettlementTimestamps", Migration0066],
+  [67, "WebhookDedupe", Migration0067],
+  [68, "ShellStopRequestIndex", Migration0068],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
 /**
+ * Fork-only migrations, recorded in their own table. The migrator skips every
+ * id at or below the highest recorded one, so sharing upstream's table made
+ * every upstream sync renumber. Each runs right after the upstream migration in
+ * its last column, the order fork builds shipped them in, so a fresh database
+ * replays what existing ones ran. A new one takes the next id and, as its
+ * last column, the newest upstream id.
+ */
+const forkMigrationEntries = [
+  [1, "AgentProfileAndPullRequestCompatibility", ForkMigration001, 51],
+  [2, "RepairAgentUpgradeSchema", ForkMigration002, 51],
+  [3, "ScheduledTasks", ForkMigration003, 53],
+  [4, "ProjectionThreadsParentThreadId", ForkMigration004, 54],
+  [5, "ProjectionTodos", ForkMigration005, 56],
+  [6, "ThreadSettlementActivityIndexes", ForkMigration006, 56],
+  [7, "ThreadTasks", ForkMigration007, 58],
+  [8, "ProjectionThreadSlimPayloads", ForkMigration008, 67],
+  [9, "ShellRunlessRootTurnIndex", ForkMigration009, 68],
+  [10, "ProjectionThreadParentIndex", ForkMigration010, 68],
+] as const;
+
+export const forkMigrationManifest = forkMigrationEntries.map(
+  ([id, name, , after]) => [id, name, after] as const,
+);
+
+/**
  * Names earlier agent builds recorded in slots this build uses for other
- * migrations. 52 and 53 replay those builds' schema idempotently, so a
- * database carrying one of these names was upgraded, not skipped.
+ * migrations. Fork migrations 1 and 2 replay those builds' schema
+ * idempotently, so a database carrying one of these names was upgraded, not
+ * skipped.
  */
 const supersededMigrationNames: ReadonlyMap<number, ReadonlyArray<string>> = new Map([
+  [48, ["ProjectionThreadProfileSnapshot"]],
+  [49, ["ProjectionThreadProfileSnapshot"]],
   [50, ["ProjectionThreadProfileSnapshot"]],
   [51, ["AgentProfileAndPullRequestCompatibility"]],
-  [52, ["ProjectionThreadListState"]],
+]);
+const supersededForkMigrationNames: ReadonlyMap<number, ReadonlyArray<string>> = new Map([
+  [1, ["ProjectionThreadListState"]],
 ]);
 
-/** Whether a recorded migration name matches this build's slot, directly or through a repaired earlier build. */
-export const isKnownMigrationName = (id: number, name: string): boolean =>
-  migrationEntries.some(([entryId, entryName]) => entryId === id && entryName === name) ||
-  (supersededMigrationNames.get(id)?.includes(name) ?? false);
+type Ledger = "upstream" | "fork";
 
-const makeMigrationLoader = (throughId?: number) =>
+const ledgers = {
+  upstream: {
+    table: "effect_sql_migrations",
+    entries: migrationEntries.map(([id, name, migration]) => [id, name, migration] as const),
+    superseded: supersededMigrationNames,
+  },
+  fork: {
+    table: FORK_MIGRATIONS_TABLE,
+    entries: forkMigrationEntries.map(([id, name, migration]) => [id, name, migration] as const),
+    superseded: supersededForkMigrationNames,
+  },
+} as const;
+
+/** Whether a recorded migration name matches this build's slot, directly or through a repaired earlier build. */
+export const isKnownMigrationName = (ledger: Ledger, id: number, name: string): boolean =>
+  ledgers[ledger].entries.some(([entryId, entryName]) => entryId === id && entryName === name) ||
+  (ledgers[ledger].superseded.get(id)?.includes(name) ?? false);
+
+const makeMigrationLoader = (ledger: Ledger, throughId: number) =>
   Migrator.fromRecord(
     Object.fromEntries(
-      migrationEntries
-        .filter(([id]) => throughId === undefined || id <= throughId)
+      ledgers[ledger].entries
+        .filter(([id]) => id <= throughId)
         .map(([id, name, migration]) => [`${id}_${name}`, migration]),
     ),
   );
 
-// The fork ledger records V2's schema at 59, after the fork's legacy schema migrations.
-const FIRST_V2_MIGRATION_ID = 59;
+/** Both ledgers in the order they run: each fork migration right after its upstream one. */
+const schedule: ReadonlyArray<readonly [Ledger, number]> = [
+  ...forkMigrationEntries.flatMap(
+    ([id, , , after]) =>
+      [
+        ["upstream", after],
+        ["fork", id],
+      ] as const,
+  ),
+  ["upstream", Number.POSITIVE_INFINITY],
+  ["fork", Number.POSITIVE_INFINITY],
+];
+
+const FIRST_V2_MIGRATION_ID = 55;
 
 /**
  * Fail before migrating when the migrator would skip one of V2's own
@@ -230,7 +271,7 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
     )
       return [];
     const recordedName = recordedNames.get(id);
-    if (recordedName !== undefined && isKnownMigrationName(id, recordedName)) return [];
+    if (recordedName === name) return [];
     return [`${id}_${name} (recorded: ${recordedName ?? "nothing"})`];
   });
   if (skipped.length === 0) return;
@@ -240,46 +281,120 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
   });
 });
 
-const run = Migrator.make({});
+const latestRecordedId = Effect.fn("latestRecordedMigrationId")(function* (ledger: Ledger) {
+  const sql = yield* SqlClient.SqlClient;
+  const { table } = ledgers[ledger];
+  const tables =
+    yield* sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${table}`;
+  if (tables.length === 0) return 0;
+  const [row] = yield* sql<{ readonly latest: number | null }>`
+    SELECT MAX(migration_id) AS latest FROM ${sql(table)}
+  `;
+  return row?.latest ?? 0;
+});
+
+const recordedHistory = Effect.fn("recordedMigrationHistory")(function* (ledger: Ledger) {
+  const sql = yield* SqlClient.SqlClient;
+  const { table } = ledgers[ledger];
+  const tables =
+    yield* sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${table}`;
+  if (tables.length === 0) return [];
+  return yield* sql<{
+    readonly migration_id: number;
+    readonly name: string;
+  }>`SELECT migration_id, name FROM ${sql(table)}`;
+});
 
 export interface RunMigrationsOptions {
+  /** Stop after this upstream migration, before fork migrations that follow it. */
   readonly toMigrationInclusive?: number | undefined;
+  /** Stop after this fork migration. Takes precedence over `toMigrationInclusive`. */
+  readonly toForkMigrationInclusive?: number | undefined;
 }
 
+/**
+ * Returns the upstream migrations this run executed, as upstream's does, so
+ * upstream's migration tests carry over unchanged. Fork migrations are logged.
+ */
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
+  toForkMigrationInclusive,
 }: RunMigrationsOptions = {}) {
-  const includesV2 =
-    toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
-  if (includesV2) {
-    yield* reconcileV2PreviewMigration();
-    yield* assertV2MigrationsCanRun(toMigrationInclusive);
+  const target: readonly [Ledger, number] | undefined =
+    toForkMigrationInclusive !== undefined
+      ? ["fork", toForkMigrationInclusive]
+      : toMigrationInclusive !== undefined
+        ? ["upstream", toMigrationInclusive]
+        : undefined;
+  const steps: Array<readonly [Ledger, number]> = [];
+  for (const [ledger, through] of schedule) {
+    const reachesTarget = target?.[0] === ledger && through >= target[1];
+    steps.push([ledger, reachesTarget ? target[1] : through]);
+    if (reachesTarget) break;
   }
-  const executedMigrations = yield* run({ loader: makeMigrationLoader(toMigrationInclusive) });
-  const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
+  const upstreamThroughId = Math.max(
+    0,
+    ...steps.filter(([ledger]) => ledger === "upstream").map(([, through]) => through),
+  );
+
+  yield* splitLegacyForkLedger({
+    upstream: migrationManifest,
+    fork: forkMigrationManifest,
+  });
+  const includesV2 = upstreamThroughId >= FIRST_V2_MIGRATION_ID;
+  const previewMigrations = includesV2 ? yield* reconcileV2PreviewMigration() : [];
+  if (includesV2) {
+    yield* assertV2MigrationsCanRun(
+      Number.isFinite(upstreamThroughId) ? upstreamThroughId : undefined,
+    );
+  }
+
+  const executed: Record<Ledger, Array<readonly [number, string]>> = {
+    upstream: [...previewMigrations],
+    fork: [],
+  };
+  const latest: Record<Ledger, number> = {
+    upstream: yield* latestRecordedId("upstream"),
+    fork: yield* latestRecordedId("fork"),
+  };
+  for (const [ledger, through] of steps) {
+    const pending = ledgers[ledger].entries.some(([id]) => id > latest[ledger] && id <= through);
+    if (!pending) continue;
+    const ran = yield* Migrator.make({})({
+      loader: makeMigrationLoader(ledger, through),
+      table: ledgers[ledger].table,
+    });
+    executed[ledger].push(...ran);
+    latest[ledger] = Math.max(latest[ledger], ...ran.map(([id]) => id));
+  }
+
+  const migrations = [
+    ...executed.upstream.map(([id, name]) => `${id}_${name}`),
+    ...executed.fork.map(([id, name]) => `fork/${id}_${name}`),
+  ];
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")
     : Effect.log("Migrations ran successfully").pipe(Effect.annotateLogs({ migrations }));
 
-  const sql = yield* SqlClient.SqlClient;
-  const recorded = yield* sql<{
-    readonly migration_id: number;
-    readonly name: string;
-  }>`SELECT migration_id, name FROM effect_sql_migrations`;
-  const manifestNames = new Map<number, string>(migrationEntries.map(([id, name]) => [id, name]));
-  const divergent = recorded.flatMap((row) => {
-    const expected = manifestNames.get(row.migration_id);
-    if (expected === undefined) {
-      return [`${row.migration_id}:${row.name} (unknown to this build)`];
+  const divergent: Array<string> = [];
+  for (const ledger of ["upstream", "fork"] as const) {
+    const manifestNames = new Map<number, string>(
+      ledgers[ledger].entries.map(([id, name]) => [id, name]),
+    );
+    const prefix = ledger === "fork" ? "fork/" : "";
+    for (const row of yield* recordedHistory(ledger)) {
+      const expected = manifestNames.get(row.migration_id);
+      if (expected === undefined) {
+        divergent.push(`${prefix}${row.migration_id}:${row.name} (unknown to this build)`);
+      } else if (!isKnownMigrationName(ledger, row.migration_id, row.name)) {
+        divergent.push(`${prefix}${row.migration_id}:${row.name} (this build: ${expected})`);
+      }
     }
-    return isKnownMigrationName(row.migration_id, row.name)
-      ? []
-      : [`${row.migration_id}:${row.name} (this build: ${expected})`];
-  });
+  }
   if (divergent.length > 0) {
     yield* Effect.logWarning(
       "Database migration history diverges from this build; recorded migration ids are skipped, not reconciled by name.",
     ).pipe(Effect.annotateLogs({ divergent }));
   }
-  return executedMigrations;
+  return executed.upstream;
 });

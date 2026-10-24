@@ -128,7 +128,7 @@ it.effect(
 it.effect("imports fork V1 scheduled tasks into the V2 table and drops the legacy table", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 56 });
+    yield* runMigrations({ toForkMigrationInclusive: 3 });
     yield* sql`INSERT INTO scheduled_tasks ${sql.insert({
       task_id: "fork-task",
       title: "Morning pull",

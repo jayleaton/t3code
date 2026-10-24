@@ -218,14 +218,13 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
       const stateDir = path.join(sourceDir, "userdata");
       const source = path.join(stateDir, "statev2.sqlite");
       yield* fs.makeDirectory(stateDir, { recursive: true });
-      // The fork ledger runs OrchestrationV2 as 59; upstream ships it as 55.
-      yield* withDatabase(source, runMigrations({ toMigrationInclusive: 58 }));
+      yield* withDatabase(source, runMigrations({ toMigrationInclusive: 54 }));
 
       const result = yield* runMigrateDevDb(
         { baseDir: destDir, source, projects: 5, threadsPerProject: 10 },
         { sharedHome: sourceDir },
       );
-      assert.include(result.executedMigrations, "59_OrchestrationV2");
+      assert.include(result.executedMigrations, "55_OrchestrationV2");
     }),
   );
 
@@ -263,7 +262,7 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
       const destDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-lineage-dest-" });
       const source = yield* createFixtureSource(sourceDir);
       // The ledger a database upgraded from an earlier agent build carries;
-      // 52 and 53 replayed that build's schema.
+      // fork migrations 1 and 2 replayed that build's schema.
       yield* withDatabase(
         source,
         Effect.gen(function* () {
