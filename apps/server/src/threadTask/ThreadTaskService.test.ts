@@ -28,6 +28,7 @@ import {
 } from "../orchestration-v2/ProjectionStore.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
+import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
 import * as ProviderReplayHarness from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import * as ThreadTaskService from "./ThreadTaskService.ts";
 import * as ThreadTaskStore from "./ThreadTaskStore.ts";
@@ -189,6 +190,12 @@ const fixture = Effect.gen(function* () {
     wakes,
     settled,
   };
+});
+
+/** Settling a parent carries on to its sub-runs through the outbox (SettlementCascade). */
+const drainSettlementCascades = Effect.gen(function* () {
+  const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+  yield* worker.drain();
 });
 
 it.effect(
@@ -375,6 +382,7 @@ it.effect("acceptance waits for the worker's turn and descendants, and reopening
       // Once the helper's turn ends the accepted tree settles.
       yield* f.endLatestRun("helper");
       yield* tasks.drain;
+      yield* drainSettlementCascades;
       assert.isTrue(yield* f.settled("worker"));
       assert.isTrue(yield* f.settled("helper"));
       assert.equal(
@@ -678,6 +686,7 @@ it.effect("a captain settles itself after its turn once its children are accepte
       yield* tasks.drain;
       current = yield* tasks.settleAfterTurn(owner, {});
       assert.equal(current.state, "settled");
+      yield* drainSettlementCascades;
       assert.isTrue(yield* f.settled("captain"));
       assert.isTrue(yield* f.settled("worker"));
     }),
