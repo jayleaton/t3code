@@ -749,12 +749,15 @@ jobs:
 
       - name: Verify packaged natives
         shell: bash
+        env:
+          PRODUCT_NAME: ${{ inputs.product_name }}
         run: |
           set -euo pipefail
           tar -C verify -xf verify/unpacked.tar
           node verify/verify-windows-desktop-artifact.mjs \
             --app-dir "$(cygpath -w "$PWD/verify/$UNPACKED_DIR")" \
-            --arch "${{ inputs.arch }}" --build-version "${{ inputs.version }}" --verbose
+            --arch "${{ inputs.arch }}" --build-version "${{ inputs.version }}" \
+            --product-name "$PRODUCT_NAME" --verbose
 
       - name: Smoke-test CLI archive
         if: inputs.cli_archive
