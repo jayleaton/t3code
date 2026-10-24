@@ -102,6 +102,11 @@ jobs:
       - name: Ensure Electron runtime is installed
         run: vp run --filter @t3tools/desktop ensure:electron
 
+      # Release Smoke installs without the lockfile; an unpinned patched package
+      # breaks it as soon as a newer version is published.
+      - name: Check patched dependencies are pinned
+        run: node scripts/check-patch-pins.ts
+
       # Files/dependencies are repo-wide; export checks cover clean workspaces only.
       - name: Check unused code
         run: vp run knip:check
