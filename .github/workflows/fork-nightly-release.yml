@@ -1,8 +1,11 @@
 name: Fork nightly release
 
 on:
+  # Only the release branch publishes. Pushes to other branches used to start runs that
+  # skipped every job but still took the single pending slot of the concurrency group,
+  # cancelling main's queued nightly (2026-10-24).
   push:
-    branches: ["**"]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
