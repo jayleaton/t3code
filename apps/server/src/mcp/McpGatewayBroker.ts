@@ -23,6 +23,26 @@ import * as Stream from "effect/Stream";
 
 const unavailable = (message: string) => new McpGatewayUnavailableError({ message });
 
+interface RelayCodec {
+  readonly encodeArgs: (args: unknown) => Effect.Effect<unknown, Schema.SchemaError>;
+  readonly decodeResult: (answer: unknown) => Effect.Effect<unknown, Schema.SchemaError>;
+}
+const relayCodec = (spec: {
+  readonly args: Schema.Codec<unknown, unknown>;
+  readonly result: Schema.Codec<unknown, unknown>;
+}): RelayCodec => ({
+  encodeArgs: Schema.encodeUnknownEffect(spec.args),
+  decodeResult: Schema.decodeUnknownEffect(spec.result),
+});
+/** Each relay call's argument encoder and answer decoder, compiled once. */
+const relayCodecs: { readonly [M in McpGatewayRelayMethod]: RelayCodec } = {
+  getThread: relayCodec(McpGatewayRelayCalls.getThread),
+  listThreads: relayCodec(McpGatewayRelayCalls.listThreads),
+  settleThread: relayCodec(McpGatewayRelayCalls.settleThread),
+  unsettleThread: relayCodec(McpGatewayRelayCalls.unsettleThread),
+  threadTask: relayCodec(McpGatewayRelayCalls.threadTask),
+};
+
 interface Host {
   readonly owner: string;
   readonly connectionId: string;
@@ -135,23 +155,25 @@ export const make = Effect.gen(function* () {
     method: M,
     args: McpGatewayRelayArgs<M>,
   ): Effect.Effect<McpGatewayRelayResult<M>, McpGatewayUnavailableError> => {
-    const spec = McpGatewayRelayCalls[method] as unknown as {
-      readonly args: Schema.Codec<McpGatewayRelayArgs<M>, ReadonlyArray<unknown>>;
-      readonly result: Schema.Codec<McpGatewayRelayResult<M>, unknown>;
-    };
+    const codec = relayCodecs[method];
     const environmentId = args[0];
-    return Schema.encodeEffect(spec.args)(args).pipe(
+    return codec.encodeArgs(args).pipe(
       Effect.mapError(() => unavailable(`The arguments of ${method} do not match its contract.`)),
-      Effect.flatMap((encoded) => invoke(method, encoded, [environmentId])),
+      Effect.flatMap((encoded) =>
+        invoke(method, encoded as ReadonlyArray<unknown>, [environmentId]),
+      ),
       Effect.flatMap((answer) =>
-        Schema.decodeUnknownEffect(spec.result)(answer).pipe(
-          Effect.mapError(() =>
-            unavailable(
-              `Environment ${environmentId} answered ${method} in a shape this server cannot read.`,
+        codec
+          .decodeResult(answer)
+          .pipe(
+            Effect.mapError(() =>
+              unavailable(
+                `Environment ${environmentId} answered ${method} in a shape this server cannot read.`,
+              ),
             ),
           ),
-        ),
       ),
+      Effect.map((result) => result as McpGatewayRelayResult<M>),
       Effect.withSpan("McpGatewayBroker.call", { attributes: { method } }),
     );
   };

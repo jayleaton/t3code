@@ -19,7 +19,6 @@ import {
   type OrchestratorMcpThreadWaitInput,
   type OrchestratorMcpThreadWaitResult,
   ProjectId,
-  ProviderInstanceId,
   ProviderInteractionMode,
   RunId,
   RuntimeMode,
