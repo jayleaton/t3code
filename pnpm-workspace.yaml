@@ -249,9 +249,6 @@ overrides:
   "@expo/fingerprint": 0.21.5
   app-builder-lib: 26.16.1
   expo-modules-core: 58.0.22
-  # Same for the fingerprint patch; expo depends on it with a range. Move this with
-  # patches/@expo__fingerprint@*.patch.
-  "@expo/fingerprint": 0.21.5
   # Keep jsdom's optional peer consistent so Vite+ has one test-runner instance.
   "@exodus/bytes>@noble/hashes": "1.8.0"
   # Earlier React Navigation declarations create a circular type alias in TypeScript 7.
