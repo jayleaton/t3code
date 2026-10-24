@@ -1,0 +1,34 @@
+name: Fork release health
+
+# The nightly stalled from 10-22 to 10-24 and the nightly sync failed for days
+# with no one noticing. A failed scheduled run notifies the repository owner, so
+# this job fails while the fork is not shipping. The rules live in
+# .github/scripts/fork-release-health.cjs.
+on:
+  schedule:
+    - cron: "41 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: fork-release-health
+  cancel-in-progress: true
+
+jobs:
+  health:
+    name: Release health
+    if: github.repository == 'jayleaton/t3code' && vars.FORK_RELEASE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/scripts
+      - name: Check the newest nightly and the nightly workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BRANCH: ${{ vars.FORK_RELEASE_BRANCH || 'main' }}
+        run: node .github/scripts/fork-release-health.cjs
