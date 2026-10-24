@@ -10,7 +10,6 @@ import * as HeadlessGatewayHost from "./mcp/agents/HeadlessGatewayHost.ts";
 import * as LocalGatewayPort from "./mcp/agents/LocalGatewayPort.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQuestionReactor.ts";
-import * as RemoteParentSettlement from "./orchestration-v2/RemoteParentSettlement.ts";
 import * as RemoteSettlementCascade from "./orchestration-v2/RemoteSettlementCascade.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
 // @effect-diagnostics nodeBuiltinImport:off
@@ -508,7 +507,8 @@ const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   // Tasks split across machines reach the other environment through the same
   // broker the WebSocket routes serve (one memoized instance).
   Layer.provide(ThreadTaskTransport.layerFromBroker.pipe(Layer.provide(McpGatewayBroker.layer))),
-  Layer.provide(RemoteParentSettlement.layerFromBroker.pipe(Layer.provide(McpGatewayBroker.layer))),
+  // RemoteParentSettlement asks other environments through the same broker.
+  Layer.provide(McpGatewayBroker.layer),
   Layer.provide(layerScheduledTaskWebhookOrigin),
   Layer.provide(ProviderEventIngestor.layerAnalytics),
   Layer.provide(layerCheckpointStore),

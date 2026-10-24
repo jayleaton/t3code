@@ -20,6 +20,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as McpGatewayBroker from "../mcp/McpGatewayBroker.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
@@ -30,7 +32,7 @@ import { ProjectionStoreV2, layer as projectionLayer } from "./ProjectionStore.t
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import { makeSubagentChildThread } from "@t3tools/provider-core/server/subagentProjection";
-import { RemoteParentSettlement } from "./RemoteParentSettlement.ts";
+import * as RemoteParentSettlement from "./RemoteParentSettlement.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
@@ -1053,103 +1055,167 @@ it.effect("a sub-run stopped after its parent settled follows the parent with it
   }).pipe(Effect.provide(testLayer)),
 );
 
+const pc = EnvironmentId.make("environment-pc");
+
+/**
+ * A connected app reaching `pc` that answers getThread from `threads`, and never answers for
+ * one listed in `stalled`. Each call is recorded and announced on `asked`.
+ */
+const relayLayer = (input: {
+  readonly threads: ReadonlyMap<string, Record<string, unknown>>;
+  readonly asked: Array<string>;
+  readonly onAsk?: (threadId: string) => Effect.Effect<void>;
+}) =>
+  Layer.effect(
+    McpGatewayBroker.McpGatewayBroker,
+    Effect.gen(function* () {
+      const broker = yield* McpGatewayBroker.make;
+      yield* broker.connect("desktop", { [pc]: ["read"] }).pipe(
+        Stream.runForEach((event) =>
+          Effect.gen(function* () {
+            const threadId = String(event.args[1]);
+            input.asked.push(`${String(event.args[0])}:${threadId}`);
+            yield* input.onAsk?.(threadId) ?? Effect.void;
+            const thread = input.threads.get(threadId);
+            // A thread missing from the fixture is one whose app never answers.
+            if (thread === undefined) return;
+            yield* broker.respond("desktop", {
+              connectionId: event.connectionId,
+              invocationId: event.invocationId,
+              result: thread,
+            });
+          }),
+        ),
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      return broker;
+    }),
+  ).pipe(Layer.provide(NodeServices.layer));
+
+const withRemoteParents = (relay: ReturnType<typeof relayLayer>) =>
+  RemoteParentSettlement.layer.pipe(Layer.provideMerge(testLayer), Layer.provideMerge(relay));
+
+/** A card as its own machine's app reports it from getThread. */
+const remoteCard = (id: string, fields: Record<string, unknown>) => ({
+  id,
+  projectId: "project:pc",
+  title: id,
+  modelSelection: { instanceId: "codex", model: "gpt-5.1-codex" },
+  runs: [],
+  messages: [],
+  parentThreadId: null,
+  ...fields,
+});
+
+const createUnder = (id: string, parent?: { threadId: string; environmentId?: EnvironmentId }) =>
+  Effect.gen(function* () {
+    const orchestrator = yield* OrchestratorV2;
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make(`create:${id}`),
+      threadId: ThreadId.make(id),
+      projectId: ProjectId.make("project:parents"),
+      title: id,
+      modelSelection: { instanceId, model: "gpt-5.1-codex" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "agent",
+      creationSource: "mcp",
+      ...(parent === undefined ? {} : { parentThreadId: ThreadId.make(parent.threadId) }),
+      ...(parent?.environmentId === undefined ? {} : { parentEnvironmentId: parent.environmentId }),
+    });
+  });
+
+const sendTo = (
+  id: string,
+  text: string,
+  dispatchMode: { readonly type: "defer_start" | "start_immediately" | "queue_after_active" },
+) =>
+  Effect.gen(function* () {
+    const orchestrator = yield* OrchestratorV2;
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make(`send:${id}:${text}`),
+      threadId: ThreadId.make(id),
+      messageId: MessageId.make(`message:${id}:${text}`),
+      text,
+      attachments: [],
+      dispatchMode,
+      createdBy: "agent",
+      creationSource: "mcp",
+    });
+  });
+
+/** Completes the thread's run at `index` (the latest by default) as its provider would. */
+const completeRun = (id: string, index = -1) =>
+  Effect.gen(function* () {
+    const projections = yield* ProjectionStoreV2;
+    const sink = yield* EventSinkV2;
+    const run = (yield* projections.getThreadRecords(ThreadId.make(id), ["runs"])).runs.at(index)!;
+    const now = yield* DateTime.now;
+    yield* sink.write({
+      events: [
+        ...(yield* finishOpenTurnItems(ThreadId.make(id))),
+        {
+          id: EventId.make(`event:complete:${run.id}`),
+          type: "run.updated",
+          threadId: ThreadId.make(id),
+          runId: run.id,
+          ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
+          providerInstanceId: instanceId,
+          occurredAt: now,
+          payload: { ...run, status: "completed", completedAt: now },
+        },
+      ],
+    });
+    return run;
+  });
+
 it.effect(
   "a sub-run under a card on another machine follows that card's manual settle once it finishes",
   () => {
-    const pcCardSettledAt = DateTime.makeUnsafe("2026-10-22T09:00:00.000Z");
-    // What the card's machine reports; null stands for one that predates settlementSource.
-    const reported = new Map<string, DateTime.Utc | null>([
-      ["pc-card", pcCardSettledAt],
-      ["pc-old-card", null],
-    ]);
+    const pcCardSettledAt = "2026-10-22T09:00:00.000Z";
     const asked: Array<string> = [];
     const oldCardAsked = Deferred.makeUnsafe<void>();
-    const remoteParents = Layer.succeed(RemoteParentSettlement, {
-      manualSettledAt: (environmentId, threadId) =>
-        Effect.sync(() => {
-          asked.push(`${environmentId}:${threadId}`);
-          return reported.get(threadId) ?? null;
-        }).pipe(
-          Effect.tap(() =>
-            threadId === "pc-old-card" ? Deferred.succeed(oldCardAsked, undefined) : Effect.void,
-          ),
-        ),
+    const relay = relayLayer({
+      threads: new Map([
+        [
+          "pc-card",
+          remoteCard("pc-card", { settledAt: pcCardSettledAt, settlementSource: "manual" }),
+        ],
+        // An environment from before settlementSource was reported.
+        ["pc-old-card", remoteCard("pc-old-card", { settledAt: pcCardSettledAt })],
+      ]),
+      asked,
+      onAsk: (threadId) =>
+        threadId === "pc-old-card" ? Deferred.succeed(oldCardAsked, undefined) : Effect.void,
     });
     return Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;
       const projections = yield* ProjectionStoreV2;
       const sink = yield* EventSinkV2;
-      const pc = EnvironmentId.make("environment-pc");
-      const create = (id: string, parent: { threadId: string; environmentId?: EnvironmentId }) =>
-        orchestrator.dispatch({
-          type: "thread.create",
-          commandId: CommandId.make(`create:${id}`),
-          threadId: ThreadId.make(id),
-          projectId: ProjectId.make("project:parents"),
-          title: id,
-          modelSelection: { instanceId, model: "gpt-5.1-codex" },
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          branch: null,
-          worktreePath: null,
-          createdBy: "agent",
-          creationSource: "mcp",
-          parentThreadId: ThreadId.make(parent.threadId),
-          ...(parent.environmentId === undefined
-            ? {}
-            : { parentEnvironmentId: parent.environmentId }),
-        });
       const settledAt = (id: string) =>
         projections.getThread(ThreadId.make(id)).pipe(Effect.map((thread) => thread.settledAt));
-      const finishRun = (id: string) =>
-        Effect.gen(function* () {
-          yield* orchestrator.dispatch({
-            type: "message.dispatch",
-            commandId: CommandId.make(`send:${id}`),
-            threadId: ThreadId.make(id),
-            messageId: MessageId.make(`message:${id}`),
-            text: "Keep working",
-            attachments: [],
-            dispatchMode: { type: "defer_start" },
-            createdBy: "agent",
-            creationSource: "mcp",
-          });
-          const run = (yield* projections.getThreadRecords(ThreadId.make(id), ["runs"])).runs.at(
-            -1,
-          )!;
-          const now = yield* DateTime.now;
-          yield* sink.write({
-            events: [
-              ...(yield* finishOpenTurnItems(ThreadId.make(id))),
-              {
-                id: EventId.make(`event:complete:${run.id}`),
-                type: "run.updated",
-                threadId: ThreadId.make(id),
-                runId: run.id,
-                ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
-                providerInstanceId: instanceId,
-                occurredAt: now,
-                payload: { ...run, status: "completed", completedAt: now },
-              },
-            ],
-          });
-        });
 
-      yield* create("remote-worker", { threadId: "pc-card", environmentId: pc });
-      yield* create("remote-worker-helper", { threadId: "remote-worker" });
+      yield* createUnder("remote-worker", { threadId: "pc-card", environmentId: pc });
+      yield* createUnder("remote-worker-helper", { threadId: "remote-worker" });
+      yield* sendTo("remote-worker", "Keep working", { type: "defer_start" });
       const before = yield* sink.latestSequence();
-      yield* finishRun("remote-worker");
+      yield* completeRun("remote-worker");
       yield* sink.stream({ afterSequence: before, eventType: "thread.settled" }).pipe(
         Stream.filter((stored) => stored.event.threadId === "remote-worker-helper"),
         Stream.runHead,
       );
       // Settled at the card's time, so un-settling the card there brings both back.
-      assert.deepEqual(yield* settledAt("remote-worker"), pcCardSettledAt);
-      assert.deepEqual(yield* settledAt("remote-worker-helper"), pcCardSettledAt);
+      const cardAt = DateTime.makeUnsafe(pcCardSettledAt);
+      assert.deepEqual(yield* settledAt("remote-worker"), cardAt);
+      assert.deepEqual(yield* settledAt("remote-worker-helper"), cardAt);
       assert.deepEqual(asked, [`${pc}:pc-card`]);
 
       // A sub-run never settles on a remote parent's word unless the command carries it.
-      yield* create("old-env-worker", { threadId: "pc-old-card", environmentId: pc });
+      yield* createUnder("old-env-worker", { threadId: "pc-old-card", environmentId: pc });
       const receipt = yield* orchestrator.dispatch({
         type: "thread.sub-run.settle",
         commandId: CommandId.make("settle:old-env-worker"),
@@ -1157,13 +1223,57 @@ it.effect(
       });
       assert.equal(receipt.storedEvents.length, 0);
       // An environment that cannot say how its card settled leaves the sub-run as before.
-      yield* finishRun("old-env-worker");
-      // The answer is null, so nothing is dispatched after it.
+      yield* sendTo("old-env-worker", "Keep working", { type: "defer_start" });
+      yield* completeRun("old-env-worker");
       yield* Deferred.await(oldCardAsked);
       assert.isNull(yield* settledAt("old-env-worker"));
-    }).pipe(Effect.provide(testLayer.pipe(Layer.provide(remoteParents))));
+    }).pipe(Effect.provide(withRemoteParents(relay)));
   },
 );
+
+it.effect("a relay that never answers holds up no other thread's run endings", () => {
+  const asked: Array<string> = [];
+  const stalledAsked = Deferred.makeUnsafe<void>();
+  // pc-card is missing from the fixture, so its app takes the call and never answers.
+  const relay = relayLayer({
+    threads: new Map(),
+    asked,
+    onAsk: () => Deferred.succeed(stalledAsked, undefined),
+  });
+  return Effect.gen(function* () {
+    const projections = yield* ProjectionStoreV2;
+    const sink = yield* EventSinkV2;
+
+    yield* createUnder("stalled-worker", { threadId: "pc-card", environmentId: pc });
+    yield* sendTo("stalled-worker", "Keep working", { type: "defer_start" });
+    yield* completeRun("stalled-worker");
+    yield* Deferred.await(stalledAsked);
+
+    // An unrelated thread with a follow-up queued behind its active run.
+    yield* createUnder("busy");
+    yield* sendTo("busy", "first", { type: "start_immediately" });
+    yield* sendTo("busy", "second", { type: "queue_after_active" });
+    const queued = (yield* projections.getThreadRecords(ThreadId.make("busy"), ["runs"])).runs.at(
+      -1,
+    )!;
+    assert.equal(queued.status, "queued");
+    const before = yield* sink.latestSequence();
+    yield* completeRun("busy", 0);
+    const started = yield* sink.stream({ afterSequence: before, eventType: "run.updated" }).pipe(
+      Stream.filter(
+        (stored) =>
+          stored.event.type === "run.updated" &&
+          stored.event.payload.id === queued.id &&
+          stored.event.payload.status !== "queued",
+      ),
+      Stream.runHead,
+    );
+    assert.isTrue(started._tag === "Some");
+    assert.deepEqual(asked, [`${pc}:pc-card`]);
+    assert.isNull((yield* projections.getThread(ThreadId.make("stalled-worker"))).settledAt);
+  }).pipe(Effect.provide(withRemoteParents(relay)));
+});
+
 it.effect("age settlement applies to one card without cascading to child chats or subagents", () =>
   Effect.gen(function* () {
     const orchestrator = yield* OrchestratorV2;

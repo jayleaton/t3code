@@ -1,10 +1,15 @@
+import type { GatewayRuntimePort } from "@t3tools/client-runtime/gateway";
 import type * as Cause from "effect/Cause";
 import {
+  McpGatewayRelayCalls,
   McpGatewayUnavailableError,
   toMcpGatewayRelayJson,
+  type McpGatewayRelayArgs,
   type McpGatewayRelayEvent,
   type McpGatewayRelayGrants,
+  type McpGatewayRelayMethod,
   type McpGatewayRelayResponse,
+  type McpGatewayRelayResult,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -13,6 +18,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 const unavailable = (message: string) => new McpGatewayUnavailableError({ message });
@@ -77,7 +83,7 @@ export const make = Effect.gen(function* () {
     return Object.fromEntries(Object.entries(merged).map(([id, scopes]) => [id, [...scopes]]));
   };
   const invoke = Effect.fn("McpGatewayBroker.invoke")(function* (
-    method: string,
+    method: keyof GatewayRuntimePort,
     args: ReadonlyArray<unknown>,
     environmentIds: ReadonlyArray<string>,
   ): Effect.fn.Return<unknown, McpGatewayUnavailableError> {
@@ -121,6 +127,34 @@ export const make = Effect.gen(function* () {
       Effect.ensuring(Effect.sync(() => pending.delete(invocationId))),
     );
   });
+  /**
+   * One of this server's own calls on another environment, with its arguments and answer checked
+   * against the contract, so an app that answers in another shape fails here, not in the caller.
+   */
+  const call = <M extends McpGatewayRelayMethod>(
+    method: M,
+    args: McpGatewayRelayArgs<M>,
+  ): Effect.Effect<McpGatewayRelayResult<M>, McpGatewayUnavailableError> => {
+    const spec = McpGatewayRelayCalls[method] as unknown as {
+      readonly args: Schema.Codec<McpGatewayRelayArgs<M>, ReadonlyArray<unknown>>;
+      readonly result: Schema.Codec<McpGatewayRelayResult<M>, unknown>;
+    };
+    const environmentId = args[0];
+    return Schema.encodeEffect(spec.args)(args).pipe(
+      Effect.mapError(() => unavailable(`The arguments of ${method} do not match its contract.`)),
+      Effect.flatMap((encoded) => invoke(method, encoded, [environmentId])),
+      Effect.flatMap((answer) =>
+        Schema.decodeUnknownEffect(spec.result)(answer).pipe(
+          Effect.mapError(() =>
+            unavailable(
+              `Environment ${environmentId} answered ${method} in a shape this server cannot read.`,
+            ),
+          ),
+        ),
+      ),
+      Effect.withSpan("McpGatewayBroker.call", { attributes: { method } }),
+    );
+  };
   const respond = Effect.fn("McpGatewayBroker.respond")(function* (
     owner: string,
     input: McpGatewayRelayResponse,
@@ -139,7 +173,12 @@ export const make = Effect.gen(function* () {
   return {
     connect,
     grants,
-    invoke,
+    call,
+    /**
+     * Runs a gateway tool's runtime port call on another environment as it is. Only the tool
+     * catalog uses this: its calls are the port's own surface, typed by the port.
+     */
+    forward: invoke,
     respond,
     available: () => hosts.size > 0,
     hostConnected: Stream.fromPubSub(connected),

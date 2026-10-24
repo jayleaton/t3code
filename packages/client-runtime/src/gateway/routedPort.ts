@@ -18,7 +18,7 @@ export function gatewayPortEnvironmentIds(args: ReadonlyArray<unknown>): Readonl
 /** Runs runtime port calls on environments this process cannot reach itself. */
 export interface GatewayPortRelay {
   readonly invoke: (
-    method: string,
+    method: keyof GatewayRuntimePort,
     args: ReadonlyArray<unknown>,
     environmentIds: ReadonlyArray<string>,
   ) => Promise<unknown>;
