@@ -28,6 +28,7 @@ import * as CommandPolicy from "../CommandPolicy.ts";
 import * as CommandReceiptStore from "../CommandReceiptStore.ts";
 import * as ContextHandoffService from "../ContextHandoffService.ts";
 import * as EffectOutbox from "../EffectOutbox.ts";
+import * as SettlementCascade from "../SettlementCascade.ts";
 import * as EffectWorker from "../EffectWorker.ts";
 import * as EventSink from "../EventSink.ts";
 import * as EventStore from "../EventStore.ts";
@@ -503,6 +504,9 @@ export function layerWithRegistry<Error>(
         layerThreadTitleRegenerationTest,
         layerServerSettings,
         layerThreadManagementProvided,
+        SettlementCascade.layer.pipe(
+          Layer.provide(Layer.merge(layerStores, layerOrchestratorProvided)),
+        ),
       ),
     ),
   );

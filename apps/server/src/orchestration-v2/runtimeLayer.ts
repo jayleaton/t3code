@@ -21,6 +21,7 @@ import * as CommandPolicy from "./CommandPolicy.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
+import * as SettlementCascade from "./SettlementCascade.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
 import * as RemoteParentSettlement from "./RemoteParentSettlement.ts";
@@ -332,6 +333,9 @@ const layerEffectExecutorProvided = EffectWorker.layerExecutor.pipe(
       layerRuntimeRequestServiceProvided,
       layerThreadTitleRegenerationProvided,
       layerThreadManagementProvided,
+      SettlementCascade.layer.pipe(
+        Layer.provide(Layer.merge(ProjectionStore.layer, layerOrchestratorProvided)),
+      ),
     ),
   ),
 );

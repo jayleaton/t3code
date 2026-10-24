@@ -5,14 +5,15 @@ import * as Effect from "effect/Effect";
 import type { ProjectionStoreV2Shape } from "./ProjectionStore.ts";
 
 export type ManualSettlementAbove =
-  | { readonly settledAt: DateTime.Utc }
+  | { readonly settledAt: DateTime.Utc; readonly settledBy: ThreadId }
   | { readonly remote: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId } }
   | null;
 
 /**
  * What a sub-run's settle follows: the settle time of its nearest manually
- * settled ancestor here, or the ancestor on another machine the walk
- * reaches, which only that machine can answer for. Ancestors that only
+ * settled ancestor here and the ancestor its cascade started from, or the
+ * ancestor on another machine the walk reaches, which only that machine can
+ * answer for. Ancestors that only
  * aged out are looked past, since age settlement never cascades and must
  * not cut a manual cascade short.
  */
@@ -38,7 +39,9 @@ export const manualSettlementAbove = Effect.fn("orchestrationV2.dispatch.manualS
         return null;
       }
       if (parent.settlementSource !== "inactivity") {
-        return parent.settledAt === null ? null : { settledAt: parent.settledAt };
+        return parent.settledAt === null
+          ? null
+          : { settledAt: parent.settledAt, settledBy: parent.settledBy ?? parent.id };
       }
       current = parent;
     }

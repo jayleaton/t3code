@@ -7,6 +7,7 @@ import * as Option from "effect/Option";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as SettlementCascade from "./SettlementCascade.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import * as WorkspaceEntries from "../workspace/WorkspaceEntries.ts";
 import * as CheckpointCapture from "./CheckpointCaptureService.ts";
@@ -91,6 +92,7 @@ it.effect.each([
         Layer.mock(ThreadTitles.ThreadTitleRegenerationService)({}),
         Layer.mock(ThreadManagement.ThreadManagementService)({}),
         ServerSettings.layerTest(),
+        Layer.mock(SettlementCascade.SettlementCascade)({}),
         Layer.mock(ProviderTurnStart.ProviderTurnStartServiceV2)({
           start: () => Effect.sync(() => calls.push("start")).pipe(Effect.asVoid),
         }),

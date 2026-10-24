@@ -26,6 +26,7 @@ import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as EffectWorker from "./EffectWorker.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { OrchestratorV2 } from "./Orchestrator.ts";
 import { ProjectionStoreV2, layer as projectionLayer } from "./ProjectionStore.ts";
@@ -45,6 +46,11 @@ const adapter = {
   openSession: () => Effect.die("No provider process needed for thread parents"),
 } as ProviderAdapter.ProviderAdapterV2["Service"];
 const database = Sqlite.layerMemory;
+/** Runs what the commands so far left in the outbox, settlement cascades among them. */
+const drainEffects = Effect.gen(function* () {
+  const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+  yield* worker.drain();
+});
 const testLayer = Layer.mergeAll(
   database,
   projectionLayer.pipe(Layer.provide(database)),
@@ -420,6 +426,7 @@ it.effect(
         commandId: CommandId.make("settle:earlier"),
         threadId: ThreadId.make("earlier"),
       });
+      yield* drainEffects;
       const earlierAt = yield* settledAt("earlier");
       yield* TestClock.adjust("1 minute");
 
@@ -428,6 +435,7 @@ it.effect(
         commandId: CommandId.make("settle:lead"),
         threadId: ThreadId.make("lead"),
       });
+      yield* drainEffects;
       const leadAt = yield* settledAt("lead");
       assert.isNotNull(leadAt);
       assert.deepEqual(yield* settledAt("worker"), leadAt);
@@ -440,6 +448,7 @@ it.effect(
         threadId: ThreadId.make("lead"),
         reason: "user",
       });
+      yield* drainEffects;
       assert.isNull(yield* settledAt("lead"));
       assert.isNull(yield* settledAt("worker"));
       assert.isNull(yield* settledAt("helper"));
@@ -505,6 +514,7 @@ it.effect(
         commandId: CommandId.make("settle:captain"),
         threadId: ThreadId.make("captain"),
       });
+      yield* drainEffects;
       const settled = Array.from(
         yield* sink
           .stream({ afterSequence: before, eventType: "thread.settled" })
@@ -707,6 +717,7 @@ it.effect("a sub-run whose turn ended with background work still open stays acti
       commandId: CommandId.make("settle:lead"),
       threadId: ThreadId.make("lead"),
     });
+    yield* drainEffects;
     assert.isNull((yield* projections.getThread(threadId)).settledOverride);
     const run = (yield* projections.getThreadRecords(threadId, ["runs"])).runs.at(-1)!;
     const now = yield* DateTime.now;
@@ -829,6 +840,7 @@ it.effect(
         commandId: CommandId.make("settle:card"),
         threadId: ThreadId.make("card"),
       });
+      yield* drainEffects;
       const cardAt = yield* settledAt("card");
       assert.isNotNull(cardAt);
       // Settling never stops work: the busy sub-run and everything under it stay active.
@@ -856,7 +868,8 @@ it.effect(
           },
         ],
       });
-      yield* waitForSettled("busy-helper", before);
+      yield* waitForSettled("busy", before);
+      yield* drainEffects;
       assert.deepEqual(yield* settledAt("busy"), cardAt);
       assert.deepEqual(yield* settledAt("busy-helper"), cardAt);
 
@@ -867,6 +880,7 @@ it.effect(
         threadId: ThreadId.make("card"),
         reason: "user",
       });
+      yield* drainEffects;
       assert.isNull(yield* settledAt("busy"));
       assert.isNull(yield* settledAt("busy-helper"));
     }).pipe(Effect.provide(testLayer)),
@@ -933,6 +947,7 @@ it.effect(
         commandId: CommandId.make("settle:lead"),
         threadId: ThreadId.make("lead"),
       });
+      yield* drainEffects;
       const leadAt = yield* settledAt("lead");
       assert.isNotNull(leadAt);
       assert.deepEqual(yield* settledAt("aged"), agedAt);
@@ -973,6 +988,7 @@ it.effect(
         threadId: ThreadId.make("lead"),
         reason: "user",
       });
+      yield* drainEffects;
       assert.deepEqual(yield* settledAt("aged"), agedAt);
       assert.isNull(yield* settledAt("aged-idle"));
       assert.isNull(yield* settledAt("aged-busy"));
@@ -1022,6 +1038,7 @@ it.effect("a sub-run stopped after its parent settled follows the parent with it
       commandId: CommandId.make("settle:card"),
       threadId: ThreadId.make("card"),
     });
+    yield* drainEffects;
     const cardAt = yield* settledAt("card");
     assert.isNull(yield* settledAt("stopped"));
 
@@ -1047,9 +1064,10 @@ it.effect("a sub-run stopped after its parent settled follows the parent with it
       ],
     });
     yield* sink.stream({ afterSequence: before, eventType: "thread.settled" }).pipe(
-      Stream.filter((stored) => stored.event.threadId === "stopped-helper"),
+      Stream.filter((stored) => stored.event.threadId === "stopped"),
       Stream.runHead,
     );
+    yield* drainEffects;
     assert.deepEqual(yield* settledAt("stopped"), cardAt);
     assert.deepEqual(yield* settledAt("stopped-helper"), cardAt);
   }).pipe(Effect.provide(testLayer)),
@@ -1205,9 +1223,10 @@ it.effect(
       const before = yield* sink.latestSequence();
       yield* completeRun("remote-worker");
       yield* sink.stream({ afterSequence: before, eventType: "thread.settled" }).pipe(
-        Stream.filter((stored) => stored.event.threadId === "remote-worker-helper"),
+        Stream.filter((stored) => stored.event.threadId === "remote-worker"),
         Stream.runHead,
       );
+      yield* drainEffects;
       // Settled at the card's time, so un-settling the card there brings both back.
       const cardAt = DateTime.makeUnsafe(pcCardSettledAt);
       assert.deepEqual(yield* settledAt("remote-worker"), cardAt);
@@ -1306,6 +1325,7 @@ it.effect("age settlement applies to one card without cascading to child chats o
       threadId: ThreadId.make("kept"),
       reason: "user",
     });
+    yield* drainEffects;
 
     const parent = yield* thread("merged");
     const settledAt = DateTime.subtract(parent.updatedAt, { days: 1 });
@@ -1373,6 +1393,7 @@ it.effect("age settlement applies to one card without cascading to child chats o
       threadId: parent.id,
       reason: "user",
     });
+    yield* drainEffects;
     assert.isNull((yield* thread("merged")).settledAt);
     assert.deepEqual((yield* thread("idle")).settledAt, settledAt);
     yield* TestClock.adjust("1 day");
@@ -1383,6 +1404,7 @@ it.effect("age settlement applies to one card without cascading to child chats o
       threadId: parent.id,
       reason: "user",
     });
+    yield* drainEffects;
     assert.deepEqual((yield* thread("merged")).unsettledAt, refreshedAt);
   }).pipe(Effect.provide(testLayer)),
 );
@@ -1556,6 +1578,7 @@ it.effect(
         threadId: stale.id,
         reason: "user",
       });
+      yield* drainEffects;
       const sequence = yield* sink.latestSequence();
       yield* orchestrator.dispatch(automatic("stale", stale.updatedAt)).pipe(Effect.flip);
       assert.equal(yield* sink.latestSequence(), sequence);
@@ -1570,4 +1593,106 @@ it.effect(
       assert.deepEqual(duplicate, first);
       assert.equal(yield* sink.latestSequence(), first.sequence);
     }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("un-settling follows provenance, not a shared settle time", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* OrchestratorV2;
+    const projections = yield* ProjectionStoreV2;
+    const thread = (id: string) => projections.getThread(ThreadId.make(id));
+    const settle = (id: string) =>
+      orchestrator
+        .dispatch({
+          type: "thread.settle",
+          commandId: CommandId.make(`settle:${id}`),
+          threadId: ThreadId.make(id),
+        })
+        .pipe(Effect.andThen(drainEffects));
+    const unsettle = (id: string) =>
+      orchestrator
+        .dispatch({
+          type: "thread.unsettle",
+          commandId: CommandId.make(`unsettle:${id}`),
+          threadId: ThreadId.make(id),
+          reason: "user",
+        })
+        .pipe(Effect.andThen(drainEffects));
+
+    yield* createUnder("captain");
+    yield* createUnder("named", { threadId: "captain" });
+    yield* createUnder("grandchild", { threadId: "named" });
+    yield* createUnder("own", { threadId: "captain" });
+    yield* createUnder("own-child", { threadId: "own" });
+    // Settled by hand in the same instant the Captain is: the clock alone cannot tell them apart.
+    yield* settle("own");
+    assert.isNull((yield* thread("own")).settledBy);
+    yield* orchestrator.dispatch({
+      type: "thread.unsettle",
+      commandId: CommandId.make("unsettle:own-child"),
+      threadId: ThreadId.make("own-child"),
+      reason: "user",
+    });
+    yield* settle("captain");
+    const captainAt = (yield* thread("captain")).settledAt;
+    for (const id of ["named", "grandchild", "own-child"]) {
+      const settled = yield* thread(id);
+      assert.deepEqual(settled.settledAt, captainAt);
+      assert.equal(settled.settledBy, "captain");
+    }
+    assert.deepEqual((yield* thread("own")).settledAt, captainAt);
+
+    // Un-settling one named child brings back what settled under it with the Captain, only.
+    yield* unsettle("named");
+    assert.isNull((yield* thread("named")).settledAt);
+    assert.isNull((yield* thread("grandchild")).settledAt);
+    assert.deepEqual((yield* thread("own-child")).settledAt, captainAt);
+
+    yield* unsettle("captain");
+    assert.isNull((yield* thread("captain")).settledAt);
+    assert.isNull((yield* thread("own-child")).settledAt);
+    // Settled on its own, so it keeps its settle even though its time matches the Captain's.
+    assert.deepEqual((yield* thread("own")).settledAt, captainAt);
+  }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("a cascade cut short resumes where it left off, settling each sub-run once", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* OrchestratorV2;
+    const projections = yield* ProjectionStoreV2;
+    const sink = yield* EventSinkV2;
+    yield* createUnder("card");
+    yield* createUnder("first", { threadId: "card" });
+    yield* createUnder("first-helper", { threadId: "first" });
+    yield* createUnder("second", { threadId: "card" });
+    const before = yield* sink.latestSequence();
+    yield* orchestrator.dispatch({
+      type: "thread.settle",
+      commandId: CommandId.make("settle:card"),
+      threadId: ThreadId.make("card"),
+    });
+    // The settle returns before any sub-run follows; the walk waits in the outbox.
+    assert.isNull((yield* projections.getThread(ThreadId.make("first"))).settledAt);
+    const cardAt = (yield* projections.getThread(ThreadId.make("card"))).settledAt!;
+    // The worker settled one sub-run, then the server stopped before it finished the walk.
+    yield* orchestrator.dispatch({
+      type: "thread.settlement.follow",
+      commandId: CommandId.make("settle:card:cascade:first"),
+      threadId: ThreadId.make("first"),
+      action: "settle",
+      settledBy: ThreadId.make("card"),
+      settledAt: cardAt,
+    });
+    yield* drainEffects;
+    for (const id of ["first", "first-helper", "second"]) {
+      assert.deepEqual((yield* projections.getThread(ThreadId.make(id))).settledAt, cardAt);
+    }
+    const settled = Array.from(
+      yield* sink
+        .stream({ afterSequence: before, eventType: "thread.settled" })
+        .pipe(Stream.take(4), Stream.runCollect),
+      (stored) => stored.event.threadId,
+    );
+    // Each once: a sub-run settled twice would crowd another out of the first four.
+    assert.sameMembers(settled, ["card", "first", "first-helper", "second"]);
+  }).pipe(Effect.provide(testLayer)),
 );
