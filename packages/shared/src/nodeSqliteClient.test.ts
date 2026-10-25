@@ -76,7 +76,7 @@ const withReaderClient = <A, E>(
       yield* sql`CREATE TABLE entries(name TEXT NOT NULL)`;
       yield* sql`INSERT INTO entries VALUES ('first')`;
       return yield* use(sql);
-    }).pipe(Effect.provide(SqliteClient.layer({ filename, readerWorker: true })));
+    }).pipe(Effect.provide(SqliteClient.layer({ filename, readers: 4 })));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
 
 const countEntries = (sql: SqlClient.SqlClient) =>
@@ -307,6 +307,105 @@ it.effect("keeps read-only work inside a write transaction on the writer", () =>
   ),
 );
 
+// Each party's read transaction finishes only once all of them are open at once.
+const overlappingReads = <A, E>(
+  sql: SqlClient.SqlClient,
+  parties: number,
+  read: Effect.Effect<A, E, SqlClient.SqlClient>,
+) =>
+  Effect.gen(function* () {
+    const allOpen = yield* Deferred.make<void>();
+    let open = 0;
+    return yield* Effect.all(
+      Array.from({ length: parties }, () =>
+        sql
+          .withTransaction(
+            Effect.gen(function* () {
+              const value = yield* read;
+              if (++open === parties) yield* Deferred.succeed(allOpen, undefined);
+              yield* Deferred.await(allOpen);
+              return value;
+            }),
+          )
+          .pipe(SqliteClient.readOnly),
+      ),
+      { concurrency: "unbounded" },
+    );
+  });
+
+it.effect("runs read-only transactions on separate readers at the same time", () =>
+  withReaderClient((sql) =>
+    Effect.gen(function* () {
+      const startedBefore = startedWorkers.length;
+      assert.deepEqual(yield* overlappingReads(sql, 4, countEntries(sql)), [1, 1, 1, 1]);
+      assert.equal(startedWorkers.length, startedBefore + 4);
+    }),
+  ),
+);
+
+it.effect("keeps one reader free of background scans for other reads", () =>
+  withReaderClient((sql) =>
+    Effect.gen(function* () {
+      const finishScans = yield* Deferred.make<void>();
+      const scan = (opened: Deferred.Deferred<void>) =>
+        sql
+          .withTransaction(
+            countEntries(sql).pipe(
+              Effect.andThen(Deferred.succeed(opened, undefined)),
+              Effect.andThen(Deferred.await(finishScans)),
+            ),
+          )
+          .pipe(SqliteClient.readOnlyBackground, Effect.forkChild);
+      const opened = yield* Effect.all(Array.from({ length: 4 }, () => Deferred.make<void>()));
+      const scans = yield* Effect.forEach(opened, scan);
+      yield* Effect.forEach(opened.slice(0, 3), Deferred.await);
+
+      // The fourth scan waits for a lane, so this read takes the fourth reader.
+      assert.equal(yield* countEntries(sql).pipe(SqliteClient.readOnly), 1);
+      assert.isFalse(yield* Deferred.isDone(opened[3]!));
+      yield* Deferred.succeed(finishScans, undefined);
+      yield* Effect.forEach(scans, Fiber.join);
+    }),
+  ),
+);
+
+it.effect("answers a quick read while another reader is held by a long one", () =>
+  withReaderClient((sql) =>
+    Effect.gen(function* () {
+      const scanning = yield* Deferred.make<void>();
+      const finishScan = yield* Deferred.make<void>();
+      const scan = yield* sql
+        .withTransaction(
+          countEntries(sql).pipe(
+            Effect.andThen(Deferred.succeed(scanning, undefined)),
+            Effect.andThen(Deferred.await(finishScan)),
+          ),
+        )
+        .pipe(SqliteClient.readOnly, Effect.forkChild);
+      yield* Deferred.await(scanning);
+
+      assert.equal(yield* countEntries(sql).pipe(SqliteClient.readOnly), 1);
+      assert.isUndefined(scan.pollUnsafe());
+      yield* Deferred.succeed(finishScan, undefined);
+      yield* Fiber.join(scan);
+    }),
+  ),
+);
+
+it.effect("shows every reader a write committed before its read began", () =>
+  withReaderClient((sql) =>
+    Effect.gen(function* () {
+      // Open all four readers, so the reads below land on workers that already
+      // served an earlier snapshot.
+      yield* overlappingReads(sql, 4, countEntries(sql));
+      yield* sql`INSERT INTO entries VALUES ('second')`;
+      assert.deepEqual(yield* overlappingReads(sql, 4, countEntries(sql)), [2, 2, 2, 2]);
+      yield* sql.withTransaction(sql`INSERT INTO entries VALUES ('third')`);
+      assert.deepEqual(yield* overlappingReads(sql, 4, countEntries(sql)), [3, 3, 3, 3]);
+    }),
+  ),
+);
+
 it.effect("fails a read-only transaction whose reader stops, then starts a new reader", () =>
   withReaderClient((sql) =>
     Effect.gen(function* () {
@@ -342,7 +441,7 @@ const withFileClient = <A, E>(
     const filename = path.join(directory, "state.sqlite");
     return yield* Effect.gen(function* () {
       return yield* setup(yield* SqlClient.SqlClient, filename);
-    }).pipe(Effect.provide(SqliteClient.layer({ filename, readerWorker: true })));
+    }).pipe(Effect.provide(SqliteClient.layer({ filename, readers: 4 })));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
 
 it.effect("uses the writer when the reader cannot open the database", () =>
