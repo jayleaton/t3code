@@ -1,3 +1,4 @@
+import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
@@ -13,6 +14,15 @@ import { initializeV2Database } from "./initializeV2Database.ts";
 import * as ServerConfig from "../config.ts";
 
 const WAL_SIZE_LIMIT_BYTES = 32 * 1024 * 1024;
+
+// Read-only connections, each a worker thread of about 15-20 MB RSS under load.
+// Background scans (shell snapshots, pull request sync, settlement sweeps,
+// storage cleanup) share all but one, so with four, three scans run at once
+// and short reads always have a free reader. 0 sends every read to the writer.
+const DEFAULT_READERS = 4;
+const readersConfig = Config.Int("T3CODE_SQLITE_READERS").pipe(
+  Config.map((readers) => Math.max(0, readers)),
+);
 
 /**
  * The migrations refused this database's history before changing it. Its own
@@ -73,6 +83,9 @@ export const layerFromPath = Effect.fn("makeSqlitePersistenceLive")(function* (d
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
+  const readers = yield* Effect.gen(function* () {
+    return yield* readersConfig;
+  }).pipe(Effect.orElseSucceed(() => DEFAULT_READERS));
 
   return Layer.provideMerge(
     Layer.catchTag(layerSetup, "MigrationError", (error) =>
@@ -84,7 +97,7 @@ export const layerFromPath = Effect.fn("makeSqlitePersistenceLive")(function* (d
     ),
     NodeSqliteClient.layer({
       filename: dbPath,
-      readerWorker: true,
+      readers,
       // Checkpoints sync the database, with F_FULLFSYNC on macOS. Run them off
       // the event loop so a slow flush cannot stall clients.
       checkpointWorker: true,

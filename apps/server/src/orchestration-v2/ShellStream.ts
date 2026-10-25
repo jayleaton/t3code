@@ -66,8 +66,8 @@ export function buildActiveShellSnapshot(input: {
 
 /**
  * One transaction covers the reads so they agree; the threads are decoded after it commits,
- * because the server shares one SQLite connection and decoding a large shell takes longer than
- * reading it.
+ * because the transaction holds a reader connection and decoding a large shell takes longer
+ * than reading it.
  */
 export const loadShellSnapshotParts = Effect.fn("ShellStream.loadShellSnapshotParts")(function* <
   E1,
@@ -88,7 +88,7 @@ export const loadShellSnapshotParts = Effect.fn("ShellStream.loadShellSnapshotPa
         snapshotSequence: input.latestSequence,
       }),
     )
-    .pipe(NodeSqliteClient.readOnly);
+    .pipe(NodeSqliteClient.readOnlyBackground);
   return {
     projects: read.projects,
     threads: yield* read.decodeThreads,

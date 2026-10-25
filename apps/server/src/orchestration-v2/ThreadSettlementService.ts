@@ -1,6 +1,7 @@
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { CommandId, type ThreadId, type OrchestrationV2DomainEvent } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -72,7 +73,9 @@ export const make = Effect.gen(function* () {
       )
     )
       return;
-    const threads = yield* projections.getSettlementCandidates(threadId);
+    const threads = yield* projections
+      .getSettlementCandidates(threadId)
+      .pipe(NodeSqliteClient.readOnlyBackground);
     yield* Effect.forEach(
       threads,
       (thread) =>
