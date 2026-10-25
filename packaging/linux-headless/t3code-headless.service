@@ -19,8 +19,10 @@ Environment=ELECTRON_RUN_AS_NODE=1
 # A user unit gets no login-shell PATH; provider CLIs must be on this one.
 Environment=PATH=%h/.local/bin:%h/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
 # Resolve `current` once, so an update that swaps it under a running server
-# does not mix files from two versions before the restart.
-ExecStart=/bin/sh -c 'app=$$(readlink -f "$$0") && exec "$$app/t3code" --require "$$app/resources/app.asar/apps/desktop/dist-electron/compileCache.cjs" "$$app/resources/app.asar/apps/server/dist/bin.mjs" serve' %h/.local/opt/t3code-headless/current
+# does not mix files from two versions before the restart. T3CODE_HOME/PORT/HOST
+# become flags and are unset: agents inherit the server's environment, and an
+# agent's `t3` or dev server in a worktree must not target this server.
+ExecStart=/bin/sh -c 'app=$$(readlink -f "$$0") && set -- serve --base-dir "$$T3CODE_HOME" --port "$$T3CODE_PORT" --host "$$T3CODE_HOST" && unset T3CODE_HOME T3CODE_PORT T3CODE_HOST && exec "$$app/t3code" --require "$$app/resources/app.asar/apps/desktop/dist-electron/compileCache.cjs" "$$app/resources/app.asar/apps/server/dist/bin.mjs" "$$@"' %h/.local/opt/t3code-headless/current
 # Agents run in their own scopes under app-t3code-agents-<hash>.slice and exit
 # when the server's pipe closes; everything else is in this cgroup.
 KillMode=control-group
