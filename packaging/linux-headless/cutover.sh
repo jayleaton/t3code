@@ -76,9 +76,7 @@ free_port() {
 # Running turns end when the server stops. Waiting on a person (an approval or question) is not
 # running, but its pending request is closed by the restart, so those threads are reported.
 busy_threads() {
-  local token shell
-  token="$("$root/bin/t3" auth session issue --base-dir "$t3_home" --scope orchestration:read \
-    --ttl 5m --label cutover-idle-check --token-only 2>/dev/null)" || return 2
+  local token="$1" shell
   shell="$(curl -fsS -m 10 -H "Authorization: Bearer $token" -H "x-t3-orchestration-protocol: 2" \
     "http://127.0.0.1:$port/api/orchestration/shell")" || return 2
   jq -r '.threads[] | (.activityRunStatus // .status) as $s
@@ -90,9 +88,12 @@ busy_threads() {
 }
 
 wait_idle() {
-  local deadline=$((SECONDS + idle_wait)) busy rc
+  local deadline=$((SECONDS + idle_wait)) busy rc token
+  # One read-only session for the whole wait, not one per poll.
+  token="$("$root/bin/t3" auth session issue --base-dir "$t3_home" --scope orchestration:read \
+    --ttl "$((idle_wait / 60 + 5))m" --label cutover-idle-check --token-only 2>/dev/null)"
   while true; do
-    busy="$(busy_threads)"
+    busy="$(busy_threads "$token")"
     rc=$?
     if [[ $rc -eq 2 ]]; then
       log "could not read thread state from :$port"
