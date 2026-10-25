@@ -79,24 +79,24 @@ function deviceConnectionText(environment: McpGrantEnvironmentRow): string {
   const failure = (() => {
     switch (environment.failureReason) {
       case "authentication":
-        return "Authentication failed — reconnect or sign in in Settings → Connections.";
+        return "Authentication failed: reconnect or sign in in Settings → Connections.";
       case "permission":
-        return "Connection permission denied — review access in Settings → Connections.";
+        return "Connection permission denied: review access in Settings → Connections.";
       case "unsupported":
-        return "Incompatible connection — check client and server compatibility in Settings → Connections.";
+        return "Incompatible connection: check client and server compatibility in Settings → Connections.";
       case "configuration":
-        return "Connection configuration failed — review Settings → Connections.";
+        return "Connection configuration failed: review Settings → Connections.";
       case "transport":
-        return "Transport failed — check the remote server and connection route.";
+        return "Transport failed: check the remote server and connection route.";
       case "timeout":
-        return "Connection timed out — check the remote server and connection route.";
+        return "Connection timed out: check the remote server and connection route.";
       case "network":
-        return "Network unavailable — check network connectivity.";
+        return "Network unavailable: check network connectivity.";
       case "relay-unavailable":
-        return "Relay unavailable — check T3 Connect in Settings → Connections.";
+        return "Relay unavailable: check T3 Connect in Settings → Connections.";
       case "endpoint-unavailable":
       case "remote-unavailable":
-        return "Remote unavailable — check the remote server and connection route.";
+        return "Remote unavailable: check the remote server and connection route.";
       default:
         return null;
     }
@@ -108,13 +108,13 @@ function deviceConnectionText(environment: McpGrantEnvironmentRow): string {
       case "reconnecting":
         return "Reconnecting";
       case "offline":
-        return "Disconnected — device or network offline";
+        return "Disconnected: device or network offline";
       case "available":
-        return "Disconnected — connect in Settings → Connections";
+        return "Disconnected: connect in Settings → Connections";
       case "error":
-        return "Connection failed — see Settings → Connections";
+        return "Connection failed: see Settings → Connections";
       default:
-        return "Unavailable — no current runtime connection";
+        return "Unavailable: no current runtime connection";
     }
   })();
   return failure ? `${phase}. ${failure}` : phase;
@@ -203,7 +203,7 @@ export function McpEnvironmentGrantMatrix({
   if (!registryReady) {
     return (
       <p className="text-sm text-muted-foreground">
-        Device connection status unavailable — loading the runtime registry.
+        Device connection status unavailable: loading the runtime registry.
       </p>
     );
   }
@@ -457,7 +457,7 @@ export function McpGatewayOperationalStatus({
                   </div>
                   <div>
                     Subscriptions ({environment.subscriptionCount ?? 0})
-                    {environment.subscriptionsTruncated ? " — first 100 shown" : ""}
+                    {environment.subscriptionsTruncated ? " (first 100 shown)" : ""}
                   </div>
                   {(environment.subscriptions ?? []).length === 0 ? (
                     <div className="text-muted-foreground">No subscriptions.</div>
@@ -467,21 +467,21 @@ export function McpGatewayOperationalStatus({
                         key={subscription.subscriptionId}
                         className="rounded border px-2 py-1 font-mono"
                       >
-                        {subscription.subscriptionId} — {subscription.status}; cursor{" "}
+                        {subscription.subscriptionId}: {subscription.status}; cursor{" "}
                         {subscription.ackedSequence}; {subscription.pendingEventCount} pending
                       </div>
                     ))
                   )}
                   <div>
                     Webhooks ({environment.webhookCount ?? 0})
-                    {environment.webhooksTruncated ? " — first 100 shown" : ""}
+                    {environment.webhooksTruncated ? " (first 100 shown)" : ""}
                   </div>
                   {(environment.webhooks ?? []).length === 0 ? (
                     <div className="text-muted-foreground">No webhooks.</div>
                   ) : (
                     (environment.webhooks ?? []).map((webhook) => (
                       <div key={webhook.webhookId} className="rounded border px-2 py-1 font-mono">
-                        {webhook.webhookId} — {webhook.status}; cursor {webhook.ackedSequence};{" "}
+                        {webhook.webhookId}: {webhook.status}; cursor {webhook.ackedSequence};{" "}
                         {webhook.deliveries.pending} pending, {webhook.deliveries.failed} failed
                       </div>
                     ))

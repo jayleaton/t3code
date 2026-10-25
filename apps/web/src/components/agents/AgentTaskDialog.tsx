@@ -360,7 +360,7 @@ function AgentTaskForm({
                 disabled={reason !== undefined}
               >
                 {env.label}
-                {reason ? ` — ${reason}` : ""}
+                {reason ? `: ${reason}` : ""}
               </option>
             ))}
           </select>

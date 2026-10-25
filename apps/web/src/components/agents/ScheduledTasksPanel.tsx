@@ -171,7 +171,7 @@ function ScheduledTaskRow({
             {task.enabled && task.nextRunAt
               ? formatUpcomingTimestamp(task.nextRunAt, timestampFormat)
               : finished
-                ? "Done — edit to schedule again"
+                ? "Done: edit to schedule again"
                 : "Paused"}
           </dd>
         </div>
