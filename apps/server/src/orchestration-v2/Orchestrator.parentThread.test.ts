@@ -1551,7 +1551,9 @@ it.effect(
                   forkedFrom: null,
                   createdAt: now,
                   updatedAt: now,
-                  pendingBackgroundTasks: [{ taskId: "monitor:task", kind: "monitor" }],
+                  pendingBackgroundTasks: [
+                    { taskId: "monitor:task", kind: "monitor", awaited: true },
+                  ],
                 },
               },
             ],
@@ -1590,7 +1592,7 @@ it.effect(
       const first = yield* orchestrator.dispatch(command);
       const duplicate = yield* orchestrator.dispatch(command);
       assert.equal(first.storedEvents.length, 1);
-      assert.deepEqual(duplicate, first);
+      assert.deepEqual(duplicate, { ...first, replayed: true });
       assert.equal(yield* sink.latestSequence(), first.sequence);
     }).pipe(Effect.provide(testLayer)),
 );

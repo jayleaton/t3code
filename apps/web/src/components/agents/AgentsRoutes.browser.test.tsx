@@ -28,6 +28,7 @@ vi.mock("../../state/entities", () => ({
   useThreadShell: () => ({}),
   useThreadDetail: () => ({}),
   useThreadStatus: () => "ready",
+  useQuietThreadShells: () => [],
 }));
 vi.mock("../../panelAnimations", () => ({
   usePanelAnimationSettings: () => ({ active: false, durationMs: 0 }),

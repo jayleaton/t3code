@@ -2879,6 +2879,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         const [text, fields] = Array.isArray(message) ? message : [message];
         if (text === "pull request watch ended") ended.push(fields);
       });
+      const base = watchedPullRequestDetail({ projectId, number: key.number, at: "2026-10-02" });
       const reactor = yield* PullRequestWatchReactor.make.pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -2887,7 +2888,9 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
               requiredChecks: () => Effect.succeed([]),
               detail: () =>
                 Effect.sync(() => ({
-                  ...watchedPullRequestDetail({ projectId, number: key.number, at: "2026-10-02" }),
+                  ...base,
+                  // A host where no checks is normal, so only quiet time is measured.
+                  capabilities: { ...base.capabilities, checksAlwaysReport: false },
                   headSha,
                   checks: [],
                 })),
@@ -3587,6 +3590,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       const host = Layer.mergeAll(
         NodeServices.layer,
         Layer.mock(PullRequestService.PullRequestService)({
+          requiredChecks: () => Effect.succeed([]),
           detail: () =>
             Effect.sync(() => ({
               ...watchedPullRequestDetail({
