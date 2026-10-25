@@ -16,10 +16,6 @@ export function formatClaudeResumeCompactionQuestion(input: {
 const CLAUDE_RESUME_COMPACTION_QUESTION_PATTERN =
   /^This session is (\d+h \d+m|\d+m) old and uses \d{1,3}(?:,\d{3})* tokens\. Compact it before continuing\?$/u;
 
-export function isClaudeResumeCompactionQuestion(question: string): boolean {
-  return CLAUDE_RESUME_COMPACTION_QUESTION_PATTERN.test(question);
-}
-
 /**
  * The session age from an answered resume question whose answer was to compact, or null. Answers
  * are keyed by question id, and the id may itself be the question text.
