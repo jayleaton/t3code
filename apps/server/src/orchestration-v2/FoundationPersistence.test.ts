@@ -22,6 +22,7 @@ import {
   ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
+  ProviderTurnId,
   RunAttemptId,
   RunId,
   ThreadId,
@@ -856,6 +857,85 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       assert.isTrue((yield* maintenance.verify).valid);
       assert.isTrue((yield* maintenance.rebuild).valid);
       assert.deepEqual(yield* projections.getThreadProjection(threadId), beforeCompaction);
+    }),
+  );
+
+  it.effect("compacts superseded provider turn snapshots but keeps the latest token usage", () =>
+    Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      const sql = yield* SqlClient.SqlClient;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:foundation-compact-turn");
+      const turnId = ProviderTurnId.make("provider-turn:foundation-compact-turn");
+      const turnEvent = (
+        suffix: string,
+        status: "running" | "completed",
+        usedTokens?: number,
+      ): OrchestrationV2DomainEvent => ({
+        id: EventId.make(`event:foundation-compact-turn:${suffix}`),
+        type: "provider-turn.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: turnId,
+          providerThreadId: ProviderThreadId.make("provider-thread:foundation-compact-turn"),
+          nodeId: NodeId.make("node:foundation-compact-turn"),
+          runAttemptId: null,
+          nativeTurnRef: null,
+          ordinal: 1,
+          status,
+          startedAt: now,
+          completedAt: status === "completed" ? now : null,
+          ...(usedTokens === undefined
+            ? {}
+            : { tokenUsage: { usedTokens, updatedAt: DateTime.formatIso(now) } }),
+        },
+      });
+
+      yield* eventSink.write({
+        events: [
+          threadCreatedEvent({
+            id: "event:foundation-compact-turn:create",
+            thread: makeThread(threadId, now),
+            now,
+          }),
+          turnEvent("start", "running"),
+          turnEvent("progress-1", "running"),
+          turnEvent("usage-1", "running", 10),
+          turnEvent("usage-2", "running", 20),
+          turnEvent("progress-2", "running"),
+          turnEvent("done", "completed"),
+        ],
+      });
+      const beforeCompaction = yield* projections.getThreadProjection(threadId);
+
+      const summary = yield* maintenance.compactEventStore;
+      assert.equal(summary.deletedEventCount, 3);
+
+      const remaining = yield* sql<{ readonly event_id: string }>`
+        SELECT event_id
+        FROM orchestration_events
+        WHERE aggregate_kind = 'thread'
+          AND stream_id = ${threadId}
+        ORDER BY sequence ASC
+      `;
+      // The final snapshot omits token usage, and replay carries the last reported
+      // usage forward, so the newest snapshot that reported it must survive.
+      assert.deepEqual(
+        remaining.map((row) => row.event_id),
+        [
+          "event:foundation-compact-turn:create",
+          "event:foundation-compact-turn:start",
+          "event:foundation-compact-turn:usage-2",
+          "event:foundation-compact-turn:done",
+        ],
+      );
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      const afterRebuild = yield* projections.getThreadProjection(threadId);
+      assert.deepEqual(afterRebuild, beforeCompaction);
+      assert.equal(afterRebuild?.providerTurns[0]?.tokenUsage?.usedTokens, 20);
     }),
   );
 
