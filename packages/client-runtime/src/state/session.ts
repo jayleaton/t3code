@@ -1,7 +1,9 @@
 import type { AuthSessionState, EnvironmentId, ServerConfig } from "@t3tools/contracts";
 import * as Data from "effect/Data";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { HttpClient } from "effect/http";
@@ -9,6 +11,7 @@ import { AsyncResult, Atom } from "effect/reactivity";
 
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as EnvironmentRegistry from "../connection/registry.ts";
+import { mapRemoteEnvironmentError } from "../connection/errors.ts";
 import type { PreparedConnection } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as ManagedRelay from "../relay/managedRelay.ts";
@@ -36,6 +39,11 @@ function initialConfigOption<E>(
 }
 
 const DEFAULT_SESSION_STATE_TIMEOUT_MS = 6_000;
+const SESSION_STATE_RETRY_SCHEDULE = Schedule.exponential("1 second").pipe(
+  Schedule.modifyDelay(({ duration }) =>
+    Effect.succeed(Duration.min(duration, Duration.seconds(30))),
+  ),
+);
 
 export const fetchEnvironmentSessionState = Effect.fn(
   "clientRuntime.state.fetchEnvironmentSessionState",
@@ -138,7 +146,17 @@ function makeEnvironmentSessionAtoms<R, E>(
             prepared,
             signer,
             remoteAuthorization,
-          }).pipe(Effect.provideService(HttpClient.HttpClient, client.value));
+          }).pipe(
+            Effect.provideService(HttpClient.HttpClient, client.value),
+            // Only a new prepared connection refetches, and swr skips a failure
+            // whose previous success is fresh, so one dropped request would
+            // otherwise deny every scope for the rest of the connection.
+            Effect.retry({
+              schedule: SESSION_STATE_RETRY_SCHEDULE,
+              while: (error) =>
+                mapRemoteEnvironmentError(error)._tag === "ConnectionTransientError",
+            }),
+          );
         });
       })
       .pipe(
