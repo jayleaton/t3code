@@ -3,7 +3,10 @@ import type * as NodeChildProcess from "node:child_process";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { SERVER_EXIT_CODE_STATE_DIR_OWNED } from "@t3tools/contracts";
+import {
+  SERVER_EXIT_CODE_DATABASE_REFUSED,
+  SERVER_EXIT_CODE_STATE_DIR_OWNED,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -213,7 +216,18 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
     }),
   );
 
-  it.effect("stays idle instead of exiting when another server owns the T3 home", () =>
+  it.effect.each([
+    {
+      refusal: "another server owns the T3 home",
+      code: SERVER_EXIT_CODE_STATE_DIR_OWNED,
+      message: "owns this T3 home",
+    },
+    {
+      refusal: "the database is refused",
+      code: SERVER_EXIT_CODE_DATABASE_REFUSED,
+      message: "did not open its database",
+    },
+  ])("stays idle instead of exiting when $refusal", ({ code, message }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -223,7 +237,7 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
         fs,
         path,
         path.join(root, "runtime", "versions", "1.0.0"),
-        `process.exit(${SERVER_EXIT_CODE_STATE_DIR_OWNED});\n`,
+        `process.exit(${code});\n`,
       );
       yield* Effect.promise(() =>
         writeServiceState(statePath, {
@@ -235,7 +249,7 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
       yield* Effect.acquireRelease(
         Effect.sync(() =>
           vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
-            if (String(chunk).includes("owns this T3 home")) refused.resolve();
+            if (String(chunk).includes(message)) refused.resolve();
             return true;
           }),
         ),
@@ -250,6 +264,60 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
       assert.isFalse(completed);
       yield* Effect.promise(() => launcher.stop("SIGTERM"));
       yield* Effect.promise(() => running);
+    }),
+  );
+
+  it.effect("rolls back a trial that refuses the database", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-trial-refused-" });
+      const statePath = path.join(root, "runtime", "service-state.json");
+      const databasePath = path.join(root, "userdata", "state.sqlite");
+      yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
+      yield* fs.writeFileString(databasePath, "before trial");
+      const childSource = `
+const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);
+if (context.update?.status === "pending") {
+  process.exit(${SERVER_EXIT_CODE_DATABASE_REFUSED});
+} else if (context.update === undefined) {
+  process.send({ type: "request-update", targetVersion: "1.1.0", dbPath: ${JSON.stringify(databasePath)} });
+  setInterval(() => {}, 1_000);
+} else {
+  process.exit(0);
+}
+`;
+      for (const version of ["1.0.0", "1.1.0"]) {
+        yield* writeFakeRuntime(
+          fs,
+          path,
+          path.join(root, "runtime", "versions", version),
+          childSource,
+        );
+      }
+      yield* Effect.promise(() =>
+        writeServiceState(statePath, {
+          protocol: SERVICE_LAUNCHER_PROTOCOL,
+          activeVersion: "1.0.0",
+        }),
+      );
+
+      const launcher = new Launcher(root, yield* Effect.promise(() => readServiceState(statePath)));
+      yield* Effect.promise(() =>
+        launcher.run().then(
+          () => Promise.reject(new Error("launcher unexpectedly completed")),
+          () => Promise.resolve(),
+        ),
+      );
+
+      const state = yield* Effect.promise(() => readServiceState(statePath));
+      assert.equal(state.activeVersion, "1.0.0");
+      assert.equal(state.update?.status, "rolled-back");
+      assert.equal(
+        state.update?.status === "rolled-back" ? state.update.reason : undefined,
+        `candidate-exited:${SERVER_EXIT_CODE_DATABASE_REFUSED}`,
+      );
+      assert.equal(yield* fs.readFileString(databasePath), "before trial");
     }),
   );
 

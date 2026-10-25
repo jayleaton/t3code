@@ -5,8 +5,10 @@ import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Runtime from "effect/Runtime";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as SqlitePersistence from "./Sqlite.ts";
@@ -52,3 +54,47 @@ it.effect("drops planner statistics a database already has", () => {
     Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
   );
 });
+
+it.effect(
+  "refuses an unknown migration history with an exit code supervisors do not restart",
+  () => {
+    const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-sqlite-refused-"));
+    const dbPath = NodePath.join(tempDir, "state.sqlite");
+    const history = Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      return yield* sql`SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id`;
+    });
+
+    return Effect.gen(function* () {
+      const recorded = yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`CREATE TABLE effect_sql_migrations (
+        migration_id integer PRIMARY KEY NOT NULL,
+        created_at datetime NOT NULL DEFAULT current_timestamp,
+        name VARCHAR(255) NOT NULL
+      )`;
+        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES
+        (52, 'AgentProfileAndPullRequestCompatibility'), (53, 'SomeExperimentalMigration')`;
+        return yield* history;
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath })));
+
+      const error = yield* Effect.flip(
+        Effect.void.pipe(
+          Effect.provide(
+            SqlitePersistence.layerFromPath(dbPath).pipe(Layer.provide(NodeServices.layer)),
+          ),
+        ),
+      );
+
+      assert.instanceOf(error, SqlitePersistence.DatabaseRefusedError);
+      assert.include(error.message, "53_SomeExperimentalMigration");
+      assert.equal(Runtime.getErrorExitCode(error), 65);
+      assert.deepStrictEqual(
+        yield* history.pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath }))),
+        recorded,
+      );
+    }).pipe(
+      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
+    );
+  },
+);

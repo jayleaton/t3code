@@ -17,6 +17,7 @@ import { HttpClient } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import {
+  SERVER_EXIT_CODE_DATABASE_REFUSED,
   SERVER_EXIT_CODE_STATE_DIR_OWNED,
   DesktopBackendBootstrap,
   type DesktopBackendBootstrap as DesktopBackendBootstrapValue,
@@ -258,6 +259,7 @@ export interface BackendInstanceSpec {
   readonly onShutdown?: () => Effect.Effect<void>;
   readonly onPreflightFailed?: (failure: PreflightFailure) => Effect.Effect<boolean>;
   readonly onStateDirOwned?: () => Effect.Effect<void>;
+  readonly onDatabaseRefused?: () => Effect.Effect<void>;
 }
 
 interface ActiveBackendRun {
@@ -814,6 +816,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           exitCode?: number,
         ) {
           const stateDirOwned = exitCode === SERVER_EXIT_CODE_STATE_DIR_OWNED;
+          const databaseRefused = exitCode === SERVER_EXIT_CODE_DATABASE_REFUSED;
           yield* mutex.withPermits(1)(
             Effect.gen(function* () {
               const { isCurrentRun, nextState, pid, exitObserved, stopRequested, wasReady } =
@@ -883,6 +886,13 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               }
 
               if (isCurrentRun && nextState.desiredRunning) {
+                // Unlike an owned state directory, a refused migration history
+                // does not change between attempts, so a restart cannot succeed.
+                if (databaseRefused && !stopRequested) {
+                  yield* Ref.update(state, (latest) => ({ ...latest, desiredRunning: false }));
+                  yield* (spec.onDatabaseRefused?.() ?? Effect.void).pipe(Effect.ignore);
+                  return;
+                }
                 if (
                   stateDirOwned &&
                   !stopRequested &&
