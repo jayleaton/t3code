@@ -1,4 +1,5 @@
 import {
+  SERVER_EXIT_CODE_DATABASE_REFUSED,
   SERVER_EXIT_CODE_STATE_DIR_OWNED,
   DesktopBackendBootstrap,
   type DesktopBackendBootstrap as DesktopBackendBootstrapValue,
@@ -123,6 +124,7 @@ interface MakeInstanceInput {
   readonly onReady?: Effect.Effect<void>;
   readonly onShutdown?: Effect.Effect<void>;
   readonly onStateDirOwned?: Effect.Effect<void>;
+  readonly onDatabaseRefused?: Effect.Effect<void>;
   readonly onPreflightFailed?: (
     failure: DesktopBackendManager.PreflightFailure,
   ) => Effect.Effect<boolean>;
@@ -181,6 +183,7 @@ function makeTestInstance(input: MakeInstanceInput) {
     ...(input.onReady ? { onReady: () => input.onReady! } : {}),
     ...(input.onShutdown ? { onShutdown: () => input.onShutdown! } : {}),
     ...(input.onStateDirOwned ? { onStateDirOwned: () => input.onStateDirOwned! } : {}),
+    ...(input.onDatabaseRefused ? { onDatabaseRefused: () => input.onDatabaseRefused! } : {}),
     ...(input.onPreflightFailed ? { onPreflightFailed: input.onPreflightFailed } : {}),
   });
 
@@ -608,6 +611,44 @@ describe("DesktopBackendManager", () => {
         assert.isFalse(snapshot.restartScheduled);
         yield* TestClock.adjust(Duration.minutes(1));
         assert.equal(startCount, 7);
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
+  );
+
+  it.effect("stops without restarting when the server refuses its database", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let startCount = 0;
+        const refused = yield* Deferred.make<void>();
+        const failures = yield* Queue.unbounded<string>();
+        const instance = yield* makeTestInstance({
+          spawnerLayer: Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() =>
+              Effect.sync(() => {
+                startCount += 1;
+                return makeProcess({
+                  exitCode: Effect.succeed(
+                    ChildProcessSpawner.ExitCode(SERVER_EXIT_CODE_DATABASE_REFUSED),
+                  ),
+                });
+              }),
+            ),
+          ),
+          httpClientLayer: layerHttpClient(() => Effect.never),
+          backendOutputLog: {
+            persistFailure: ({ details }) => Queue.offer(failures, details).pipe(Effect.asVoid),
+          },
+          onDatabaseRefused: Deferred.succeed(refused, undefined).pipe(Effect.asVoid),
+        });
+        yield* instance.start;
+        yield* Deferred.await(refused);
+        assert.include(yield* Queue.take(failures), `code=${SERVER_EXIT_CODE_DATABASE_REFUSED}`);
+        const snapshot = yield* instance.snapshot;
+        assert.isFalse(snapshot.desiredRunning);
+        assert.isFalse(snapshot.restartScheduled);
+        yield* TestClock.adjust(Duration.minutes(1));
+        assert.equal(startCount, 1);
       }).pipe(Effect.provide(TestClock.layer())),
     ),
   );

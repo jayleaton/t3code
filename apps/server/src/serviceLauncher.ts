@@ -42,6 +42,8 @@ const TERMINATE_GRACE_MS = 5_000;
 // Matches SERVER_EXIT_CODE_STATE_DIR_OWNED in contracts. The standalone
 // launcher stays independent of the Effect-backed contracts package.
 const STATE_DIR_OWNED_EXIT_CODE = 78;
+// Matches SERVER_EXIT_CODE_DATABASE_REFUSED in contracts, for the same reason.
+const DATABASE_REFUSED_EXIT_CODE = 65;
 
 type TerminalStatus = "committed" | "rolled-back" | "failed";
 type ChildRole = "active" | "trial";
@@ -809,13 +811,20 @@ export class Launcher {
       await this.#startTrial(pending);
       return;
     }
+    // After the pending-update branch on purpose: the target build may
+    // recognise the migration history, and a refused trial rolls back to here.
+    if (code === DATABASE_REFUSED_EXIT_CODE) {
+      this.#idle(
+        "T3 Code did not open its database, which was left unchanged. Install the build that last opened it, or report the server log, then restart this service.",
+      );
+      return;
+    }
     throw new Error(`Active child exited unexpectedly (${String(code ?? signal ?? "unknown")}).`);
   }
 
   /**
-   * Exiting would make systemd or launchd start another refused server, so stay
-   * idle until stopped or restarted. A pending update fails without restoring
-   * its backup: the other owner may have written to the database since.
+   * A pending update fails without restoring its backup: the other owner may
+   * have written to the database since.
    */
   async #idleWhileStateDirOwned(): Promise<void> {
     this.#clearTimer();
@@ -830,11 +839,17 @@ export class Launcher {
       this.#state = next;
       await discardDatabaseBackup(this.#baseDir, pending.id).catch(() => undefined);
     }
+    this.#idle("Another T3 Code server owns this T3 home. Stop it, then restart this service.");
+  }
+
+  /**
+   * Exiting would make systemd or launchd start another refused server, so stay
+   * idle until stopped or restarted.
+   */
+  #idle(message: string): void {
     // Signal listeners alone do not keep Node alive.
     this.#timer = setInterval(() => {}, 2_147_483_647);
-    process.stderr.write(
-      "[service-launcher] Another T3 Code server owns this T3 home. Stop it, then restart this service.\n",
-    );
+    process.stderr.write(`[service-launcher] ${message}\n`);
   }
 
   async #returnToPrevious(

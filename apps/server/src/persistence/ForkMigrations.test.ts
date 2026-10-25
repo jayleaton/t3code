@@ -7,6 +7,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { forkMigrationManifest, migrationManifest, runMigrations } from "./Migrations.ts";
+import titleState from "./Migrations/052_ProjectionThreadTitleState.ts";
 import { FORK_MIGRATIONS_TABLE, legacyForkLedger } from "./splitLegacyForkLedger.ts";
 
 const FIRST_LEGACY_FORK_ID = 52;
@@ -157,6 +158,100 @@ describe("fork migration ledger", () => {
 
         yield* runMigrations();
         assert.deepStrictEqual(yield* ledgers, fresh.ledgers);
+        assert.deepStrictEqual(yield* schema, fresh.schema);
+      }).pipe(Effect.provide(memory));
+    }),
+  );
+
+  /**
+   * Names installs recorded below and at the first legacy slot, on top of the
+   * legacy layout. Agent builds before fork main recorded profile snapshots at
+   * 44, 48, 49 or 50 and agent profiles at 51, and a build carrying upstream's
+   * title state recorded it at 52 before fork main took over the ledger.
+   */
+  const installs: ReadonlyArray<readonly [string, ReadonlyMap<number, string>]> = [
+    [
+      "agent builds that recorded profiles at 48 and 50",
+      new Map([
+        [48, "ProjectionThreadProfileSnapshot"],
+        [50, "ProjectionThreadProfileSnapshot"],
+        [51, "AgentProfileAndPullRequestCompatibility"],
+      ]),
+    ],
+    [
+      "agent builds that recorded profiles at 49 and 50",
+      new Map([
+        [49, "ProjectionThreadProfileSnapshot"],
+        [50, "ProjectionThreadProfileSnapshot"],
+        [51, "AgentProfileAndPullRequestCompatibility"],
+      ]),
+    ],
+    [
+      "agent builds that recorded the thread list state at 52",
+      new Map([
+        [50, "ProjectionThreadProfileSnapshot"],
+        [51, "AgentProfileAndPullRequestCompatibility"],
+        [52, "ProjectionThreadListState"],
+      ]),
+    ],
+    [
+      "a build that recorded upstream's title state at 52",
+      new Map([
+        [44, "ProjectionThreadProfileSnapshot"],
+        [48, "ProjectionThreadProfileSnapshot"],
+        [50, "ProjectionThreadProfileSnapshot"],
+        [51, "AgentProfileAndPullRequestCompatibility"],
+        [52, "ProjectionThreadTitleState"],
+      ]),
+    ],
+    [
+      "the same build, hand-relabelled at 52",
+      new Map([
+        [44, "ProjectionThreadProfileSnapshot"],
+        [48, "ProjectionThreadProfileSnapshot"],
+        [50, "ProjectionThreadProfileSnapshot"],
+        [51, "AgentProfileAndPullRequestCompatibility"],
+        [52, "AgentProfileAndPullRequestCompatibility"],
+      ]),
+    ],
+  ];
+
+  it.effect.each(
+    installs.flatMap(([install, recorded]) =>
+      [52, 53, 54, FIRST_LEGACY_FORK_ID + legacyForkLedger.length - 1].map((legacyId) => ({
+        install,
+        recorded,
+        legacyId,
+      })),
+    ),
+  )("splits a ledger from $install at $legacyId", ({ recorded, legacyId }) =>
+    Effect.gen(function* () {
+      const fresh = yield* freshFullDatabase;
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations(newSlot(legacyId));
+        yield* toLegacyLedger;
+        for (const [id, name] of recorded) {
+          yield* sql`UPDATE effect_sql_migrations SET name = ${name} WHERE migration_id = ${id}`;
+        }
+        // Fork migrations 1 and 2 replay the others; the build that recorded this one ran it.
+        if (recorded.get(FIRST_LEGACY_FORK_ID) === "ProjectionThreadTitleState") yield* titleState;
+
+        yield* runMigrations();
+        const split = yield* ledgers;
+        assert.deepStrictEqual(
+          split.upstream,
+          fresh.ledgers.upstream.map(([id, name]) =>
+            id < FIRST_LEGACY_FORK_ID ? ([id, recorded.get(id) ?? name] as const) : [id, name],
+          ),
+        );
+        const listState = recorded.get(FIRST_LEGACY_FORK_ID) === "ProjectionThreadListState";
+        assert.deepStrictEqual(
+          split.fork,
+          fresh.ledgers.fork?.map(([id, name]) =>
+            id === 1 && listState ? ([id, "ProjectionThreadListState"] as const) : [id, name],
+          ),
+        );
         assert.deepStrictEqual(yield* schema, fresh.schema);
       }).pipe(Effect.provide(memory));
     }),
