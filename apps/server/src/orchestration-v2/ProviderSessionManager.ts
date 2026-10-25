@@ -57,6 +57,9 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
 const RELEASE_SCOPE_CLOSE_TIMEOUT_MS = 30 * 1000;
+// Server shutdown releases every session at once and waits this long in total,
+// so one wedged provider cannot hold the ownership lock for a restart.
+const SHUTDOWN_RELEASE_TIMEOUT_MS = 5 * 1000;
 
 const busyTurnPrefix = (providerThreadId: ProviderThreadId) => `${providerThreadId}#`;
 const busyTurnKey = (providerThreadId: ProviderThreadId, runOrdinal: number) =>
@@ -975,18 +978,17 @@ export const layerWithOptions = (
       const closeScopeWithin = Effect.fn("ProviderSessionManager.closeScopeWithin")(function* (
         scope: Scope.Closeable,
         annotations: { readonly providerSessionId?: ProviderSessionId; readonly reason: string },
+        timeoutMs = RELEASE_SCOPE_CLOSE_TIMEOUT_MS,
       ) {
         const closeFiber = yield* Scope.close(scope, Exit.void).pipe(
           Effect.exit,
           Effect.forkDetach({ startImmediately: true }),
         );
-        const closeExit = yield* Fiber.join(closeFiber).pipe(
-          Effect.timeoutOption(RELEASE_SCOPE_CLOSE_TIMEOUT_MS),
-        );
+        const closeExit = yield* Fiber.join(closeFiber).pipe(Effect.timeoutOption(timeoutMs));
         if (Option.isNone(closeExit)) {
           yield* Effect.logWarning("orchestration-v2.provider-session-scope-close-timeout", {
             ...annotations,
-            timeoutMs: RELEASE_SCOPE_CLOSE_TIMEOUT_MS,
+            timeoutMs,
           });
           yield* Fiber.join(closeFiber).pipe(
             Effect.flatMap((exit) =>
@@ -2094,7 +2096,9 @@ export const layerWithOptions = (
       const sessionScopes = yield* Scope.make("parallel");
       const shutdown = Effect.gen(function* () {
         const activeSessions = [...(yield* Ref.get(sessions)).values()];
-        yield* Effect.forEach(
+        // Detached, like closeScopeWithin: a release that outlives the bound
+        // keeps running while the rest of shutdown proceeds.
+        const releases = yield* Effect.forEach(
           activeSessions,
           (entry) =>
             releaseEntry({
@@ -2109,11 +2113,26 @@ export const layerWithOptions = (
               ),
             ),
           { concurrency: "unbounded", discard: true },
+        ).pipe(Effect.forkDetach({ startImmediately: true }));
+        const released = yield* Fiber.join(releases).pipe(
+          Effect.timeoutOption(SHUTDOWN_RELEASE_TIMEOUT_MS),
         );
+        if (Option.isNone(released)) {
+          yield* Effect.logWarning("orchestration-v2.driver-session.shutdown-release-timeout", {
+            sessionCount: activeSessions.length,
+            timeoutMs: SHUTDOWN_RELEASE_TIMEOUT_MS,
+          });
+        }
       });
       yield* Effect.addFinalizer(() =>
         shutdown.pipe(
-          Effect.ensuring(closeScopeWithin(sessionScopes, { reason: "server_shutdown" })),
+          Effect.ensuring(
+            closeScopeWithin(
+              sessionScopes,
+              { reason: "server_shutdown" },
+              SHUTDOWN_RELEASE_TIMEOUT_MS,
+            ),
+          ),
         ),
       );
 

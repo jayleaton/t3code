@@ -5,12 +5,15 @@ import * as NodeSqlite from "node:sqlite";
 
 import { SERVER_EXIT_CODE_STATE_DIR_OWNED } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Runtime from "effect/Runtime";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 
 import {
@@ -35,6 +38,7 @@ import {
   readPersistedServerRuntimeState,
   type PersistedServerRuntimeState,
 } from "./serverRuntimeState.ts";
+import { SERVER_SHUTDOWN_DEADLINE } from "./serverShutdown.ts";
 
 export class ServerAlreadyRunningError extends Schema.TaggedError<ServerAlreadyRunningError>()(
   "ServerAlreadyRunningError",
@@ -178,11 +182,44 @@ const olderBootServiceHome = Effect.fn("olderBootServiceHome")(
   Effect.orElseSucceed(() => undefined),
 );
 
+const HANDOVER_POLL_INTERVAL = Duration.millis(200);
+// A stopping owner exits by its shutdown deadline; this covers its exit after that.
+const HANDOVER_EXIT_GRACE = Duration.seconds(5);
+
+/**
+ * When the lock holder has begun shutting down, how long until it will have
+ * exited. A supervised restart (the desktop app relaunching, a service manager
+ * restarting) starts the replacement while the previous server still releases
+ * its provider sessions.
+ */
+const stoppingOwnerRemaining = Effect.fn("stoppingOwnerRemaining")(function* (statePath: string) {
+  const state = yield* readPersistedServerRuntimeState(statePath).pipe(
+    Effect.orElseSucceed(() => Option.none<PersistedServerRuntimeState>()),
+  );
+  if (
+    Option.isNone(state) ||
+    state.value.stoppingAt === undefined ||
+    !isProcessAlive(state.value.pid)
+  ) {
+    return Option.none<Duration.Duration>();
+  }
+  const stoppingAt = Date.parse(state.value.stoppingAt);
+  if (!Number.isFinite(stoppingAt)) return Option.none<Duration.Duration>();
+  const exitBy =
+    stoppingAt +
+    Duration.toMillis(SERVER_SHUTDOWN_DEADLINE) +
+    Duration.toMillis(HANDOVER_EXIT_GRACE);
+  const remaining = exitBy - (yield* Clock.currentTimeMillis);
+  return remaining > 0 ? Option.some(Duration.millis(remaining)) : Option.none<Duration.Duration>();
+});
+
 /**
  * Hold an exclusive lock on the state directory until the scope closes. The
  * lock is an exclusive transaction on `server-owner.sqlite`, which never holds
  * data and must never be unlinked: the OS releases it when the process exits,
- * even on SIGKILL, so a crashed owner never blocks the next start.
+ * even on SIGKILL, so a crashed owner never blocks the next start. An owner
+ * that is shutting down is waited for until its deadline; a running one is
+ * refused at once.
  */
 export const acquireServerOwnership = Effect.fn("acquireServerOwnership")(function* (
   statePath: string,
@@ -192,7 +229,7 @@ export const acquireServerOwnership = Effect.fn("acquireServerOwnership")(functi
   const ownerId = yield* crypto
     .randomUUIDv4()
     .pipe(Effect.mapError((cause) => new ServerOwnershipError({ stateDir, cause })));
-  yield* Effect.acquireRelease(
+  const lock = Effect.acquireRelease(
     Effect.try({
       try: () => {
         NodeFS.mkdirSync(stateDir, { recursive: true });
@@ -221,6 +258,26 @@ export const acquireServerOwnership = Effect.fn("acquireServerOwnership")(functi
         Effect.ensuring(Effect.sync(() => db.close())),
       ),
   );
+  // Each attempt is its own acquireRelease, so the wait between them stays interruptible.
+  const awaitStoppingOwner = Effect.fn("acquireServerOwnership.awaitStoppingOwner")(function* (
+    refused: ServerAlreadyRunningError,
+  ) {
+    const remaining = yield* stoppingOwnerRemaining(statePath);
+    if (Option.isNone(remaining)) return yield* refused;
+    yield* Effect.logInfo("waiting for the stopping server to release this T3 home", {
+      stateDir,
+      remainingMs: Duration.toMillis(remaining.value),
+    });
+    return yield* lock.pipe(
+      Effect.retry({
+        while: (error) => error._tag === "ServerAlreadyRunningError",
+        schedule: Schedule.spaced(HANDOVER_POLL_INTERVAL).pipe(
+          Schedule.upTo({ duration: remaining.value }),
+        ),
+      }),
+    );
+  });
+  yield* lock.pipe(Effect.catchTags({ ServerAlreadyRunningError: awaitStoppingOwner }));
 
   const previous = yield* readPersistedServerRuntimeState(statePath).pipe(
     Effect.orElseSucceed(() => Option.none<PersistedServerRuntimeState>()),
@@ -237,8 +294,19 @@ export const acquireServerOwnership = Effect.fn("acquireServerOwnership")(functi
     return yield* new OlderBootServiceError({ baseDir: olderServiceHome });
   }
 
+  const persist = (state: PersistedServerRuntimeState) =>
+    persistServerRuntimeState({ path: statePath, state: { ...state, ownerId } });
   return {
-    publish: (state: PersistedServerRuntimeState) =>
-      persistServerRuntimeState({ path: statePath, state: { ...state, ownerId } }),
+    publish: persist,
+    /** Tells a replacement starting now to wait for this server instead of failing. */
+    markStopping: readPersistedServerRuntimeState(statePath).pipe(
+      Effect.flatMap((state) =>
+        Option.isSome(state) && state.value.ownerId === ownerId
+          ? Effect.flatMap(DateTime.now, (now) =>
+              persist({ ...state.value, stoppingAt: DateTime.formatIso(now) }),
+            )
+          : Effect.void,
+      ),
+    ),
   };
 });
