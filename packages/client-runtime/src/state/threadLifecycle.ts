@@ -13,6 +13,12 @@ interface PendingThreadUpdate {
   readonly threadId: ThreadId;
   readonly apply: (thread: OrchestrationV2ThreadShell) => OrchestrationV2ThreadShell;
   sequence?: number;
+  /**
+   * A thread the command reaches only through a server-side follow-up, such as a settle cascade.
+   * Its own event carries a sequence the client never learns, so the preview holds until the
+   * thread itself shows a change made after the command started.
+   */
+  readonly settlesWhen?: (thread: OrchestrationV2ThreadShell) => boolean;
 }
 
 export function createOptimisticThreadLifecycle(
@@ -60,6 +66,19 @@ export function createOptimisticThreadLifecycle(
       now: DateTime.Utc,
       accepted: boolean,
     ) => OrchestrationV2ThreadShell,
+    followers?: {
+      /** Threads the server changes after this one commits, read from the shown snapshot. */
+      readonly select: (
+        snapshot: OrchestrationV2ShellSnapshot,
+        input: Input,
+      ) => ReadonlyArray<ThreadId>;
+      readonly apply: (
+        thread: OrchestrationV2ThreadShell,
+        now: DateTime.Utc,
+      ) => OrchestrationV2ThreadShell;
+      /** The server's own state for the follower has landed. */
+      readonly landed: (thread: OrchestrationV2ThreadShell, now: DateTime.Utc) => boolean;
+    },
   ): typeof command {
     return {
       label: command.label,
@@ -71,18 +90,50 @@ export function createOptimisticThreadLifecycle(
           threadId: target.input.threadId,
           apply: (thread) => apply(thread, target.input, now, update.sequence !== undefined),
         };
+        const shown = registry.get(snapshotAtom(target.environmentId));
+        const followerUpdates: ReadonlyArray<PendingThreadUpdate> =
+          followers === undefined || shown === null
+            ? []
+            : followers.select(shown, target.input).map((threadId) => ({
+                threadId,
+                apply: (thread) =>
+                  followers.landed(thread, now) ? thread : followers.apply(thread, now),
+                settlesWhen: (thread) => followers.landed(thread, now),
+              }));
         const remove = () =>
-          registry.update(pending, (current) => current.filter((item) => item !== update));
-        registry.update(pending, (current) => [...current, update]);
+          registry.update(pending, (current) =>
+            current.filter((item) => item !== update && !followerUpdates.includes(item)),
+          );
+        registry.update(pending, (current) => [...current, update, ...followerUpdates]);
         let confirmed = false;
         try {
           const result = await command.run(registry, target);
+          if (result._tag === "Success" && followerUpdates.length > 0) {
+            const prune = (snapshot: OrchestrationV2ShellSnapshot | null) => {
+              const threads = new Map(
+                (snapshot?.threads ?? []).map((thread) => [thread.id, thread]),
+              );
+              registry.update(pending, (current) =>
+                current.filter((item) => {
+                  if (item.settlesWhen === undefined || !followerUpdates.includes(item))
+                    return true;
+                  const thread = threads.get(item.threadId);
+                  return thread !== undefined && !item.settlesWhen(thread);
+                }),
+              );
+              if (!registry.get(pending).some((item) => followerUpdates.includes(item))) {
+                stopPruning();
+              }
+            };
+            const stopPruning = registry.subscribe(source, prune);
+            prune(registry.get(source));
+          }
           if (result._tag === "Success") {
             update.sequence = result.value.sequence;
             registry.update(pending, (current) => [...current]);
             const reconcile = (snapshot: OrchestrationV2ShellSnapshot | null) => {
               if (snapshot === null || snapshot.snapshotSequence >= result.value.sequence) {
-                remove();
+                registry.update(pending, (current) => current.filter((item) => item !== update));
                 unsubscribe();
               }
             };

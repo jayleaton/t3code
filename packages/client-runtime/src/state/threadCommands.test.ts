@@ -348,6 +348,102 @@ describe("remote thread lifecycle commands", () => {
       }),
   );
 
+  it.effect("settles a card's idle sub-runs with it until their own updates land", () =>
+    Effect.gen(function* () {
+      const base = SNAPSHOT.threads[0]!;
+      const thread = (
+        id: string,
+        parent: string | null,
+        fields: Partial<typeof base> = {},
+      ): typeof base => ({
+        ...base,
+        id: ThreadId.make(id),
+        title: id,
+        parentThreadId: parent === null ? null : ThreadId.make(parent),
+        ...fields,
+      });
+      const tree: OrchestrationV2ShellSnapshot = {
+        ...SNAPSHOT,
+        threads: [
+          thread("thread", null),
+          thread("child", "thread"),
+          thread("grandchild", "child"),
+          thread("busy", "thread", { status: "running" }),
+          thread("under-busy", "busy"),
+          thread("own", "thread", { settledOverride: "settled", settledAt: NOW }),
+          thread("under-own", "own"),
+          thread("elsewhere", "thread", { parentEnvironmentId: EnvironmentId.make("other") }),
+        ],
+      };
+      const h = yield* makeHarness();
+      h.registry.set(h.snapshotAtom(ENVIRONMENT_ID), tree);
+      const shownSettled = () =>
+        (h.registry.get(h.visibleAtom)?.threads ?? [])
+          .filter((shown) => shown.settledOverride === "settled")
+          .map((shown) => shown.id)
+          .toSorted();
+      const followers = ["child", "grandchild", "own", "thread", "under-own"];
+
+      const settle = h.commands.settle.run(h.registry, {
+        environmentId: ENVIRONMENT_ID,
+        input: { threadId: THREAD_ID },
+      });
+      expect(shownSettled()).toEqual(followers);
+      const request = yield* Queue.take(h.requests);
+
+      // The server confirms the card before its sub-runs' follow-up events arrive.
+      const later = DateTime.makeUnsafe("2099-01-01T00:00:00.000Z");
+      const settledThread = (shown: typeof base) => ({
+        ...shown,
+        settledOverride: "settled" as const,
+        settledAt: NOW,
+        updatedAt: later,
+      });
+      h.registry.set(h.snapshotAtom(ENVIRONMENT_ID), {
+        ...tree,
+        snapshotSequence: 2,
+        threads: tree.threads.map((shown) =>
+          shown.id === THREAD_ID ? settledThread(shown) : shown,
+        ),
+      });
+      yield* Deferred.succeed(request.reply, { sequence: 2 });
+      yield* Effect.promise(() => settle);
+      expect(shownSettled()).toEqual(followers);
+
+      const landed = {
+        ...tree,
+        snapshotSequence: 3,
+        threads: tree.threads.map((shown) =>
+          followers.includes(shown.id) && shown.id !== "own" ? settledThread(shown) : shown,
+        ),
+      };
+      h.registry.set(h.snapshotAtom(ENVIRONMENT_ID), landed);
+      expect(h.registry.get(h.visibleAtom)).toBe(landed);
+    }),
+  );
+
+  it.effect("brings a card's sub-runs back when its settle fails", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      const child = {
+        ...SNAPSHOT.threads[0]!,
+        id: ThreadId.make("child"),
+        parentThreadId: THREAD_ID,
+      };
+      const tree = { ...SNAPSHOT, threads: [...SNAPSHOT.threads, child] };
+      h.registry.set(h.snapshotAtom(ENVIRONMENT_ID), tree);
+      const settle = h.commands.settle.run(h.registry, {
+        environmentId: ENVIRONMENT_ID,
+        input: { threadId: THREAD_ID },
+      });
+      expect(h.registry.get(h.visibleAtom)?.threads[1]?.settledOverride).toBe("settled");
+      const request = yield* Queue.take(h.requests);
+      yield* Deferred.fail(request.reply, new Error("Settle rejected"));
+      expect(yield* Effect.promise(() => settle)).toMatchObject({ _tag: "Failure" });
+      expect(h.registry.get(h.visibleAtom)).toBe(tree);
+    }),
+  );
+
   it.effect("isolates environments and does not restore a remotely removed thread", () =>
     Effect.gen(function* () {
       const h = yield* makeHarness();
