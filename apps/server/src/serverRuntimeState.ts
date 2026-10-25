@@ -22,6 +22,8 @@ export const PersistedServerRuntimeState = Schema.Struct({
   startedAt: Schema.String,
   serviceManaged: Schema.optional(Schema.Boolean),
   serverVersion: Schema.optional(Schema.String),
+  // Set when the owner begins shutting down, so a replacement waits for it.
+  stoppingAt: Schema.optional(Schema.String),
 });
 export type PersistedServerRuntimeState = typeof PersistedServerRuntimeState.Type;
 

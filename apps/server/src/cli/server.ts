@@ -1,5 +1,7 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -9,6 +11,7 @@ import * as CliError from "effect/cli/CliError";
 import * as ServerConfig from "../config.ts";
 import { awaitLauncherLoss } from "../launcherWatch.ts";
 import { runServer } from "../server.ts";
+import * as ServerShutdown from "../serverShutdown.ts";
 import { type CliServerFlags, resolveServerConfig, sharedServerCommandFlags } from "./config.ts";
 
 const encodeCommand = Schema.encodeEffect(Schema.fromJsonString(Schema.String));
@@ -30,7 +33,25 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveServerConfig(flags, logLevel, options);
-  const run = runServer.pipe(Effect.provideService(ServerConfig.ServerConfig, config));
+  const shutdownStarted = yield* Deferred.make<void>();
+  const beginShutdown = () => Deferred.doneUnsafe(shutdownStarted, Exit.void);
+  // Beside the runtime's own SIGINT/SIGTERM handlers, which interrupt the server.
+  yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      process.on("SIGINT", beginShutdown);
+      process.on("SIGTERM", beginShutdown);
+    }),
+    () =>
+      Effect.sync(() => {
+        process.off("SIGINT", beginShutdown);
+        process.off("SIGTERM", beginShutdown);
+      }),
+  );
+  yield* ServerShutdown.enforceShutdownDeadline(Deferred.await(shutdownStarted));
+  const run = runServer.pipe(
+    Effect.provideService(ServerConfig.ServerConfig, config),
+    Effect.provideService(ServerShutdown.ShutdownStarted, Deferred.await(shutdownStarted)),
+  );
   if (config.mode !== "desktop" || config.desktopBootstrapToken === undefined) return yield* run;
   yield* Effect.sync(() => {
     process.stdout.on("error", ignoreClosedLauncherPipe);
@@ -39,6 +60,7 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
   return yield* Effect.raceFirst(
     run,
     awaitLauncherLoss().pipe(
+      Effect.andThen(Effect.sync(beginShutdown)),
       // End like SIGTERM does (interrupt-only exit, so the runtime forces process exit).
       Effect.andThen(Effect.interrupt),
     ),

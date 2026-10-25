@@ -1,12 +1,18 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Runtime from "effect/Runtime";
+import * as Scope from "effect/Scope";
+import * as TestClock from "effect/testing/TestClock";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { renderBootServicePlist, renderBootServiceUnit } from "./cloud/bootService.ts";
@@ -184,6 +190,68 @@ describe("server ownership", () => {
       );
       assert.isFalse(yield* fs.exists(statePath));
       yield* Effect.scoped(ServerOwnership.acquireServerOwnership(statePath));
+    }).pipe(Effect.provide(layerOwnership)),
+  );
+
+  // A replacement starts while the previous server still releases its sessions:
+  // the desktop app relaunching its backend, or a service manager restarting.
+  const startBesideStoppingOwner = Effect.fn("test.startBesideStoppingOwner")(function* (
+    statePath: string,
+  ) {
+    const waiting = yield* Deferred.make<void>();
+    const logger = Logger.make(({ message }) => {
+      if (String(message).includes("waiting for the stopping server")) {
+        Deferred.doneUnsafe(waiting, Exit.void);
+      }
+    });
+    const successor = yield* Effect.scoped(ServerOwnership.acquireServerOwnership(statePath)).pipe(
+      Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+      Effect.result,
+      Effect.forkChild,
+    );
+    yield* Deferred.await(waiting);
+    return successor;
+  });
+
+  it.effect("waits for a stopping owner and takes over once it releases the lock", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-owner-handover-" });
+      const statePath = path.join(root, "server-runtime.json");
+      const ownerScope = yield* Scope.make();
+      const owner = yield* ServerOwnership.acquireServerOwnership(statePath).pipe(
+        Scope.provide(ownerScope),
+      );
+      yield* owner.publish(yield* makeState);
+      yield* owner.markStopping;
+
+      const successor = yield* startBesideStoppingOwner(statePath);
+      yield* TestClock.adjust("1 second");
+      assert.isUndefined(successor.pollUnsafe());
+
+      yield* Scope.close(ownerScope, Exit.void);
+      yield* TestClock.adjust("200 millis");
+      const result = yield* Fiber.join(successor);
+      assert.equal(result._tag, "Success");
+    }).pipe(Effect.provide(layerOwnership)),
+  );
+
+  it.effect("stops waiting for a stopping owner that overruns its shutdown deadline", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-owner-overrun-" });
+      const statePath = path.join(root, "server-runtime.json");
+      const owner = yield* ServerOwnership.acquireServerOwnership(statePath);
+      yield* owner.publish(yield* makeState);
+      yield* owner.markStopping;
+
+      const successor = yield* startBesideStoppingOwner(statePath);
+      // Past the shutdown deadline (10 s) plus the exit grace (5 s).
+      yield* TestClock.adjust("16 seconds");
+      const result = yield* Fiber.join(successor);
+      assert.equal(result._tag === "Failure" && result.failure._tag, "ServerAlreadyRunningError");
     }).pipe(Effect.provide(layerOwnership)),
   );
 

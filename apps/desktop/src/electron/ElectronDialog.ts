@@ -182,9 +182,21 @@ export const make = ElectronDialog.of({
           cause,
         }),
     }),
+  // The native error box runs a nested loop that holds the main process, and
+  // with it SIGTERM handling, until someone dismisses it: under a supervisor a
+  // stop then waits out its timeout and ends in SIGKILL. Electron allows only
+  // the native box before `ready`.
   showErrorBox: (title, content) =>
-    Effect.try({
-      try: () => Electron.dialog.showErrorBox(title, content),
+    Effect.tryPromise({
+      try: async () => {
+        if (!Electron.app.isReady()) return Electron.dialog.showErrorBox(title, content);
+        await Electron.dialog.showMessageBox({
+          type: "error",
+          title,
+          message: title,
+          detail: content,
+        });
+      },
       catch: (cause) =>
         new ElectronDialogShowErrorBoxError({
           titleLength: title.length,

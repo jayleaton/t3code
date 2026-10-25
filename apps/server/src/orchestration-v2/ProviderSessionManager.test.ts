@@ -1434,6 +1434,41 @@ it.effect("ProviderSessionManagerV2 interrupts event subscriptions on server shu
   }),
 );
 
+it.effect("ProviderSessionManagerV2 bounds server shutdown when a provider never closes", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const scopeCloseReached = yield* Deferred.make<void>();
+    const effect = Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread-provider-session-manager-shutdown-bound");
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      yield* eventSink.write({
+        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+      });
+      yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+
+      const shutdown = yield* Effect.forkChild(manager.shutdown);
+      yield* Deferred.await(scopeCloseReached);
+      // Well short of the 30 s a single release may wait for its scope.
+      yield* TestClock.adjust("5 seconds");
+      yield* Fiber.join(shutdown);
+      assert.equal((yield* Ref.get(state)).closeCount, 0);
+    });
+
+    yield* effect.pipe(
+      Effect.provide(
+        layerTest({ state, idleTimeoutMs: 60_000, hangSessionScopeClose: true, scopeCloseReached }),
+      ),
+    );
+  }),
+);
+
 it.effect("ProviderSessionManagerV2 drains subscribers when the provider stops", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
