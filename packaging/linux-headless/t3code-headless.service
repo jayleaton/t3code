@@ -1,0 +1,46 @@
+# Headless T3 server: the server from the fork's AppImage, without the Electron window.
+# Install with packaging/linux-headless/t3-headless-update; see docs/operations/headless-linux.md.
+[Unit]
+Description=T3 Code server (headless)
+# No network wait: T3CODE_HOST=0.0.0.0 also covers LAN and Tailscale addresses
+# that appear after start, and clients re-read the advertised addresses.
+# A remote host has nobody to reset a start limit: keep retrying with backoff
+# (below), and let deliberate restarts through.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+Environment=T3CODE_HOME=%h/.t3
+Environment=T3CODE_PORT=3773
+Environment=T3CODE_HOST=0.0.0.0
+Environment=T3CODE_CLI_PATH=%h/.local/opt/t3code-headless/bin/t3
+Environment=ELECTRON_RUN_AS_NODE=1
+# A user unit gets no login-shell PATH; provider CLIs must be on this one.
+Environment=PATH=%h/.local/bin:%h/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
+# Resolve `current` once, so an update that swaps it under a running server
+# does not mix files from two versions before the restart.
+ExecStart=/bin/sh -c 'app=$$(readlink -f "$$0") && exec "$$app/t3code" --require "$$app/resources/app.asar/apps/desktop/dist-electron/compileCache.cjs" "$$app/resources/app.asar/apps/server/dist/bin.mjs" serve' %h/.local/opt/t3code-headless/current
+# Agents run in their own scopes under app-t3code-agents-<hash>.slice and exit
+# when the server's pipe closes; everything else is in this cgroup.
+KillMode=control-group
+# A tool process an agent detached (setsid) can outlive the agent. The next server
+# stops this home's agent slice on start; do it on stop too, so `stop` leaves
+# nothing behind. Detached terminals live in app-t3code-agents.slice and survive.
+# The slice name is ownedAgentSlice() in apps/server/src/process/agentScope.ts.
+ExecStopPost=/bin/sh -c 'systemctl --user stop "app-t3code-agents-$$(printf %%s "$$T3CODE_HOME/userdata" | sha256sum | cut -c1-12).slice"'
+TimeoutStopSec=20
+Restart=on-failure
+# The server exits 130 after a clean SIGTERM shutdown.
+SuccessExitStatus=130
+RestartSec=2
+RestartSteps=6
+RestartMaxDelaySec=60
+# Short helper commands share this cgroup; one OOM kill must not stop the server.
+OOMPolicy=continue
+CPUWeight=1000
+IOWeight=1000
+ManagedOOMPreference=avoid
+
+[Install]
+WantedBy=default.target
