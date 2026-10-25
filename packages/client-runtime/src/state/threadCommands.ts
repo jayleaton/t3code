@@ -7,6 +7,7 @@ import {
   WS_METHODS,
   type EnvironmentId,
   type OrchestrationV2ShellSnapshot,
+  type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 
 import { createOptimisticThreadLifecycle } from "./threadLifecycle.ts";
@@ -440,26 +441,63 @@ export function createThreadEnvironmentAtoms<R, E>(
     }),
   };
   const optimistic = createOptimisticThreadLifecycle(snapshotAtom);
+  const busy = (thread: OrchestrationV2ThreadShell) =>
+    thread.pendingRuntimeRequest !== null ||
+    ["preparing", "queued", "starting", "running", "waiting"].includes(thread.status);
+  const settled = (thread: OrchestrationV2ThreadShell, now: DateTime.Utc) => ({
+    ...thread,
+    pendingRuntimeRequest: null,
+    settledOverride: "settled" as const,
+    settledAt: thread.settledOverride === "settled" ? (thread.settledAt ?? now) : now,
+    unsettledAt: null,
+    activeOrderKey: null,
+    pinnedAt: null,
+    pinOrderKey: null,
+    snoozedAt: null,
+    snoozedUntil: null,
+  });
+  /**
+   * The sub-runs a settle cascades to on the server (SettlementCascade): idle unsettled ones
+   * settle with it, ones settled on their own pass the cascade through, and a busy one stays
+   * active with everything under it until its run ends.
+   */
+  const settleFollowers = (snapshot: OrchestrationV2ShellSnapshot, threadId: ThreadId) => {
+    const children = new Map<ThreadId, Array<OrchestrationV2ThreadShell>>();
+    for (const thread of snapshot.threads) {
+      if (thread.parentThreadId == null || thread.parentEnvironmentId != null) continue;
+      const siblings = children.get(thread.parentThreadId) ?? [];
+      siblings.push(thread);
+      children.set(thread.parentThreadId, siblings);
+    }
+    const followers: Array<ThreadId> = [];
+    const visited = new Set([threadId]);
+    const pending = [threadId];
+    while (pending.length > 0) {
+      for (const child of children.get(pending.pop()!) ?? []) {
+        if (visited.has(child.id) || busy(child)) continue;
+        visited.add(child.id);
+        if (child.settledOverride !== "settled") followers.push(child.id);
+        pending.push(child.id);
+      }
+    }
+    return followers;
+  };
   return {
     ...commands,
     snapshotAtom: optimistic.snapshotAtom,
-    settle: optimistic.wrap(commands.settle, (thread, _input, now, accepted) =>
-      !accepted &&
-      (thread.pendingRuntimeRequest !== null ||
-        ["preparing", "queued", "starting", "running", "waiting"].includes(thread.status))
-        ? thread
-        : {
-            ...thread,
-            pendingRuntimeRequest: null,
-            settledOverride: "settled",
-            settledAt: thread.settledOverride === "settled" ? (thread.settledAt ?? now) : now,
-            unsettledAt: null,
-            activeOrderKey: null,
-            pinnedAt: null,
-            pinOrderKey: null,
-            snoozedAt: null,
-            snoozedUntil: null,
-          },
+    settle: optimistic.wrap(
+      commands.settle,
+      (thread, _input, now, accepted) =>
+        !accepted && busy(thread) ? thread : settled(thread, now),
+      {
+        select: (snapshot, input) => settleFollowers(snapshot, input.threadId),
+        apply: settled,
+        // The child's own settle event landed, or it changed in a way the cascade leaves alone.
+        landed: (thread, now) =>
+          thread.settledOverride === "settled" ||
+          busy(thread) ||
+          DateTime.toEpochMillis(thread.updatedAt) > DateTime.toEpochMillis(now),
+      },
     ),
     unsettle: optimistic.wrap(commands.unsettle, (thread, input, now) => ({
       ...thread,
