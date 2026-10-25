@@ -63,13 +63,12 @@ function authenticate(
           reject(new Error("Invalid server proof."));
           return;
         }
-        if (configure) {
-          socket.send(JSON.stringify({ type: "configure", grants: {} }));
-          const configuredSignal = AbortSignal.timeout(10);
-          configuredSignal.addEventListener("abort", () => resolve(), { once: true });
-        } else resolve();
+        if (configure) socket.send(JSON.stringify({ type: "configure", grants: {} }));
+        else resolve();
         return;
       }
+      // The bridge only routes requests once it has applied the grants and said so.
+      if (message.type === "configured") resolve();
       onRequest?.(message);
     });
   });

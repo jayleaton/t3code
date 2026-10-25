@@ -97,6 +97,33 @@ function shell(overrides: Partial<SettlementShell> = {}): SettlementShell {
   };
 }
 
+function persistedLink(
+  state: "open" | null,
+  linkedAt: DateTime.Utc,
+): NonNullable<SettlementShell["pullRequests"]>[number] {
+  return {
+    host: "example.test",
+    repository: "owner/repository",
+    number: 42,
+    url: "https://example.test/owner/repository/pull/42",
+    source: "manual",
+    linkedAt: DateTime.formatIso(linkedAt),
+    snapshot:
+      state === null
+        ? null
+        : {
+            state,
+            title: "Pull request",
+            headBranch: "feature",
+            baseBranch: "main",
+            isDraft: false,
+            updatedAt: DateTime.formatIso(linkedAt),
+            syncedAt: DateTime.formatIso(linkedAt),
+          },
+    stack: null,
+  };
+}
+
 describe("isAutoSettlementCandidate", () => {
   it("excludes settled, pinned, blocked, and working cards", () => {
     expect(AutoSettlement.isAutoSettlementCandidate(shell(), NOW_MS)).toBe(true);
@@ -259,7 +286,7 @@ describe("age settlement", () => {
     );
   });
 
-  it.each(["monitor", "subagent", "background_task"] as const)(
+  it.each(["subagent", "background_task"] as const)(
     "keeps a completed card with a pending %s active",
     (kind) => {
       expect(
@@ -343,6 +370,22 @@ describe("age settlement", () => {
       AutoSettlement.resolveAutoSettlementAt({ ...input, autoSettleKeepPullRequests: false }),
     ).toEqual(at(-4 * DAY_MS));
   });
+  it("settles an idle thread with an open persisted link only while retention is off", () => {
+    const input = {
+      thread: shell({
+        latestUserMessageAt: at(-4 * DAY_MS),
+        pullRequests: [persistedLink("open", at(-5 * DAY_MS))],
+      }),
+      nowMs: NOW_MS,
+      autoSettleAfterDays: 3,
+      autoSettleKeepPullRequests: false,
+    };
+    expect(AutoSettlement.resolveAutoSettlementAt(input)).toEqual(at(-4 * DAY_MS));
+    expect(
+      AutoSettlement.resolveAutoSettlementAt({ ...input, autoSettleKeepPullRequests: true }),
+    ).toBeNull();
+  });
+
   it.each([null, 0])("disables age settlement with %s", (autoSettleAfterDays) => {
     expect(
       AutoSettlement.resolveAutoSettlementAt({
@@ -561,7 +604,7 @@ it.effect("sweeps on the fake clock with project overrides and active descendant
           shell({
             id: ThreadId.make("monitor"),
             projectId: enabled,
-            pendingBackgroundTasks: [{ taskId: "watch", kind: "monitor" }],
+            pendingBackgroundTasks: [{ taskId: "watch", kind: "monitor", awaited: true }],
           }),
         ],
       });

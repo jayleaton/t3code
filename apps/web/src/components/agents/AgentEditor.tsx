@@ -307,7 +307,7 @@ export function AgentEditor({
                   <option value="">Select model</option>
                   {modelLabel && !selectedModel && (
                     <option value={modelLabel} disabled>
-                      {modelLabel} — unavailable; select a model
+                      {modelLabel}: unavailable; select a model
                     </option>
                   )}
                   {models.map((model) => (

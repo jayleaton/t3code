@@ -153,7 +153,7 @@ describe("Agents new chat workspace", () => {
     ];
     await refresh(screen);
     const option = machineSelect(screen).options[1]!;
-    expect(option.text).toContain("MacBook — Not connected");
+    expect(option.text).toContain("MacBook: Not connected");
     expect(option.disabled).toBe(true);
     expect(screen.container.textContent).toContain("Settings → Connections");
     await submit(screen);

@@ -2,6 +2,7 @@ import {
   type AuthEnvironmentScope,
   AuthStandardClientScopes,
   ExecutionEnvironmentDescriptor,
+  ORCHESTRATION_PROTOCOL_VERSION,
   PortSchema,
 } from "@t3tools/contracts";
 import { resolveWorktreeT3Home } from "@t3tools/shared/devHome";
@@ -77,6 +78,18 @@ export class NoRunningServerError extends Schema.TaggedError<NoRunningServerErro
   }
 }
 
+export class IncompatibleServerProtocolError extends Schema.TaggedError<IncompatibleServerProtocolError>()(
+  "IncompatibleServerProtocolError",
+  { serverVersion: Schema.String, serverProtocolVersion: Schema.Number },
+) {
+  override get message(): string {
+    return [
+      `The running T3 Code server (${this.serverVersion}) speaks orchestration protocol ${String(this.serverProtocolVersion)}, but this CLI speaks protocol ${String(ORCHESTRATION_PROTOCOL_VERSION)}.`,
+      `Pair with the matching CLI instead: \`npx t3@${this.serverVersion} pair\`.`,
+    ].join("\n");
+  }
+}
+
 export class TailscaleUnavailableError extends Schema.TaggedError<TailscaleUnavailableError>()(
   "TailscaleUnavailableError",
   { cause: Schema.Defect() },
@@ -132,7 +145,10 @@ export class ServePortOccupiedError extends Schema.TaggedError<ServePortOccupied
 }
 
 const resolveDirectPairingBaseUrl = (state: PersistedServerRuntimeState): string =>
-  state.devUrl ?? resolveHeadlessConnectionString(state.host, state.port);
+  state.devUrl ??
+  resolveHeadlessConnectionString(state.host, state.port, {
+    privateNetworkOnly: state.privateNetworkOnly,
+  });
 
 export class DevServerNotProxiableError extends Schema.TaggedError<DevServerNotProxiableError>()(
   "DevServerNotProxiableError",
@@ -495,6 +511,16 @@ export const pairCommand = Command.make("pair", {
       const logLevel = Option.getOrElse(cliLogLevel, () => "Warn" as const);
 
       const target = yield* discoverPairTarget(Option.getOrUndefined(flags.baseDir));
+      // Each protocol keeps auth in its own database, so a token minted here
+      // for another protocol's server would never be accepted by it. Refuse
+      // before any local layer opens (and migrates) that database.
+      const serverProtocolVersion = target.descriptor.orchestrationProtocolVersion ?? 1;
+      if (serverProtocolVersion !== ORCHESTRATION_PROTOCOL_VERSION) {
+        return yield* new IncompatibleServerProtocolError({
+          serverVersion: target.descriptor.serverVersion,
+          serverProtocolVersion,
+        });
+      }
 
       const notes: Array<string> = [];
       let pairingBaseUrl: string;
@@ -510,6 +536,10 @@ export const pairCommand = Command.make("pair", {
         if (isLoopbackHost(new URL(pairingBaseUrl).hostname)) {
           notes.push(
             "This URL is only reachable from this machine. Re-run with --tailscale, or restart the server with a reachable --host.",
+          );
+        } else if (target.state.privateNetworkOnly) {
+          notes.push(
+            "This URL works only from this machine's local network. From elsewhere, re-run with --tailscale or use T3 Connect.",
           );
         }
         if (target.variant === "dev" && target.state.devUrl === undefined) {

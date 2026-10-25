@@ -16,7 +16,7 @@ export function agentMachineUnavailableReason(
     return "Not selected in this agent’s settings";
   }
   if (environment.connection.phase !== "connected") {
-    return "Not connected — check Settings → Connections";
+    return "Not connected: check Settings → Connections";
   }
   const providers = environment.providers;
   if (!environment.serverConfig || !providers) return "Loading provider status";
@@ -42,7 +42,7 @@ export function agentMachineUnavailableReason(
   );
   if (!ready.length) {
     const detail = enabled[0]?.unavailableReason ?? enabled[0]?.message;
-    return `${label} is not ready${detail ? `: ${detail}` : " — check Settings → Providers"}`;
+    return `${label} is not ready${detail ? `: ${detail}` : ". Check Settings → Providers"}`;
   }
-  return `Model ${profile.modelLabel ?? profile.modelSelection?.model ?? "selection"} is missing or ambiguous — reselect it in the agent’s settings`;
+  return `Model ${profile.modelLabel ?? profile.modelSelection?.model ?? "selection"} is missing or ambiguous: reselect it in the agent’s settings`;
 }

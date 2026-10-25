@@ -21,8 +21,6 @@ import {
 } from "./LinkedPullRequestList";
 import { useLinkedPullRequestActions } from "./useLinkedPullRequestActions";
 
-const TITLE = "Linked pull requests";
-
 export function ThreadPullRequestsSheet(
   _props: StaticScreenProps<{ readonly environmentId: string; readonly threadId: string }>,
 ) {
@@ -53,6 +51,8 @@ export function ThreadPullRequestsSheet(
     () => ({ lines, actions, watchesSuspended }),
     [lines, actions, watchesSuspended],
   );
+  const { singular } = actions.terminology;
+  const title = `Linked ${actions.terminology.plural}`;
 
   const content = (
     <View className="flex-1 android:bg-sheet-solid ios:bg-screen">
@@ -89,7 +89,7 @@ export function ThreadPullRequestsSheet(
         }
         ListEmptyComponent={
           <Text className="pt-6 text-center text-sm text-foreground-muted">
-            No linked pull requests.
+            No linked {actions.terminology.plural}.
           </Text>
         }
       />
@@ -99,12 +99,12 @@ export function ThreadPullRequestsSheet(
   if (Platform.OS === "ios") {
     return (
       <View collapsable={false} className="flex-1 bg-sheet">
-        <SheetHeader presentation="native" title={TITLE} onClose={() => navigation.goBack()} />
+        <SheetHeader presentation="native" title={title} onClose={() => navigation.goBack()} />
         {actions.canLink ? (
           <Toolbar placement="right">
             <Toolbar.Button
               icon="plus"
-              accessibilityLabel="Link pull request"
+              accessibilityLabel={`Link ${singular}`}
               onPress={actions.promptLink}
             />
           </Toolbar>
@@ -118,14 +118,14 @@ export function ThreadPullRequestsSheet(
     <View collapsable={false} className="flex-1 bg-header">
       <NativeStackScreenOptions options={{ sheetCornerRadius: 28 }} />
       <AndroidSheetHeader
-        title={TITLE}
+        title={title}
         hideBottomBorder
         onBack={() => navigation.goBack()}
         actions={
           actions.canLink
             ? [
                 {
-                  accessibilityLabel: "Link pull request",
+                  accessibilityLabel: `Link ${singular}`,
                   icon: "plus",
                   onPress: actions.promptLink,
                 },

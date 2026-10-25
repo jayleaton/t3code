@@ -205,8 +205,8 @@ describe("MCP gateway operational status", () => {
     );
     const text = screen.container.textContent;
     expect(text).toContain("Cursor 41; retained 35; oldest 7");
-    expect(text).toContain("sub-safe — active; cursor 40; 1 pending");
-    expect(text).toContain("whk-safe — degraded; cursor 39; 1 pending, 2 failed");
+    expect(text).toContain("sub-safe: active; cursor 40; 1 pending");
+    expect(text).toContain("whk-safe: degraded; cursor 39; 1 pending, 2 failed");
     expect(text).not.toContain("http");
   });
 

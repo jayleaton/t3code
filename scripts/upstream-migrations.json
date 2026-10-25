@@ -66,5 +66,6 @@
   [65, "CodexUsageNativeTurnIndex"],
   [66, "RepairClientSettlementTimestamps"],
   [67, "WebhookDedupe"],
-  [68, "ShellStopRequestIndex"]
+  [68, "ShellStopRequestIndex"],
+  [69, "ThreadMessageSearch"]
 ]
