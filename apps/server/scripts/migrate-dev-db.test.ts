@@ -195,6 +195,59 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
     }),
   );
 
+  it.effect("copies every kept row of a table spanning many read chunks", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const sourceDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-chunks-" });
+      const destDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-chunks-dest-" });
+      const source = yield* createFixtureSource(sourceDir);
+      // Kept and archived events alternate across several chunks, with a gap
+      // in the rowids wider than a chunk.
+      yield* withDatabase(
+        source,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5000)
+            INSERT INTO orchestration_events
+              (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at, actor_kind, payload_json, metadata_json)
+            SELECT 'bulk-' || i, 'thread', CASE i % 2 WHEN 0 THEN 'stopped-thread' ELSE 'archived-thread' END,
+              i, 'thread.meta-updated', '2026-08-01', 'user', '{}', '{}'
+            FROM n`;
+          yield* sql`DELETE FROM orchestration_events WHERE event_id BETWEEN 'bulk-2000' AND 'bulk-3600'
+            AND length(event_id) = 9`;
+        }),
+      );
+      const expected = yield* withDatabase(
+        source,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          return yield* sql`SELECT event_id FROM orchestration_events
+            WHERE stream_id = 'stopped-thread' ORDER BY event_id`.values;
+        }),
+      );
+
+      const result = yield* runMigrateDevDb(
+        { baseDir: destDir, source, projects: 5, threadsPerProject: 100 },
+        { sharedHome: sourceDir },
+      );
+
+      const copied = yield* withDatabase(
+        result.databasePath,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          const kept = yield* sql`SELECT event_id FROM orchestration_events
+            WHERE stream_id = 'stopped-thread' ORDER BY event_id`.values;
+          const [archived] = yield* sql<{ count: number }>`
+            SELECT COUNT(*) AS count FROM orchestration_events WHERE stream_id = 'archived-thread'`;
+          return { kept, archived: archived?.count };
+        }),
+      );
+      assert.equal(expected.length, 1700);
+      assert.deepStrictEqual(copied.kept, expected);
+      assert.equal(copied.archived, 0);
+    }),
+  );
+
   it.effect("skips a thread family larger than the per-project limit", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

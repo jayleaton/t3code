@@ -793,20 +793,34 @@ const startCheckpointWorker = Effect.fnUntraced(function* (
   let generation = 0;
   let nextId = 0;
   let inFlight: number | undefined;
+  // The newest request the worker has answered.
+  let retired = 0;
   let checkAgain = false;
   let blocked = false;
   let log = 0;
   let checkpointed = 0;
   let unknown = false;
   let truncate: { id: number; acknowledged: boolean } | undefined;
-  type Waiter = { resume: () => void; cancelled: boolean };
+  // `after` is the newest request sent before the write began waiting.
+  type Waiter = { resume: () => void; cancelled: boolean; after: number };
   const waiters: Array<Waiter> = [];
   let elected: Waiter | undefined;
   const gated = () =>
     !stopped &&
     !writer.isTransaction &&
     (unknown || blocked || truncate !== undefined || log >= CHECKPOINT_BACKPRESSURE_FRAMES);
+  // A write over the ceiling waits for one checkpoint attempt, not for the WAL
+  // to drain. No checkpoint can pass a reader's snapshot, so waiting for a
+  // drain would let any reader, in this process or another, stop every write
+  // for as long as it stays open. The WAL grows instead.
+  const served = (waiter: Waiter) => retired > waiter.after;
   const wake = () => {
+    for (let index = waiters.length - 1; index >= 0; index--) {
+      const waiter = waiters[index]!;
+      if (!served(waiter)) continue;
+      waiters.splice(index, 1);
+      waiter.resume();
+    }
     if (!gated() && elected === undefined) {
       elected = waiters.shift();
       elected?.resume();
@@ -922,8 +936,11 @@ const startCheckpointWorker = Effect.fnUntraced(function* (
       unknown = false;
     }
     // Even a stale snapshot must retire its request so a newer check can run.
-    if ("id" in message && message.id === inFlight) inFlight = undefined;
-    if (checkAgain && inFlight === undefined) {
+    if (inFlight !== undefined && "id" in message && message.id === inFlight) {
+      retired = inFlight;
+      inFlight = undefined;
+    }
+    if (inFlight === undefined && (checkAgain || waiters.some((waiter) => !served(waiter)))) {
       checkAgain = false;
       request(true);
     }
@@ -946,7 +963,7 @@ const startCheckpointWorker = Effect.fnUntraced(function* (
     admitted?: Waiter,
   ): Effect.Effect<A, E> =>
     Effect.suspend(() => {
-      if (!gated()) {
+      if (!gated() || (admitted !== undefined && served(admitted))) {
         // Release the election after executing; its successor must see the new WAL state.
         try {
           return execute();
@@ -955,7 +972,7 @@ const startCheckpointWorker = Effect.fnUntraced(function* (
         }
       }
       if (admitted !== undefined) release(admitted);
-      const waiter: Waiter = { resume: () => {}, cancelled: false };
+      const waiter: Waiter = { resume: () => {}, cancelled: false, after: nextId };
       const wait = Effect.uninterruptibleMask((restore) =>
         Effect.withFiber((fiber) =>
           (fiber.getRef(TransactionAcquire)?.restore ?? restore)(
