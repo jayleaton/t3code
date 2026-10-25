@@ -41,7 +41,10 @@ sudo loginctl enable-linger "$(id -un)"   # keep it running without a login sess
 ```
 
 Edit `T3CODE_HOME`, `T3CODE_PORT`, and `PATH` in the unit (or a drop-in) to match the host.
-Provider CLIs must be on that `PATH`; a user unit does not read the login shell.
+Provider CLIs must be on that `PATH`; the server then adds the login shell's `PATH` for agents.
+The unit passes home, port, and host to the server as flags and unsets them, so agents get the
+same environment as under the desktop app: a `t3` command or dev server an agent runs in a
+worktree must not find this server's home.
 
 The server prints a pairing URL at every start (`journalctl --user -u t3code-headless`). Mint
 another one with `~/.local/opt/t3code-headless/bin/t3 pair`.
@@ -62,10 +65,35 @@ update T3 itself here. The server is neither desktop-managed nor run by the upst
 so it is listed as needing a manual update. Run `t3-headless-update` (or a timer that runs
 it).
 
+## Switch from the desktop unit
+
+[`cutover.sh`](../../packaging/linux-headless/cutover.sh) moves a host from the desktop unit to
+the headless unit and back. Stopping the desktop unit ends every agent, including one that
+started the switch, so run it in its own transient unit:
+
+```sh
+systemd-run --user --unit=t3-headless-cutover --collect packaging/linux-headless/cutover.sh run
+```
+
+`run` installs the unit, the update script, and a release (`CUTOVER_VERSION`, else the newest);
+waits up to 30 minutes for running turns to end (`--force` skips this; otherwise it aborts
+before changing anything); stops and disables the desktop unit; stops the
+`app-<appId>-<pid>.scope` that still holds the port, if any; points the MCP gateway service at
+the headless release with a drop-in; and starts the headless unit. It then checks for up to
+120 seconds that the server listens on `0.0.0.0`, reports the installed version, answers on
+the Tailscale Serve URL, has a connected runtime in the gateway, and writes its database. If a
+check fails it rolls back: headless off, gateway drop-in removed, desktop unit on, and the same
+checks again. `rollback` does that on request. Each run writes a report to
+`~/.local/state/t3-captain/cutover-<timestamp>.txt`. Unit names, port, T3 home, and URL are
+`CUTOVER_*` variables at the top of the script.
+
+The headless server hosts the T3 Agents gateway runtime the desktop app used to provide: the
+cutover adds `T3_MCP_HEADLESS_GATEWAY=1` to the unit, and the server reads the bridge token from
+`~/.config/t3code/mcp-gateway.env`. Agents in chats keep their own `t3-code` MCP, which their
+server serves either way.
+
 ## What the host loses
 
 The local window and tray, desktop notifications on that machine, snap-shot screen capture,
 deep links, and the Electron browser panel extras (the preview falls back to the server's
-headless Chromium). Agents webhooks and the MCP runtime bridge need
-`T3_MCP_HEADLESS_GATEWAY=1`; see
-[Running T3 Code in the background](../user/background-service.md#t3-agents-webhooks-without-the-desktop-app).
+headless Chromium).
