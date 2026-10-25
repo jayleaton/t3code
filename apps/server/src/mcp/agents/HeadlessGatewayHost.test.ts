@@ -1,6 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Effect from "effect/Effect";
 
-import { parseGatewayEnvFile, resolveHeadlessGatewaySettings } from "./HeadlessGatewayHost.ts";
+import {
+  parseGatewayEnvFile,
+  resolveHeadlessGatewaySettings,
+  takeLauncherEnvironment,
+} from "./HeadlessGatewayHost.ts";
 
 const TOKEN = "headless-token-0123456789";
 const base = {
@@ -21,6 +27,35 @@ describe("parseGatewayEnvFile", () => {
       T3_MCP_BRIDGE_PORT: "47700",
     });
   });
+});
+
+describe("takeLauncherEnvironment", () => {
+  it.effect("keeps the gateway variables from children and hands them to the host", () =>
+    Effect.gen(function* () {
+      const launcher = {
+        T3_MCP_HEADLESS_GATEWAY: "1",
+        T3_MCP_HEADLESS_SCOPES: "read,delivery",
+        T3_MCP_BRIDGE_PORT: "47700",
+        T3_MCP_BRIDGE_TOKEN: TOKEN,
+        T3_MCP_REPOSITORY_ALLOWLIST: "jayleaton/t3code",
+        T3_MCP_EVENT_RETENTION: "5000",
+        T3_MCP_STATE_FILE: "/home/jj/.t3/mcp-gateway-v3.sqlite",
+        T3_MCP_GRANTS: "{}",
+      };
+      const ordinary = { PATH: "/usr/bin", HOME: "/home/jj", TMPDIR: "/home/jj/.t3/tmp" };
+      const env: NodeJS.ProcessEnv = { ...ordinary, ...launcher };
+
+      const taken = yield* takeLauncherEnvironment().pipe(
+        Effect.provideService(HostProcess.Environment, env),
+      );
+
+      expect(env).toEqual(ordinary);
+      expect(taken).toEqual(launcher);
+      expect(
+        resolveHeadlessGatewaySettings({ ...base, env: { ...env, ...taken }, file: {} }),
+      ).toMatchObject({ enabled: true, config: { port: 47700, token: TOKEN } });
+    }),
+  );
 });
 
 describe("resolveHeadlessGatewaySettings", () => {

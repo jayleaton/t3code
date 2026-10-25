@@ -5,6 +5,8 @@ import {
   startSharedGatewayOwner,
   type SharedGatewayConfig,
 } from "@t3tools/mcp-gateway/sharedOwner";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -41,6 +43,44 @@ export type HeadlessGatewaySettings =
       readonly config: SharedGatewayConfig;
       readonly scopes: ReadonlyArray<GatewayScope>;
     };
+
+/** This host's switches plus what `sharedGatewayConfigFromEnvironment` reads. */
+const LAUNCHER_ENV_KEYS = [
+  "T3_MCP_HEADLESS_GATEWAY",
+  "T3_MCP_HEADLESS_SCOPES",
+  "T3_MCP_BRIDGE_PORT",
+  "T3_MCP_BRIDGE_TOKEN",
+  "T3_MCP_REPOSITORY_ALLOWLIST",
+  "T3_MCP_EVENT_RETENTION",
+  "T3_MCP_STATE_FILE",
+  "T3_MCP_GRANTS",
+] as const;
+
+/**
+ * Removes the gateway launcher variables from the server's environment and returns them. Agents,
+ * terminals, and provider SDKs all inherit that environment, so leaving them would hand every
+ * agent the bridge token, and a dev server an agent starts would join the shared owner as a
+ * standby runtime and take that role from this server.
+ */
+export const takeLauncherEnvironment = Effect.fn("HeadlessGatewayHost.takeLauncherEnvironment")(
+  function* () {
+    const env = yield* HostProcess.Environment;
+    const taken: Record<string, string> = {};
+    for (const key of LAUNCHER_ENV_KEYS) {
+      const value = env[key];
+      if (value === undefined) continue;
+      taken[key] = value;
+      delete env[key];
+    }
+    return taken;
+  },
+);
+
+/** What `takeLauncherEnvironment` removed from the process environment at startup. */
+export class LauncherEnvironment extends Context.Service<
+  LauncherEnvironment,
+  Readonly<Record<string, string>>
+>()("t3/mcp/agents/HeadlessGatewayHost/LauncherEnvironment") {}
 
 const DEFAULT_SCOPES: ReadonlyArray<GatewayScope> = ["read", "delivery"];
 
@@ -127,9 +167,10 @@ const readGatewayEnvFile = Effect.fn("HeadlessGatewayHost.readEnvFile")(function
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
+    const launcherEnvironment = yield* LauncherEnvironment;
     const homeDirectory = process.env.HOME ?? "";
     const settings = resolveHeadlessGatewaySettings({
-      env: process.env,
+      env: { ...process.env, ...launcherEnvironment },
       file: homeDirectory === "" ? {} : yield* readGatewayEnvFile(homeDirectory),
       homeDirectory,
       baseDir: config.baseDir,
