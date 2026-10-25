@@ -9269,8 +9269,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     if (
       thread.parentThreadId == null ||
       parentSettledAt == null ||
-      thread.settledOverride !== null ||
-      thread.autoSettleDisabledAt != null ||
+      thread.settledOverride === "settled" ||
+      // The cascade settles idle sub-runs whatever their override or auto-settle opt-out, so a
+      // busy one follows the same way. Only an un-settle after the parent's settle keeps it.
+      (thread.settledOverride === "active" &&
+        thread.unsettledAt != null &&
+        DateTime.toEpochMillis(thread.unsettledAt) > DateTime.toEpochMillis(parentSettledAt)) ||
       thread.archivedAt !== null ||
       thread.deletedAt !== null ||
       records.runs.some((run) => isBlockingRun(run) || run.status === "queued") ||
@@ -12494,7 +12498,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     completion: string,
   ) {
     const thread = yield* projectionStore.getThread(threadId);
-    if (thread.settledOverride !== null) return;
+    if (thread.settledOverride === "settled") return;
     const above = yield* manualSettlementAbove(thread);
     // Only the other machine can say how a remote parent settled. RemoteParentSettlement asks it
     // off this path, so a slow or missing relay never holds up run endings here.
