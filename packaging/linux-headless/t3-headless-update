@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+# Install, update, or roll back the headless T3 server (no Electron window) from the
+# fork's nightly Linux feed. See docs/operations/headless-linux.md.
+#
+#   t3-headless-update [update]        install the newest nightly and restart the unit
+#   t3-headless-update install <ver>   install an exact version (e.g. 0.1.2-nightly.20261025.409001)
+#   t3-headless-update rollback        switch back to the previous version
+#   t3-headless-update status          show installed, previous, and newest versions
+#
+# Each version is extracted once into releases/<version>; `current` and `previous`
+# are symlinks, so a swap is one rename and a running server keeps its files.
+set -euo pipefail
+
+root="${T3_HEADLESS_ROOT:-$HOME/.local/opt/t3code-headless}"
+unit="${T3_HEADLESS_UNIT:-t3code-headless.service}"
+repo="${T3_HEADLESS_REPO:-jayleaton/t3code}"
+feed="${T3_HEADLESS_FEED:-nightly-linux.yml}"
+ready_seconds="${T3_HEADLESS_READY_SECONDS:-90}"
+# Other units that run from $root/current (e.g. t3-mcp-gateway.service), restarted
+# after the server comes back so they never run on a pruned version.
+companions="${T3_HEADLESS_COMPANIONS:-}"
+
+die() { echo "t3-headless-update: $*" >&2; exit 1; }
+log() { echo "t3-headless-update: $*" >&2; }
+
+mkdir -p "$root/releases"
+exec 9>"$root/.lock"
+flock -n 9 || die "another update is running"
+
+was_active=false
+systemctl --user is-active --quiet "$unit" && was_active=true
+
+installed() { [[ -L "$root/$1" ]] && basename "$(readlink "$root/$1")" || true; }
+
+# Every release is a prerelease, so /releases/latest never points at one.
+newest_version() {
+  curl -fsSL "https://api.github.com/repos/$repo/releases?per_page=1" |
+    jq -er '.[0].tag_name' | sed 's/^v//'
+}
+
+feed_field() { sed -nE "s/^$1: *'?([^']*)'?\$/\\1/p" "$2" | head -n 1; }
+
+fetch_release() {
+  local version="$1" work="$root/.download-$1"
+  local base="https://github.com/$repo/releases/download/v$version"
+  rm -rf "$work" && mkdir -p "$work"
+  curl -fsSL -o "$work/feed.yml" "$base/$feed"
+  [[ "$(feed_field version "$work/feed.yml")" == "$version" ]] || die "feed does not describe $version"
+  local file sha size
+  file="$(feed_field path "$work/feed.yml")"
+  sha="$(feed_field sha512 "$work/feed.yml")"
+  [[ "$file" == *.AppImage && "$file" != */* && -n "$sha" ]] || die "feed has no AppImage entry"
+  log "downloading $file"
+  local progress=-sS
+  [[ -t 2 ]] && progress=--progress-bar
+  curl -fL "$progress" -o "$work/app.AppImage" "$base/$file"
+  # electron-builder publishes base64(sha512(file)).
+  [[ "$(openssl dgst -sha512 -binary "$work/app.AppImage" | base64 -w0)" == "$sha" ]] ||
+    die "sha512 mismatch for $file"
+  size="$(sed -nE '/url: .*\.AppImage$/,/size:/s/^ *size: *([0-9]+)$/\1/p' "$work/feed.yml" | head -n 1)"
+  [[ -z "$size" || "$(stat -c %s "$work/app.AppImage")" == "$size" ]] || die "size mismatch for $file"
+  log "sha512 verified"
+  chmod +x "$work/app.AppImage"
+  # No FUSE needed: the AppImage runtime extracts itself into ./squashfs-root.
+  (cd "$work" && ./app.AppImage --appimage-extract >/dev/null)
+  local reported
+  reported="$(ELECTRON_RUN_AS_NODE=1 "$work/squashfs-root/t3code" \
+    "$work/squashfs-root/resources/app.asar/apps/server/dist/bin.mjs" --version 2>/dev/null | tail -n 1)"
+  [[ "$reported" == *"$version"* ]] || die "extracted server reports '$reported', expected $version"
+  rm -rf "$root/releases/$version"
+  mv "$work/squashfs-root" "$root/releases/$version"
+  rm -rf "$work"
+}
+
+point() { ln -sfn "releases/$2" "$root/.$1.new" && mv -T "$root/.$1.new" "$root/$1"; }
+
+unit_env() {
+  systemctl --user show -p Environment --value "$unit" 2>/dev/null |
+    tr ' ' '\n' | sed -n "s/^$1=//p" | head -n 1
+}
+
+# `t3 pair`, `t3 thread`, and the commands the UI offers to copy run through this
+# shim (the unit names it in T3CODE_CLI_PATH), always against the current version.
+write_cli_shim() {
+  local home
+  home="$(unit_env T3CODE_HOME)"
+  mkdir -p "$root/bin"
+  cat >"$root/bin/.t3.new" <<EOF
+#!/bin/sh
+export T3CODE_HOME="\${T3CODE_HOME:-${home:-$HOME/.t3}}"
+export T3CODE_CLI_PATH='$root/bin/t3'
+export ELECTRON_RUN_AS_NODE=1
+exec '$root/current/t3code' '$root/current/resources/app.asar/apps/server/dist/bin.mjs' "\$@"
+EOF
+  chmod +x "$root/bin/.t3.new"
+  mv -f "$root/bin/.t3.new" "$root/bin/t3"
+}
+
+wait_ready() {
+  local expected="$1" port body
+  port="$(unit_env T3CODE_PORT)"
+  [[ -n "$port" ]] || die "$unit sets no T3CODE_PORT"
+  for _ in $(seq "$ready_seconds"); do
+    body="$(curl -fs -m 2 "http://127.0.0.1:$port/.well-known/t3/environment" || true)"
+    if [[ "$(jq -r '.serverVersion // empty' <<<"$body" 2>/dev/null)" == "$expected" ]]; then
+      log "$unit is serving $expected on port $port"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+# Only a running server is restarted; a stopped one picks the new version up when started.
+restart_and_verify() {
+  local version="$1"
+  if [[ "$was_active" != true ]]; then
+    log "$unit is not running; start it to use $version"
+    return 0
+  fi
+  log "restarting $unit"
+  # Updates and rollbacks are deliberate restarts; do not let them trip the start limit.
+  systemctl --user reset-failed "$unit" 2>/dev/null || true
+  systemctl --user restart "$unit" || true
+  wait_ready "$version" || return 1
+  local companion
+  for companion in $companions; do
+    systemctl --user try-restart "$companion" || log "could not restart $companion"
+  done
+}
+
+prune() {
+  local keep_current keep_previous dir
+  keep_current="$(installed current)" keep_previous="$(installed previous)"
+  for dir in "$root"/releases/*/; do
+    dir="$(basename "$dir")"
+    [[ "$dir" == "$keep_current" || "$dir" == "$keep_previous" ]] || rm -rf "${root:?}/releases/$dir"
+  done
+}
+
+switch_to() {
+  local target="$1" old old_previous
+  old="$(installed current)" old_previous="$(installed previous)"
+  if [[ "$old" == "$target" ]]; then
+    log "already on $target"
+    restart_and_verify "$target" || die "$unit did not come back on $target"
+    return 0
+  fi
+  [[ -d "$root/releases/$target" ]] || fetch_release "$target"
+  write_cli_shim
+  point current "$target"
+  [[ -z "$old" ]] || point previous "$old"
+  if restart_and_verify "$target"; then
+    prune
+    return 0
+  fi
+  [[ -n "$old" ]] || die "$unit did not become ready on $target and there is nothing to roll back to"
+  log "$unit did not become ready on $target; rolling back to $old"
+  point current "$old"
+  if [[ -n "$old_previous" ]]; then point previous "$old_previous"; else rm -f "$root/previous"; fi
+  rm -rf "${root:?}/releases/$target"
+  restart_and_verify "$old" || die "rollback to $old did not become ready either"
+  die "update to $target failed; still on $old"
+}
+
+case "${1:-update}" in
+  update) switch_to "$(newest_version)" ;;
+  install) switch_to "${2:?usage: t3-headless-update install <version>}" ;;
+  rollback)
+    previous="$(installed previous)"
+    [[ -n "$previous" ]] || die "no previous version"
+    current="$(installed current)"
+    point current "$previous"
+    point previous "$current"
+    restart_and_verify "$previous" || die "$unit did not become ready on $previous"
+    ;;
+  status)
+    echo "current:  $(installed current)"
+    echo "previous: $(installed previous)"
+    echo "newest:   $(newest_version)"
+    ;;
+  *) die "unknown command '$1'" ;;
+esac
