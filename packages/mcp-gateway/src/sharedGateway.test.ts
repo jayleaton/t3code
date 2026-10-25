@@ -672,10 +672,17 @@ describe("shared MCP gateway", () => {
         T3_MCP_GRANTS: "{}",
       },
     });
+    let stderr = "";
+    transport.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
     cleanup.push(() => client.close());
     await client.connect(transport);
     const changed = Promise.withResolvers<void>();
     client.setNotificationHandler(ToolListChangedNotificationSchema, () => changed.resolve());
+    // A launcher that cannot move the session exits; fail with its reason instead of waiting.
+    // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client exposes an onclose callback rather than a DOM event API.
+    client.onclose = () => changed.reject(new Error(`Launcher exited: ${stderr.trim()}`));
     expect((await client.listTools()).tools.length).toBeGreaterThan(0);
 
     await first!.close();
