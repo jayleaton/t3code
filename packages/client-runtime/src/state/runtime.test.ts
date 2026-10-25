@@ -1066,6 +1066,35 @@ describe("runtime command runner", () => {
     }),
   );
 
+  it("runs a serial command while a latest-value command with the same key is pending", async () => {
+    const visitLatch = Latch.makeUnsafe();
+    const runtime = Atom.runtime(Layer.empty);
+    const scheduler = createAtomCommandScheduler();
+    const key = () => "thread";
+    const visit = createRuntimeCommand(runtime, {
+      label: "test.visit",
+      scheduler,
+      concurrency: { mode: "latest", key },
+      execute: () => visitLatch.await.pipe(Effect.as("visited")),
+    });
+    const settle = createRuntimeCommand(runtime, {
+      label: "test.settle",
+      scheduler,
+      concurrency: { mode: "serial", key },
+      execute: () => Effect.succeed("settled"),
+    });
+    const registry = AtomRegistry.make();
+
+    const visited = visit.run(registry, undefined);
+    expect(await settle.run(registry, undefined)).toMatchObject({
+      _tag: "Success",
+      value: "settled",
+    });
+    visitLatch.openUnsafe();
+    expect(await visited).toMatchObject({ _tag: "Success", value: "visited" });
+    registry.dispose();
+  });
+
   it("deduplicates single-flight commands by key", async () => {
     const latch = Latch.makeUnsafe();
     let executions = 0;

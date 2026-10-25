@@ -3298,3 +3298,32 @@ it.effect("loads a shell snapshot while the writer connection is occupied", () =
     }).pipe(Effect.provide(projectionLayer));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.effect("looks up a dispatch receipt while the reader connection is occupied", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "receipt-writer-" });
+    const database = SqlitePersistence.layerFromPath(path.join(directory, "statev2.sqlite"));
+    const receiptLayer = CommandReceiptStore.layer.pipe(Layer.provideMerge(database));
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+      const held = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const scan = yield* sql
+        .withTransaction(
+          sql`SELECT 1`.pipe(
+            Effect.andThen(Deferred.succeed(held, undefined)),
+            Effect.andThen(Deferred.await(release)),
+          ),
+        )
+        .pipe(NodeSqliteClient.readOnly, Effect.forkChild);
+      yield* Deferred.await(held);
+      const receipt = yield* receipts.getByCommandId(CommandId.make("command:receipt-writer"));
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(scan);
+      assert.isTrue(Option.isNone(receipt));
+    }).pipe(Effect.provide(receiptLayer));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

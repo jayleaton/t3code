@@ -271,7 +271,18 @@ export function createThreadEnvironmentAtoms<R, E>(
       label: "environment-data:commands:thread:visit",
       execute: (input: VisitThreadInput) => visitThread(input),
       scheduler,
-      concurrency,
+      // Visits repeat constantly and only the newest matters. On the serial lane a slow
+      // one held every settle, pin, or stop on the thread behind it with no feedback.
+      // An open counts toward search frecency, so a plain revisit never replaces one.
+      concurrency: {
+        mode: "latest",
+        key: ({ environmentId, input }: { environmentId: string; input: VisitThreadInput }) =>
+          JSON.stringify([
+            environmentId,
+            input.threadId,
+            input.opened === true ? (input.searchQuery ?? "") : null,
+          ]),
+      },
     }),
     markUnread: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:mark-unread",

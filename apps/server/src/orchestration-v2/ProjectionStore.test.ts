@@ -8,6 +8,7 @@ import {
   CheckpointScopeId,
   MessageId,
   type ModelSelection,
+  type OrchestrationV2AppThread,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2TurnItem,
   type OrchestrationV2ThreadShellSnapshot,
@@ -720,6 +721,120 @@ const threadWorktreePathsIncludeArchivedOnRequest = Effect.gen(function* () {
   ]);
 });
 
+const pullRequestSyncReadMatchesShellFields = Effect.gen(function* () {
+  const store = yield* ProjectionStore.ProjectionStoreV2;
+  const now = yield* DateTime.now;
+  const projectId = ProjectId.make("project:pull-request-sync");
+  const reference = {
+    projectId,
+    repository: "acme/project",
+    number: 7,
+    url: "https://github.com/acme/project/pull/7",
+  };
+  const link: ThreadPullRequestLink = {
+    host: "github.com",
+    repository: "acme/project",
+    number: 8,
+    url: "https://github.com/acme/project/pull/8",
+    source: "manual",
+    linkedAt: "2026-09-01T00:00:00.000Z",
+    snapshot: null,
+    stack: null,
+  };
+  const create = (id: string, overrides: Partial<OrchestrationV2AppThread> = {}) => {
+    const threadId = ThreadId.make(`thread:pull-request-sync:${id}`);
+    const thread: OrchestrationV2AppThread = {
+      createdBy: "user",
+      creationSource: "web",
+      id: threadId,
+      projectId,
+      title: id,
+      providerInstanceId,
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: `feature/${id}`,
+      worktreePath: null,
+      activeProviderThreadId: null,
+      lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+      forkedFrom: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      lastVisitedAt: null,
+      deletedAt: null,
+      ...overrides,
+    };
+    return store
+      .apply({
+        id: EventId.make(`event:${threadId}:created`),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: thread,
+      })
+      .pipe(Effect.as(thread));
+  };
+  // A legacy manual link has no pullRequests list; the shell derives one from it.
+  yield* create("legacy-link", {
+    worktreePath: "/worktrees/legacy-link",
+    linkedPullRequest: reference,
+    branchPullRequest: reference,
+  });
+  yield* create("linked-list", { pullRequests: [link], branchPullRequest: null });
+  yield* create("no-branch", { branch: null });
+  yield* create("settled", { settledAt: now });
+  yield* create("settled-override", { settledOverride: "settled" });
+  yield* create("archived", { archivedAt: now });
+  const deleted = yield* create("deleted");
+  yield* store.apply({
+    id: EventId.make(`event:${deleted.id}:deleted`),
+    type: "thread.deleted",
+    threadId: deleted.id,
+    occurredAt: now,
+    payload: { ...deleted, deletedAt: now },
+  });
+
+  const syncFields = (thread: ProjectionStore.ProjectionPullRequestSyncThread) => ({
+    id: thread.id,
+    projectId: thread.projectId,
+    branch: thread.branch,
+    worktreePath: thread.worktreePath,
+    pullRequests: thread.pullRequests,
+    linkedPullRequest: thread.linkedPullRequest ?? null,
+    branchPullRequest: thread.branchPullRequest ?? null,
+    createdAt: thread.createdAt,
+    archivedAt: thread.archivedAt,
+    settledOverride: thread.settledOverride,
+    settledAt: thread.settledAt,
+  });
+  for (const unsettledOnly of [true, false]) {
+    const shell = yield* store.getShellSnapshot({ location: "active", unsettledOnly });
+    const narrow = yield* store.getPullRequestSyncThreads({ unsettledOnly });
+    assert.equal(narrow.snapshotSequence, shell.snapshotSequence);
+    assert.deepEqual(narrow.threads.map(syncFields), shell.threads.map(syncFields));
+  }
+
+  const inProject = (thread: ProjectionStore.ProjectionPullRequestSyncThread) =>
+    thread.projectId === projectId;
+  const unsettled = (yield* store.getPullRequestSyncThreads({
+    unsettledOnly: true,
+  })).threads.filter(inProject);
+  assert.deepEqual(
+    unsettled.map((thread) => thread.id),
+    ["legacy-link", "linked-list", "no-branch"].map((id) =>
+      ThreadId.make(`thread:pull-request-sync:${id}`),
+    ),
+  );
+  assert.equal(unsettled[0]?.pullRequests?.[0]?.number, reference.number);
+  const all = (yield* store.getPullRequestSyncThreads({ unsettledOnly: false })).threads.filter(
+    inProject,
+  );
+  assert.equal(all.length, 5);
+});
+
 const commandReadsSkipSettledLeafNodes = Effect.gen(function* () {
   const store = yield* ProjectionStore.ProjectionStoreV2;
   const now = yield* DateTime.now;
@@ -1170,6 +1285,10 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
   it.effect(
     "worktree path lookup defaults to active threads and can include archived threads",
     () => threadWorktreePathsIncludeArchivedOnRequest,
+  );
+  it.effect(
+    "pull request sync reads the shell's sync fields for the same active threads",
+    () => pullRequestSyncReadMatchesShellFields,
   );
 
   it.effect(

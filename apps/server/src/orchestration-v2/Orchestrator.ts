@@ -131,6 +131,7 @@ import {
   type ProjectionRecordFilter,
   type ProjectionRecords,
   type ProjectionCheckpointContext,
+  type ProjectionPullRequestSyncThread,
   type ShellSnapshotOptions,
 } from "./ProjectionStore.ts";
 import { manualSettlementAbove as manualSettlementAboveIn } from "./SubRunSettlement.ts";
@@ -391,6 +392,15 @@ export interface OrchestratorV2Shape {
   readonly getShellSnapshot: (
     options?: ShellSnapshotOptions,
   ) => Effect.Effect<OrchestrationV2ThreadShellSnapshot, OrchestratorV2Error>;
+  readonly getPullRequestSyncThreads: (options: {
+    readonly unsettledOnly: boolean;
+  }) => Effect.Effect<
+    {
+      readonly snapshotSequence: number;
+      readonly threads: ReadonlyArray<ProjectionPullRequestSyncThread>;
+    },
+    OrchestratorV2Error
+  >;
   readonly listActiveSubagentThreadIds: () => Effect.Effect<
     ReadonlyArray<ThreadId>,
     OrchestratorV2Error
@@ -12977,6 +12987,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause }))),
     getShellSnapshot: (options) =>
       projectionStore.getShellSnapshot(options).pipe(Effect.mapError(shellProjectionError)),
+    getPullRequestSyncThreads: (options) =>
+      projectionStore
+        .getPullRequestSyncThreads(options)
+        .pipe(Effect.mapError(shellProjectionError)),
     listActiveSubagentThreadIds: () =>
       projectionStore.listActiveSubagentThreadIds().pipe(Effect.mapError(shellProjectionError)),
     readShellSnapshot: (options) =>
@@ -13119,6 +13133,13 @@ const layerUnavailable: Layer.Layer<OrchestratorV2> = Layer.succeed(
         }),
       ),
     getShellSnapshot: () =>
+      Effect.fail(
+        new OrchestratorProjectionError({
+          threadId: ThreadId.make("thread:shell"),
+          cause: "Orchestration V2 live runtime is not configured.",
+        }),
+      ),
+    getPullRequestSyncThreads: () =>
       Effect.fail(
         new OrchestratorProjectionError({
           threadId: ThreadId.make("thread:shell"),

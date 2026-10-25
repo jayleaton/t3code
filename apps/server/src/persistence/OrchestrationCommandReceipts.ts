@@ -6,7 +6,6 @@ import {
   ThreadId,
   TodoId,
 } from "@t3tools/contracts";
-import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 import * as Context from "effect/Context";
@@ -156,8 +155,10 @@ const makeOrchestrationCommandReceiptRepository = Effect.gen(function* () {
   const getByCommandId: OrchestrationCommandReceiptRepository["Service"]["getByCommandId"] = (
     input,
   ) =>
+    // Left on the writer: dispatch looks this up before committing through the
+    // writer anyway, and on the shared reader it queued behind multi-second
+    // background scans. Pure readers opt in with readOnly at the call site.
     findReceiptByCommandId(input).pipe(
-      NodeSqliteClient.readOnly,
       Effect.mapError(
         toPersistenceSqlError("OrchestrationCommandReceiptRepository.getByCommandId:query"),
       ),
