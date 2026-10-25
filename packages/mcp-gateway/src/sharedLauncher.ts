@@ -39,9 +39,9 @@ export function launchSharedOwner(
         },
       },
     );
-    const timeout = AbortSignal.timeout(15_000);
+    // Startup waits on no peer, so it always ends in ready, an error, or an exit. A deadline would
+    // only kill a healthy owner a loaded machine starts slowly; a stuck launcher is its host's to end.
     const cleanup = () => {
-      timeout.removeEventListener("abort", onTimeout);
       child.off("error", fail);
       child.off("exit", onExit);
       child.off("message", onMessage);
@@ -52,7 +52,6 @@ export function launchSharedOwner(
       if (child.connected) child.disconnect();
       reject(error);
     };
-    const onTimeout = () => fail(new Error("Timed out starting the shared MCP gateway owner."));
     const onExit = (code: number | null) =>
       fail(new Error(`Shared MCP gateway owner exited before startup (code ${code}).`));
     const onMessage = (value: unknown) => {
@@ -66,7 +65,6 @@ export function launchSharedOwner(
         resolve(child);
       }
     };
-    timeout.addEventListener("abort", onTimeout, { once: true });
     child.once("error", fail);
     child.once("exit", onExit);
     child.on("message", onMessage);
