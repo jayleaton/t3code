@@ -1748,3 +1748,66 @@ it.effect("a cascade cut short resumes where it left off, settling each sub-run 
     assert.sameMembers(settled, ["card", "first", "first-helper", "second"]);
   }).pipe(Effect.provide(testLayer)),
 );
+
+it.effect("a busy sub-run follows a repeat settle once it finishes, with its subtree", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* OrchestratorV2;
+    const projections = yield* ProjectionStoreV2;
+    const sink = yield* EventSinkV2;
+    const thread = (id: string) => projections.getThread(ThreadId.make(id));
+    const command = (type: "thread.settle" | "thread.unsettle", id: string, round: number) =>
+      orchestrator
+        .dispatch(
+          type === "thread.settle"
+            ? {
+                type,
+                commandId: CommandId.make(`settle:${id}:${round}`),
+                threadId: ThreadId.make(id),
+              }
+            : {
+                type,
+                commandId: CommandId.make(`unsettle:${id}:${round}`),
+                threadId: ThreadId.make(id),
+                reason: "user",
+              },
+        )
+        .pipe(Effect.andThen(drainEffects));
+
+    yield* createUnder("captain");
+    yield* createUnder("worker", { threadId: "captain" });
+    yield* createUnder("helper", { threadId: "worker" });
+    yield* createUnder("opted-out", { threadId: "captain" });
+    yield* orchestrator.dispatch({
+      type: "thread.auto-settle.set",
+      commandId: CommandId.make("auto-settle:off:opted-out"),
+      threadId: ThreadId.make("opted-out"),
+      enabled: false,
+    });
+    // Un-settling the Captain brings its sub-runs back as explicitly active.
+    yield* command("thread.settle", "captain", 1);
+    yield* command("thread.unsettle", "captain", 1);
+    assert.equal((yield* thread("worker")).settledOverride, "active");
+    yield* TestClock.adjust("1 minute");
+
+    yield* sendTo("worker", "keep working", { type: "defer_start" });
+    yield* sendTo("opted-out", "keep working", { type: "defer_start" });
+    yield* command("thread.settle", "captain", 2);
+    const captainAt = (yield* thread("captain")).settledAt;
+    assert.isNull((yield* thread("worker")).settledAt);
+
+    const before = yield* sink.latestSequence();
+    yield* completeRun("worker");
+    yield* completeRun("opted-out");
+    yield* sink.stream({ afterSequence: before, eventType: "thread.settled" }).pipe(
+      Stream.filter((stored) => stored.event.threadId === "opted-out"),
+      Stream.runHead,
+    );
+    // The worker settled before the opted-out chat; its own subtree follows in the outbox.
+    yield* drainEffects;
+    for (const id of ["worker", "helper", "opted-out"]) {
+      const settled = yield* thread(id);
+      assert.deepEqual(settled.settledAt, captainAt, id);
+      assert.equal(settled.settledBy, "captain", id);
+    }
+  }).pipe(Effect.provide(testLayer)),
+);
