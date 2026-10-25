@@ -9,6 +9,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
+import * as TestClock from "effect/testing/TestClock";
 import type * as Tracer from "effect/Tracer";
 import { vi } from "vite-plus/test";
 
@@ -573,4 +574,43 @@ it.effect("keeps checkpoints off the writer after a transient lock", () =>
     Effect.scoped,
     Effect.provide(NodeServices.layer),
   ),
+);
+
+it.effect("keeps committing while another process holds a read transaction", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-sqlite-pinned-" });
+    const filename = path.join(directory, "state.sqlite");
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`PRAGMA journal_mode = WAL`;
+      yield* sql`CREATE TABLE pages(value BLOB NOT NULL)`;
+      // No checkpoint can pass this snapshot, so the WAL cannot drain while it is open.
+      const reader = yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          const database = new NodeSqlite.DatabaseSync(filename, { readOnly: true });
+          database.exec("BEGIN");
+          database.prepare("SELECT COUNT(*) AS count FROM pages").get();
+          return database;
+        }),
+        (database) => Effect.sync(() => database.close()),
+      );
+      // Fifteen commits of about 1000 frames each go past the 10000-frame
+      // backpressure ceiling, over a minute of the reader staying open.
+      for (let batch = 0; batch < 15; batch++) {
+        yield* sql.withTransaction(
+          sql`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000)
+            INSERT INTO pages SELECT randomblob(4000) FROM n`,
+        );
+        if (batch === 7) yield* sql`PRAGMA wal_checkpoint(PASSIVE)`;
+        yield* TestClock.adjust("4 seconds");
+      }
+
+      const [wal] = yield* sql<{ log: number }>`PRAGMA wal_checkpoint(NOOP)`;
+      assert.isAtLeast(wal?.log ?? 0, 10_000);
+      assert.deepEqual(yield* sql`SELECT COUNT(*) FROM pages`.values, [[15_000]]);
+      assert.equal(reader.prepare("SELECT COUNT(*) AS count FROM pages").get()?.count, 0);
+    }).pipe(Effect.provide(SqliteClient.layer({ filename, checkpointWorker: true, readers: 4 })));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

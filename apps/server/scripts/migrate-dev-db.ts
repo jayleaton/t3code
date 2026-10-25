@@ -231,8 +231,14 @@ const rootIsVisible = (sql: SqlClient.SqlClient) => sql`
   AND json_extract(root.payload_json, '$.deletedAt') IS NULL
   AND json_extract(root.payload_json, '$.archivedAt') IS NULL`;
 
+// Rowids per copy statement. Each statement is its own short read of the
+// source: a read transaction held for the whole copy keeps the live server's
+// WAL from checkpointing for as long as the copy runs.
+const COPY_CHUNK_ROWIDS = 1000;
+
 /**
- * One transaction reads the source, so the copy is consistent while the real server writes.
+ * Rows written while the copy runs may be partly copied. Those belong to
+ * running threads, which the prune step drops.
  */
 const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath: string) {
   const sql = yield* SqlClient.SqlClient;
@@ -272,41 +278,54 @@ const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath:
     }
   }
 
-  yield* sql.withTransaction(
-    Effect.gen(function* () {
-      for (const table of tables) yield* sql.unsafe(table.sql).unprepared;
-      if (filtered) {
-        yield* sql`CREATE TEMP TABLE copied_threads (thread_id TEXT PRIMARY KEY)`;
-        yield* sql`INSERT OR IGNORE INTO copied_threads
+  const withoutRowid = new Set(
+    (yield* sql<{
+      name: string;
+    }>`SELECT name FROM pragma_table_list WHERE schema = 'src' AND wr = 1`).map((row) => row.name),
+  );
+
+  // The snapshot is scratch: a crash mid-copy leaves a file that is deleted anyway.
+  yield* sql`PRAGMA main.synchronous = OFF`;
+  for (const table of tables) yield* sql.unsafe(table.sql).unprepared;
+  if (filtered) {
+    yield* sql`CREATE TEMP TABLE copied_threads (thread_id TEXT PRIMARY KEY)`;
+    yield* sql`INSERT OR IGNORE INTO copied_threads
           SELECT family.thread_id FROM src.orchestration_v2_projection_threads family
           JOIN src.orchestration_v2_projection_threads root ON root.thread_id =
             COALESCE(json_extract(family.payload_json, '$.lineage.rootThreadId'), family.thread_id)
           WHERE ${rootIsVisible(sql)}`;
-      }
-      for (const { name } of tables) {
-        if (cleared.has(name) || virtualTables.includes(name)) continue;
-        const nullable = threadIdNullable.get(name);
-        const filter = !filtered
-          ? ""
-          : name === "orchestration_events"
-            ? // Two ranges rather than `<>`, so SQLite seeks the (aggregate_kind, stream_id)
-              // index instead of scanning every event.
-              `WHERE (aggregate_kind = 'thread' AND stream_id IN (SELECT thread_id FROM copied_threads))
-                OR aggregate_kind < 'thread' OR aggregate_kind > 'thread'`
-            : nullable === undefined || name === PROVIDER_SESSIONS_TABLE
-              ? ""
-              : `WHERE thread_id IN (SELECT thread_id FROM copied_threads)${nullable ? " OR thread_id IS NULL" : ""}`;
-        yield* sql.unsafe(`INSERT INTO main."${name}" SELECT * FROM src."${name}" ${filter}`)
-          .unprepared;
-      }
-      yield* sql`DELETE FROM main.sqlite_sequence`;
-      yield* sql`INSERT INTO main.sqlite_sequence SELECT name, seq FROM src.sqlite_sequence`;
-      for (const entry of schema) {
-        if (entry.type !== "table") yield* sql.unsafe(entry.sql).unprepared;
-      }
-      yield* rebuildMessageSearch(sql);
-    }),
-  );
+  }
+  for (const { name } of tables) {
+    if (cleared.has(name) || virtualTables.includes(name)) continue;
+    const nullable = threadIdNullable.get(name);
+    const filter = !filtered
+      ? "1"
+      : name === "orchestration_events"
+        ? `(aggregate_kind = 'thread' AND stream_id IN (SELECT thread_id FROM copied_threads))
+                OR aggregate_kind <> 'thread'`
+        : nullable === undefined || name === PROVIDER_SESSIONS_TABLE
+          ? "1"
+          : `thread_id IN (SELECT thread_id FROM copied_threads)${nullable ? " OR thread_id IS NULL" : ""}`;
+    const copy = `INSERT INTO main."${name}" SELECT * FROM src."${name}" WHERE (${filter})`;
+    // Without a rowid there is nothing to range over; these tables are small.
+    if (withoutRowid.has(name)) {
+      yield* sql.unsafe(copy).unprepared;
+      continue;
+    }
+    const [range] = yield* sql.unsafe<{ low: number | null; high: number | null }>(
+      `SELECT min(rowid) AS low, max(rowid) AS high FROM src."${name}"`,
+    ).unprepared;
+    if (range?.low == null || range.high == null) continue;
+    for (let start = range.low; start <= range.high; start += COPY_CHUNK_ROWIDS) {
+      yield* sql.unsafe(`${copy} AND rowid >= ? AND rowid < ?`, [start, start + COPY_CHUNK_ROWIDS]);
+    }
+  }
+  yield* sql`DELETE FROM main.sqlite_sequence`;
+  yield* sql`INSERT INTO main.sqlite_sequence SELECT name, seq FROM src.sqlite_sequence`;
+  for (const entry of schema) {
+    if (entry.type !== "table") yield* sql.unsafe(entry.sql).unprepared;
+  }
+  yield* rebuildMessageSearch(sql);
   yield* sql`DETACH DATABASE src`;
 });
 
