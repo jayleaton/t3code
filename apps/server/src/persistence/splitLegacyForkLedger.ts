@@ -41,10 +41,17 @@ export const legacyForkLedger = [
   "ProjectionThreadParentIndex",
 ] as const;
 
-// Shipped agent builds recorded 52 as ProjectionThreadListState; fork migration 2 repairs them.
+/**
+ * Other names installs recorded at 52 before fork main wrote its first
+ * migration there. Shipped agent builds recorded ProjectionThreadListState, and
+ * a build carrying upstream's ProjectionThreadTitleState recorded that. Either
+ * way fork main then ran 53 on, and fork migration 2 replays what 52 skipped.
+ */
+const legacyAliases = new Set(["ProjectionThreadListState", "ProjectionThreadTitleState"]);
+
 const isLegacyName = (id: number, name: string) =>
   legacyForkLedger[id - FIRST_LEGACY_FORK_ID] === name ||
-  (id === FIRST_LEGACY_FORK_ID && name === "ProjectionThreadListState");
+  (id === FIRST_LEGACY_FORK_ID && legacyAliases.has(name));
 
 interface Manifests {
   readonly upstream: ReadonlyArray<readonly [id: number, name: string]>;
@@ -58,12 +65,15 @@ interface Manifests {
  * migration up to the latest legacy id is recorded at its new id, and nothing
  * re-runs or gets skipped. Databases already split, fresh, or written by
  * upstream (52 is upstream's ProjectionThreadTitleState) are left alone.
+ * Anything else fails before changing the database, since the migrator would
+ * otherwise skip upstream migrations whose ids the fork's rows occupy.
  */
 export const splitLegacyForkLedger = Effect.fn("splitLegacyForkLedger")(function* (
   manifests: Manifests,
 ) {
   const sql = yield* SqlClient.SqlClient;
   const upstreamIds = new Map(manifests.upstream.map(([id, name]) => [name, id]));
+  const upstreamNames = new Map(manifests.upstream);
   const forkIds = new Map(manifests.fork.map(([id, name]) => [name, id]));
   yield* sql.withTransaction(
     Effect.gen(function* () {
@@ -84,11 +94,14 @@ export const splitLegacyForkLedger = Effect.fn("splitLegacyForkLedger")(function
         WHERE migration_id >= ${FIRST_LEGACY_FORK_ID}
         ORDER BY migration_id
       `;
-      const [first] = rows;
-      if (
-        first?.migration_id !== FIRST_LEGACY_FORK_ID ||
-        !isLegacyName(first.migration_id, first.name)
-      ) {
+      // Only a name upstream never recorded at that id marks the fork's layout:
+      // a database stopped at upstream's 52 is upstream's, whoever wrote it.
+      const isForkLayout = rows.some(
+        (row) =>
+          isLegacyName(row.migration_id, row.name) &&
+          upstreamNames.get(row.migration_id) !== row.name,
+      );
+      if (rows[0]?.migration_id !== FIRST_LEGACY_FORK_ID || !isForkLayout) {
         return;
       }
       const unexpected = rows.filter((row) => !isLegacyName(row.migration_id, row.name));
@@ -111,7 +124,12 @@ export const splitLegacyForkLedger = Effect.fn("splitLegacyForkLedger")(function
           const row = recorded.get(FIRST_LEGACY_FORK_ID + index);
           return {
             name,
-            recordedName: row?.name ?? name,
+            // An upstream name stays out of the fork ledger. Upstream's row moves
+            // from its own legacy id, or its idempotent migration runs again.
+            recordedName:
+              row === undefined || (row.name !== name && upstreamIds.has(row.name))
+                ? name
+                : row.name,
             createdAt: row?.created_at ?? null,
           };
         });

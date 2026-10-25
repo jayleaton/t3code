@@ -68,6 +68,12 @@ import {
   type ProviderReplayGate,
 } from "@t3tools/provider-testing/replayGate";
 
+type DatabaseLayerError =
+  | MigrationError
+  | SqlitePersistence.DatabaseRefusedError
+  | PlatformError.PlatformError
+  | SqlError;
+
 export function makeReplayServerConfig(
   scenario: string,
 ): Effect.Effect<
@@ -190,10 +196,7 @@ export function runOrchestratorV2ProviderReplayScenario<
   scenario: OrchestratorV2ProviderReplayScenario<Transcript>,
   harness: OrchestratorV2ProviderReplayHarness<Transcript, Error>,
   options: {
-    readonly databaseLayer?: Layer.Layer<
-      SqlClient.SqlClient,
-      MigrationError | PlatformError.PlatformError | SqlError
-    >;
+    readonly databaseLayer?: Layer.Layer<SqlClient.SqlClient, DatabaseLayerError>;
     readonly runEffectWorker?: boolean;
     readonly runContinuationWorker?: boolean;
     readonly recoverOnStartup?: boolean;
@@ -201,12 +204,7 @@ export function runOrchestratorV2ProviderReplayScenario<
   } = {},
 ): Effect.Effect<
   OrchestratorV2ScenarioResult,
-  | Orchestrator.OrchestratorV2Error
-  | OrchestratorV2ScenarioStepError
-  | Error
-  | MigrationError
-  | PlatformError.PlatformError
-  | SqlError,
+  Orchestrator.OrchestratorV2Error | OrchestratorV2ScenarioStepError | Error | DatabaseLayerError,
   never
 > {
   const replayGate = makeProviderReplayGate(
@@ -232,10 +230,7 @@ export function layerProviderReplay<Transcript extends ProviderReplayTranscript,
   scenario: OrchestratorV2ProviderReplayScenario<Transcript>,
   harness: OrchestratorV2ProviderReplayHarness<Transcript, Error>,
   options: {
-    readonly databaseLayer?: Layer.Layer<
-      SqlClient.SqlClient,
-      MigrationError | PlatformError.PlatformError | SqlError
-    >;
+    readonly databaseLayer?: Layer.Layer<SqlClient.SqlClient, DatabaseLayerError>;
     readonly runEffectWorker?: boolean;
     readonly runContinuationWorker?: boolean;
     readonly recoverOnStartup?: boolean;
@@ -249,7 +244,7 @@ export function layerProviderReplay<Transcript extends ProviderReplayTranscript,
   | CommandOutputRecorder.CommandOutputRecorder
   | ProviderSessionManager.ProviderSessionManagerV2
   | ProjectionStore.ProjectionStoreV2,
-  Error | MigrationError | PlatformError.PlatformError | SqlError
+  Error | DatabaseLayerError
 > {
   const layerRegistry = harness.makeProviderAdapterRegistryLayer(
     scenario.transcript,
@@ -266,10 +261,7 @@ export function layerWithRegistry<Error>(
     McpProviderSessions.McpProviderSessions
   >,
   options: {
-    readonly databaseLayer?: Layer.Layer<
-      SqlClient.SqlClient,
-      MigrationError | PlatformError.PlatformError | SqlError
-    >;
+    readonly databaseLayer?: Layer.Layer<SqlClient.SqlClient, DatabaseLayerError>;
     readonly runEffectWorker?: boolean;
     readonly runContinuationWorker?: boolean;
     readonly recoverOnStartup?: boolean;
@@ -282,7 +274,7 @@ export function layerWithRegistry<Error>(
   | ProviderSessionManager.ProviderSessionManagerV2
   | CommandOutputRecorder.CommandOutputRecorder
   | ProjectionStore.ProjectionStoreV2,
-  Error | MigrationError | PlatformError.PlatformError | SqlError
+  Error | DatabaseLayerError
 > {
   const layerServerConfig = Layer.effect(
     ServerConfig.ServerConfig,
@@ -530,10 +522,7 @@ export function layerWithRegistry<Error>(
   }
   // Built before the runtime it shares stores with, so recovery commits before
   // the effect worker claims anything, as in serverRuntimeStartup.
-  const layerStartupRecovery: Layer.Layer<
-    never,
-    MigrationError | PlatformError.PlatformError | SqlError
-  > =
+  const layerStartupRecovery: Layer.Layer<never, DatabaseLayerError> =
     options.recoverOnStartup === true
       ? Layer.effectDiscard(
           ProviderRuntimeRecoveryService.ProviderRuntimeRecoveryService.use(

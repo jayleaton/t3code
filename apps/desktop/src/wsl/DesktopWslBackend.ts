@@ -77,9 +77,7 @@ export const layer = Layer.effect(
     const reconcileMutex = yield* Semaphore.make(1);
 
     const preflightErrorRef = yield* Ref.make(Option.none<string>());
-    const ownershipRefusedRef = yield* Ref.make(
-      Option.none<DesktopBackendPool.BackendInstanceId>(),
-    );
+    const refusedRef = yield* Ref.make(Option.none<DesktopBackendPool.BackendInstanceId>());
 
     const findExistingWslInstance = pool.list.pipe(
       Effect.map((instances) => instances.find((instance) => isWslInstanceId(instance.id))),
@@ -117,6 +115,12 @@ export const layer = Layer.effect(
       const allocatedPort = port.value;
 
       const targetId = resolveTargetInstanceId(input.distro);
+      // A refused instance stays stopped until the distro or setting changes;
+      // reconcile would otherwise restart it into the same refusal.
+      const refuse = (message: string) =>
+        Ref.set(refusedRef, Option.some(targetId)).pipe(
+          Effect.andThen(Ref.set(preflightErrorRef, Option.some(message))),
+        );
       yield* logWslBackendInfo("registering WSL backend with pool", {
         id: targetId,
         port: allocatedPort,
@@ -131,18 +135,15 @@ export const layer = Layer.effect(
           onPreflightFailed: (failure) =>
             Ref.set(preflightErrorRef, Option.some(failure.reason)).pipe(Effect.as(false)),
           onStateDirOwned: () =>
-            Ref.set(ownershipRefusedRef, Option.some(targetId)).pipe(
-              Effect.andThen(
-                Ref.set(
-                  preflightErrorRef,
-                  Option.some(
-                    "Another T3 Code server is using this distro's T3 home, or an older background service is set up for it. Stop that server or pair with it, or try `t3 update` in the distro. If the older launcher cannot update, run `t3 service uninstall` and optionally reinstall with `t3 service install` from a current CLI in the distro. Use `npx t3@latest` if `t3` is missing or outdated, and pass `--base-dir` with the service's T3 home to each command.",
-                  ),
-                ),
-              ),
+            refuse(
+              "Another T3 Code server is using this distro's T3 home, or an older background service is set up for it. Stop that server or pair with it, or try `t3 update` in the distro. If the older launcher cannot update, run `t3 service uninstall` and optionally reinstall with `t3 service install` from a current CLI in the distro. Use `npx t3@latest` if `t3` is missing or outdated, and pass `--base-dir` with the service's T3 home to each command.",
+            ),
+          onDatabaseRefused: () =>
+            refuse(
+              "T3 Code could not open this distro's database because its migration history comes from a build this version does not recognise. The database was not changed, and the server log lists the migration rows it refused. Install the build that last opened it in the distro, or report the server log.",
             ),
           onReady: () =>
-            Ref.set(ownershipRefusedRef, Option.none()).pipe(
+            Ref.set(refusedRef, Option.none()).pipe(
               Effect.andThen(Ref.set(preflightErrorRef, Option.none())),
             ),
         })
@@ -192,7 +193,7 @@ export const layer = Layer.effect(
         const isIdle =
           !snapshot.ready && Option.isNone(snapshot.activePid) && !snapshot.restartScheduled;
         if (isIdle) {
-          const refused = yield* Ref.get(ownershipRefusedRef);
+          const refused = yield* Ref.get(refusedRef);
           if (Option.isSome(refused) && refused.value === existingInstance.id) return;
           yield* logWslBackendInfo("retrying idle WSL backend", { id: existingInstance.id });
           yield* Ref.set(preflightErrorRef, Option.none());
@@ -202,7 +203,7 @@ export const layer = Layer.effect(
       }
 
       yield* Ref.set(preflightErrorRef, Option.none());
-      yield* Ref.set(ownershipRefusedRef, Option.none());
+      yield* Ref.set(refusedRef, Option.none());
 
       if (Option.isSome(existingId)) {
         yield* logWslBackendInfo("tearing down WSL backend", { id: existingId.value });

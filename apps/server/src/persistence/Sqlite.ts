@@ -2,7 +2,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Runtime from "effect/Runtime";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import { SERVER_EXIT_CODE_DATABASE_REFUSED } from "@t3tools/contracts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 import { runMigrations } from "./Migrations.ts";
@@ -10,6 +13,21 @@ import { initializeV2Database } from "./initializeV2Database.ts";
 import * as ServerConfig from "../config.ts";
 
 const WAL_SIZE_LIMIT_BYTES = 32 * 1024 * 1024;
+
+/**
+ * The migrations refused this database's history before changing it. Its own
+ * exit code tells a supervisor that restarting would only be refused again.
+ */
+export class DatabaseRefusedError extends Schema.TaggedError<DatabaseRefusedError>()(
+  "DatabaseRefusedError",
+  { detail: Schema.String },
+) {
+  override readonly [Runtime.errorExitCode] = SERVER_EXIT_CODE_DATABASE_REFUSED;
+
+  override get message(): string {
+    return `T3 Code did not open its database, and left it unchanged: ${this.detail}`;
+  }
+}
 
 const layerSetup = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -57,7 +75,13 @@ export const layerFromPath = Effect.fn("makeSqlitePersistenceLive")(function* (d
   yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
 
   return Layer.provideMerge(
-    layerSetup,
+    Layer.catchTag(layerSetup, "MigrationError", (error) =>
+      Layer.effectDiscard(
+        Effect.fail(
+          error.kind === "BadState" ? new DatabaseRefusedError({ detail: error.message }) : error,
+        ),
+      ),
+    ),
     NodeSqliteClient.layer({
       filename: dbPath,
       readerWorker: true,

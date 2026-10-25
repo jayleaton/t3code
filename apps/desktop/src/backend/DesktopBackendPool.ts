@@ -183,6 +183,13 @@ export const layer = Layer.effect(
             "Another T3 Code server, such as the background service, is using this data directory, or an older background service is set up for it. Stop that server or try `t3 update`. If the older launcher cannot update, run `t3 service uninstall` and optionally reinstall with `t3 service install` from a current CLI. Use `npx t3@latest` if `t3` is missing or outdated, and pass `--base-dir` with the service's T3 home to each command. Then reopen T3 Code. You can also set a separate T3CODE_HOME and pair with the running server.",
           )
           .pipe(Effect.andThen(electronApp.quit)),
+      onDatabaseRefused: () =>
+        electronDialog
+          .showErrorBox(
+            "T3 Code could not open its database",
+            "This database's migration history comes from a T3 Code build that this version does not recognise, so T3 Code left the database unchanged. The server log lists the migration rows it refused. To continue, install the build that last opened this database, or report the server log so the history can be supported.",
+          )
+          .pipe(Effect.andThen(electronApp.quit)),
     });
 
     const instancesRef = yield* SynchronizedRef.make<
