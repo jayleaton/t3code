@@ -149,13 +149,8 @@ describe("ThreadPullRequestServiceV2 reads", () => {
         const dependencies = Layer.mergeAll(
           Layer.mock(Orchestrator.OrchestratorV2)({
             streamDomainEvents: Stream.fromQueue(domainEvents),
-            getShellSnapshot: () =>
-              Effect.succeed({
-                schemaVersion: 2,
-                snapshotSequence: 1,
-                threads: [thread],
-                archivedThreads: [],
-              }),
+            getPullRequestSyncThreads: () =>
+              Effect.succeed({ snapshotSequence: 1, threads: [thread] }),
             getThreadEventSequence: () => Effect.succeed(1),
             getThreadShell: () => Effect.succeed(thread),
           }),
@@ -263,14 +258,9 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           const dependencies = Layer.mergeAll(
             Layer.mock(Orchestrator.OrchestratorV2)({
               streamDomainEvents: Stream.never,
-              getShellSnapshot: () =>
+              getPullRequestSyncThreads: () =>
                 Deferred.succeed(sweepStarted, undefined).pipe(
-                  Effect.as({
-                    schemaVersion: 2,
-                    snapshotSequence: 1,
-                    threads: [thread],
-                    archivedThreads: [],
-                  }),
+                  Effect.as({ snapshotSequence: 1, threads: [thread] }),
                 ),
               dispatch: (command) =>
                 Effect.sync(() => {

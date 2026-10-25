@@ -257,6 +257,7 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import { isNetworkPath } from "@t3tools/shared/path";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { isTelemetryIdHash } from "@t3tools/shared/telemetryId";
 import {
@@ -1236,13 +1237,23 @@ export const layerWsRpc = (
       const currentSessionId = currentSession.sessionId;
       const sql = yield* SqlClient.SqlClient;
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
-      const intakeContext = yield* Effect.context<
-        | ThreadManagementService.ThreadManagementService
-        | ThreadLaunchService.ThreadLaunchService
-        | FileSystem.FileSystem
-        | ServerConfig.ServerConfig
-        | ServerSettings.ServerSettingsService
-      >();
+      // Only the services: the whole layer context carries the connection's
+      // span, which would re-parent every dispatch away from its RPC span.
+      const intakeContext = Context.pick(
+        ThreadManagementService.ThreadManagementService,
+        ThreadLaunchService.ThreadLaunchService,
+        FileSystem.FileSystem,
+        ServerConfig.ServerConfig,
+        ServerSettings.ServerSettingsService,
+      )(
+        yield* Effect.context<
+          | ThreadManagementService.ThreadManagementService
+          | ThreadLaunchService.ThreadLaunchService
+          | FileSystem.FileSystem
+          | ServerConfig.ServerConfig
+          | ServerSettings.ServerSettingsService
+        >(),
+      );
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectStore = yield* ProjectStore.ProjectStoreV2;
       const projectService = yield* ProjectService.ProjectService;
@@ -1889,6 +1900,7 @@ export const layerWsRpc = (
           Effect.forEach(commandIds, (id) => commandReceipts.getByCommandId({ commandId: id }), {
             concurrency: 8,
           }).pipe(
+            NodeSqliteClient.readOnly,
             Effect.map((receipts) => ({
               receipts: receipts.flatMap((receipt) =>
                 Option.isSome(receipt) ? [receipt.value] : [],

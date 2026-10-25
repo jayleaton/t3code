@@ -68,6 +68,8 @@ import {
   CheckpointScopeId,
   CheckpointId,
   ThreadId,
+  ThreadLinkedPullRequest,
+  ThreadPullRequestLink,
   TurnItemId,
   NodeId,
   ProviderInstanceId,
@@ -225,6 +227,21 @@ export type ProjectionLimitRecoveryCandidate = Pick<
 export type ProjectionThreadPullRequests = Pick<
   OrchestrationV2AppThread,
   "id" | "projectId" | "lineage" | "settledOverride" | "settledAt" | "pullRequests"
+>;
+
+export type ProjectionPullRequestSyncThread = Pick<
+  OrchestrationV2ThreadShell,
+  | "id"
+  | "projectId"
+  | "branch"
+  | "worktreePath"
+  | "pullRequests"
+  | "linkedPullRequest"
+  | "branchPullRequest"
+  | "createdAt"
+  | "archivedAt"
+  | "settledOverride"
+  | "settledAt"
 >;
 
 export type ProjectionSettlementCandidate = Pick<
@@ -550,6 +567,19 @@ export interface ProjectionStoreV2Shape {
   readonly getThreadsWithPullRequests: (
     threadId?: ThreadId,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadPullRequests>, ProjectionStoreV2Error>;
+  /**
+   * Active threads with only the fields the pull request sweep compares, read
+   * without the shell's per-run subqueries that held the reader for seconds.
+   */
+  readonly getPullRequestSyncThreads: (options: {
+    readonly unsettledOnly: boolean;
+  }) => Effect.Effect<
+    {
+      readonly snapshotSequence: number;
+      readonly threads: ReadonlyArray<ProjectionPullRequestSyncThread>;
+    },
+    ProjectionStoreV2Error
+  >;
   readonly getThreadWorktreePaths: (options?: {
     readonly includeArchived?: boolean;
   }) => Effect.Effect<
@@ -1281,6 +1311,23 @@ const encodeContextTransferPayload = Schema.encodeEffect(
 
 const decodeThreadPayload = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2AppThreadJsonSchema),
+);
+const PullRequestSyncThreadJson = Schema.Struct({
+  id: OrchestrationV2AppThreadJsonSchema.fields.id,
+  projectId: OrchestrationV2AppThreadJsonSchema.fields.projectId,
+  branch: OrchestrationV2AppThreadJsonSchema.fields.branch,
+  worktreePath: OrchestrationV2AppThreadJsonSchema.fields.worktreePath,
+  // SQLite cannot omit a json_object key, so an absent list arrives as null.
+  pullRequests: Schema.NullOr(Schema.Array(ThreadPullRequestLink)),
+  linkedPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
+  branchPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
+  createdAt: OrchestrationV2AppThreadJsonSchema.fields.createdAt,
+  archivedAt: OrchestrationV2AppThreadJsonSchema.fields.archivedAt,
+  settledOverride: OrchestrationV2AppThreadJsonSchema.fields.settledOverride,
+  settledAt: OrchestrationV2AppThreadJsonSchema.fields.settledAt,
+});
+const decodePullRequestSyncThread = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(PullRequestSyncThreadJson),
 );
 const decodeProfileSnapshotContentJson = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ProfileSnapshotContent),
@@ -6456,6 +6503,59 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
       );
 
+    const getPullRequestSyncThreads: ProjectionStoreV2Shape["getPullRequestSyncThreads"] =
+      Effect.fn("ProjectionStore.getPullRequestSyncThreads")(
+        function* ({ unsettledOnly }) {
+          // One read transaction, so the sequence and the rows come from the same snapshot.
+          const [rows, sequenceRows] = yield* sql.withTransaction(
+            Effect.all([
+              sql<PayloadRow>`
+                SELECT json_object(
+                  'id', t.thread_id,
+                  'projectId', json_extract(t.payload_json, '$.projectId'),
+                  'branch', json_extract(t.payload_json, '$.branch'),
+                  'worktreePath', json_extract(t.payload_json, '$.worktreePath'),
+                  'pullRequests', t.payload_json -> '$.pullRequests',
+                  'linkedPullRequest', t.payload_json -> '$.linkedPullRequest',
+                  'branchPullRequest', t.payload_json -> '$.branchPullRequest',
+                  'createdAt', json_extract(t.payload_json, '$.createdAt'),
+                  'archivedAt', json_extract(t.payload_json, '$.archivedAt'),
+                  'settledOverride', json_extract(t.payload_json, '$.settledOverride'),
+                  'settledAt', json_extract(t.payload_json, '$.settledAt')
+                ) AS payload_json
+                FROM orchestration_v2_projection_threads t
+                WHERE t.deleted_at IS NULL
+                  AND json_extract(t.payload_json, '$.archivedAt') IS NULL${
+                    unsettledOnly
+                      ? sql` AND json_extract(t.payload_json, '$.settledAt') IS NULL AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'`
+                      : sql``
+                  }
+                ORDER BY t.updated_at ASC, t.thread_id ASC
+              `,
+              sql<{ readonly snapshot_sequence: number | null }>`
+                SELECT MAX(sequence) AS snapshot_sequence
+                FROM orchestration_events
+                WHERE application_event_version = 2
+                  AND aggregate_kind = 'thread'
+              `,
+            ]),
+          );
+          const threads = yield* Effect.forEach(rows, (row) =>
+            decodePullRequestSyncThread(row.payload_json).pipe(
+              Effect.map(({ pullRequests, ...thread }): ProjectionPullRequestSyncThread => ({
+                ...thread,
+                pullRequests: threadPullRequestsOf({
+                  linkedPullRequest: thread.linkedPullRequest,
+                  ...(pullRequests === null ? {} : { pullRequests }),
+                }),
+              })),
+            ),
+          );
+          return { snapshotSequence: sequenceRows[0]?.snapshot_sequence ?? 0, threads };
+        },
+        Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
+      );
+
     const getThreadWorktreePaths: ProjectionStoreV2Shape["getThreadWorktreePaths"] = (options) =>
       sql<{ readonly thread_id: string; readonly worktree_path: string }>`
         SELECT thread_id, json_extract(payload_json, '$.worktreePath') AS worktree_path
@@ -6929,6 +7029,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getThreadParentLinks: readOnReader(getThreadParentLinks),
       getSettlementCandidates: readOnReader(getSettlementCandidates),
       getThreadsWithPullRequests: readOnReader(getThreadsWithPullRequests),
+      getPullRequestSyncThreads: readOnReader(getPullRequestSyncThreads),
       getThreadWorktreePaths: readOnReader(getThreadWorktreePaths),
       getThreadProjection,
       getTurnStartContext: readOnReader(getTurnStartContext),
@@ -7173,6 +7274,10 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             ),
           ),
         ),
+      getPullRequestSyncThreads: ({ unsettledOnly }) =>
+        service
+          .getShellSnapshot({ location: "active", unsettledOnly })
+          .pipe(Effect.map(({ snapshotSequence, threads }) => ({ snapshotSequence, threads }))),
       getThreadsWithPullRequests: (threadId) =>
         Ref.get(replayState).pipe(
           Effect.map((state) =>

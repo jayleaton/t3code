@@ -7,7 +7,6 @@ import {
   type ThreadLinkedPullRequest,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
-import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -142,12 +141,9 @@ export const make = Effect.gen(function* () {
 
   const readThreadSnapshot = ({ threadId, backfill }: RefreshRequest) =>
     threadId === null
-      ? orchestrator
-          .getShellSnapshot({
-            location: "active",
-            unsettledOnly: !(backfill || pendingBackfill.size > 0),
-          })
-          .pipe(NodeSqliteClient.readOnly)
+      ? orchestrator.getPullRequestSyncThreads({
+          unsettledOnly: !(backfill || pendingBackfill.size > 0),
+        })
       : Effect.gen(function* () {
           // Read the sequence first. The thread is then at least this new, so a
           // sync guarded by the sequence is rejected rather than missing a change.
