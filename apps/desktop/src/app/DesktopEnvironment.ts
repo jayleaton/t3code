@@ -85,6 +85,7 @@ export class DesktopEnvironment extends Context.Service<
     readonly linuxDesktopEntryName: string;
     readonly linuxWmClass: string;
     readonly linuxApplicationsDir: string;
+    readonly desktopLauncherPath: Option.Option<string>;
     readonly appImagePath: Option.Option<string>;
     readonly defaultDesktopSettings: DesktopAppSettings.DesktopSettings;
     readonly runtimeInfo: DesktopRuntimeInfo;
@@ -250,6 +251,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     linuxDesktopEntryName: resolveLinuxDesktopEntryName(isDevelopment, input.brand ?? desktopBrand),
     linuxWmClass: resolveLinuxWmClass(isDevelopment, input.brand ?? desktopBrand),
     linuxApplicationsDir,
+    desktopLauncherPath: config.desktopLauncherPath,
     appImagePath: config.appImagePath,
     defaultDesktopSettings: DesktopAppSettings.resolveDefaultDesktopSettings(input.appVersion),
     runtimeInfo: resolveDesktopRuntimeInfo({

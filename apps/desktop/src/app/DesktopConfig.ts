@@ -55,6 +55,7 @@ export const DesktopConfig = Config.all({
   otlpProtocol: Config.schema(OtlpProtocol, "T3CODE_OTLP_PROTOCOL").pipe(
     Config.withDefault("http/json"),
   ),
+  desktopLauncherPath: trimmedString("T3CODE_DESKTOP_LAUNCHER_PATH"),
   appImagePath: trimmedString("APPIMAGE"),
   disableAutoUpdate: optionalBoolean("T3CODE_DISABLE_AUTO_UPDATE"),
   supervisedRelaunch: optionalBoolean("T3CODE_SUPERVISED_RELAUNCH"),

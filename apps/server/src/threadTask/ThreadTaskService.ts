@@ -38,7 +38,6 @@ import {
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { threadShellHasActiveWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import {
-  threadPullRequestsOf,
   threadPullRequestWatchesSuspended,
   visibleThreadPullRequests,
 } from "@t3tools/shared/threadPullRequests";
@@ -60,6 +59,7 @@ import * as TxRef from "effect/TxRef";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import { threadPullRequestsOf } from "../sourceControl/threadPullRequests.ts";
 import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import { forkParked } from "../serverActivation.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";

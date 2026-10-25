@@ -7,8 +7,8 @@ import { clearConnectOnboardingRequest, connectOnboardingRequestAtom } from "./c
 import { isConnectOnboardingOptedOut } from "./connectOnboardingOptOut";
 import { hasCloudPublicConfig } from "./publicConfig";
 
-// Sign-in happens inside the Settings sheet; give its session-state transition
-// a beat to settle before presenting another formSheet on top.
+// Sign-in happens in its own modal; give its session-state transition a beat to
+// settle before presenting another formSheet on top.
 const PRESENT_ONBOARDING_DELAY_MS = 600;
 
 /**

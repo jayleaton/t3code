@@ -17,6 +17,7 @@ import {
   type OrchestrationV2DomainEvent,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 import * as Effect from "effect/Effect";
@@ -133,6 +134,7 @@ export class OrchestrationEventStore extends Context.Service<
     readonly streamProjectedApplicationEvents: <A extends { readonly sequence: number }>(input: {
       readonly afterSequence?: number;
       readonly project: (event: ApplicationStoredEvent) => A;
+      readonly filter?: (event: ApplicationStoredEvent) => boolean;
     }) => Stream.Stream<A, OrchestrationEventStoreError>;
   }
 >()("t3/persistence/OrchestrationEventStore") {}
@@ -560,7 +562,7 @@ const makeEventStore = Effect.gen(function* () {
         ])}
       ORDER BY sequence ASC
       LIMIT ${input.limit}
-    `;
+    `.pipe(NodeSqliteClient.readOnly);
 
   const appendAgentEvents: OrchestrationEventStore["Service"]["appendAgentEvents"] = (input) =>
     Effect.forEach(
@@ -736,6 +738,7 @@ const makeEventStore = Effect.gen(function* () {
         LIMIT ${Math.max(0, Math.floor(input.maxEvents)) + 1}
       )
     `.pipe(
+      NodeSqliteClient.readOnly,
       Effect.mapError(toPersistenceSqlError("OrchestrationEventStore.getAgentReplayStats:query")),
       Effect.map((rows) => ({
         eventCount: rows[0]?.eventCount ?? 0,
@@ -757,6 +760,7 @@ const makeEventStore = Effect.gen(function* () {
           OR (application_event_version = 2 AND aggregate_kind = 'thread')
         )
     `.pipe(
+      NodeSqliteClient.readOnly,
       Effect.mapError(toPersistenceSqlError("OrchestrationEventStore.getReplayStats:query")),
       Effect.map((rows) => ({
         eventCount: rows[0]?.eventCount ?? 0,
@@ -779,6 +783,7 @@ const makeEventStore = Effect.gen(function* () {
         AND aggregate_kind = 'thread'
         ${threadId === undefined ? sql`` : sql`AND stream_id = ${threadId}`}
     `.pipe(
+      NodeSqliteClient.readOnly,
       Effect.map((rows) => rows[0]?.sequence ?? 0),
       Effect.mapError(toPersistenceSqlError("OrchestrationEventStore.latestAgentSequence:query")),
     );
@@ -790,6 +795,7 @@ const makeEventStore = Effect.gen(function* () {
     WHERE aggregate_kind = 'project'
       OR (application_event_version = 2 AND aggregate_kind = 'thread')
   `.pipe(
+    NodeSqliteClient.readOnly,
     Effect.map((rows) => rows[0]?.sequence ?? 0),
     Effect.mapError(
       toPersistenceSqlError("OrchestrationEventStore.latestApplicationSequence:query"),
@@ -836,11 +842,17 @@ const makeEventStore = Effect.gen(function* () {
 
   const streamProjectedApplicationEvents: OrchestrationEventStore["Service"]["streamProjectedApplicationEvents"] =
     (input) =>
-      replayAndBufferProjectedLiveEvents({
+      replayAndBufferProjectedLiveEvents<
+        ApplicationStoredEvent,
+        ReturnType<typeof input.project>,
+        OrchestrationEventStoreError,
+        never
+      >({
         subscribe: PubSub.subscribe(committedEvents),
         latestSequence: latestApplicationSequence,
         afterSequence: input.afterSequence ?? 0,
         project: input.project,
+        ...(input.filter === undefined ? {} : { filter: input.filter }),
         replay: (throughSequence) =>
           catchUpApplicationEvents({
             afterSequence: input?.afterSequence ?? 0,
