@@ -812,6 +812,8 @@ const layerMakeServer = Layer.unwrap(
     const layerLauncher = ServiceLauncherClient.layer;
 
     yield* fixPath({ shellEnvironmentPrepared: config.shellEnvironmentPrepared });
+    // Before any layer below can spawn a child that would inherit them.
+    const gatewayLauncherEnvironment = yield* HeadlessGatewayHost.takeLauncherEnvironment();
 
     const layerHttpListening = Layer.effectDiscard(
       Effect.gen(function* () {
@@ -1154,10 +1156,18 @@ const layerMakeServer = Layer.unwrap(
       ).pipe(Effect.asVoid),
     }).pipe(Layer.provideMerge(layerRuntimeDependencies), Layer.provide(layerLauncher));
 
-    const layerRoutes = HttpRouter.serve(layerMakeRoutes.pipe(Layer.provide(layerLauncher)), {
-      disableLogger: !config.logWebSocketEvents,
-      routerConfig: HTTP_ROUTER_CONFIG,
-    }).pipe(
+    const layerRoutes = HttpRouter.serve(
+      layerMakeRoutes.pipe(
+        Layer.provide(layerLauncher),
+        Layer.provide(
+          Layer.succeed(HeadlessGatewayHost.LauncherEnvironment, gatewayLauncherEnvironment),
+        ),
+      ),
+      {
+        disableLogger: !config.logWebSocketEvents,
+        routerConfig: HTTP_ROUTER_CONFIG,
+      },
+    ).pipe(
       withUntracedRequests,
       Layer.tap(() => Deferred.succeed(routesReady, undefined).pipe(Effect.orDie)),
     );
