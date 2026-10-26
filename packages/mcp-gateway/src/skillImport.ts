@@ -3,6 +3,7 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import { AgentSkill, AgentSkillResources, MAX_SKILL_RESOURCE_BYTES } from "@t3tools/contracts";
+import { expandCompactJson } from "@t3tools/shared/compactJson";
 import * as Schema from "effect/Schema";
 
 const decodeResources = Schema.decodeUnknownSync(AgentSkillResources);
@@ -61,7 +62,12 @@ export function removeResourceWorkaround(content: string, directory: string) {
 }
 
 type CallTool = (name: string, args: Record<string, unknown>) => Promise<unknown>;
-const readLibrary = Schema.decodeUnknownSync(Schema.Struct({ items: Schema.Array(AgentSkill) }));
+// Gateway results leave out null and empty fields; expanding restores what these schemas require.
+const decodeResult = <S extends Schema.Decoder<unknown>>(schema: S) => {
+  const decode = Schema.decodeUnknownSync(schema);
+  return (value: unknown) => decode(expandCompactJson(schema, value));
+};
+const readLibrary = decodeResult(Schema.Struct({ items: Schema.Array(AgentSkill) }));
 
 /** Two-phase migration: prove persisted resources before removing the local-path workaround. */
 export async function migrateSkillResources(
@@ -119,7 +125,7 @@ const decodeBlocks = Schema.decodeUnknownSync(
 );
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const decodeEnvelope = Schema.decodeUnknownSync(Schema.Struct({ data: Schema.Unknown }));
-const decodeSync = Schema.decodeUnknownSync(
+const decodeSync = decodeResult(
   Schema.Struct({
     sync: Schema.optionalKey(Schema.Struct({ failedEnvironmentIds: Schema.Array(Schema.String) })),
   }),

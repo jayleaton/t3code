@@ -27,7 +27,6 @@ describe("orchestrator MCP contracts", () => {
       taskId: "node-task-1",
       childThreadId: "thread-child-1",
       childRunId: "run-child-1",
-      childNodeId: "node-task-1",
       status: "completed",
       workState: "result_available",
       hasPendingChildRuns: false,

@@ -856,3 +856,35 @@ it.effect("lists tools in name order whichever toolkit registers first", () => {
     expect(alphaFirst).toEqual(zetaFirst);
   });
 });
+
+it.effect("leaves null and empty fields out of tool results and requires none of them", () => {
+  const WaitToolkit = Toolkit.make(
+    Tool.make("wait_tool", {
+      success: Schema.Struct({
+        runId: Schema.NullOr(Schema.String),
+        options: Schema.Array(Schema.String),
+        timedOut: Schema.Boolean,
+      }),
+      failure: OrchestratorMcpFailure,
+      failureMode: "return",
+    }),
+  );
+  const registration = McpHttpServer.toolkitRegistration(
+    WaitToolkit,
+    McpToolAccess.toLayer(WaitToolkit, {
+      wait_tool: McpToolAccess.reads(() =>
+        Effect.succeed({ runId: null, options: [], timedOut: false }),
+      ),
+    }),
+  );
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const result = yield* callTool("wait_tool", {});
+    expect(result).toMatchObject({
+      structuredContent: { timedOut: false },
+      content: [{ type: "text", text: '{"timedOut":false}' }],
+    });
+    // MCP SDK clients reject structured content missing a key the output schema requires.
+    expect(JSON.stringify(server.tools[0]?.tool.outputSchema)).not.toContain('"required"');
+  }).pipe(Effect.provide(registration.pipe(Layer.provideMerge(McpServer.McpServer.layer))));
+});

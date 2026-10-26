@@ -159,7 +159,7 @@ export const layer = McpToolAccess.toLayer(
                   toCallToolResult(
                     taskWarning === undefined
                       ? run.result
-                      : success({ ...created, taskWarning }, requestContext(args)),
+                      : success({ ...created, taskWarning }, args),
                   ),
                 ),
               );

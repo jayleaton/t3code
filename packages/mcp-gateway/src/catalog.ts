@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - the gateway is a plain Node process outside the Effect runtime.
 import * as NodeCrypto from "node:crypto";
+import { compactJson } from "@t3tools/shared/compactJson";
 import * as DateTime from "effect/DateTime";
 import { z } from "zod";
 
@@ -728,14 +729,19 @@ export function requestContext(args: Record<string, unknown>) {
   };
 }
 
-export function success(value: unknown, context: ReturnType<typeof requestContext>) {
-  const body = {
+/**
+ * Agents re-read every result on later turns, so the envelope echoes only the request and
+ * correlation IDs the caller supplied, and empty fields are left out.
+ */
+export function success(value: unknown, args: Record<string, unknown>) {
+  const supplied = (key: string) => (typeof args[key] === "string" ? args[key] : undefined);
+  const body = compactJson({
     schemaVersion: "3",
-    ...context,
+    requestId: supplied("requestId") ?? supplied("idempotencyKey"),
+    correlationId: supplied("correlationId"),
     serverTime: DateTime.formatIso(DateTime.nowUnsafe()),
     data: value,
-    warnings: [] as ReadonlyArray<string>,
-  };
+  });
   return {
     content: [{ type: "text" as const, text: JSON.stringify(body) }],
     structuredContent: body,
@@ -794,15 +800,14 @@ export async function runGatewayTool(
   args: Record<string, unknown>,
   invocation: GatewayInvocation = {},
 ) {
-  const responseContext = requestContext(args);
   try {
     const aliasAction = LIFECYCLE_ALIASES[name];
     const toolName = aliasAction === undefined ? name : "t3_control_thread";
     const normalizedArgs = aliasAction === undefined ? args : { ...args, action: aliasAction };
     const value = await callGatewayTool(context, toolName, normalizedArgs, invocation);
-    return { ok: true as const, value, result: success(value, responseContext) };
+    return { ok: true as const, value, result: success(value, args) };
   } catch (error) {
-    return { ok: false as const, error, result: failure(error, responseContext) };
+    return { ok: false as const, error, result: failure(error, requestContext(args)) };
   }
 }
 

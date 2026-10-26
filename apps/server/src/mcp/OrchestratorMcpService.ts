@@ -999,7 +999,7 @@ function threadRun(run: OrchestrationV2Run): OrchestratorMcpThreadRun {
 
 function jsonText(value: unknown): string {
   try {
-    return JSON.stringify(value, null, 2);
+    return JSON.stringify(value);
   } catch {
     return String(value);
   }
@@ -1711,7 +1711,6 @@ const make = Effect.gen(function* () {
       taskId: task.id,
       childThreadId: task.childThreadId,
       childRunId: childRun?.id ?? null,
-      childNodeId: task.id,
       status,
       workState,
       hasPendingChildRuns: hasPendingChildRuns(childProjection, childRun),

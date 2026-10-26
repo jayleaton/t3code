@@ -211,7 +211,7 @@ describe("MCP gateway server", () => {
     });
     expect(board.isError).not.toBe(true);
     expect(board.structuredContent).toMatchObject({
-      data: { items: [{ profileId: "code", description: "Implements approved plans", runs: [] }] },
+      data: { items: [{ profileId: "code", description: "Implements approved plans" }] },
     });
     expect(agents.structuredContent).toMatchObject({
       data: {
@@ -273,10 +273,11 @@ describe("MCP gateway server", () => {
       arguments: { environmentId: "local" },
     });
     expect(result.isError).not.toBe(true);
-    expect(result.structuredContent).toMatchObject({
+    // Agents re-read results: no generated request IDs, empty lists, or empty warnings.
+    expect(result.structuredContent).toEqual({
       schemaVersion: "3",
-      data: { items: [], snapshotAt: "snapshot-1" },
-      warnings: [],
+      serverTime: expect.any(String),
+      data: { snapshotAt: "snapshot-1" },
     });
 
     await client.close();
@@ -317,6 +318,7 @@ describe("MCP gateway server", () => {
         });
 
         expect(result.isError).not.toBe(true);
+        expect(result.structuredContent).toMatchObject({ requestId: "worktree-create-1" });
         expect(creates).toHaveLength(1);
         expect(creates[0]).toMatchObject({ workspaceMode: "worktree", baseBranch: "main" });
       } finally {
@@ -337,7 +339,7 @@ describe("MCP gateway server", () => {
     const before = await client.callTool({ name: "t3_list_environments", arguments: {} });
     expect(before.structuredContent).toMatchObject({
       schemaVersion: "3",
-      data: { items: [], snapshotAt: "runtime" },
+      data: { snapshotAt: "runtime" },
     });
 
     grants = { local: ["read", "create", "send"] };
@@ -447,7 +449,7 @@ describe("MCP gateway server", () => {
     });
     expect(replay.structuredContent).toMatchObject({
       schemaVersion: "3",
-      data: { subscriptionId, items: [], ackedSequence: 3 },
+      data: { subscriptionId, ackedSequence: 3 },
     });
 
     currentGrants = {};

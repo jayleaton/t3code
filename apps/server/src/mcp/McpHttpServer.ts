@@ -20,6 +20,8 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 
+import { compactJson } from "@t3tools/shared/compactJson";
+
 import { serverBuildVersion } from "../buildVersion.ts";
 import * as ServerConfig from "../config.ts";
 import * as DeviceService from "../device/DeviceService.ts";
@@ -1075,6 +1077,86 @@ export const layerInToolNameOrder = <E, R>(toolkits: Layer.Layer<never, E, R>) =
     Layer.provide(McpToolCatalog.layer),
   );
 
+// Keys whose value maps names to schemas, so a property named "required" survives.
+const SCHEMA_MAP_KEYS: ReadonlySet<string> = new Set([
+  "properties",
+  "patternProperties",
+  "$defs",
+  "definitions",
+]);
+
+const withoutRequired = (schema: unknown): unknown => {
+  if (Array.isArray(schema)) return schema.map(withoutRequired);
+  if (typeof schema !== "object" || schema === null) return schema;
+  return Object.fromEntries(
+    Object.entries(schema).flatMap(([key, value]): Array<[string, unknown]> => {
+      if (key === "required" && Array.isArray(value)) return [];
+      if (SCHEMA_MAP_KEYS.has(key) && typeof value === "object" && value !== null) {
+        return [
+          [
+            key,
+            Object.fromEntries(
+              Object.entries(value).map(([name, field]) => [name, withoutRequired(field)]),
+            ),
+          ],
+        ];
+      }
+      return [[key, withoutRequired(value)]];
+    }),
+  );
+};
+
+const compactToolResult = <A>(result: A): A => {
+  if (
+    !isCallToolResult(result) ||
+    result.isError === true ||
+    result.structuredContent === undefined
+  ) {
+    return result;
+  }
+  const structuredContent = compactJson(result.structuredContent);
+  return new McpSchema.CallToolResult({
+    ...result,
+    structuredContent,
+    content: [{ type: "text", text: JSON.stringify(structuredContent) }],
+  }) as A;
+};
+
+/**
+ * Agents re-read every tool result on later turns, and `McpServer.toolkit`
+ * returns each encoded null and empty-array field twice, as JSON text and as
+ * `structuredContent`. Results leave those fields out. Clients such as the MCP
+ * SDK validate `structuredContent` against the advertised `outputSchema`, so it
+ * no longer lists required fields.
+ */
+const withCompactResults = Effect.fn("McpHttpServer.withCompactResults")(function* <A, E, R>(
+  registration: Effect.Effect<A, E, R>,
+) {
+  const server = yield* McpServer.McpServer;
+  return yield* registration.pipe(
+    Effect.provideService(
+      McpServer.McpServer,
+      McpServer.McpServer.of({
+        ...server,
+        addTool: (options) =>
+          server.addTool({
+            ...options,
+            tool:
+              options.tool.outputSchema === undefined
+                ? options.tool
+                : new McpSchema.Tool({
+                    ...options.tool,
+                    outputSchema: withoutRequired(
+                      options.tool.outputSchema,
+                    ) as McpSchema.Tool["outputSchema"],
+                  }),
+            handle: (payload) => options.handle(payload).pipe(Effect.map(compactToolResult)),
+          }),
+      }),
+    ),
+  );
+});
+
 /**
  * `McpServer.toolkit` asks for every service its tools declare when it
  * registers them, but the auth middleware provides `McpInvocationContext` to
@@ -1086,7 +1168,9 @@ export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, 
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
 ) => {
   const registration = Layer.effectDiscard(
-    stagedInCatalog(withToolAnalytics(McpServer.registerToolkit(decodeAsAdvertised(toolkit)))),
+    stagedInCatalog(
+      withToolAnalytics(withCompactResults(McpServer.registerToolkit(decodeAsAdvertised(toolkit)))),
+    ),
   ).pipe(Layer.provide(McpServer.McpServer.layer));
   // @effect-diagnostics-next-line unsafeEffectTypeAssertion:off - the auth middleware provides it per request.
   const registered = registration as Layer.Layer<

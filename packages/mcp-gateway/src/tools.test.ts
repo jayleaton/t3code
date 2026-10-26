@@ -319,6 +319,36 @@ describe("gateway chat tools", () => {
     expect(requests).toHaveLength(5);
   });
 
+  it("leaves the caller out of the tasks it owns in a task list", async () => {
+    const view = (taskId: string, ownerThreadId: string) => ({
+      task: { taskId, ownerThreadId, revision: 1 },
+      workerRun: "idle",
+    });
+    const context = {
+      port: {
+        ...makePort(),
+        // Only the fields the gateway touches; the port types a full task record.
+        threadTask: async () =>
+          ({
+            tasks: [view("mine", "owner"), view("theirs", "other")],
+            cursor: 4,
+            timedOut: false,
+          }) as unknown as Awaited<ReturnType<NonNullable<GatewayRuntimePort["threadTask"]>>>,
+      },
+      grants: { local: ["read"] as const },
+    };
+    const listed = await callGatewayTool(
+      context,
+      "t3_task_read",
+      { environmentId: "local" },
+      { caller: { environmentId: "local", threadId: "owner" } },
+    );
+    expect(listed.tasks).toEqual([
+      { task: { taskId: "mine", revision: 1 }, workerRun: "idle" },
+      view("theirs", "other"),
+    ]);
+  });
+
   it("runs task tools as the invoking chat, never from input", async () => {
     const calls: Array<{ request: unknown; caller: unknown }> = [];
     const context = {
@@ -3342,6 +3372,8 @@ describe("cross-environment discovery", () => {
       }),
       expect.objectContaining({ profileId: "review", availableEnvironmentIds: ["dev-box"] }),
     ]);
+    // Restricted to exactly the machines it was found on, so the restriction is not repeated.
+    expect(listed.items[1]).not.toHaveProperty("environmentIds");
   });
 
   it("collects each agent's runs from every environment onto one board card", async () => {

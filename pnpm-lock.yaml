@@ -1430,6 +1430,9 @@ importers:
       '@t3tools/client-runtime':
         specifier: workspace:*
         version: link:../client-runtime
+      '@t3tools/shared':
+        specifier: workspace:*
+        version: link:../shared
       effect:
         specifier: 4.0.5
         version: 4.0.5
