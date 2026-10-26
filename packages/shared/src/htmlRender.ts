@@ -229,23 +229,23 @@ export function htmlRenderTheme(
 }
 
 export const HTML_RENDER_THEME_GUIDE = [
-  "T3 injects its active theme as CSS custom properties on :root, and they follow the user's theme and light/dark mode live:",
-  "--background (page background, identical to the thread around the frame), --foreground, --muted, --muted-foreground,",
+  "T3 sets its active theme as CSS custom properties on :root, following the user's theme and light/dark mode live:",
+  "--background (identical to the thread around the frame), --foreground, --muted, --muted-foreground,",
   "--card, --card-foreground, --popover, --popover-foreground, --secondary, --secondary-foreground, --border, --input, --ring,",
   "--primary, --primary-foreground (solid buttons), --accent, --accent-foreground (brand accent), --accent-surface, --accent-surface-foreground,",
   "--destructive, --destructive-foreground, --destructive-surface, --warning, --warning-foreground, --warning-surface,",
   "--success, --success-foreground, --info, --info-foreground, --code-background, --code-foreground,",
-  "--chart-1 … --chart-6 (categorical series for charts), --radius, --font-sans, --font-mono.",
-  "The base stylesheet sets html background/color/font from these, body margin to 0, and hides the page's scrollbar; your own CSS overrides it.",
+  "--chart-1 … --chart-6 (chart series), --radius, --font-sans, --font-mono.",
+  "A base stylesheet sets html background, color, and font from these, body margin to 0, and hides the scrollbar; your CSS overrides it.",
 ].join(" ");
 
 export const HTML_RENDER_LAYOUT_GUIDE = [
-  `The frame is borderless on the thread's background, as wide as the reply column (${HTML_RENDER_COLUMN_WIDTH}px on desktop by default, wider if the reader widens chat, about 360px on phones), and its left edge lines up with your reply text.`,
-  "The page sits on the thread's own background, so by default leave html, body, and the outermost element with no background color. This overrides general style preferences such as a fixed black page background.",
-  "Use a fluid width with no horizontal padding on the outermost element, and no outer card, border, or banner title: the page is part of your reply.",
-  "If a box needs its own background (a mock of a specific screen, a panel that must stand apart), give it at least 16px of padding on every side and var(--radius) corners, so content never touches its edge.",
-  "Give charts fixed pixel heights rather than heights that scale with width.",
-  "Let content set the page's height. The frame grows to fit the page, so a height that follows the viewport makes it grow again and again: html_preview and html_render reject vh, svh, lvh, and dvh units, and height:100% on html or body has the same problem.",
+  `The frame is borderless on the thread's background, as wide as the reply column (${HTML_RENDER_COLUMN_WIDTH}px on desktop by default, wider if the reader widens chat, about 360px on phones), aligned with your reply text.`,
+  "Leave html, body, and the outermost element with no background color, even if style preferences ask for a fixed page background.",
+  "Give the outermost element a fluid width, no horizontal padding, and no outer card, border, or banner title: the page is part of your reply.",
+  "A box that needs its own background (a mock of a specific screen, a panel that must stand apart) gets at least 16px of padding on every side and var(--radius) corners.",
+  "Give charts fixed pixel heights.",
+  "Let content set the page's height: the frame grows to fit the page, so viewport heights make it grow again and again. vh, svh, lvh, and dvh units are rejected, and height:100% on html or body has the same problem.",
 ].join(" ");
 
 const HOST_CONTEXT_CHANGED_METHOD = "ui/notifications/host-context-changed";
