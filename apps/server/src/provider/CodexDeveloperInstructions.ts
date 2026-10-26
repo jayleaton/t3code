@@ -14,6 +14,61 @@ import {
  */
 export const CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES = 4_000;
 
+/**
+ * Apps may store up to 16 KiB each and a thread can hold any number of them,
+ * so only the most recently updated ones that fit this budget go to Codex.
+ */
+export const CODEX_APP_CONTEXT_MAX_TOTAL_BYTES = 4 * CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES;
+
+const TRUNCATION_MARKER = "\n…[truncated]…\n";
+
+const utf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
+
+const takeUtf8Bytes = (chars: ReadonlyArray<string>, maxBytes: number): Array<string> => {
+  const taken: Array<string> = [];
+  let bytes = 0;
+  for (const char of chars) {
+    bytes += utf8Bytes(char);
+    if (bytes > maxBytes) break;
+    taken.push(char);
+  }
+  return taken;
+};
+
+/**
+ * Cuts the middle out ourselves, as Codex would, so a value restored after
+ * compaction (which Codex does not truncate) matches what the turn delivered.
+ */
+const fitCodexContextValue = (text: string): string => {
+  if (utf8Bytes(text) <= CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES) return text;
+  const chars = Array.from(text);
+  const half = Math.floor(
+    (CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES - utf8Bytes(TRUNCATION_MARKER)) / 2,
+  );
+  const head = takeUtf8Bytes(chars, half).join("");
+  const tail = takeUtf8Bytes(chars.toReversed(), half).toReversed().join("");
+  return `${head}${TRUNCATION_MARKER}${tail}`;
+};
+
+/**
+ * An app's context is text an MCP server wrote, so it goes in as untrusted
+ * context: Codex renders it as quoted user-side input, never as developer
+ * instructions. Entries arrive oldest update first.
+ */
+export function buildCodexAppContext(
+  entries: ReadonlyArray<{ readonly key: string; readonly text: string }>,
+): Record<string, V2TurnStartParams__AdditionalContextEntry> {
+  const kept: Array<readonly [string, V2TurnStartParams__AdditionalContextEntry]> = [];
+  let bytes = 0;
+  for (const entry of entries.toReversed()) {
+    const value = fitCodexContextValue(entry.text);
+    bytes += utf8Bytes(value);
+    if (bytes > CODEX_APP_CONTEXT_MAX_TOTAL_BYTES) break;
+    kept.push([entry.key, { kind: "untrusted", value }]);
+  }
+  return Object.fromEntries(kept.toReversed());
+}
+
 const T3_CODE_DEVICE_TOOL_INSTRUCTIONS = `## T3 Code devices
 
 The \`t3-code\` MCP server also exposes \`device_*\` tools for iOS Simulators and Android Emulators on this environment. For mobile verification, call \`device_list\`, then \`device_open\` so the user can watch the device in their Device panel; its result explains how to drive the device. Driving happens through the \`agent-device\` CLI, using the exact launcher path returned by \`device_open\`. Keep the host config and session flags returned by \`device_open\` on every command so concurrent devices stay independent: prefer \`agent-device snapshot -i\` refs over coordinates, and use \`device_screenshot\` when you need to see the screen. Prefer these tools and \`agent-device\` for opening and driving devices. Platform tools such as \`xcrun simctl\` and \`adb\` remain available for anything they do not cover, such as builds, logs, or port forwarding. If \`device_list\` reports a platform as unavailable, say so.`;

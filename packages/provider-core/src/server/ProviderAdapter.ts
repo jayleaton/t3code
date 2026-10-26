@@ -435,6 +435,7 @@ export interface ProviderAdapterV2TurnInput {
   readonly message: ProviderAdapterV2TurnMessage;
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
+  /** Oldest update first. */
   readonly appContext?: ReadonlyArray<{ readonly key: string; readonly text: string }>;
 }
 

@@ -59,6 +59,7 @@ import * as Orchestrator from "../Orchestrator.ts";
 import * as ProviderReplayHarness from "../testkit/ProviderReplayHarness.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import type * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
+import { CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES } from "../../provider/CodexDeveloperInstructions.ts";
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
 import { makeReplayServerConfig, withCodexReplayChildMetadata } from "./CodexAdapterV2.testkit.ts";
 import * as CodexAdapterV2Testkit from "./CodexAdapterV2.testkit.ts";
@@ -1717,17 +1718,23 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       Effect.gen(function* () {
         const nativeThreadId = "context-thread";
         const nativeTurnId = "context-turn";
+        // Codex truncates turn context but not injected items, so the restored
+        // copy only matches the delivered one if T3 fits it first.
+        const appContext = [{ key: "mcp_app_item-1", text: "x".repeat(16 * 1024) }];
         const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
           nativeThreadId,
           codexInput: [{ type: "text", text: "work" }],
           runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
           modelSelection: CODEX_TEST_MODEL_SELECTION,
           hasT3Mcp: true,
+          appContext,
         });
         assert.include(
           params.additionalContext?.t3_code_orchestration_01?.value ?? "",
           "delegate_task",
         );
+        const appValue = params.additionalContext?.["mcp_app_item-1"]?.value ?? "";
+        assert.isAtMost(Buffer.byteLength(appValue), CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES);
         const entries = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "work" });
         const transcript = makeCodexReplayTranscript({
           scenario: "restore-context",
@@ -1759,11 +1766,26 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 method: "thread/inject_items",
                 params: {
                   threadId: nativeThreadId,
-                  items: Object.entries(params.additionalContext ?? {}).map(([key, entry]) => ({
-                    type: "message",
-                    role: "developer",
-                    content: [{ type: "input_text", text: `<${key}>${entry.value}</${key}>` }],
-                  })),
+                  items: Object.entries(params.additionalContext ?? {}).map(([key, entry]) =>
+                    entry.kind === "untrusted"
+                      ? {
+                          type: "message",
+                          role: "user",
+                          content: [
+                            {
+                              type: "input_text",
+                              text: `<external_${key}>${entry.value}</external_${key}>`,
+                            },
+                          ],
+                        }
+                      : {
+                          type: "message",
+                          role: "developer",
+                          content: [
+                            { type: "input_text", text: `<${key}>${entry.value}</${key}>` },
+                          ],
+                        },
+                  ),
                 },
               },
             },
@@ -1791,15 +1813,16 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           authorizationHeader: "Bearer test",
           browserToolsAvailable: true,
         });
-        yield* harness.runtime.startTurn(
-          makeCodexTestTurnInput({
+        yield* harness.runtime.startTurn({
+          ...makeCodexTestTurnInput({
             threadId: harness.threadId,
             providerThread: harness.providerThread,
             now: yield* DateTime.now,
             attemptId: RunAttemptId.make("context-attempt"),
             text: "work",
           }),
-        );
+          appContext,
+        });
         yield* harness.firstTerminal;
         assert.equal(harness.terminalEvents()[0]?.status, "completed");
       }).pipe(

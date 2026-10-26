@@ -4,7 +4,9 @@ import { describe, it } from "vite-plus/test";
 
 import {
   buildCodexAdditionalContext,
+  buildCodexAppContext,
   CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES,
+  CODEX_APP_CONTEXT_MAX_TOTAL_BYTES,
 } from "./CodexDeveloperInstructions.ts";
 
 describe("buildCodexAdditionalContext", () => {
@@ -44,5 +46,47 @@ describe("Codex orchestration context", () => {
       ),
     );
     NodeAssert.ok(!orchestration.includes("Do not use `t3_thread_send`"));
+  });
+});
+
+describe("buildCodexAppContext", () => {
+  it("keeps the most recently updated apps within the aggregate budget", () => {
+    const entries = Array.from({ length: 6 }, (_, index) => ({
+      key: `mcp_app_${index}`,
+      text: String(index).repeat(CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES),
+    }));
+
+    const context = buildCodexAppContext(entries);
+
+    NodeAssert.deepEqual(Object.keys(context), [
+      "mcp_app_2",
+      "mcp_app_3",
+      "mcp_app_4",
+      "mcp_app_5",
+    ]);
+    const total = Object.values(context).reduce(
+      (bytes, entry) => bytes + Buffer.byteLength(entry.value, "utf8"),
+      0,
+    );
+    NodeAssert.ok(total <= CODEX_APP_CONTEXT_MAX_TOTAL_BYTES);
+    NodeAssert.ok(Object.values(context).every((entry) => entry.kind === "untrusted"));
+  });
+
+  it("cuts the middle of an oversized value on a character boundary", () => {
+    const text = `start ${"🦊".repeat(4_000)} end`;
+
+    const value = buildCodexAppContext([{ key: "mcp_app_fox", text }]).mcp_app_fox!.value;
+
+    NodeAssert.ok(Buffer.byteLength(value, "utf8") <= CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES);
+    NodeAssert.ok(value.startsWith("start 🦊"));
+    NodeAssert.ok(value.endsWith("🦊 end"));
+    NodeAssert.ok(value.includes("[truncated]"));
+    NodeAssert.ok(!value.includes("\uFFFD"));
+  });
+
+  it("passes values within the per-entry cap through unchanged", () => {
+    NodeAssert.deepEqual(buildCodexAppContext([{ key: "mcp_app_a", text: "Filtered" }]), {
+      mcp_app_a: { kind: "untrusted", value: "Filtered" },
+    });
   });
 });
