@@ -32,19 +32,17 @@ type ToolResult = {
 
 const decodeJsonText = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
-// Gateway envelopes can hold `undefined` fields, which MCP's JSON schema rejects. Their text
-// content is the same body as JSON, so structured content is read back from it.
-const toCallToolResult = (result: ToolResult) => {
-  const content = result.content as McpSchema.CallToolResult["content"];
-  const [first] = content;
-  return new McpSchema.CallToolResult({
+// Gateway envelopes can hold `undefined` fields, which MCP's JSON schema rejects, so structured
+// content goes through JSON. The text block is a compacted copy for the model, not the same body.
+const toCallToolResult = (result: ToolResult) =>
+  new McpSchema.CallToolResult({
     isError: result.isError === true,
-    structuredContent: (first?.type === "text"
-      ? decodeJsonText(first.text)
-      : result.structuredContent) as Record<string, unknown>,
-    content,
+    structuredContent: decodeJsonText(JSON.stringify(result.structuredContent)) as Record<
+      string,
+      unknown
+    >,
+    content: result.content as McpSchema.CallToolResult["content"],
   });
-};
 
 /** Tools that create a chat; a named child they create on another machine gets its task here. */
 const CREATE_TOOLS: ReadonlySet<string> = new Set([

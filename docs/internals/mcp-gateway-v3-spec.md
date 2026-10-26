@@ -93,11 +93,9 @@ Every response uses this envelope:
   "correlationId": "corr_...",
   "serverTime": "2026-09-03T12:00:00Z",
   "data": {},
-  "warnings": ["..."]
+  "warnings": []
 }
 ```
-
-Agents re-read every result on later turns, so a success echoes `requestId` and `correlationId` only when the caller supplied them, and every MCP result, gateway or not, leaves out fields that are `null` or an empty array, at any depth. A reader treats a missing field as `null` or empty; a typed reader restores them with `expandCompactJson` (`packages/shared/src/compactJson.ts`) before decoding.
 
 Errors are structured and stable:
 

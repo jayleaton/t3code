@@ -1077,35 +1077,6 @@ export const layerInToolNameOrder = <E, R>(toolkits: Layer.Layer<never, E, R>) =
     Layer.provide(McpToolCatalog.layer),
   );
 
-// Keys whose value maps names to schemas, so a property named "required" survives.
-const SCHEMA_MAP_KEYS: ReadonlySet<string> = new Set([
-  "properties",
-  "patternProperties",
-  "$defs",
-  "definitions",
-]);
-
-const withoutRequired = (schema: unknown): unknown => {
-  if (Array.isArray(schema)) return schema.map(withoutRequired);
-  if (typeof schema !== "object" || schema === null) return schema;
-  return Object.fromEntries(
-    Object.entries(schema).flatMap(([key, value]): Array<[string, unknown]> => {
-      if (key === "required" && Array.isArray(value)) return [];
-      if (SCHEMA_MAP_KEYS.has(key) && typeof value === "object" && value !== null) {
-        return [
-          [
-            key,
-            Object.fromEntries(
-              Object.entries(value).map(([name, field]) => [name, withoutRequired(field)]),
-            ),
-          ],
-        ];
-      }
-      return [[key, withoutRequired(value)]];
-    }),
-  );
-};
-
 const compactToolResult = <A>(result: A): A => {
   if (
     !isCallToolResult(result) ||
@@ -1114,20 +1085,18 @@ const compactToolResult = <A>(result: A): A => {
   ) {
     return result;
   }
-  const structuredContent = compactJson(result.structuredContent);
   return new McpSchema.CallToolResult({
     ...result,
-    structuredContent,
-    content: [{ type: "text", text: JSON.stringify(structuredContent) }],
+    content: [{ type: "text", text: JSON.stringify(compactJson(result.structuredContent)) }],
   }) as A;
 };
 
 /**
- * Agents re-read every tool result on later turns, and `McpServer.toolkit`
- * returns each encoded null and empty-array field twice, as JSON text and as
- * `structuredContent`. Results leave those fields out. Clients such as the MCP
- * SDK validate `structuredContent` against the advertised `outputSchema`, so it
- * no longer lists required fields.
+ * `McpServer.toolkit` writes each result twice, as `structuredContent` and as
+ * JSON text. The text block, which text-reading harnesses put in the model's
+ * context, leaves out null and empty-array fields. `structuredContent` and the
+ * advertised `outputSchema` stay complete for typed readers, including older
+ * `t3 thread` CLIs that decode it with the contract schemas.
  */
 const withCompactResults = Effect.fn("McpHttpServer.withCompactResults")(function* <A, E, R>(
   registration: Effect.Effect<A, E, R>,
@@ -1141,15 +1110,6 @@ const withCompactResults = Effect.fn("McpHttpServer.withCompactResults")(functio
         addTool: (options) =>
           server.addTool({
             ...options,
-            tool:
-              options.tool.outputSchema === undefined
-                ? options.tool
-                : new McpSchema.Tool({
-                    ...options.tool,
-                    outputSchema: withoutRequired(
-                      options.tool.outputSchema,
-                    ) as McpSchema.Tool["outputSchema"],
-                  }),
             handle: (payload) => options.handle(payload).pipe(Effect.map(compactToolResult)),
           }),
       }),

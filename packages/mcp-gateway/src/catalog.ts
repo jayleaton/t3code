@@ -730,20 +730,23 @@ export function requestContext(args: Record<string, unknown>) {
 }
 
 /**
- * Agents re-read every result on later turns, so the envelope echoes only the request and
- * correlation IDs the caller supplied, and empty fields are left out.
+ * The envelope echoes only the request and correlation IDs the caller supplied: generated ones
+ * were never seen by the caller. The text block, which text-reading harnesses put in the model's
+ * context, also leaves out null and empty-array fields; `structuredContent` keeps every field.
  */
 export function success(value: unknown, args: Record<string, unknown>) {
   const supplied = (key: string) => (typeof args[key] === "string" ? args[key] : undefined);
-  const body = compactJson({
+  const requestId = supplied("requestId") ?? supplied("idempotencyKey");
+  const correlationId = supplied("correlationId");
+  const body = {
     schemaVersion: "3",
-    requestId: supplied("requestId") ?? supplied("idempotencyKey"),
-    correlationId: supplied("correlationId"),
+    ...(requestId === undefined ? {} : { requestId }),
+    ...(correlationId === undefined ? {} : { correlationId }),
     serverTime: DateTime.formatIso(DateTime.nowUnsafe()),
     data: value,
-  });
+  };
   return {
-    content: [{ type: "text" as const, text: JSON.stringify(body) }],
+    content: [{ type: "text" as const, text: JSON.stringify(compactJson(body)) }],
     structuredContent: body,
   };
 }

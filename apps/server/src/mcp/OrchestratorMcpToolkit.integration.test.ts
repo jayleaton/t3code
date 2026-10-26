@@ -16,7 +16,6 @@ import {
   type ServerProvider,
   ThreadId,
 } from "@t3tools/contracts";
-import { expandCompactJson } from "@t3tools/shared/compactJson";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -67,14 +66,11 @@ const cancellationPrompt = "Remain active until the parent cancels this delegate
 const queuedFollowupPrompt = "Complete the queued follow-up and return the final result.";
 const queuedFollowupResult = "Queued delegated follow-up completed.";
 
-// Tool results leave out null and empty fields, so a typed reader expands them first.
-const decodeToolResult =
-  <S extends Schema.Decoder<unknown>>(schema: S) =>
-  (structuredContent: unknown) =>
-    Schema.decodeUnknownEffect(schema)(expandCompactJson(schema, structuredContent));
-const decodeDelegateTaskResult = decodeToolResult(OrchestratorMcpDelegateTaskResult);
-const decodeThreadInterruptResult = decodeToolResult(OrchestratorMcpThreadInterruptResult);
-const decodeThreadSendResult = decodeToolResult(OrchestratorMcpLocalThreadSendResult);
+const decodeDelegateTaskResult = Schema.decodeUnknownEffect(OrchestratorMcpDelegateTaskResult);
+const decodeThreadInterruptResult = Schema.decodeUnknownEffect(
+  OrchestratorMcpThreadInterruptResult,
+);
+const decodeThreadSendResult = Schema.decodeUnknownEffect(OrchestratorMcpLocalThreadSendResult);
 
 const codexSelection = {
   instanceId: codexInstanceId,

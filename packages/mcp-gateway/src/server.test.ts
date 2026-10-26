@@ -211,7 +211,7 @@ describe("MCP gateway server", () => {
     });
     expect(board.isError).not.toBe(true);
     expect(board.structuredContent).toMatchObject({
-      data: { items: [{ profileId: "code", description: "Implements approved plans" }] },
+      data: { items: [{ profileId: "code", description: "Implements approved plans", runs: [] }] },
     });
     expect(agents.structuredContent).toMatchObject({
       data: {
@@ -273,8 +273,13 @@ describe("MCP gateway server", () => {
       arguments: { environmentId: "local" },
     });
     expect(result.isError).not.toBe(true);
-    // Agents re-read results: no generated request IDs, empty lists, or empty warnings.
+    // No generated request IDs or empty warnings; the model-facing text also drops empty lists.
     expect(result.structuredContent).toEqual({
+      schemaVersion: "3",
+      serverTime: expect.any(String),
+      data: { items: [], snapshotAt: "snapshot-1" },
+    });
+    expect(JSON.parse((result.content as Array<{ text: string }>)[0]!.text)).toEqual({
       schemaVersion: "3",
       serverTime: expect.any(String),
       data: { snapshotAt: "snapshot-1" },
@@ -339,7 +344,7 @@ describe("MCP gateway server", () => {
     const before = await client.callTool({ name: "t3_list_environments", arguments: {} });
     expect(before.structuredContent).toMatchObject({
       schemaVersion: "3",
-      data: { snapshotAt: "runtime" },
+      data: { items: [], snapshotAt: "runtime" },
     });
 
     grants = { local: ["read", "create", "send"] };
@@ -449,7 +454,7 @@ describe("MCP gateway server", () => {
     });
     expect(replay.structuredContent).toMatchObject({
       schemaVersion: "3",
-      data: { subscriptionId, ackedSequence: 3 },
+      data: { subscriptionId, items: [], ackedSequence: 3 },
     });
 
     currentGrants = {};

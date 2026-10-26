@@ -12,7 +12,6 @@ import {
   type OrchestratorMcpThreadStatus,
   type OrchestratorMcpThreadTimelineItem,
 } from "@t3tools/contracts";
-import { expandCompactJson } from "@t3tools/shared/compactJson";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
@@ -191,10 +190,9 @@ const makeThreadTools = (session: McpToolSession, origin: string) => {
       if (result.isError === true) {
         return yield* new ThreadToolFailedError({ tool, detail: toolFailureDetail(result) });
       }
-      // The server leaves null and empty fields out of tool results.
-      return yield* Schema.decodeUnknownEffect(schema)(
-        expandCompactJson(schema, result.structuredContent),
-      ).pipe(Effect.mapError(() => unexpected(tool)));
+      return yield* Schema.decodeUnknownEffect(schema)(result.structuredContent).pipe(
+        Effect.mapError(() => unexpected(tool)),
+      );
     }),
   };
 };

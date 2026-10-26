@@ -239,7 +239,7 @@ describe("shared MCP gateway", () => {
     for (const client of clients.slice(1)) {
       expect(
         body(await client.callTool({ name: "t3_list_environments", arguments: {} })).data,
-      ).not.toHaveProperty("items");
+      ).toMatchObject({ items: [] });
     }
   });
 

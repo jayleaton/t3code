@@ -857,7 +857,7 @@ it.effect("lists tools in name order whichever toolkit registers first", () => {
   });
 });
 
-it.effect("leaves null and empty fields out of tool results and requires none of them", () => {
+it.effect("leaves null and empty fields out of the result text only", () => {
   const WaitToolkit = Toolkit.make(
     Tool.make("wait_tool", {
       success: Schema.Struct({
@@ -881,10 +881,12 @@ it.effect("leaves null and empty fields out of tool results and requires none of
     const server = yield* McpServer.McpServer;
     const result = yield* callTool("wait_tool", {});
     expect(result).toMatchObject({
-      structuredContent: { timedOut: false },
+      structuredContent: { runId: null, options: [], timedOut: false },
       content: [{ type: "text", text: '{"timedOut":false}' }],
     });
-    // MCP SDK clients reject structured content missing a key the output schema requires.
-    expect(JSON.stringify(server.tools[0]?.tool.outputSchema)).not.toContain('"required"');
+    // Typed readers decode structuredContent against the advertised schema, so it stays strict.
+    expect(server.tools[0]?.tool.outputSchema).toMatchObject({
+      required: ["runId", "options", "timedOut"],
+    });
   }).pipe(Effect.provide(registration.pipe(Layer.provideMerge(McpServer.McpServer.layer))));
 });

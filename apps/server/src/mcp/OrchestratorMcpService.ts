@@ -1711,6 +1711,7 @@ const make = Effect.gen(function* () {
       taskId: task.id,
       childThreadId: task.childThreadId,
       childRunId: childRun?.id ?? null,
+      childNodeId: task.id,
       status,
       workState,
       hasPendingChildRuns: hasPendingChildRuns(childProjection, childRun),

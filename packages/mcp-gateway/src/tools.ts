@@ -472,28 +472,6 @@ type GatewayListPage = {
   readonly snapshotAt: string;
 };
 
-/** A task list read by its owner leaves out the owner on every task: the caller knows itself. */
-function withoutCallerOwner(result: unknown, callerThreadId: string | undefined): unknown {
-  const tasks = isRecord(result) ? result.tasks : undefined;
-  if (callerThreadId === undefined || !Array.isArray(tasks)) return result;
-  return {
-    ...(result as Record<string, unknown>),
-    tasks: tasks.map((view: unknown) => {
-      if (!isRecord(view) || !isRecord(view.task)) return view;
-      const { ownerThreadId, ...task } = view.task;
-      return ownerThreadId === callerThreadId ? { ...view, task } : view;
-    }),
-  };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function sameMembers(left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean {
-  return left.length === right.length && left.every((value) => right.includes(value));
-}
-
 function tagged(target: DiscoveryTarget, page: GatewayListPage): GatewayListPage {
   return { ...page, items: page.items.map((item) => ({ ...item, ...target })) };
 }
@@ -1654,8 +1632,7 @@ export async function callGatewayTool(
       const request = { action, input: parsed.data } as GatewayThreadTaskRequest;
       try {
         // The calling chat is the server's own record of who invoked the tool, never input.
-        const result = await context.port.threadTask(environmentId, request, invocation.caller);
-        return withoutCallerOwner(result, invocation.caller?.threadId);
+        return await context.port.threadTask(environmentId, request, invocation.caller);
       } catch (error) {
         throw threadTaskFailure(error, environmentId);
       }
@@ -1763,12 +1740,7 @@ export async function callGatewayTool(
         }
       }
       return {
-        // An agent restricted to exactly the machines it was found on says so once.
-        items: [...agents.values()].map(({ environmentIds, ...agent }) =>
-          sameMembers(environmentIds ?? [], agent.availableEnvironmentIds)
-            ? agent
-            : { ...agent, environmentIds },
-        ),
+        items: [...agents.values()],
         environments: discovered.coverage,
         snapshotAt: "runtime",
       };
