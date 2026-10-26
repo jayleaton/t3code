@@ -738,6 +738,61 @@ const registerDeviceScreenshot = Effect.fn("McpHttpServer.registerDeviceScreensh
   );
 });
 
+type McpToolRegistration = Parameters<McpServer.McpServer["Service"]["addTool"]>[0];
+
+const byToolName = (left: McpToolRegistration, right: McpToolRegistration) =>
+  left.tool.name < right.tool.name ? -1 : left.tool.name > right.tool.name ? 1 : 0;
+
+/**
+ * Effect's MCP server lists tools in first-registration order, and toolkit
+ * layers build concurrently, so `tools/list` order could change between
+ * starts. Provider prompt caches key on the exact tool list. Under
+ * `layerInToolNameOrder`, registrations are staged here and added sorted by
+ * name once every toolkit is built.
+ */
+export class McpToolCatalog extends Context.Service<
+  McpToolCatalog,
+  {
+    readonly stage: (registration: McpToolRegistration) => Effect.Effect<void>;
+    readonly registerStaged: Effect.Effect<void>;
+  }
+>()("t3/mcp/McpHttpServer/McpToolCatalog") {
+  static readonly layer = Layer.effect(
+    McpToolCatalog,
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      // Undefined once flushed: a later registration has nothing to wait for.
+      let staged: Array<McpToolRegistration> | undefined = [];
+      return McpToolCatalog.of({
+        stage: (registration) => {
+          if (staged === undefined) return server.addTool(registration);
+          staged.push(registration);
+          return Effect.void;
+        },
+        registerStaged: Effect.suspend(() => {
+          const registrations = (staged ?? []).toSorted(byToolName);
+          staged = undefined;
+          return Effect.forEach(registrations, server.addTool, { discard: true });
+        }),
+      });
+    }),
+  );
+}
+
+const stagedInCatalog = Effect.fn("McpHttpServer.stagedInCatalog")(function* <A, E, R>(
+  registration: Effect.Effect<A, E, R>,
+) {
+  const catalog = yield* Effect.serviceOption(McpToolCatalog);
+  if (Option.isNone(catalog)) return yield* registration;
+  const server = yield* McpServer.McpServer;
+  return yield* registration.pipe(
+    Effect.provideService(
+      McpServer.McpServer,
+      McpServer.McpServer.of({ ...server, addTool: catalog.value.stage }),
+    ),
+  );
+});
+
 const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
 const isCallToolResult = Schema.is(McpSchema.CallToolResult);
 
@@ -785,7 +840,7 @@ const registerAgentsTools = Effect.fn("McpHttpServer.registerAgentsTools")(funct
   }
 });
 
-export const layerAgentsToolkit = Layer.effectDiscard(registerAgentsTools()).pipe(
+export const layerAgentsToolkit = Layer.effectDiscard(stagedInCatalog(registerAgentsTools())).pipe(
   Layer.provide(McpToolAccess.HandlersLayer.layer(AgentsTools.layer)),
 );
 
@@ -1013,6 +1068,13 @@ const withToolAnalytics =
     return yield* registration.pipe(Effect.provideService(McpServer.McpServer, recordingServer));
   });
 
+/** Builds `toolkits`, then registers all their tools in name order. */
+export const layerInToolNameOrder = <E, R>(toolkits: Layer.Layer<never, E, R>) =>
+  Layer.effectDiscard(McpToolCatalog.use((catalog) => catalog.registerStaged)).pipe(
+    Layer.provide(toolkits),
+    Layer.provide(McpToolCatalog.layer),
+  );
+
 /**
  * `McpServer.toolkit` asks for every service its tools declare when it
  * registers them, but the auth middleware provides `McpInvocationContext` to
@@ -1024,7 +1086,7 @@ export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, 
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
 ) => {
   const registration = Layer.effectDiscard(
-    withToolAnalytics(McpServer.registerToolkit(decodeAsAdvertised(toolkit))),
+    stagedInCatalog(withToolAnalytics(McpServer.registerToolkit(decodeAsAdvertised(toolkit)))),
   ).pipe(Layer.provide(McpServer.McpServer.layer));
   // @effect-diagnostics-next-line unsafeEffectTypeAssertion:off - the auth middleware provides it per request.
   const registered = registration as Layer.Layer<
@@ -1039,7 +1101,7 @@ const imageToolRegistration = <Tools extends Record<string, Tool.Any>, A, E, R, 
   register: Effect.Effect<A, E, R>,
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
 ) =>
-  Layer.effectDiscard(withToolAnalytics(register)).pipe(
+  Layer.effectDiscard(stagedInCatalog(withToolAnalytics(register))).pipe(
     Layer.provide(McpToolAccess.HandlersLayer.layer(handlers)),
   );
 
@@ -1120,18 +1182,20 @@ export const layerMcpTransport = McpServer.layerHttp({
   allowSessionTermination: true,
 }).pipe(Layer.provide(layerMcpAuthMiddleware));
 
-export const layer = Layer.mergeAll(
-  // Fork: T3 Agents tools join this server's `t3-code` MCP (see mcp/agents).
-  layerAgentsToolkit,
-  layerPreviewToolkit,
-  layerOrchestratorToolkit,
-  layerThreadToolkit,
-  layerAttachmentToolkit,
-  layerProjectRegistration,
-  layerEnvironmentToolkit,
-  layerPreviewControlsRegistration,
-  layerWorktreeToolkitRegistration,
-  layerPullRequestsToolkit,
-  layerDeviceToolkit,
-  layerHtmlToolkit,
+export const layer = layerInToolNameOrder(
+  Layer.mergeAll(
+    // Fork: T3 Agents tools join this server's `t3-code` MCP (see mcp/agents).
+    layerAgentsToolkit,
+    layerPreviewToolkit,
+    layerOrchestratorToolkit,
+    layerThreadToolkit,
+    layerAttachmentToolkit,
+    layerProjectRegistration,
+    layerEnvironmentToolkit,
+    layerPreviewControlsRegistration,
+    layerWorktreeToolkitRegistration,
+    layerPullRequestsToolkit,
+    layerDeviceToolkit,
+    layerHtmlToolkit,
+  ),
 ).pipe(Layer.provideMerge(layerMcpTransport));

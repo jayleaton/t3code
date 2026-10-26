@@ -820,3 +820,39 @@ it.effect("admits provider and OAuth client credentials and points only clients 
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
+
+it.effect("lists tools in name order whichever toolkit registers first", () => {
+  const tool = (name: string) =>
+    Tool.make(name, {
+      success: Schema.Struct({ ok: Schema.Boolean }),
+      failure: OrchestratorMcpFailure,
+      failureMode: "return",
+    });
+  const ok = McpToolAccess.reads(() => Effect.succeed({ ok: true }));
+  const AlphaToolkit = Toolkit.make(tool("alpha_tool"));
+  const ZetaToolkit = Toolkit.make(tool("zeta_tool"), tool("mid_tool"));
+  const alpha = McpHttpServer.toolkitRegistration(
+    AlphaToolkit,
+    McpToolAccess.toLayer(AlphaToolkit, { alpha_tool: ok }),
+  );
+  const zeta = McpHttpServer.toolkitRegistration(
+    ZetaToolkit,
+    McpToolAccess.toLayer(ZetaToolkit, { zeta_tool: ok, mid_tool: ok }),
+  );
+  const listedNames = (toolkits: Layer.Layer<never>) =>
+    McpServer.McpServer.pipe(
+      Effect.map((server) => server.tools.map(({ tool }) => tool.name)),
+      Effect.provide(
+        McpHttpServer.layerInToolNameOrder(toolkits).pipe(
+          Layer.provideMerge(McpServer.McpServer.layer),
+        ),
+      ),
+    );
+  return Effect.gen(function* () {
+    // A provided layer builds before the layer it feeds, forcing each registration order.
+    const zetaFirst = yield* listedNames(alpha.pipe(Layer.provide(zeta)));
+    const alphaFirst = yield* listedNames(zeta.pipe(Layer.provide(alpha)));
+    expect(zetaFirst).toEqual(["alpha_tool", "mid_tool", "zeta_tool"]);
+    expect(alphaFirst).toEqual(zetaFirst);
+  });
+});
