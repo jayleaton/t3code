@@ -999,7 +999,7 @@ function threadRun(run: OrchestrationV2Run): OrchestratorMcpThreadRun {
 
 function jsonText(value: unknown): string {
   try {
-    return JSON.stringify(value, null, 2);
+    return JSON.stringify(value);
   } catch {
     return String(value);
   }

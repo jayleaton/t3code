@@ -273,10 +273,16 @@ describe("MCP gateway server", () => {
       arguments: { environmentId: "local" },
     });
     expect(result.isError).not.toBe(true);
-    expect(result.structuredContent).toMatchObject({
+    // No generated request IDs or empty warnings; the model-facing text also drops empty lists.
+    expect(result.structuredContent).toEqual({
       schemaVersion: "3",
+      serverTime: expect.any(String),
       data: { items: [], snapshotAt: "snapshot-1" },
-      warnings: [],
+    });
+    expect(JSON.parse((result.content as Array<{ text: string }>)[0]!.text)).toEqual({
+      schemaVersion: "3",
+      serverTime: expect.any(String),
+      data: { snapshotAt: "snapshot-1" },
     });
 
     await client.close();
@@ -317,6 +323,7 @@ describe("MCP gateway server", () => {
         });
 
         expect(result.isError).not.toBe(true);
+        expect(result.structuredContent).toMatchObject({ requestId: "worktree-create-1" });
         expect(creates).toHaveLength(1);
         expect(creates[0]).toMatchObject({ workspaceMode: "worktree", baseBranch: "main" });
       } finally {

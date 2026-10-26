@@ -856,3 +856,37 @@ it.effect("lists tools in name order whichever toolkit registers first", () => {
     expect(alphaFirst).toEqual(zetaFirst);
   });
 });
+
+it.effect("leaves null and empty fields out of the result text only", () => {
+  const WaitToolkit = Toolkit.make(
+    Tool.make("wait_tool", {
+      success: Schema.Struct({
+        runId: Schema.NullOr(Schema.String),
+        options: Schema.Array(Schema.String),
+        timedOut: Schema.Boolean,
+      }),
+      failure: OrchestratorMcpFailure,
+      failureMode: "return",
+    }),
+  );
+  const registration = McpHttpServer.toolkitRegistration(
+    WaitToolkit,
+    McpToolAccess.toLayer(WaitToolkit, {
+      wait_tool: McpToolAccess.reads(() =>
+        Effect.succeed({ runId: null, options: [], timedOut: false }),
+      ),
+    }),
+  );
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const result = yield* callTool("wait_tool", {});
+    expect(result).toMatchObject({
+      structuredContent: { runId: null, options: [], timedOut: false },
+      content: [{ type: "text", text: '{"timedOut":false}' }],
+    });
+    // Typed readers decode structuredContent against the advertised schema, so it stays strict.
+    expect(server.tools[0]?.tool.outputSchema).toMatchObject({
+      required: ["runId", "options", "timedOut"],
+    });
+  }).pipe(Effect.provide(registration.pipe(Layer.provideMerge(McpServer.McpServer.layer))));
+});

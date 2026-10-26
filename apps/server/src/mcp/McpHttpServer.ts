@@ -20,6 +20,8 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 
+import { compactJson } from "@t3tools/shared/compactJson";
+
 import { serverBuildVersion } from "../buildVersion.ts";
 import * as ServerConfig from "../config.ts";
 import * as DeviceService from "../device/DeviceService.ts";
@@ -1075,6 +1077,46 @@ export const layerInToolNameOrder = <E, R>(toolkits: Layer.Layer<never, E, R>) =
     Layer.provide(McpToolCatalog.layer),
   );
 
+const compactToolResult = <A>(result: A): A => {
+  if (
+    !isCallToolResult(result) ||
+    result.isError === true ||
+    result.structuredContent === undefined
+  ) {
+    return result;
+  }
+  return new McpSchema.CallToolResult({
+    ...result,
+    content: [{ type: "text", text: JSON.stringify(compactJson(result.structuredContent)) }],
+  }) as A;
+};
+
+/**
+ * `McpServer.toolkit` writes each result twice, as `structuredContent` and as
+ * JSON text. The text block, which text-reading harnesses put in the model's
+ * context, leaves out null and empty-array fields. `structuredContent` and the
+ * advertised `outputSchema` stay complete for typed readers, including older
+ * `t3 thread` CLIs that decode it with the contract schemas.
+ */
+const withCompactResults = Effect.fn("McpHttpServer.withCompactResults")(function* <A, E, R>(
+  registration: Effect.Effect<A, E, R>,
+) {
+  const server = yield* McpServer.McpServer;
+  return yield* registration.pipe(
+    Effect.provideService(
+      McpServer.McpServer,
+      McpServer.McpServer.of({
+        ...server,
+        addTool: (options) =>
+          server.addTool({
+            ...options,
+            handle: (payload) => options.handle(payload).pipe(Effect.map(compactToolResult)),
+          }),
+      }),
+    ),
+  );
+});
+
 /**
  * `McpServer.toolkit` asks for every service its tools declare when it
  * registers them, but the auth middleware provides `McpInvocationContext` to
@@ -1086,7 +1128,9 @@ export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, 
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
 ) => {
   const registration = Layer.effectDiscard(
-    stagedInCatalog(withToolAnalytics(McpServer.registerToolkit(decodeAsAdvertised(toolkit)))),
+    stagedInCatalog(
+      withToolAnalytics(withCompactResults(McpServer.registerToolkit(decodeAsAdvertised(toolkit)))),
+    ),
   ).pipe(Layer.provide(McpServer.McpServer.layer));
   // @effect-diagnostics-next-line unsafeEffectTypeAssertion:off - the auth middleware provides it per request.
   const registered = registration as Layer.Layer<

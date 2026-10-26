@@ -131,6 +131,10 @@
       "types": "./src/Struct.ts",
       "import": "./src/Struct.ts"
     },
+    "./compactJson": {
+      "types": "./src/compactJson.ts",
+      "import": "./src/compactJson.ts"
+    },
     "./serverSettings": {
       "types": "./src/serverSettings.ts",
       "import": "./src/serverSettings.ts"
