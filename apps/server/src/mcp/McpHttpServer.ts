@@ -38,6 +38,7 @@ import {
   toolOutcome,
 } from "../telemetry/ProviderDimensions.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import { leanToolResult, wantsLeanResults } from "./McpResultShape.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
@@ -799,6 +800,50 @@ const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
 const isCallToolResult = Schema.is(McpSchema.CallToolResult);
 
 /**
+ * Decides each tool result's shape once per MCP session, from the client the
+ * session initialized as (see McpResultShape). Other clients get the result
+ * as registered.
+ */
+const withResultShape = Effect.fn("McpHttpServer.withResultShape")(function* <A, E, R>(
+  registration: Effect.Effect<A, E, R>,
+) {
+  const server = yield* McpServer.McpServer;
+  return yield* registration.pipe(
+    Effect.provideService(
+      McpServer.McpServer,
+      McpServer.McpServer.of({
+        ...server,
+        addTool: (options) =>
+          server.addTool({
+            ...options,
+            handle: (payload) =>
+              options
+                .handle(payload)
+                .pipe(
+                  Effect.flatMap((result) =>
+                    Effect.map(
+                      Effect.all([
+                        Effect.serviceOption(McpSchema.McpServerClient),
+                        Effect.serviceOption(McpInvocationContext.McpInvocationContext),
+                      ]),
+                      ([client, invocation]) =>
+                        isCallToolResult(result) &&
+                        wantsLeanResults(Option.getOrUndefined(client)?.clientInfo)
+                          ? leanToolResult(
+                              result,
+                              Option.getOrUndefined(invocation)?.thread?.threadId,
+                            )
+                          : result,
+                    ),
+                  ),
+                ),
+          }),
+      }),
+    ),
+  );
+});
+
+/**
  * Fork: the T3 Agents tools (see mcp/agents). Registered by hand because each tool keeps the
  * gateway catalog's input schema and returns the gateway's own envelope as its result.
  */
@@ -842,9 +887,9 @@ const registerAgentsTools = Effect.fn("McpHttpServer.registerAgentsTools")(funct
   }
 });
 
-export const layerAgentsToolkit = Layer.effectDiscard(stagedInCatalog(registerAgentsTools())).pipe(
-  Layer.provide(McpToolAccess.HandlersLayer.layer(AgentsTools.layer)),
-);
+export const layerAgentsToolkit = Layer.effectDiscard(
+  stagedInCatalog(withResultShape(registerAgentsTools())),
+).pipe(Layer.provide(McpToolAccess.HandlersLayer.layer(AgentsTools.layer)));
 
 const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(function* () {
   const htmlRender = yield* HtmlRender.HtmlRender;
@@ -1129,7 +1174,9 @@ export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, 
 ) => {
   const registration = Layer.effectDiscard(
     stagedInCatalog(
-      withToolAnalytics(withCompactResults(McpServer.registerToolkit(decodeAsAdvertised(toolkit)))),
+      withToolAnalytics(
+        withResultShape(withCompactResults(McpServer.registerToolkit(decodeAsAdvertised(toolkit)))),
+      ),
     ),
   ).pipe(Layer.provide(McpServer.McpServer.layer));
   // @effect-diagnostics-next-line unsafeEffectTypeAssertion:off - the auth middleware provides it per request.

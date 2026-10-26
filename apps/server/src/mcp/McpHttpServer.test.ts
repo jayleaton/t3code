@@ -890,3 +890,78 @@ it.effect("leaves null and empty fields out of the result text only", () => {
     });
   }).pipe(Effect.provide(registration.pipe(Layer.provideMerge(McpServer.McpServer.layer))));
 });
+
+it.effect("shapes results by the session's client: lean for Claude Code and Codex only", () => {
+  const ResultToolkit = Toolkit.make(
+    Tool.make("result_tool", {
+      success: Schema.Struct({
+        taskId: Schema.String,
+        childNodeId: Schema.String,
+        ownerThreadId: Schema.String,
+        runId: Schema.NullOr(Schema.String),
+        options: Schema.Array(Schema.String),
+        timedOut: Schema.Boolean,
+      }),
+      failure: OrchestratorMcpFailure,
+      failureMode: "return",
+    }),
+  );
+  const full = {
+    taskId: "task-1",
+    childNodeId: "task-1",
+    ownerThreadId: threadId,
+    runId: null,
+    options: [],
+    timedOut: false,
+  };
+  const handlers = McpToolAccess.toLayer(ResultToolkit, {
+    result_tool: McpToolAccess.reads(() => Effect.succeed(full)),
+  });
+  const callAs = (name: string) =>
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      return yield* server
+        .callTool({ name: "result_tool", arguments: {} })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.provideService(
+            McpSchema.McpServerClient,
+            McpSchema.McpServerClient.of({ ...client, clientInfo: { name, version: "1.0.0" } }),
+          ),
+        );
+    });
+  const shaped = McpHttpServer.toolkitRegistration(ResultToolkit, handlers).pipe(
+    Layer.provideMerge(McpServer.McpServer.layer),
+  );
+  // What main serves every client: the full encoded result, and its text without empty fields.
+  const baseline = new McpSchema.CallToolResult({
+    isError: false,
+    structuredContent: full,
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          taskId: "task-1",
+          childNodeId: "task-1",
+          ownerThreadId: threadId,
+          timedOut: false,
+        }),
+      },
+    ],
+  });
+  return Effect.gen(function* () {
+    for (const name of ["t3-thread-cli", "mcp-test", "cursor"]) {
+      const result = yield* callAs(name).pipe(Effect.provide(shaped));
+      expect(JSON.stringify(result)).toBe(JSON.stringify(baseline));
+    }
+    for (const name of ["claude-code", "codex-mcp-client"]) {
+      const result = yield* callAs(name).pipe(Effect.provide(shaped));
+      expect(result).toMatchObject({
+        isError: false,
+        content: [],
+        structuredContent: { taskId: "task-1", timedOut: false },
+      });
+      expect(Object.keys(result.structuredContent ?? {})).toEqual(["taskId", "timedOut"]);
+    }
+  });
+});
