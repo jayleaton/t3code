@@ -161,6 +161,7 @@ function startWithMissingWorktree(
             projectionReadCount += 1;
             return Effect.succeed({
               ...projection,
+              compactedRunIds: [],
               hasConversation: projection.messages.some(
                 (m) =>
                   m.role === "user" &&
@@ -282,6 +283,9 @@ function makeLocalCommandHarness(input: {
     readonly liveSession?: boolean;
     readonly interruptFailure?: boolean;
     readonly interruptCurrentRun?: boolean;
+    /** Profile content the previous turn's prompt carried. */
+    readonly profileContentHash?: string;
+    readonly compacted?: boolean;
   };
 }) {
   const now = DateTime.makeUnsafe("2026-09-04T12:00:00Z");
@@ -493,6 +497,21 @@ function makeLocalCommandHarness(input: {
         },
         run,
       ],
+      attempts:
+        input.previousTurn.profileContentHash === undefined
+          ? projection.attempts
+          : [
+              {
+                ...projection.attempts[0]!,
+                id: previousAttemptId,
+                runId: previousRunId,
+                providerThreadId: previousProviderThreadId,
+                nativeThreadId: "existing-native-conversation",
+                status: "completed",
+                profileContentHash: input.previousTurn.profileContentHash,
+              },
+              ...projection.attempts,
+            ],
       providerThreads: [
         {
           ...providerThread,
@@ -635,9 +654,9 @@ function makeLocalCommandHarness(input: {
         )
       : Effect.void,
   );
-  const tryHandlePromptCommand = vi.fn(() =>
+  const tryHandlePromptCommand = vi.fn(({ text }: { readonly text: string }) =>
     input.logoutFailure === undefined
-      ? Effect.succeed(true)
+      ? Effect.succeed(text.trim().toLowerCase() !== "/compact")
       : Effect.fail(
           new ProviderSetupError({
             instanceId: oldInstanceId,
@@ -681,6 +700,7 @@ function makeLocalCommandHarness(input: {
   const getTurnStartContext = vi.fn(() =>
     Effect.succeed({
       ...projection,
+      compactedRunIds: input.previousTurn?.compacted ? [RunId.make("previous-failed-run")] : [],
       hasConversation: projection.messages.some(
         (m) =>
           m.role === "user" &&
@@ -795,6 +815,67 @@ effectIt.effect("prefixes an agent turn with the instructions its thread referen
     expect(harness.startRootRun.mock.calls[0]?.[0].message.text).toBe(
       "<agent_profile_instructions>\nReview every change.\n</agent_profile_instructions>\n\nContinue",
     );
+  }),
+);
+
+effectIt.effect("omits instructions the native conversation already holds", () =>
+  Effect.gen(function* () {
+    const harness = makeLocalCommandHarness({
+      text: "Continue",
+      previousTurn: {
+        runStatus: "completed",
+        turnStatus: "completed",
+        profileContentHash: "sha256:agent",
+      },
+      profileContent: { systemPrompt: "Review every change.", skills: [] },
+    });
+
+    yield* harness.start;
+
+    expect(harness.startRootRun.mock.calls[0]?.[0].message.text).toBe("Continue");
+    expect(
+      harness.projection().attempts.find((attempt) => attempt.id === harness.attemptId),
+    ).not.toHaveProperty("profileContentHash");
+  }),
+);
+
+effectIt.effect("resends instructions after the provider compacted them away", () =>
+  Effect.gen(function* () {
+    const harness = makeLocalCommandHarness({
+      text: "Continue",
+      previousTurn: {
+        runStatus: "completed",
+        turnStatus: "completed",
+        profileContentHash: "sha256:agent",
+        compacted: true,
+      },
+      profileContent: { systemPrompt: "Review every change.", skills: [] },
+    });
+
+    yield* harness.start;
+
+    expect(harness.startRootRun.mock.calls[0]?.[0].message.text).toBe(
+      "<agent_profile_instructions>\nReview every change.\n</agent_profile_instructions>\n\nContinue",
+    );
+    expect(
+      harness.projection().attempts.find((attempt) => attempt.id === harness.attemptId)
+        ?.profileContentHash,
+    ).toBe("sha256:agent");
+  }),
+);
+
+effectIt.effect("keeps a compaction prompt exact so the adapter recognizes it", () =>
+  Effect.gen(function* () {
+    const harness = makeLocalCommandHarness({
+      text: "/compact",
+      previousMessages: ["Review the diff"],
+      previousTurn: { runStatus: "completed", turnStatus: "completed" },
+      profileContent: { systemPrompt: "Review every change.", skills: [] },
+    });
+
+    yield* harness.start;
+
+    expect(harness.startRootRun.mock.calls[0]?.[0].message.text).toBe("/compact");
   }),
 );
 

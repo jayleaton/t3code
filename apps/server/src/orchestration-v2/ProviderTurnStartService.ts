@@ -1,6 +1,6 @@
 import { syncAgentSkillFiles } from "../provider/AgentInstructionFiles.ts";
 import * as Path from "effect/Path";
-import { agentProfilePrompt } from "./AgentProfile.ts";
+import { agentInstructionsInContext, agentProfilePrompt } from "./AgentProfile.ts";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import {
@@ -951,11 +951,40 @@ export const layer: Layer.Layer<
         status: "running",
         startedAt: now,
       };
+      const compactionMessageIds = new Set(
+        projection.messages
+          .filter(
+            (candidate) =>
+              candidate.attachments.length === 0 &&
+              candidate.text.trim().toLowerCase() === "/compact",
+          )
+          .map((candidate) => candidate.id),
+      );
+      const profileContentHash = projection.thread.profileSnapshot?.contentHash;
+      // The adapter recognizes a compaction by its exact text, so it never carries instructions.
+      const sendAgentInstructions =
+        profileContentHash !== undefined &&
+        !compactionMessageIds.has(message.id) &&
+        !agentInstructionsInContext({
+          profileContentHash,
+          nativeThreadId: runningProviderThread.nativeThreadRef?.nativeId ?? undefined,
+          run,
+          runs: projection.runs,
+          attempts: projection.attempts,
+          providerTurns: projection.providerTurns,
+          compactedRunIds: new Set([
+            ...projection.compactedRunIds,
+            ...projection.runs
+              .filter((source) => compactionMessageIds.has(source.userMessageId))
+              .map((source) => source.id),
+          ]),
+        });
       const runningAttempt: OrchestrationV2RunAttempt = {
         ...attempt,
         ...(runningProviderThread.nativeThreadRef?.nativeId == null
           ? {}
           : { nativeThreadId: runningProviderThread.nativeThreadRef.nativeId }),
+        ...(sendAgentInstructions ? { profileContentHash } : {}),
         status: "running",
         startedAt: now,
       };
@@ -1079,10 +1108,12 @@ export const layer: Layer.Layer<
           )
         : "";
       const userText = projectComposerContextForProvider({
-        text: agentProfilePrompt(
-          skillIndex ? `${skillIndex}\n\n${message.text}` : message.text,
-          profileContent?.systemPrompt,
-        ),
+        text: sendAgentInstructions
+          ? agentProfilePrompt(
+              skillIndex ? `${skillIndex}\n\n${message.text}` : message.text,
+              profileContent?.systemPrompt,
+            )
+          : message.text,
         records: message.context?.records ?? [],
       });
       // Delivered once: this run's provider turn marks the work as told. A
@@ -1096,15 +1127,7 @@ export const layer: Layer.Layer<
       const restartCancelledWork = pendingRestartCancelledBackgroundWork({
         runs: projection.runs,
         providerTurns: projection.providerTurns,
-        compactionMessageIds: new Set(
-          projection.messages
-            .filter(
-              (candidate) =>
-                candidate.attachments.length === 0 &&
-                candidate.text.trim().toLowerCase() === "/compact",
-            )
-            .map((candidate) => candidate.id),
-        ),
+        compactionMessageIds,
         run,
         attempts: projection.attempts,
       });

@@ -1,6 +1,16 @@
 import { describe, expect, it } from "@effect/vitest";
-import { ProviderInstanceId, type McpGatewayProfile } from "@t3tools/contracts";
-import { agentProfilePrompt, resolveThreadCreateProfile } from "./AgentProfile.ts";
+import {
+  ProviderInstanceId,
+  ProviderThreadId,
+  RunAttemptId,
+  RunId,
+  type McpGatewayProfile,
+} from "@t3tools/contracts";
+import {
+  agentInstructionsInContext,
+  agentProfilePrompt,
+  resolveThreadCreateProfile,
+} from "./AgentProfile.ts";
 
 const profile: McpGatewayProfile = {
   profileId: "review",
@@ -83,5 +93,73 @@ describe("V2 profile association", () => {
     expect(resolved.modelSelection).toEqual(modelSelection);
     expect(resolved.profileSnapshot?.effectiveSource.modelSelection).toBe("thread-override");
     expect(resolved.profileContent?.systemPrompt).toBe(profile.systemPrompt);
+  });
+});
+
+describe("agent instruction delivery", () => {
+  const providerThreadId = ProviderThreadId.make("provider-thread");
+  const turn = (ordinal: number, overrides: { status?: "completed" | "rolled_back" } = {}) => ({
+    id: RunId.make(`run-${ordinal}`),
+    ordinal,
+    status: overrides.status ?? ("completed" as const),
+    providerThreadId,
+  });
+  const attempt = (ordinal: number, profileContentHash?: string) => ({
+    id: RunAttemptId.make(`attempt-${ordinal}`),
+    runId: RunId.make(`run-${ordinal}`),
+    attemptOrdinal: 1,
+    providerThreadId,
+    nativeThreadId: "native-1",
+    ...(profileContentHash === undefined ? {} : { profileContentHash }),
+  });
+  const accepted = (ordinal: number, status: "completed" | "failed" = "completed") => ({
+    runAttemptId: RunAttemptId.make(`attempt-${ordinal}`),
+    status,
+  });
+  // Every input is durable projection state, so a restarted server decides the same way.
+  const base = {
+    profileContentHash: "sha256:v1",
+    nativeThreadId: "native-1",
+    run: { providerThreadId },
+    runs: [turn(1), turn(2), turn(3)],
+    attempts: [attempt(1, "sha256:v1"), attempt(2)],
+    providerTurns: [accepted(1), accepted(2)],
+    compactedRunIds: new Set<string>(),
+  };
+
+  it("skips instructions the same native conversation already accepted", () => {
+    expect(agentInstructionsInContext(base)).toBe(true);
+  });
+
+  it.each([
+    ["a fresh native session", { nativeThreadId: undefined }],
+    ["a different native session", { nativeThreadId: "native-2" }],
+    ["another provider thread", { run: { providerThreadId: ProviderThreadId.make("switched") } }],
+    ["changed profile content", { profileContentHash: "sha256:v2" }],
+    ["a later compaction", { compactedRunIds: new Set(["run-2"]) }],
+    ["a compaction during the delivering turn", { compactedRunIds: new Set(["run-1"]) }],
+    ["a rolled-back delivery", { runs: [turn(1, { status: "rolled_back" }), turn(2), turn(3)] }],
+    ["a turn the provider failed", { providerTurns: [accepted(1, "failed"), accepted(2)] }],
+  ])("resends instructions after %s", (_label, overrides) => {
+    expect(agentInstructionsInContext({ ...base, ...overrides })).toBe(false);
+  });
+
+  it("resends when a newer delivery replaced the current content", () => {
+    expect(
+      agentInstructionsInContext({
+        ...base,
+        attempts: [attempt(1, "sha256:v1"), attempt(2, "sha256:v2")],
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores a compaction that the delivery came after", () => {
+    expect(
+      agentInstructionsInContext({
+        ...base,
+        attempts: [attempt(1), attempt(2, "sha256:v1")],
+        compactedRunIds: new Set(["run-1"]),
+      }),
+    ).toBe(true);
   });
 });
