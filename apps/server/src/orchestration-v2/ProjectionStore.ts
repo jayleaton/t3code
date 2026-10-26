@@ -605,7 +605,11 @@ export interface ProjectionStoreV2Shape {
       | "contextHandoffs"
       | "contextTransfers"
       | "turnItems"
-    > & { readonly hasConversation: boolean },
+    > & {
+      readonly hasConversation: boolean;
+      /** Runs whose provider reported a context compaction. */
+      readonly compactedRunIds: ReadonlyArray<RunId>;
+    },
     ProjectionStoreV2Error
   >;
   readonly getTurnStartHistory: (
@@ -4490,6 +4494,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 OR (role = 'user' AND lower(trim(json_extract(payload_json, '$.text'), ${javascriptTrimWhitespace})) = '/compact')
               ) ORDER BY created_at ASC, message_id ASC
             `.pipe(Effect.flatMap(decodeRows(decodeMessagePayload, threadId)));
+            const compacted = yield* sql<{ run_id: RunId }>`
+              SELECT DISTINCT run_id FROM orchestration_v2_projection_turn_items
+              WHERE thread_id = ${threadId} AND type = 'compaction' AND run_id IS NOT NULL
+            `;
             const conversation = yield* sql<{ present: number }>`
               SELECT EXISTS(
                 SELECT 1 FROM orchestration_v2_projection_messages
@@ -4502,6 +4510,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               hasConversation:
                 conversation[0]?.present === 1 ||
                 inheritsForkConversation({ thread, contextTransfers, contextHandoffs }),
+              compactedRunIds: compacted.map((row) => row.run_id),
               thread,
               runs,
               attempts,
@@ -7812,6 +7821,13 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                   (message.text.trim().toLowerCase() !== "/compact" ||
                     message.attachments.length > 0),
               ) || inheritsForkConversation(projection),
+            compactedRunIds: [
+              ...new Set(
+                projection.turnItems.flatMap((item) =>
+                  item.type === "compaction" && item.runId !== null ? [item.runId] : [],
+                ),
+              ),
+            ],
             turnItems: projection.turnItems.filter((item) => item.runId === runId),
           })),
         ),

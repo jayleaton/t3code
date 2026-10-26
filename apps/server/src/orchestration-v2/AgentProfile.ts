@@ -4,6 +4,9 @@ import {
   type ServerProvider,
   type ThreadProfileSelection,
   type ThreadProfileSnapshot,
+  type OrchestrationV2ProviderTurn,
+  type OrchestrationV2Run,
+  type OrchestrationV2RunAttempt,
   OrchestrationDispatchCommandError,
 } from "@t3tools/contracts";
 
@@ -176,4 +179,71 @@ export function agentProfilePrompt(text: string, systemPrompt: string | undefine
   return instructions
     ? `<agent_profile_instructions>\n${instructions}\n</agent_profile_instructions>\n\n${text}`
     : text;
+}
+
+/**
+ * Whether this native conversation still holds the exact instructions the next prompt would
+ * prepend, so repeating them would only grow every later turn's context. Every adapter keeps
+ * native history across turns and binds a new native id when it cannot resume one, so an
+ * accepted prompt under the same native id is still in context unless a compaction summarized it
+ * or a rollback removed it. Changed content is resent because the newest copy is authoritative.
+ */
+export function agentInstructionsInContext(input: {
+  readonly profileContentHash: string;
+  readonly nativeThreadId: string | undefined;
+  readonly run: Pick<OrchestrationV2Run, "providerThreadId">;
+  readonly runs: ReadonlyArray<
+    Pick<OrchestrationV2Run, "id" | "ordinal" | "status" | "providerThreadId">
+  >;
+  readonly attempts: ReadonlyArray<
+    Pick<
+      OrchestrationV2RunAttempt,
+      | "id"
+      | "runId"
+      | "attemptOrdinal"
+      | "providerThreadId"
+      | "nativeThreadId"
+      | "profileContentHash"
+    >
+  >;
+  readonly providerTurns: ReadonlyArray<
+    Pick<OrchestrationV2ProviderTurn, "runAttemptId" | "status">
+  >;
+  /** Manual `/compact` runs and runs whose provider reported a compaction. */
+  readonly compactedRunIds: ReadonlySet<string>;
+}): boolean {
+  if (input.nativeThreadId === undefined) return false;
+  const accepted = new Set(
+    input.providerTurns
+      .filter((turn) => turn.status === "completed" || turn.status === "interrupted")
+      .map((turn) => turn.runAttemptId),
+  );
+  const ordinals = new Map(
+    input.runs
+      .filter(
+        (run) =>
+          run.providerThreadId === input.run.providerThreadId && run.status !== "rolled_back",
+      )
+      .map((run) => [run.id, run.ordinal]),
+  );
+  const latest = input.attempts
+    .filter(
+      (attempt) =>
+        attempt.profileContentHash !== undefined &&
+        attempt.providerThreadId === input.run.providerThreadId &&
+        attempt.nativeThreadId === input.nativeThreadId &&
+        accepted.has(attempt.id) &&
+        ordinals.has(attempt.runId),
+    )
+    .map((attempt) => ({ attempt, ordinal: ordinals.get(attempt.runId)! }))
+    .toSorted(
+      (a, b) => a.ordinal - b.ordinal || a.attempt.attemptOrdinal - b.attempt.attemptOrdinal,
+    )
+    .at(-1);
+  if (latest === undefined || latest.attempt.profileContentHash !== input.profileContentHash)
+    return false;
+  // A compaction in the delivering run itself may already have summarized the instructions away.
+  return ![...ordinals].some(
+    ([runId, ordinal]) => ordinal >= latest.ordinal && input.compactedRunIds.has(runId),
+  );
 }
