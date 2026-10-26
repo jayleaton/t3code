@@ -750,7 +750,7 @@ const byToolName = (left: McpToolRegistration, right: McpToolRegistration) =>
  * `layerInToolNameOrder`, registrations are staged here and added sorted by
  * name once every toolkit is built.
  */
-export class McpToolCatalog extends Context.Service<
+class McpToolCatalog extends Context.Service<
   McpToolCatalog,
   {
     readonly stage: (registration: McpToolRegistration) => Effect.Effect<void>;
