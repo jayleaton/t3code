@@ -161,6 +161,7 @@ function startWithMissingWorktree(
             projectionReadCount += 1;
             return Effect.succeed({
               ...projection,
+              compactedRunIds: [],
               hasConversation: projection.messages.some(
                 (m) =>
                   m.role === "user" &&
