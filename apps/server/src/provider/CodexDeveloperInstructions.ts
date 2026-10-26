@@ -187,12 +187,6 @@ Use the \`request_user_input\` tool only when it is listed in the available tool
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
 </collaboration_mode>`;
 
-export interface CodexRuntimeInfo {
-  readonly model: string;
-  readonly modelName?: string | undefined;
-  readonly reasoningEffort?: string | undefined;
-}
-
 export function buildCodexDeveloperInstructions(interactionMode: ProviderInteractionMode): string {
   return interactionMode === "plan"
     ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
@@ -203,9 +197,12 @@ export function buildCodexDeveloperInstructions(interactionMode: ProviderInterac
  * This must stay out of the collaboration mode: when the model catalog ships
  * its own text for a mode, as newer models do, Codex uses that text and drops
  * the client's `developer_instructions` entirely.
+ *
+ * Model and effort stay out of the text because they already go to Codex as
+ * turn settings; naming them here would change developer context on every
+ * effort toggle.
  */
 export function buildCodexAdditionalContext(
-  runtime: CodexRuntimeInfo,
   toolsAvailable: boolean | T3CodeToolAvailability = true,
 ): Record<string, V2TurnStartParams__AdditionalContextEntry> {
   const tools = toolInstructions(toolsAvailable);
@@ -220,7 +217,7 @@ export function buildCodexAdditionalContext(
     ),
     t3_code_runtime: {
       kind: "application",
-      value: buildRuntimeInstructions({ harness: "Codex", ...runtime }),
+      value: buildRuntimeInstructions({ harness: "Codex" }),
     },
     ...(tools ? { t3_code_tools: { kind: "application", value: tools } } : {}),
   };

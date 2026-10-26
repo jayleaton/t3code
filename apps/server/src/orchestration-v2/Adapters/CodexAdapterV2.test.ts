@@ -203,6 +203,34 @@ describe("CodexAdapterV2 runtime policy", () => {
       assert.isDefined(withT3.additionalContext?.["t3_code_runtime"]);
     }),
   );
+
+  it.effect("keeps T3 context identical when only reasoning effort changes", () =>
+    Effect.gen(function* () {
+      const build = (effort: "low" | "xhigh") =>
+        CodexAdapterV2.buildCodexTurnStartParams({
+          nativeThreadId: "native-effort",
+          codexInput: [{ type: "text", text: "work" }],
+          runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5.4",
+            options: [{ id: "reasoningEffort", value: effort }],
+          },
+          hasT3Mcp: true,
+        });
+
+      const low = yield* build("low");
+      const xhigh = yield* build("xhigh");
+
+      assert.equal(low.effort, "low");
+      assert.equal(xhigh.effort, "xhigh");
+      assert.deepEqual(low.additionalContext, xhigh.additionalContext);
+      assert.deepEqual(
+        low.collaborationMode?.settings.developer_instructions,
+        xhigh.collaborationMode?.settings.developer_instructions,
+      );
+    }),
+  );
 });
 
 describe("CodexAdapterV2 native protocol logging", () => {
