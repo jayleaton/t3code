@@ -101,6 +101,7 @@ import { ServerConfig } from "../../config.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import {
   buildCodexAdditionalContext,
+  buildCodexAppContext,
   buildCodexDeveloperInstructions,
 } from "../../provider/CodexDeveloperInstructions.ts";
 import {
@@ -764,24 +765,13 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
       input.hasT3Mcp !== true
         ? undefined
         : buildCodexDeveloperInstructions(input.runtimePolicy.interactionMode);
-    // An app's context is text an MCP server wrote, so it goes in as untrusted
-    // context: Codex renders it as quoted user-side input, never as developer
-    // instructions.
-    const appContext = Object.fromEntries(
-      (input.appContext ?? []).map((entry) => [
-        entry.key,
-        { kind: "untrusted" as const, value: entry.text },
-      ]),
-    );
+    const appContext = buildCodexAppContext(input.appContext ?? []);
     const t3Context =
       input.hasT3Mcp === true
-        ? buildCodexAdditionalContext(
-            { model: input.modelSelection.model, reasoningEffort: effort ?? undefined },
-            {
-              browser: input.browserToolsAvailable ?? true,
-              device: input.deviceToolsAvailable ?? false,
-            },
-          )
+        ? buildCodexAdditionalContext({
+            browser: input.browserToolsAvailable ?? true,
+            device: input.deviceToolsAvailable ?? false,
+          })
         : undefined;
     const additionalContext =
       t3Context === undefined && Object.keys(appContext).length === 0
