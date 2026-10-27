@@ -357,7 +357,7 @@ function makeLocalCommandHarness(input: {
       worktreePath: input.worktreePath ?? null,
       ...(input.profileContent === undefined
         ? {}
-        : { profileSnapshot: { contentHash: "sha256:agent" } }),
+        : { profileSnapshot: { contentHash: "sha256:agent", profileName: "Reviewer" } }),
     } as OrchestrationV2ThreadProjection["thread"],
     runs: [
       ...(input.previousNativeSession
@@ -818,7 +818,7 @@ effectIt.effect("prefixes an agent turn with the instructions its thread referen
   }),
 );
 
-effectIt.effect("omits instructions the native conversation already holds", () =>
+effectIt.effect("reminds the agent of instructions the native conversation already holds", () =>
   Effect.gen(function* () {
     const harness = makeLocalCommandHarness({
       text: "Continue",
@@ -832,7 +832,9 @@ effectIt.effect("omits instructions the native conversation already holds", () =
 
     yield* harness.start;
 
-    expect(harness.startRootRun.mock.calls[0]?.[0].message.text).toBe("Continue");
+    expect(harness.startRootRun.mock.calls[0]?.[0].message.text).toBe(
+      '<agent_profile_reminder>You are running as the T3 agent "Reviewer". Your agent_profile_instructions from the start of this conversation still apply; re-read a skill\'s SKILL.md when its trigger applies.</agent_profile_reminder>\n\nContinue',
+    );
     expect(
       harness.projection().attempts.find((attempt) => attempt.id === harness.attemptId),
     ).not.toHaveProperty("profileContentHash");
@@ -869,7 +871,11 @@ effectIt.effect("keeps a compaction prompt exact so the adapter recognizes it", 
     const harness = makeLocalCommandHarness({
       text: "/compact",
       previousMessages: ["Review the diff"],
-      previousTurn: { runStatus: "completed", turnStatus: "completed" },
+      previousTurn: {
+        runStatus: "completed",
+        turnStatus: "completed",
+        profileContentHash: "sha256:agent",
+      },
       profileContent: { systemPrompt: "Review every change.", skills: [] },
     });
 
