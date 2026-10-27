@@ -182,6 +182,23 @@ export function agentProfilePrompt(text: string, systemPrompt: string | undefine
 }
 
 /**
+ * Turns that skip the full instructions still name them: hundreds of thousands of tokens later,
+ * a model stops honoring per-turn duties it can no longer see. Built only from frozen profile
+ * content, so the bytes stay identical turn to turn and keep the provider's prompt cache warm.
+ */
+export function agentProfileReminder(
+  text: string,
+  profileName: string | null | undefined,
+  content: ProfileSnapshotContent,
+): string {
+  if (!content.systemPrompt?.trim() && content.skills.length === 0) return text;
+  const skillNames = content.skills.map((skill) => skill.name);
+  const agent = profileName ? `the T3 agent "${profileName}"` : "a T3 agent";
+  const skills = skillNames.length === 0 ? "" : ` and assigned skills (${skillNames.join(", ")})`;
+  return `<agent_profile_reminder>You are running as ${agent}. Your agent_profile_instructions${skills} from the start of this conversation still apply; re-read a skill's SKILL.md when its trigger applies.</agent_profile_reminder>\n\n${text}`;
+}
+
+/**
  * Whether this native conversation still holds the exact instructions the next prompt would
  * prepend, so repeating them would only grow every later turn's context. Every adapter keeps
  * native history across turns and binds a new native id when it cannot resume one, so an

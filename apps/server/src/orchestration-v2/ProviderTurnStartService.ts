@@ -1,6 +1,10 @@
 import { syncAgentSkillFiles } from "../provider/AgentInstructionFiles.ts";
 import * as Path from "effect/Path";
-import { agentInstructionsInContext, agentProfilePrompt } from "./AgentProfile.ts";
+import {
+  agentInstructionsInContext,
+  agentProfilePrompt,
+  agentProfileReminder,
+} from "./AgentProfile.ts";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import {
@@ -1113,7 +1117,13 @@ export const layer: Layer.Layer<
               skillIndex ? `${skillIndex}\n\n${message.text}` : message.text,
               profileContent?.systemPrompt,
             )
-          : message.text,
+          : profileContent === undefined || compactionMessageIds.has(message.id)
+            ? message.text
+            : agentProfileReminder(
+                message.text,
+                projection.thread.profileSnapshot?.profileName,
+                profileContent,
+              ),
         records: message.context?.records ?? [],
       });
       // Delivered once: this run's provider turn marks the work as told. A

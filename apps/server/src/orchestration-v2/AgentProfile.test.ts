@@ -9,6 +9,7 @@ import {
 import {
   agentInstructionsInContext,
   agentProfilePrompt,
+  agentProfileReminder,
   resolveThreadCreateProfile,
 } from "./AgentProfile.ts";
 
@@ -43,6 +44,28 @@ describe("V2 profile association", () => {
     expect(agentProfilePrompt("Check this patch", prompt)).toContain("Review changes carefully.");
     expect(agentProfilePrompt("Check this patch", prompt)).not.toContain("New instructions");
     expect(agentProfilePrompt("Normal chat", undefined)).toBe("Normal chat");
+  });
+  it("names the agent and its skills in the reminder for turns that skip the full prompt", () => {
+    const skill = (name: string) => ({
+      skillId: name,
+      name,
+      description: "unused",
+      content: "unused",
+      revision: 1,
+      createdAt: "2026-09-23T00:00:00.000Z",
+      updatedAt: "2026-09-23T00:00:00.000Z",
+    });
+    expect(
+      agentProfileReminder("Wake", "Captain", {
+        systemPrompt: "Sweep every child.",
+        skills: [skill("captain-event-loop"), skill("pr")],
+      }),
+    ).toBe(
+      '<agent_profile_reminder>You are running as the T3 agent "Captain". Your agent_profile_instructions and assigned skills (captain-event-loop, pr) from the start of this conversation still apply; re-read a skill\'s SKILL.md when its trigger applies.</agent_profile_reminder>\n\nWake',
+    );
+    expect(agentProfileReminder("Wake", "Captain", { systemPrompt: "  ", skills: [] })).toBe(
+      "Wake",
+    );
   });
   it("freezes only the selected skill bundles with the profile", () => {
     const skill = {
