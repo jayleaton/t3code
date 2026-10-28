@@ -8,13 +8,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-// electron-builder's built-in notarization staples once: @electron/notarize
-// 2.5.0 wraps stapleApp in promise-retry without calling `retry`, so a single
-// dropped connection to Apple's ticket service fails the whole release build.
-// This afterSign hook owns notarization instead and retries the network steps.
-// It runs before electron-builder packs the DMG and zip, so both contain the
-// stapled app, and it fails when it runs out of attempts so a signed build can
-// never ship without a ticket.
+// electron-builder does not retry failed stapling. Retry before DMG/zip packaging and never publish without a ticket.
 
 class NotarizeCommandFailedError extends Schema.TaggedError<NotarizeCommandFailedError>()(
   "NotarizeCommandFailedError",

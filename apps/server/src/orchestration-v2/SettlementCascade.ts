@@ -13,14 +13,9 @@ export type SettlementCascadeRequest = Extract<
   { readonly type: "thread-settlement.cascade" }
 >;
 
-/**
- * Settlement follows the sub-run tree. A manually settled thread takes its unsettled sub-runs
- * with it, and un-settling it brings back the ones that settled with it (`settledBy`). This runs
- * as an outbox effect after the root's settle commits, so the user's request returns at once and
- * a restart mid-walk resumes it. Each sub-run gets its own `thread.settlement.follow` command, so
- * its own guard applies: a working child chat or subagent stays active and follows once its run
- * completes. Age-based settlement never starts a cascade.
- */
+/** Manual settlement follows the sub-run tree; unsettle restores only matching settledBy rows.
+ * The resumable outbox walk starts after commit; each child uses thread.settlement.follow
+ * so working children defer until completion. Age-based settlement never cascades. */
 export class SettlementCascade extends Context.Service<
   SettlementCascade,
   {

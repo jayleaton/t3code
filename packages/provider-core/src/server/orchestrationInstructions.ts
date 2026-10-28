@@ -1,14 +1,10 @@
 import type { ProviderInteractionMode } from "@t3tools/contracts";
 
-/**
- * Authored as self-contained sections so a provider that limits the size of
- * each instruction entry can deliver every one whole. Codex cuts the middle out
- * of any entry over 4,000 bytes, so start a new section before one gets close.
- */
+// Codex truncates entries over 4,000 bytes; keep each section self-contained and below that limit.
 export const T3_CODE_ORCHESTRATION_SECTIONS: ReadonlyArray<string> = [
   `## T3 Code orchestration
 
-The \`t3-code\` MCP server provides app-owned orchestration. Treat these concepts distinctly:
+Ordinary coding tasks need no T3 tools.
 
 - Agents come first. The user's T3 Agents (\`agents\` in \`orchestrator_capabilities\`, or \`t3_list_agents\`) are named specialists with their own instructions, skills, model, and modes. When work matches an agent, or the user names one, run it as that agent: pass its \`profileId\` to \`delegate_task\`, \`t3_thread_launch\`, or \`create_threads\`, and omit \`target\`/\`modelSelection\` and modes so the agent's own settings apply. Set them only to deliberately override the agent. Use a bare provider/model target or a plain thread only when no agent fits. Native subagents cannot run as a T3 agent. An agent whose modes are broader than this thread's runs at this thread's modes. If a call with \`profileId\` fails, do not retry without it or fall back to a bare model: report the returned error to the user and let them decide.
 - Children and subagents are different. A child is a full agent chat with its own context that you launch to do a separate part of a larger task; it shows inside your card on the Agents board, keeps its own status, and settles on its own. A subagent is a helper inside your own run that saves your context; it shows only in your thread's Lineage panel. Leading other agents does not make your children subagents.
@@ -40,19 +36,14 @@ ${T3_CODE_ORCHESTRATION_SECTIONS.join("\n\n")}
 
 export const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
 
-## T3 Code collaborative browser
+## T3 Code browser
 
-You are running inside T3 Code. The \`t3-code\` MCP server is the product-native collaborative browser shared with the user. When it exposes \`preview_*\` tools, prefer those tools for browser navigation, inspection, interaction, screenshots, and recordings.
-
-For browser work, first call \`preview_status\`. If no automation-capable preview is attached, call \`preview_open\` before concluding that the browser is unavailable. Then use \`preview_navigate\`, \`preview_snapshot\`, and the focused interaction tools. Prefer snapshot-provided locators over coordinates.
-
-\`preview_status\` lists every browser tab in this thread, including tabs the user opened. When the user asks about "this page" or a page they have open, read their tab: pass its \`tabId\` to \`preview_snapshot\` or \`preview_wait_for\`, or omit \`tabId\` when you have no tab of your own. You may act on the user's tab, including \`preview_evaluate\`, only while its owner is \`unclaimed\`; while it is \`human\`, the user is driving, so read it with \`preview_snapshot\` or open your own tab. To use a browser profile (a set of saved logins), pass \`profileId\` from \`preview_status\` profiles to \`preview_open\`.
-
-Do not switch to global browser skills, Chrome, Node REPL browser automation, standalone Playwright, or agent-browser merely because the preview is initially closed or a first call fails. Inspect a failed preview call and retry with corrected arguments when the error is actionable. Use another browser system when:
-- the T3 preview tools are absent, or \`preview_open\` returns an explicit unsupported/unavailable error;
-- the user asks for another browser, or invokes a skill or documented repository workflow that names one; follow that workflow and report any prerequisite it is missing;
-- preview calls on an open tab have failed twice on the same step (timeouts, \`chrome-error://\` pages, a different client answering). Quote the raw error and switch without asking the user which browser to use.
+When browser work was asked, \`preview_*\` is the browser you share with the user: \`preview_status\` first, then \`preview_open\` if no tab can be automated. Prefer snapshot locators over coordinates. Switch browsers only if the tools are absent or \`preview_open\` says unsupported, the user asks, or two preview calls fail on one step. Then quote the error and switch.
 `;
+
+// ACP only: some ACP agents accept the injected MCP server but never expose
+// its tools, so they need the terminal transport other harnesses never use.
+const T3_CODE_ACP_MCP_FALLBACK_INSTRUCTIONS = `ACP fallback: if the T3 tools are absent and \`T3_ACP_MCP_NODE\` is present, call them through the terminal: \`ELECTRON_RUN_AS_NODE=1 "$T3_ACP_MCP_NODE" \${T3_ACP_MCP_ENTRYPOINT:+"$T3_ACP_MCP_ENTRYPOINT"} acp-mcp-call orchestrator_capabilities '{}'\` (\`T3_ACP_MCP_ENTRYPOINT\` is unset for a standalone executable). Delegate with \`acp-mcp-call delegate_task '{"task":"...","target":{"providerInstanceId":"...","model":"..."},"mode":"async","clientRequestId":"..."}'\`.`;
 
 const T3_CODE_ACP_DEFAULT_MODE_INSTRUCTIONS = `## T3 Code interaction mode: Default
 
@@ -67,10 +58,7 @@ export interface T3AcpInstructionState {
   readonly hasT3Mcp: boolean;
 }
 
-/**
- * ACP has no system/developer prompt field, so send T3-owned context in the
- * first user prompt and whenever the available tools or interaction mode change.
- */
+/** ACP lacks system/developer fields; inject context on first prompt and tool/mode changes. */
 export function t3AcpPromptWithInstructions(input: {
   readonly prompt: string;
   readonly state: T3AcpInstructionState;
@@ -89,15 +77,16 @@ export function t3AcpPromptWithInstructions(input: {
       ? T3_CODE_ACP_PLAN_MODE_INSTRUCTIONS
       : T3_CODE_ACP_DEFAULT_MODE_INSTRUCTIONS,
     ...(input.state.hasT3Mcp
-      ? [T3_CODE_BROWSER_TOOL_INSTRUCTIONS.trim(), T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim()]
+      ? [
+          T3_CODE_BROWSER_TOOL_INSTRUCTIONS.trim(),
+          T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim(),
+          T3_CODE_ACP_MCP_FALLBACK_INSTRUCTIONS,
+        ]
       : []),
   ];
   return `<t3_code_instructions>\n${instructions.join("\n\n")}\n</t3_code_instructions>\n\n<user_request>\n${input.prompt}\n</user_request>`;
 }
 
-/**
- * Keep the wrapper explicit so it cannot be mistaken for text authored by the user.
- */
 function prependT3OrchestrationInstructions(prompt: string): string {
   return `<t3_code_orchestration_instructions>${T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim()}</t3_code_orchestration_instructions>\n\n<user_request>\n${prompt}\n</user_request>`;
 }

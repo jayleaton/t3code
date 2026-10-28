@@ -27,7 +27,15 @@ import {
   type TraceSampling,
   OtlpHeadersFromString,
   truncateTraceAttributes,
+  processServiceInstanceId,
 } from "./observability.ts";
+
+describe("processServiceInstanceId", () => {
+  it("stays the same for the process unless the operator set one", () => {
+    expect(processServiceInstanceId()).toBe(processServiceInstanceId({}));
+    expect(processServiceInstanceId({ "service.instance.id": "pod-7" })).toBe("pod-7");
+  });
+});
 
 describe("errorTag", () => {
   it("reports structural tags without retaining arbitrary values", () => {

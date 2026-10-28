@@ -19,6 +19,7 @@ export function usePasteToFocusComposer(
   embeddedSurfaceRef: { readonly current: Element | null } | null,
 ) {
   const pasteAsTextShortcutUntilRef = useRef(0);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- attaches window keydown and paste capture listeners that route stray pastes into the composer
   useEffect(() => {
     const keyHandler = (event: KeyboardEvent) => {
       if (

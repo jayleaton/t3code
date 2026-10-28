@@ -3,7 +3,7 @@ import type { AppRouter } from "./router";
 
 export async function openDesktopGatewayThread(
   router: Pick<AppRouter, "navigate">,
-  desktop: Pick<DesktopBridge, "revealWindow"> | undefined,
+  desktop: Partial<Pick<DesktopBridge, "revealWindow">> | undefined,
   environmentId: string,
   threadId: string,
 ): Promise<void> {
@@ -17,7 +17,7 @@ export async function openDesktopGatewayThread(
 
 export async function openDesktopGatewayAgents(
   router: Pick<AppRouter, "navigate">,
-  desktop: Pick<DesktopBridge, "revealWindow"> | undefined,
+  desktop: Partial<Pick<DesktopBridge, "revealWindow">> | undefined,
 ): Promise<void> {
   if (!desktop?.revealWindow) throw new Error("Desktop window focus is unavailable.");
   await router.navigate({ to: "/agents" });

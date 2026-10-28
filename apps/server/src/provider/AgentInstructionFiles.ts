@@ -47,35 +47,32 @@ const syncManagedInstructionFile = Effect.fn("syncManagedInstructionFile")(funct
     }
     const actual = yield* fs.realPath(parent);
     if (actual !== parent)
-      return yield* Effect.fail(
-        new AgentInstructionFileError({
-          message: "Agent instruction directories must not be symlinks.",
-        }),
-      );
+      return yield* new AgentInstructionFileError({
+        message: "Agent instruction directories must not be symlinks.",
+      });
   }
   if (!input.settled) {
     // This directory holds runtime material, not changes the coding agent should commit.
     yield* fs
       .writeFileString(path.join(root, ".agents", "t3", ".gitignore"), "*\n", { flag: "wx" })
       .pipe(
-        Effect.catch((error) =>
-          error.reason._tag === "AlreadyExists" ? Effect.void : Effect.fail(error),
+        Effect.catchIf(
+          (error) => error.reason._tag === "AlreadyExists",
+          () => Effect.void,
         ),
       );
   }
   const file = path.join(root, relativePath);
   if (yield* fs.exists(file)) {
     if ((yield* fs.realPath(file)) !== file)
-      return yield* Effect.fail(
-        new AgentInstructionFileError({ message: "Agent instruction file must not be a symlink." }),
-      );
+      return yield* new AgentInstructionFileError({
+        message: "Agent instruction file must not be a symlink.",
+      });
     const previous = yield* fs.readFileString(file);
     if (!previous.startsWith(`${marker}\n`))
-      return yield* Effect.fail(
-        new AgentInstructionFileError({
-          message: "Refusing to replace an unmanaged agent instruction file.",
-        }),
-      );
+      return yield* new AgentInstructionFileError({
+        message: "Refusing to replace an unmanaged agent instruction file.",
+      });
     if (input.settled || !input.instructions.trim()) {
       yield* fs.remove(file);
       // Preserve handoff documents and any user-added files. Only remove empty directories.

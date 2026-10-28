@@ -12,7 +12,7 @@ import {
 import { View } from "react-native";
 
 type ViewType = ComponentRef<typeof View>;
-import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue } from "react-native-reanimated";
 
 import { AgentAvatar } from "../../components/AgentAvatar";
@@ -63,8 +63,7 @@ export function AgentCardDragProvider(props: {
   const [drag, setDrag] = useState<DragState | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const y = useSharedValue(0);
-  const latest = useRef(props);
-  latest.current = props;
+  const { linkTargetsFor, onDrop } = props;
 
   const update = useCallback((next: DragState | null) => {
     dragRef.current = next;
@@ -91,8 +90,8 @@ export function AgentCardDragProvider(props: {
         else views.current.delete(key);
       },
       begin: (subject, _pointerX, pointerY) => {
-        y.value = pointerY;
-        targets.current = latest.current.linkTargetsFor(subject.key);
+        y.set(pointerY);
+        targets.current = linkTargetsFor(subject.key);
         cards.current = [];
         // Only mounted (visible) cards can be drop targets; recycled rows are off screen.
         for (const [key, view] of views.current) {
@@ -104,7 +103,7 @@ export function AgentCardDragProvider(props: {
         update({ subject, drop: { kind: "none" } });
       },
       move: (_pointerX, pointerY) => {
-        y.value = pointerY;
+        y.set(pointerY);
         const current = dragRef.current;
         if (!current) return;
         const drop = resolve(current.subject, pointerY);
@@ -116,10 +115,10 @@ export function AgentCardDragProvider(props: {
         const current = dragRef.current;
         update(null);
         if (!current || cancelled) return;
-        latest.current.onDrop(current.subject, current.drop);
+        onDrop(current.subject, current.drop);
       },
     }),
-    [drag, resolve, update, y],
+    [drag, resolve, update, y, linkTargetsFor, onDrop],
   );
 
   // The chip tracks the finger vertically and stays inset horizontally, so it
@@ -196,26 +195,15 @@ export function AgentCardDragSource(props: {
   readonly className?: string;
 }) {
   const api = useContext(AgentCardDragContext);
-  // The API object changes with drag state; the gesture reads it at event time.
-  const apiRef = useRef(api);
-  apiRef.current = api;
-  const latest = useRef(props);
-  latest.current = props;
-  const hasApi = api !== null;
-  const gesture = useMemo(
-    () =>
-      Gesture.Pan()
-        .enabled(hasApi && props.enabled)
-        .activateAfterLongPress(PICK_UP_DELAY_MS)
-        .shouldCancelWhenOutside(false)
-        .runOnJS(true)
-        .onStart((event) =>
-          apiRef.current?.begin(latest.current.subject, event.absoluteX, event.absoluteY),
-        )
-        .onUpdate((event) => apiRef.current?.move(event.absoluteX, event.absoluteY))
-        .onFinalize((_, success) => apiRef.current?.end(!success)),
-    [hasApi, props.enabled],
-  );
+  const gesture = usePanGesture({
+    enabled: api !== null && props.enabled,
+    activateAfterLongPress: PICK_UP_DELAY_MS,
+    shouldCancelWhenOutside: false,
+    runOnJS: true,
+    onActivate: (event) => api?.begin(props.subject, event.absoluteX, event.absoluteY),
+    onUpdate: (event) => api?.move(event.absoluteX, event.absoluteY),
+    onFinalize: (event) => api?.end(event.canceled),
+  });
   const register = api?.register;
   const key = props.subject.key;
   const setRef = useCallback((view: ViewType | null) => register?.(key, view), [register, key]);

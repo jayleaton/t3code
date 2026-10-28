@@ -9,14 +9,8 @@ export type ManualSettlementAbove =
   | { readonly remote: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId } }
   | null;
 
-/**
- * What a sub-run's settle follows: the settle time of its nearest manually
- * settled ancestor here and the ancestor its cascade started from, or the
- * ancestor on another machine the walk reaches, which only that machine can
- * answer for. Ancestors that only
- * aged out are looked past, since age settlement never cascades and must
- * not cut a manual cascade short.
- */
+/** Follow the nearest manually settled ancestor and its cascade root, or defer to a remote ancestor.
+ * Skip age-settled ancestors: age never cascades and must not cut a manual cascade short. */
 export const manualSettlementAbove = Effect.fn("orchestrationV2.dispatch.manualSettlementAbove")(
   function* (
     projections: Pick<ProjectionStoreV2Shape, "getThread">,

@@ -89,7 +89,7 @@ function preferredConnection(
   return best?.connection;
 }
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.fn("clients.focusBroker.make")(function* (
   leases: Effect.Effect<ReadonlyArray<ClientActivityLease>>,
 ) {

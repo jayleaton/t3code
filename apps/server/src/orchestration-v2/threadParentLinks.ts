@@ -19,13 +19,8 @@ export interface ThreadParentRepair {
   readonly parentRelationship: OrchestrationV2ParentRelationship | null;
 }
 
-/**
- * Children whose Agents-board parent link cannot be shown and should be
- * cleared: the parent is missing or deleted, the link points at the chat
- * itself, or the links form a cycle. `links` holds every live (not deleted)
- * thread. A cycle is broken once, at its smallest thread id, so the rest of
- * the chain keeps its parents.
- */
+/** links contains all live threads; missing/deleted parents and self-links must detach.
+ * Break each cycle only at its smallest thread id so the remaining parent chain survives. */
 function findBrokenThreadParentLinks(
   links: ReadonlyArray<ThreadParentLink>,
 ): ReadonlyArray<ThreadId> {
@@ -58,22 +53,10 @@ function findBrokenThreadParentLinks(
   return [...broken].toSorted();
 }
 
-/**
- * Startup repairs that leave every live thread visible in exactly one place:
- * a card (top-level or nested in its parent's card) or its owner's Lineage.
- *
- * - A broken link (see findBrokenThreadParentLinks) makes the thread
- *   top-level, subagents included: a subagent whose owner is gone has no
- *   Lineage to appear in.
- * - A task-spawned thread stored before the kind was recorded is classified:
- *   one the user moved under another chat is a child (nesting is a child
- *   relationship); a delegate_task run as a named agent other than its owner's
- *   is a child; anything else, provider-native subagents included, is a
- *   subagent and gets its owner back as its parent.
- *
- * Other unrecorded rows read correctly through `threadParentRelationship`'s
- * fallback, so they are left as they are.
- */
+/** Broken links become top-level, including subagents whose owner disappeared.
+ * Legacy task spawns moved under another parent or using a different named agent become children;
+ * other spawns regain their owner as subagents, including provider-native spawns.
+ * Leave other unrecorded rows to threadParentRelationship's fallback. */
 export function planThreadParentRepairs(
   links: ReadonlyArray<ThreadParentLink>,
 ): ReadonlyArray<ThreadParentRepair> {

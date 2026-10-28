@@ -36,10 +36,7 @@ import {
   useScheduledWakeThreadKeys,
 } from "../../state/scheduledTasks";
 import { useEnvironmentProviders, useEnvironments } from "../../state/environments";
-import {
-  useAllEnvironmentShellsBootstrapped,
-  readEnvironmentSupportsSettlement,
-} from "../../state/entities";
+import { useAllEnvironmentShellsBootstrapped } from "../../state/entities";
 import { useAgentThreadShells } from "./useAgentRunParenting";
 import { AgentSkillsEditor } from "./AgentSkillsEditor";
 import { AgentEditor } from "./AgentEditor";
@@ -112,7 +109,7 @@ function AgentThreadList({
           const parentKey = agentRunParentKey(thread);
           return parentKey === null ? null : runByKey.get(parentKey);
         })()}
-        settleSupported={readEnvironmentSupportsSettlement(thread.environmentId)}
+        settleSupported
         onSettleAction={onSettleAction}
         onContextMenu={onContextMenu}
       />

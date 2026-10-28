@@ -446,8 +446,8 @@ it.effect(
               environment: { capabilities: { serverResolvedCommandContext: true } },
             }),
             client: {
-              [WS_METHODS.serverGetConfig]: () => Effect.succeed({ providers: [] }),
-              [WS_METHODS.serverGetSettings]: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
+              [WS_METHODS.serverGetConfig]: () =>
+                Effect.succeed({ providers: [], settings: DEFAULT_SERVER_SETTINGS }),
               [ORCHESTRATION_V2_WS_METHODS.launchThread]: (
                 input: OrchestrationV2ThreadLaunchInput,
               ) =>

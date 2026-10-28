@@ -507,7 +507,7 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
               active = undefined;
             }),
           ),
-          Effect.catchCause(() => Effect.void),
+          Effect.ignoreCause,
         );
       });
       const runtime: ProviderAdapterV2SessionRuntime = {

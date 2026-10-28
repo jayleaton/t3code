@@ -59,7 +59,8 @@ export function isAutoSettlementCandidate(
   if (thread.archivedAt !== null || thread.settledOverride === "settled") return false;
   if (thread.pinnedAt != null || thread.autoSettleDisabledAt != null) return false;
   // Blocked-on-you work must never park behind a settled override.
-  if (thread.pendingRuntimeRequest !== null) return false;
+  if (thread.pendingRuntimeRequest !== null || (thread.pendingGuestMessageCount ?? 0) > 0)
+    return false;
   // A live run, or background work that will wake the agent, is not
   // staleness. A dev server left running is: the agent is done.
   if (threadShellHasActiveWork(thread)) return false;
@@ -141,23 +142,23 @@ function resolveIdleSince(
     : null;
 }
 
-/**
- * Whether a thread is parked on its snooze: its wake time is in the future and
- * it has not raised its hand with a pending request or a fresh failure.
- * Completed runs and background wakes keep it snoozed. Server twin of the
- * client's `effectiveSnoozed`, so agents and the sidebar agree on what is
- * snoozed.
- */
+/** Match the client snooze: pending requests, waiting guests and fresh failures wake it; completion does not. */
 export function isSnoozed(
   thread: Pick<
     ProjectionStore.ProjectionSettlementCandidate,
-    "snoozedUntil" | "snoozedAt" | "latestRunCompletedAt" | "status" | "pendingRuntimeRequest"
+    | "snoozedUntil"
+    | "snoozedAt"
+    | "latestRunCompletedAt"
+    | "status"
+    | "pendingRuntimeRequest"
+    | "pendingGuestMessageCount"
   >,
   nowMs: number,
 ): boolean {
   const snoozedUntilMs = toMillis(thread.snoozedUntil);
   if (snoozedUntilMs === null || snoozedUntilMs <= nowMs) return false;
-  if (thread.pendingRuntimeRequest !== null) return false;
+  if (thread.pendingRuntimeRequest !== null || (thread.pendingGuestMessageCount ?? 0) > 0)
+    return false;
   const snoozedAtMs = toMillis(thread.snoozedAt);
   const completedAtMs = toMillis(thread.latestRunCompletedAt);
   const wokeOnError =

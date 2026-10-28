@@ -27,7 +27,7 @@ describe("runtime profile persistence", () => {
               environment: { capabilities: { agentSkillResources: resourcesSupported } },
             })),
             client: {
-              [WS_METHODS.serverGetSettings]: () => Effect.succeed(settings),
+              [WS_METHODS.serverGetConfig]: () => Effect.succeed({ settings }),
               [WS_METHODS.serverUpdateSettings]: (input: {
                 patch: Partial<ServerSettings>;
                 replicateProfiles?: boolean;

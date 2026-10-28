@@ -2,7 +2,7 @@ import { Link } from "@tanstack/react-router";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import { type GatewayScope, type GatewayStatusSnapshot } from "@t3tools/client-runtime/gateway";
 import { ChevronDownIcon, ServerCogIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 
 import { useEnvironments } from "../../state/environments";
 import { Button } from "../ui/button";
@@ -25,16 +25,16 @@ import {
 import { Switch } from "../ui/switch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import {
-  getMcpGatewayGrants,
+  getMcpGatewayConfiguration,
   getMcpGatewayPort,
   setMcpGatewayPort,
   getMcpGatewayStatus,
   getMcpGatewayStatusSnapshot,
-  getMcpGatewayToken,
-  isMcpGatewayEnabled,
   MCP_GATEWAY_BASELINE_SCOPES,
   MCP_GATEWAY_CONFIGURABLE_SCOPES,
-  MCP_GATEWAY_STATE_EVENT,
+  publishMcpGatewayStatus,
+  subscribeMcpGatewayStatus,
+  subscribeMcpGatewayStatusSnapshot,
   requestMcpGatewayStatusSnapshot,
   type McpGatewayGrants,
   type McpGatewayUiState,
@@ -169,13 +169,7 @@ export function updateMcpGatewayGrant(
   return setEnvironmentScopes(grants, environmentId, nextScopes);
 }
 
-/**
- * Machine-first grant matrix (spec §9.2). One machine-level Off/On control
- * per row, a Select all action over the visible rows with indeterminate
- * mixed state, and a compact per-machine dropdown for the baseline plus
- * fine-grained scope tweaks. All edits stay in the caller's pending form
- * until Save.
- */
+// Keep grant edits in the pending form until Save; enabling a machine grants only the baseline.
 export function McpEnvironmentGrantMatrix({
   environments,
   grants,
@@ -498,16 +492,34 @@ export function McpGatewayOperationalStatus({
 
 export function McpGatewaySettings() {
   const { environments, isReady: registryReady } = useEnvironments();
-  const [enabled, setEnabled] = useState(isMcpGatewayEnabled);
-  const [configurationError, setConfigurationError] = useState<string | null>(null);
-  const [token, setToken] = useState(getMcpGatewayToken);
-  const [bridgePort, setBridgePort] = useState(() => String(getMcpGatewayPort()));
-  const [savedGrants, setSavedGrants] = useState(getMcpGatewayGrants);
-  const [pendingGrants, setPendingGrants] = useState<McpGatewayGrants | null>(null);
-  const [status, setStatus] = useState<McpGatewayUiState>(() =>
-    enabled ? getMcpGatewayStatus() : "disabled",
+  const configuration = useSyncExternalStore(
+    subscribeMcpGatewayConfiguration,
+    getMcpGatewayConfiguration,
   );
-  const [statusSnapshot, setStatusSnapshot] = useState(getMcpGatewayStatusSnapshot);
+  const { enabled, grants: savedGrants, token: savedToken, port: savedPort } = configuration;
+  const [configurationError, setConfigurationError] = useState<string | null>(null);
+  const [tokenDraft, setTokenDraft] = useState<{
+    source: typeof configuration;
+    value: string;
+  } | null>(null);
+  const token = tokenDraft?.source === configuration ? tokenDraft.value : savedToken;
+  const [portDraft, setPortDraft] = useState<{
+    source: typeof configuration;
+    value: string;
+  } | null>(null);
+  const bridgePort = portDraft?.source === configuration ? portDraft.value : String(savedPort);
+  const [grantsDraft, setGrantsDraft] = useState<{
+    source: McpGatewayGrants;
+    value: McpGatewayGrants;
+  } | null>(null);
+  // A changed source invalidates unsaved grants so a draft cannot restore another window's revocation.
+  const pendingGrants = grantsDraft?.source === savedGrants ? grantsDraft.value : null;
+  const gatewayStatus = useSyncExternalStore(subscribeMcpGatewayStatus, getMcpGatewayStatus);
+  const status = enabled ? gatewayStatus : "disabled";
+  const statusSnapshot = useSyncExternalStore(
+    subscribeMcpGatewayStatusSnapshot,
+    getMcpGatewayStatusSnapshot,
+  );
   const [launch] = useState(() => window.desktopBridge?.getMcpGatewayLaunchConfig?.() ?? null);
   const [failedCopy, setFailedCopy] = useState<string | null>(null);
   const { copyToClipboard, isCopied } = useCopyToClipboard<string>({
@@ -524,36 +536,6 @@ export function McpGatewaySettings() {
     );
     copyToClipboard(value, value);
   };
-
-  useEffect(() => {
-    const onStatus = (event: Event) => setStatus((event as CustomEvent<McpGatewayUiState>).detail);
-    window.addEventListener(`${MCP_GATEWAY_STATE_EVENT}:status`, onStatus);
-    return () => window.removeEventListener(`${MCP_GATEWAY_STATE_EVENT}:status`, onStatus);
-  }, []);
-
-  useEffect(() => {
-    const onSnapshot = (event: Event) =>
-      setStatusSnapshot((event as CustomEvent<GatewayStatusSnapshot | null>).detail);
-    window.addEventListener(`${MCP_GATEWAY_STATE_EVENT}:snapshot`, onSnapshot);
-    return () => window.removeEventListener(`${MCP_GATEWAY_STATE_EVENT}:snapshot`, onSnapshot);
-  }, []);
-
-  useEffect(() => {
-    let saved = JSON.stringify(getMcpGatewayGrants());
-    return subscribeMcpGatewayConfiguration(() => {
-      setEnabled(isMcpGatewayEnabled());
-      setToken(getMcpGatewayToken());
-      setBridgePort(String(getMcpGatewayPort()));
-      const next = getMcpGatewayGrants();
-      const serialized = JSON.stringify(next);
-      if (serialized !== saved) {
-        saved = serialized;
-        setSavedGrants(next);
-        // Discard a stale draft so saving cannot restore another window's revoked grants.
-        setPendingGrants(null);
-      }
-    });
-  }, []);
 
   const grantsDirty =
     pendingGrants !== null && JSON.stringify(pendingGrants) !== JSON.stringify(savedGrants);
@@ -585,8 +567,7 @@ export function McpGatewaySettings() {
                 try {
                   setMcpGatewayToken(token);
                   setMcpGatewayEnabled(next);
-                  setEnabled(next);
-                  setStatus(next ? "connecting" : "disabled");
+                  publishMcpGatewayStatus(next ? "connecting" : "disabled");
                   setConfigurationError(null);
                 } catch {
                   setConfigurationError(
@@ -608,13 +589,15 @@ export function McpGatewaySettings() {
               min={1}
               max={65535}
               value={bridgePort}
-              onChange={(event) => setBridgePort(event.target.value)}
+              onChange={(event) =>
+                setPortDraft({ source: configuration, value: event.target.value })
+              }
               onBlur={() => {
                 try {
                   setMcpGatewayPort(Number(bridgePort));
                   setConfigurationError(null);
                 } catch {
-                  setBridgePort(String(getMcpGatewayPort()));
+                  setPortDraft(null);
                   setConfigurationError(
                     "Choose a port from 1 to 65535 and ensure browser storage is available.",
                   );
@@ -634,7 +617,9 @@ export function McpGatewaySettings() {
               autoComplete="off"
               placeholder="At least 16 characters"
               aria-label="MCP gateway bridge token"
-              onChange={(event) => setToken(event.target.value)}
+              onChange={(event) =>
+                setTokenDraft({ source: configuration, value: event.target.value })
+              }
               onBlur={() => setMcpGatewayToken(token)}
             />
           }
@@ -656,8 +641,7 @@ export function McpGatewaySettings() {
                   onClick={() => {
                     try {
                       setMcpGatewayGrants(pendingGrants);
-                      setSavedGrants(pendingGrants);
-                      setPendingGrants(null);
+                      setGrantsDraft(null);
                       setConfigurationError(null);
                     } catch {
                       setConfigurationError(
@@ -672,7 +656,7 @@ export function McpGatewaySettings() {
                   size="sm"
                   variant="ghost"
                   onClick={() => {
-                    setPendingGrants(null);
+                    setGrantsDraft(null);
                   }}
                 >
                   Cancel
@@ -685,7 +669,7 @@ export function McpGatewaySettings() {
             environments={environmentRows}
             registryReady={registryReady}
             grants={pendingGrants ?? savedGrants}
-            onChange={setPendingGrants}
+            onChange={(value) => setGrantsDraft({ source: savedGrants, value })}
           />
         </SettingsRow>
         <SettingsRow

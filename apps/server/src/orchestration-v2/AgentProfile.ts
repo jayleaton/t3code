@@ -198,13 +198,8 @@ export function agentProfileReminder(
   return `<agent_profile_reminder>You are running as ${agent}. Your agent_profile_instructions${skills} from the start of this conversation still apply; re-read a skill's SKILL.md when its trigger applies.</agent_profile_reminder>\n\n${text}`;
 }
 
-/**
- * Whether this native conversation still holds the exact instructions the next prompt would
- * prepend, so repeating them would only grow every later turn's context. Every adapter keeps
- * native history across turns and binds a new native id when it cannot resume one, so an
- * accepted prompt under the same native id is still in context unless a compaction summarized it
- * or a rollback removed it. Changed content is resent because the newest copy is authoritative.
- */
+/** An accepted prompt remains in the same native conversation until compaction or rollback.
+ * Adapters replace the native id when resume fails; resend changed content as authoritative. */
 export function agentInstructionsInContext(input: {
   readonly profileContentHash: string;
   readonly nativeThreadId: string | undefined;

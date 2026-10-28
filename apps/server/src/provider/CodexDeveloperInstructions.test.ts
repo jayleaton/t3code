@@ -9,11 +9,15 @@ import {
   CODEX_APP_CONTEXT_MAX_TOTAL_BYTES,
 } from "./CodexDeveloperInstructions.ts";
 
+function runtimeInstructions(runtime: Parameters<typeof buildCodexAdditionalContext>[0]) {
+  return buildCodexAdditionalContext(runtime).t3_code_runtime!.value;
+}
+
 describe("buildCodexAdditionalContext", () => {
   it.each([undefined, { browser: true, device: true }])(
     "keeps every entry within Codex's per-entry cap with tools %j",
     (availability) => {
-      const context = buildCodexAdditionalContext(availability);
+      const context = buildCodexAdditionalContext({ model: "gpt-6.1-sol" }, availability);
 
       for (const [key, entry] of Object.entries(context)) {
         // Codex counts ceil(UTF-8 bytes / 4) tokens, excluding keys and wrappers.
@@ -28,9 +32,35 @@ describe("buildCodexAdditionalContext", () => {
   );
 });
 
+describe("Codex runtime context", () => {
+  it("describes Markdown media support in the runtime context in both modes", () => {
+    {
+      const instructions = runtimeInstructions({
+        model: "gpt-5.3-codex",
+        reasoningEffort: "high",
+      });
+      NodeAssert.match(
+        instructions,
+        /<runtime_info>.*embed images, video, and audio.*Markdown image syntax with absolute file paths.*Link any other file.*absolute path.*files viewer.*<\/runtime_info>/,
+      );
+    }
+  });
+
+  it("flattens multiline metadata into single-line runtime info", () => {
+    const instructions = runtimeInstructions({
+      model: "gpt\n5.3\ncodex",
+      reasoningEffort: " high\neffort ",
+    });
+
+    NodeAssert.match(instructions, /as gpt 5\.3 codex/);
+    NodeAssert.doesNotMatch(instructions, /reasoning effort/);
+    NodeAssert.doesNotMatch(instructions, /<runtime_info>[^<]*\n/);
+  });
+});
+
 describe("Codex orchestration context", () => {
   it("routes same-child follow-ups to t3_thread_send and independent reviews to delegate_task", () => {
-    const orchestration = Object.entries(buildCodexAdditionalContext())
+    const orchestration = Object.entries(buildCodexAdditionalContext({ model: "gpt-6.1-sol" }))
       .filter(([key]) => key.startsWith("t3_code_orchestration_"))
       .map(([, entry]) => entry.value)
       .join("\n");

@@ -112,12 +112,10 @@ export const make = Effect.gen(function* () {
       .toReversed()
       .find((candidate) => environmentIds.every((id) => candidate.grants[id] !== undefined));
     if (!host) {
-      return yield* Effect.fail(
-        unavailable(
-          hosts.size === 0
-            ? "No T3 app with T3 Agents enabled is connected to this environment."
-            : `No connected T3 app grants T3 Agents access to ${environmentIds.join(", ")}.`,
-        ),
+      return yield* unavailable(
+        hosts.size === 0
+          ? "No T3 app with T3 Agents enabled is connected to this environment."
+          : `No connected T3 app grants T3 Agents access to ${environmentIds.join(", ")}.`,
       );
     }
     // Omitted trailing arguments stay omitted rather than arriving as null.
@@ -183,7 +181,7 @@ export const make = Effect.gen(function* () {
   ) {
     const call = pending.get(input.invocationId);
     if (!call || call.host.owner !== owner || call.host.connectionId !== input.connectionId) {
-      return yield* Effect.fail(unavailable("Relay response does not belong to this connection."));
+      return yield* unavailable("Relay response does not belong to this connection.");
     }
     pending.delete(input.invocationId);
     if (input.error !== undefined) {

@@ -36,10 +36,11 @@ export const layerFromBroker = Layer.effect(
     const descriptor = yield* (yield* ServerEnvironment.ServerEnvironment).getDescriptor;
     return ThreadTaskTransport.of({
       localEnvironmentId: descriptor.environmentId,
-      call: (environmentId, request) =>
+      call: Effect.fn("ThreadTaskTransport.call")((environmentId, request) =>
         broker
           .call("threadTask", [environmentId, request])
           .pipe(Effect.mapError((error) => error.message)),
+      ),
       peers: () =>
         Object.keys(broker.grants())
           .filter((id) => id !== descriptor.environmentId)

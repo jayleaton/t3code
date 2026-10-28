@@ -1,4 +1,3 @@
-/* oxlint-disable unicorn/prefer-add-event-listener -- The MCP Transport interface uses callback properties, not DOM events. */
 // @effect-diagnostics-next-line nodeBuiltinImport:off - A detached owner must outlive any one stdio client, including on Windows.
 import * as NodeChildProcess from "node:child_process";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -112,13 +111,8 @@ const isRequest = (message: JSONRPCMessage) => "method" in message && "id" in me
 const isResponse = (message: JSONRPCMessage) => "id" in message && !("method" in message);
 const RECONNECT_INITIALIZE_ID = "t3-gateway-reconnect";
 
-/**
- * Proxy complete MCP messages, keeping request ids and notifications scoped to
- * this session. When the owner stops (an update retired it, or it crashed) and
- * `reconnect` is given, the session moves to the next owner: calls in flight
- * fail with a retry hint, the client's initialize handshake is replayed, and
- * the client is told the tool list changed so it picks up the new build's tools.
- */
+// Owner replacement requires failing in-flight calls and replaying this session's handshake.
+// The tool-list notification makes the client discover the replacement build's tools.
 export async function proxyMcpStdio(
   initial: Transport,
   reconnect?: () => Promise<Transport>,

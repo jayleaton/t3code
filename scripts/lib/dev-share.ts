@@ -1,8 +1,4 @@
-/**
- * Because browser dev is single-origin (Vite proxies the backend — see
- * `resolveDevProxyTarget` in apps/web/vite.config.ts), one proxy rule covering
- * the web port is enough; the backend needs no mapping of its own.
- */
+/** Vite proxies the backend, so only the web port needs a share mapping. */
 
 import {
   buildTailscaleHttpsBaseUrl,
@@ -18,11 +14,7 @@ import * as Schema from "effect/Schema";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 
-/**
- * Human-readable gloss for each diagnostic. Deliberately our own words rather
- * than the CLI's: tailscale prints auth keys and node names into stderr, and
- * this string is logged.
- */
+/** Log fixed diagnostics; tailscale stderr can contain auth keys and node names. */
 const DIAGNOSTIC_EXPLANATIONS: Record<TailscaleStderrDiagnostic, string | undefined> = {
   "no-existing-handler": "no mapping existed for that port",
   "not-logged-in": "this machine is not logged into a tailnet — run `tailscale up`",
@@ -147,15 +139,7 @@ const clearServePort = (
     ),
   );
 
-/**
- * Removes the mapping only while it still forwards to this dev server. Another
- * server may have taken the port since (or owned it all along), and removing
- * its mapping would cut off every client reaching it over the tailnet.
- *
- * Runs uninterruptibly: this is called from a finalizer on the way out of an
- * interrupted program, and cancelling the cleanup subprocess would leave
- * exactly the stale mapping it exists to remove.
- */
+/** Uninterruptible finalizer cleanup removes only our mapping, so it cannot disconnect another server. */
 export const unshareDevServer = (
   input: DevShareTarget,
 ): Effect.Effect<
@@ -210,9 +194,7 @@ export const shareDevServer = Effect.fn("devShare.shareDevServer")(function* (
   // path handlers (/api, /ws) an older mapping left on the port.
   const cleared = yield* clearServePort(input.webPort);
   if (!cleared.cleared) {
-    // Serving over routes we failed to remove would hand out a URL that is
-    // broken in a way the user cannot see: the page loads while /ws and /api
-    // silently resolve to a dead backend. Better to refuse and say why.
+    // Refuse stale routes: the page could load while /ws and /api still point at a dead backend.
     return yield* new DevServeFailedError({
       stage: "clear-existing",
       webPort: input.webPort,

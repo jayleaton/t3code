@@ -1,4 +1,4 @@
-import { useContext, useRef, useState, type ReactNode } from "react";
+import { useContext, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -17,9 +17,9 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { useThreadActions } from "../../hooks/useThreadActions";
-import { readEnvironmentSupportsActiveReorder, readThreadShell } from "../../state/entities";
+import { readThreadShell } from "../../state/entities";
 import { planSidebarThreadDrop } from "../Sidebar.logic";
-import { SidebarDragLifecycle, SidebarPointerSensor } from "../Sidebar.pointer";
+import { SidebarPointerSensor } from "../Sidebar.pointer";
 import { SortableThreadRow } from "../SortableThreadRow";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
@@ -95,27 +95,10 @@ const keyOf = (thread: EnvironmentThreadShell) =>
 
 /** Pinned, settled, and reorder-less environments' cards keep their place and only link. */
 const isReorderable = (thread: EnvironmentThreadShell) =>
-  thread.pinnedAt == null &&
-  thread.settledAt === null &&
-  readEnvironmentSupportsActiveReorder(thread.environmentId);
+  thread.pinnedAt == null && thread.settledAt === null;
 
-/**
- * One drag surface for a list of agent chats: active cards reorder (the
- * sidebar's pointer lifecycle and persisted drop planner), and any card or
- * child row can be linked under another run or detached from its parent.
- * `active` is the reorderable list rendered by SortableAgentThreads inside.
- *
- * Both gestures follow the pointer over the card beneath it: the middle of a
- * card links, its edges reorder (see agentRunDropZone). Reordering is not
- * left to the dragged card's center, which swapped a neighbour away before
- * the pointer could reach it.
- *
- * Link targets are not dnd-kit droppables. A sortable item loses its
- * transform whenever `over` is not a list item, so hovering a header would
- * snap every card, the dragged one included, back to its resting place.
- * Instead the hovered header is tracked on the side and `over` stays on the
- * last list position, which keeps the arrangement still under the pointer.
- */
+// Card edges reorder; centers link. Keep dnd-kit over the last sort position while linking
+// so cards retain their transforms until the pointer leaves the header.
 export function AgentRunDragArea({
   active: activeThreads,
   children,
@@ -139,8 +122,7 @@ export function AgentRunDragArea({
   const sensor = useRef<SidebarPointerSensor | null>(null);
   const [dragging, setDragging] = useState(false);
   const [saving, setSaving] = useState(false);
-  // dnd-kit keeps the sensor options, and SidebarDragLifecycle cancels the drag
-  // whenever onUnmount changes, so these handlers keep one identity.
+  // dnd-kit retains sensor options, so these handlers keep one identity.
   const attach = useStableCallback((value: SidebarPointerSensor) => {
     sensor.current = value;
   });
@@ -161,7 +143,8 @@ export function AgentRunDragArea({
     childDrop.current = { kind: "none" };
     setChildDropHint("none");
   };
-  const cancel = useStableCallback(() => sensor.current?.cancel());
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- cancels the pointer sensor and releases its document listeners when the drag surface unmounts
+  useLayoutEffect(() => () => sensor.current?.cancel(), []);
   const sensors = useSensors(
     useSensor(SidebarPointerSensor, {
       distance: 6,
@@ -270,11 +253,7 @@ export function AgentRunDragArea({
       pinnedKeysById: new Map(),
       activeOrder: ids,
       activeKeysById: new Map(fresh.map((thread) => [keyOf(thread), thread.activeOrderKey])),
-      activeReorderableKeys: new Set(
-        fresh
-          .filter((thread) => readEnvironmentSupportsActiveReorder(thread.environmentId))
-          .map(keyOf),
-      ),
+      activeReorderableKeys: new Set(fresh.map(keyOf)),
     });
     if (plan.kind !== "move-active") return;
     setSaving(true);
@@ -313,7 +292,6 @@ export function AgentRunDragArea({
         clearDrop();
       }}
     >
-      <SidebarDragLifecycle onUnmount={cancel} />
       <AgentRunDragContext.Provider value={dragContext}>
         <AgentNestTargetContext.Provider value={nestTargetKey}>
           {children}

@@ -156,14 +156,9 @@ const readGatewayEnvFile = Effect.fn("HeadlessGatewayHost.readEnvFile")(function
   return parseGatewayEnvFile(yield* fileSystem.readFileString(file));
 });
 
-/**
- * Runs the T3 Agents gateway runtime for this server when no desktop app does, so thread events
- * reach the shared gateway owner and its signed webhooks fire on a headless machine.
- *
- * It holds the shared owner itself when the bridge port is free, and otherwise joins the owner
- * already there. Either way it connects as a standby runtime: an open desktop app keeps the
- * runtime role, and one owner with one store and one delivery worker means one delivery.
- */
+/** Headless thread events and signed webhooks need a gateway runtime without a desktop app.
+ * Acquire the free bridge port or join its owner; stay standby while a desktop owns runtime.
+ * One owner, store and delivery worker prevent duplicate delivery. */
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;

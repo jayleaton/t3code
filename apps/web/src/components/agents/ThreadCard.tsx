@@ -386,6 +386,7 @@ export const ThreadCard = memo(function ThreadCard({
     editing.current = false;
     setPreviewOpen(false);
   };
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- listens for document pointer presses to dismiss the open preview
   useEffect(() => {
     if (!previewOpen) return;
     const onPointerDown = (event: PointerEvent) => {

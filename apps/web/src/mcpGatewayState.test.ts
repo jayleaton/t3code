@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  getMcpGatewayConfiguration,
   getMcpGatewayGrants,
   getMcpGatewayPort,
   setMcpGatewayPort,
@@ -69,6 +70,32 @@ describe("MCP gateway grants", () => {
       "a534b83f-a352-44d8-aedc-c4230c179390": ["read", "create", "send"],
       "2549ba75-2a91-4554-8baa-88e6ae0efa48": ["read"],
     });
+  });
+
+  it("keeps a stable configuration snapshot until persisted access changes", () => {
+    const before = getMcpGatewayConfiguration();
+    expect(getMcpGatewayConfiguration()).toBe(before);
+    setMcpGatewayGrants({ remote: ["read", "send"] });
+    const granted = getMcpGatewayConfiguration();
+    expect(granted).not.toBe(before);
+    expect(granted.grants).toEqual({ remote: ["read", "send"] });
+    expect(getMcpGatewayConfiguration()).toBe(granted);
+    localStorage.removeItem(MCP_GATEWAY_GRANTS_KEY);
+    const revoked = getMcpGatewayConfiguration();
+    expect(revoked).not.toBe(granted);
+    expect(revoked.grants).toEqual({});
+    expect(getMcpGatewayConfiguration()).toBe(revoked);
+    vi.stubGlobal("window", {
+      ...window,
+      desktopBridge: {
+        ...window.desktopBridge,
+        getMcpGatewayLaunchConfig: () => ({ command: "t3", args: [], env: {} }),
+      },
+    });
+    const available = getMcpGatewayConfiguration();
+    expect(available.available).toBe(true);
+    expect(available).not.toBe(revoked);
+    expect(getMcpGatewayConfiguration()).toBe(available);
   });
 
   it("drops malformed persisted grant entries instead of granting access", () => {

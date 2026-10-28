@@ -303,8 +303,8 @@ const make = Effect.gen(function* () {
       });
       return toTodo(yield* readTodo(todoId));
     }),
-    settle: (input) => mutate("todo.settle", input),
-    unsettle: (input) => mutate("todo.unsettle", input),
+    settle: Effect.fn("TodoService.settle")((input) => mutate("todo.settle", input)),
+    unsettle: Effect.fn("TodoService.unsettle")((input) => mutate("todo.unsettle", input)),
     remove: Effect.fn("TodoService.remove")(function* (input) {
       const todoId = yield* commit({
         type: "todo.delete",

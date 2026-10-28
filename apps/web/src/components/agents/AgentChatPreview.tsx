@@ -37,6 +37,7 @@ export function AgentChatPreview({
   const following = useRef(true);
   // Markdown and images can grow after a stream event has rendered. Follow only
   // while the reader stays near the bottom; never pull them away from older text.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- observes streamed DOM content growth to keep the preview scrolled while following
   useLayoutEffect(() => {
     const scroll = scrollRef.current;
     const content = contentRef.current;

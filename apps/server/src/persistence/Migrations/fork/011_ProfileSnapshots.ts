@@ -16,19 +16,9 @@ const carriesProfileContent = (column: string) =>
   `(json_type(${column}, '$.profileSnapshot.skills') IS NOT NULL
     OR json_type(${column}, '$.profileSnapshot.systemPrompt') IS NOT NULL)`;
 
-/**
- * Agent instructions and skills move out of thread payloads into content-addressed rows, so
- * whole-thread events and bulk thread reads stop carrying ~130 KB per agent thread.
- *
- * Existing thread events keep their inline copies and decode by hashing them
- * (`withoutLegacyProfileContent`), so every one of them needs its row here. A thread's
- * profile is frozen at creation and every later thread event repeats it, so storing what
- * the projection holds, plus each `thread.created` the projection does not cover, stores
- * all of them. Pages keep one batch of large payloads in memory at a time.
- *
- * Slim payloads make fork migration 8's skill-less copy of each row identical to the row,
- * so its table and triggers go.
- */
+/** Legacy events decode inline content by its hash, so every frozen profile needs a snapshot row.
+ * Current projections plus thread.created events absent from them cover all repeated profiles;
+ * batch pages bound memory. Slim payloads also make migration 8's copy and triggers redundant. */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 

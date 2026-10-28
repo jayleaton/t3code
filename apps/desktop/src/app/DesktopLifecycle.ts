@@ -213,7 +213,7 @@ const isSupervisedRelaunch = Effect.gen(function* () {
   return (yield* DesktopConfig.DesktopConfig).supervisedRelaunch;
 }).pipe(Effect.orElseSucceed(() => false));
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = DesktopLifecycle.of({
   relaunch: Effect.fn("desktop.lifecycle.relaunch")(function* (reason) {
     const electronApp = yield* ElectronApp.ElectronApp;

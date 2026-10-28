@@ -1,5 +1,39 @@
-import type { ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
-import { getTriggerDisplayModelName, type ModelEsque } from "./providerIconUtils";
+import type { ModelSelection, ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
+import {
+  resolveSelectableProviderInstanceEntry,
+  type ProviderInstanceEntry,
+} from "../../providerInstances";
+import { getDisplayModelName, type ModelEsque } from "./providerIconUtils";
+
+export function providerSupportsManualCompaction(
+  provider: ProviderInstanceEntry | null | undefined,
+): boolean {
+  return provider?.snapshot.slashCommands.some((command) => command.name === "compact") ?? false;
+}
+
+export function hasAvailableCompactionProvider(input: {
+  readonly providers: ReadonlyArray<ProviderInstanceEntry>;
+  readonly driverKind: ProviderDriverKind;
+  readonly instanceId: ProviderInstanceId | null;
+  readonly lockedInstanceId: ProviderInstanceId | null;
+}): boolean {
+  const driverProviders = input.providers.filter(
+    (provider) => provider.driverKind === input.driverKind,
+  );
+  const lockedContinuationGroupKey = input.lockedInstanceId
+    ? driverProviders.find((provider) => provider.instanceId === input.lockedInstanceId)
+        ?.continuationGroupKey
+    : undefined;
+  const compatibleProviders = lockedContinuationGroupKey
+    ? driverProviders.filter(
+        (provider) => provider.continuationGroupKey === lockedContinuationGroupKey,
+      )
+    : driverProviders;
+
+  return providerSupportsManualCompaction(
+    resolveSelectableProviderInstanceEntry(compatibleProviders, input.instanceId ?? undefined),
+  );
+}
 
 export function resolveContextWindowModelDisplayName(
   selection: ModelSelection | null | undefined,
@@ -13,7 +47,7 @@ export function resolveContextWindowModelDisplayName(
     .get(selection.instanceId)
     ?.find((model) => model.slug === selection.model);
 
-  return selectedModel ? getTriggerDisplayModelName(selectedModel) : selection.model;
+  return selectedModel ? getDisplayModelName(selectedModel) : selection.model;
 }
 
 export function formatContextWindowCompactionMessage(

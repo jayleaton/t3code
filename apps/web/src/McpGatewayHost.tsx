@@ -6,16 +6,13 @@ import {
 } from "@t3tools/client-runtime/gateway";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import type { AppRouter } from "./router";
 import { openDesktopGatewayThread, openDesktopGatewayAgents } from "./mcpGatewayNavigation";
 import { connectionAtomRuntime } from "./connection/runtime";
 import {
-  getMcpGatewayGrants,
-  getMcpGatewayPort,
-  getMcpGatewayToken,
-  isMcpGatewayEnabled,
+  getMcpGatewayConfiguration,
   mcpGatewayStartupMessage,
   publishMcpGatewayStartup,
   publishMcpGatewayStatus,
@@ -27,31 +24,18 @@ import {
 import { appAtomRegistry } from "./rpc/atomRegistry";
 
 export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
-  const [configuration, setConfiguration] = useState(() => ({
-    available: (window.desktopBridge?.getMcpGatewayLaunchConfig?.() ?? null) !== null,
-    enabled: isMcpGatewayEnabled(),
-    port: getMcpGatewayPort(),
-    grants: getMcpGatewayGrants(),
-    token: getMcpGatewayToken(),
-  }));
-
-  useEffect(() => {
-    const onChange = () =>
-      setConfiguration({
-        available: (window.desktopBridge?.getMcpGatewayLaunchConfig?.() ?? null) !== null,
-        enabled: isMcpGatewayEnabled(),
-        port: getMcpGatewayPort(),
-        grants: getMcpGatewayGrants(),
-        token: getMcpGatewayToken(),
-      });
-    return subscribeMcpGatewayConfiguration(onChange);
-  }, []);
+  const configuration = useSyncExternalStore(
+    subscribeMcpGatewayConfiguration,
+    getMcpGatewayConfiguration,
+  );
+  const { available } = configuration;
 
   const [restartVersion, setRestartVersion] = useState(0);
   // Another host's gateway can hold the port with a different store; the desktop takes over
   // once it exits, without the user having to press Restart.
   const [retryVersion, setRetryVersion] = useState(0);
   const startupFailures = useRef(0);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers the desktop gateway restart callback while this host is mounted
   useEffect(() => {
     setMcpGatewayRestarter(() => {
       startupFailures.current = 0;
@@ -60,8 +44,7 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
     return () => setMcpGatewayRestarter(null);
   }, []);
 
-  const nativeEnabled =
-    configuration.available && configuration.enabled && configuration.token.length >= 16;
+  const nativeEnabled = available && configuration.enabled && configuration.token.length >= 16;
   const nativeToken = configuration.token;
   const nativePort = configuration.port;
   // The effect below restarts the managed gateway on any change here, so it keys on
@@ -75,6 +58,7 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
   ]);
   const [readyKey, setReadyKey] = useState<string | null>(null);
   const managedReady = nativeEnabled && readyKey === nativeKey;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- owns the native gateway session and retry timer for the selected configuration
   useEffect(() => {
     let stopped = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
@@ -113,13 +97,9 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
     };
   }, [nativeEnabled, nativeToken, nativePort, nativeKey]);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- owns the authenticated gateway bridge, connection runtime subscription and relays while enabled
   useEffect(() => {
-    if (
-      !configuration.available ||
-      !configuration.enabled ||
-      configuration.token.length < 16 ||
-      !managedReady
-    ) {
+    if (!available || !configuration.enabled || configuration.token.length < 16 || !managedReady) {
       publishMcpGatewayStatus(configuration.enabled ? "degraded" : "disabled");
       publishMcpGatewayStatusSnapshot(null);
       setMcpGatewayStatusRequester(null);
@@ -180,7 +160,7 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
       publishMcpGatewayStatusSnapshot(null);
       unmountRuntime();
     };
-  }, [configuration, router, managedReady]);
+  }, [available, configuration, router, managedReady]);
 
   return null;
 }

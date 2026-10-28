@@ -1,10 +1,4 @@
-/**
- * Drops object properties that hold `null`, `undefined`, or an empty array, at
- * any depth. For text a model reads, where an absent field costs nothing and
- * reads like an empty one; typed readers keep the full value. `false`, `0`,
- * `""`, and `{}` stay because they can mean something, and array elements stay
- * so positions keep their meaning.
- */
+/** Compact model-facing objects only: typed readers need the full value, and array positions and meaningful falsy values stay intact. */
 export function compactJson<T>(value: T): T {
   if (Array.isArray(value)) return value.map(compactJson) as T;
   if (typeof value !== "object" || value === null || !isPlainObject(value)) return value;

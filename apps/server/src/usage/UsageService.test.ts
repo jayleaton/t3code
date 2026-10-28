@@ -50,7 +50,7 @@ import { totalTokens, type UsageRecord } from "@t3tools/provider-core/server/usa
 import * as UsageService from "./UsageService.ts";
 import * as MuseSdk from "../../../../packages/provider-muse/src/server/sdk.ts";
 import { MuseUsageHome } from "@t3tools/provider-muse/server";
-import { encodeScanCache, SCAN_CACHE_FILE_NAME } from "./usageScanCache.ts";
+import { makeScanCacheWriter, SCAN_CACHE_FILE_NAME } from "./usageScanCache.ts";
 
 vi.mock("node:fs/promises", { spy: true });
 vi.mock("../../../../packages/provider-muse/src/server/sdk.ts", async (importOriginal) => ({
@@ -199,9 +199,7 @@ const NARROW_WINDOW: UsageSummaryInput = {
   untilDay: UsageDay.make("2026-09-02"),
 };
 
-/**
- * Each waiting gate holds one libuv pool thread; keep at most three.
- */
+// Each waiting gate holds a libuv thread; allow at most three.
 const makeGate = (path: string, lastWriteSeconds?: number) =>
   Effect.promise(async () => {
     NodeChildProcess.execFileSync("mkfifo", [path]);
@@ -2417,7 +2415,7 @@ describe("UsageService", () => {
       yield* Effect.gen(function* () {
         const { stateDir } = yield* ServerConfig.ServerConfig;
         const mtimeMs = yield* Clock.currentTimeMillis;
-        const cache = encodeScanCache(
+        const cache = makeScanCacheWriter()(
           new Map([
             [
               transcript,
@@ -2432,13 +2430,11 @@ describe("UsageService", () => {
               },
             ],
           ]),
+          {},
         );
         yield* Effect.promise(async () => {
           await NodeFSP.mkdir(stateDir, { recursive: true });
-          await NodeFSP.writeFile(
-            NodePath.join(stateDir, SCAN_CACHE_FILE_NAME),
-            encodeUnknownJsonString(cache),
-          );
+          await NodeFSP.writeFile(NodePath.join(stateDir, SCAN_CACHE_FILE_NAME), cache);
         });
         const summary = yield* (yield* UsageService.make).readSummary(WINDOW);
         const source = summary.sources.find((source) => source.fingerprint.provider === "claude");
@@ -2612,6 +2608,7 @@ describe("UsageService", () => {
       );
 
       let orphanedAt: number | undefined;
+      // oxlint-disable-next-line t3code/no-polling-loop-in-tests -- Fixed-count scheduler interruption matrix; each iteration exercises a different interruption point.
       for (let interruptAt = 1; interruptAt <= 31; interruptAt += 1) {
         const tasks: Array<() => void> = [];
         const dispatcher: Scheduler.SchedulerDispatcher = {

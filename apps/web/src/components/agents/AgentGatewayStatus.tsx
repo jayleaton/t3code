@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import {
   getMcpGatewayStartup,
   getMcpGatewayStatus,
@@ -25,7 +25,6 @@ export function AgentGatewayStatus() {
   const [status, setStatus] = useState(getMcpGatewayStatus);
   const [live, setLive] = useState(false);
   const [recovering, setRecovering] = useState(false);
-  const recoveringRef = useRef(false);
   const [error, setError] = useState<string | null>(() => {
     const startup = getMcpGatewayStartup();
     return startup.phase === "failed" ? startup.message : null;
@@ -33,10 +32,24 @@ export function AgentGatewayStatus() {
   const responseTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const recoveryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  useEffect(() => {
-    recoveringRef.current = recovering;
-  }, [recovering]);
+  const onStartup = useEffectEvent(() => {
+    const startup = getMcpGatewayStartup();
+    if (startup.phase === "failed") {
+      clearTimeout(recoveryTimer.current);
+      setLive(false);
+      setRecovering(false);
+      setError(startup.message);
+    } else if (startup.phase === "ready") {
+      if (!recovering) return;
+      clearTimeout(recoveryTimer.current);
+      recoveryTimer.current = setTimeout(() => {
+        setRecovering(false);
+        setError("Gateway started but its bridge did not report healthy. Try again.");
+      }, 15_000);
+    }
+  });
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to gateway health and startup events and owns their response/recovery timers
   useEffect(() => {
     if (!available) return;
     const refresh = () => {
@@ -72,23 +85,6 @@ export function AgentGatewayStatus() {
       clearTimeout(recoveryTimer.current);
       setRecovering(false);
       setError(null);
-    };
-    // Recovery reports the desktop's own startup error; only a started gateway waits for health.
-    const onStartup = () => {
-      const startup = getMcpGatewayStartup();
-      if (startup.phase === "failed") {
-        clearTimeout(recoveryTimer.current);
-        setLive(false);
-        setRecovering(false);
-        setError(startup.message);
-      } else if (startup.phase === "ready") {
-        if (!recoveringRef.current) return;
-        clearTimeout(recoveryTimer.current);
-        recoveryTimer.current = setTimeout(() => {
-          setRecovering(false);
-          setError("Gateway started but its bridge did not report healthy. Try again.");
-        }, 15_000);
-      }
     };
     const unsubscribe = subscribeMcpGatewayConfiguration(() => {
       setEnabled(isMcpGatewayEnabled());
@@ -151,7 +147,6 @@ export function AgentGatewayStatus() {
             setError(null);
             setLive(false);
             setRecovering(true);
-            recoveringRef.current = true;
             if (!requestGatewayRestart()) {
               setRecovering(false);
               setError("Gateway restart is unavailable. Check MCP Gateway settings.");

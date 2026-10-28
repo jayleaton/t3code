@@ -35,11 +35,8 @@ import { isTerminalRunStatus } from "../../orchestration-v2/ThreadManagementServ
 import * as ThreadTaskService from "../../threadTask/ThreadTaskService.ts";
 import { McpGatewayBroker } from "../McpGatewayBroker.ts";
 import type { McpInvocationScope } from "../McpInvocationContext.ts";
-import {
-  clampWaitTimeoutMs,
-  resolveInteractionMode,
-  resolveRuntimeMode,
-} from "../OrchestratorMcpService.ts";
+import { clampWaitTimeoutMs } from "../OrchestratorMcpService.ts";
+import { resolveInteractionMode, resolveRuntimeMode } from "../delegatedTaskModes.ts";
 import { newCommandId } from "../threadAccess.ts";
 import { LocalGatewayPort } from "./LocalGatewayPort.ts";
 
@@ -501,23 +498,24 @@ const remoteWorkspace = (
   }
 };
 
-const remoteModel = (remote: RemoteEnvironment, selection: ModelSelection | undefined) => {
-  if (selection === undefined) return Effect.succeed({});
+const remoteModel = Effect.fn("remoteThreads.remoteModel")(function* (
+  remote: RemoteEnvironment,
+  selection: ModelSelection | undefined,
+) {
+  if (selection === undefined) return {};
   const options = selection.options ?? [];
   const effort = options.find((option) => option.id === "reasoningEffort");
   const others = options.filter((option) => option.id !== "reasoningEffort");
   if (others.length > 0 || (effort !== undefined && typeof effort.value !== "string")) {
-    return Effect.fail(
-      invalid(
-        `On another environment (${remote.environmentId}) a launch takes a model and reasoningEffort only; drop the options ${others.map((option) => option.id).join(", ")}.`,
-      ),
+    return yield* invalid(
+      `On another environment (${remote.environmentId}) a launch takes a model and reasoningEffort only; drop the options ${others.map((option) => option.id).join(", ")}.`,
     );
   }
-  return Effect.succeed({
+  return {
     modelSelection: { instanceId: selection.instanceId, model: selection.model },
     ...(effort === undefined ? {} : { reasoningEffort: effort.value }),
-  });
-};
+  };
+});
 
 /** A t3_thread_launch on another environment: it lands there, or it fails. */
 export const launchThread = Effect.fn("remoteThreads.launchThread")(function* (

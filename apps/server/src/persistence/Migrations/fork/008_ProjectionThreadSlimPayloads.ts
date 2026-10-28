@@ -1,16 +1,9 @@
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
-/**
- * Agent threads snapshot their profile's skills, about 130 KB per thread and
- * nearly all of each payload. Shell, settlement, and cleanup reads drop them,
- * but still read every overflow page of every thread row to do it, which on a
- * large database turns each client connect into hundreds of MB of I/O.
- * Triggers keep a copy without skills, so those reads stay off the big rows
- * and no write path has to remember it. The triggers delete before inserting:
- * a trigger's INSERT takes the conflict policy of the statement that fired it,
- * so the projection's upserts would turn INSERT OR REPLACE into ABORT.
- */
+/** Skill-free copies keep shell, settlement and cleanup reads off large overflow pages.
+ * Triggers cover every write path and must delete before inserting: a triggering upsert's
+ * conflict policy overrides INSERT OR REPLACE and would turn it into ABORT. */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 

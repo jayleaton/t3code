@@ -116,13 +116,13 @@ export const make = Effect.gen(function* () {
             ...(finishedChildAt === null ? {} : { reason: "finished-child" as const }),
           });
         }).pipe(
-          Effect.catchCause((cause) =>
-            Cause.hasInterruptsOnly(cause)
-              ? Effect.failCause(cause)
-              : Effect.logWarning("automatic thread settlement skipped", {
-                  threadId: thread.id,
-                  cause: Cause.pretty(cause),
-                }),
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterruptsOnly(cause),
+            (cause) =>
+              Effect.logWarning("automatic thread settlement skipped", {
+                threadId: thread.id,
+                cause: Cause.pretty(cause),
+              }),
           ),
         ),
       { concurrency: 8, discard: true },
@@ -130,21 +130,17 @@ export const make = Effect.gen(function* () {
   });
   const worker = yield* makeDrainableWorker((threadId: ThreadId | undefined) =>
     sweep(threadId).pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
-          : Effect.logWarning("automatic thread settlement sweep failed", {
-              cause: Cause.pretty(cause),
-            }),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) =>
+          Effect.logWarning("automatic thread settlement sweep failed", {
+            cause: Cause.pretty(cause),
+          }),
       ),
     ),
   );
 
-  // Settling closes the thread's shells that sit at an idle prompt, so they stop
-  // holding the worktree. A terminal running a command (a dev server, an
-  // editor) stays for the user to close. Then the project's settle script runs
-  // in the thread's own worktree; a thread in the shared checkout skips it,
-  // because other threads may still be working there.
+  // Close idle prompts and run the settle script only in an isolated worktree; live terminals stay open.
   const cleanUpSettledThread = Effect.fn("ThreadSettlementServiceV2.cleanUpSettledThread")(
     function* (threadId: ThreadId) {
       // A thread re-engaged before this event ran keeps its shells.
@@ -176,13 +172,13 @@ export const make = Effect.gen(function* () {
     },
     (effect, threadId) =>
       effect.pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.failCause(cause)
-            : Effect.logWarning("cleaning up a settled thread failed", {
-                threadId,
-                cause: Cause.pretty(cause),
-              }),
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) =>
+            Effect.logWarning("cleaning up a settled thread failed", {
+              threadId,
+              cause: Cause.pretty(cause),
+            }),
         ),
       ),
   );

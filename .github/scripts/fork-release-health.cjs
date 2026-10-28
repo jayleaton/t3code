@@ -17,16 +17,8 @@ const FAILED_CONCLUSIONS = new Set(["failure", "timed_out", "startup_failure"]);
 const hours = (ms) => `${Math.round(ms / (60 * 60 * 1000))} h`;
 
 /**
- * @param {{
- *   mainHead: { sha: string, committedAt: string },
- *   nightlies: Array<{ tagName: string, publishedAt: string }>,
- *   workflows: Array<{
- *     name: string,
- *     cancelledIsFailure: boolean,
- *     runs: Array<{ conclusion: string, createdAt: string, url: string }>,
- *   }>,
- * }} input runs are newest first.
- * @returns {string[]} one message per problem; empty when healthy.
+ * @param {{mainHead: {sha: string, committedAt: string}, nightlies: Array<{tagName: string, publishedAt: string}>, workflows: Array<{name: string, cancelledIsFailure: boolean, runs: Array<{conclusion: string, createdAt: string, url: string}>}>}} input Runs are newest first.
+ * @returns {string[]} One message per problem; empty when healthy.
  */
 function evaluateReleaseHealth({ mainHead, nightlies, workflows }) {
   const problems = [];

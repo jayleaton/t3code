@@ -1,20 +1,7 @@
-/**
- * `t3 watch <config.json>` - a host-owned, deterministic status watcher.
- *
- * It probes caller-configured resources (a file, an HTTP endpoint, a command's
- * exit status) and POSTs exactly one webhook per allow-listed transition, so a
- * T3 webhook task (and therefore a model run) only fires when something
- * actionable changes. Unchanged state sends nothing. It runs as its own
- * process and never inside the server; command probes run the configured argv
- * directly, without a shell.
- *
- * Delivery is crash safe: the event is persisted to the cursor as `pending`
- * before the POST, keyed `<name>:<instanceId>:<seq>` in an `Idempotency-Key`
- * header, and a leftover pending event is re-sent with the same key on the next
- * start. `instanceId` is minted once when the cursor is created, so two hosts (or
- * a deleted and recreated cursor) never share keys. A per-state-file lock makes
- * overlapping runs skip instead of interleaving.
- */
+/** Standalone file/HTTP/argv probes fire webhooks only for allowed state transitions.
+ * Persist pending before POST; crash retries reuse <name>:<instanceId>:<seq> idempotency keys.
+ * Each cursor gets a unique instanceId; a per-state-file lock prevents overlapping runs.
+ * Command probes run argv directly without a shell. */
 import * as NodeOS from "node:os";
 
 import * as Clock from "effect/Clock";
@@ -257,15 +244,9 @@ const saveCursor = Effect.fn("watch.saveCursor")(function* (path: string, cursor
   yield* writeFileAtomic(path, `${text}\n`);
 });
 
-/**
- * Single-writer lock, one per state file: `${statePath}.lock`.
- *
- * Created with an atomic exclusive hard link of a fully written temp file, so a
- * racer never reads a half-written lock. It is stale when the holder stopped
- * refreshing `heartbeatAt` for longer than the `staleAfterMs` it recorded, or when
- * the holder is a dead pid on this same host. A stale lock is renamed aside, then
- * the exclusive create is retried; losing that race means backing off.
- */
+/** One ${statePath}.lock writer; atomic hard-linking a complete temp file prevents partial reads.
+ * A lock is stale past its recorded heartbeat deadline or when its same-host PID is dead.
+ * Rename stale locks aside and retry exclusive creation; a lost race backs off. */
 const LockInfo = Schema.Struct({
   token: Schema.String,
   pid: Schema.Number,

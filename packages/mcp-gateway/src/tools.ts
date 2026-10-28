@@ -2039,11 +2039,8 @@ export async function callGatewayTool(
               ? profile.modelSelection
               : await context.port.resolveProfileModelSelection(environmentId, profile);
         const rawModelSelection = input.modelSelection ?? profileModelSelection;
-        // Settings profiles persist readable labels, not routing keys. Resolve
-        // those labels against the selected environment's live catalog at this
-        // authoritative create boundary; only a missing/ambiguous profile pair
-        // remains unresolved. With no selected profile or explicit override,
-        // the server-owned provider/global default chain remains authoritative.
+        // Profile labels need an unambiguous match in the target environment's live catalog.
+        // Without a profile or override, leave model defaults to the server.
         if (rawModelSelection === undefined && profile !== undefined) {
           throw new GatewayError({
             code: "invalid_input",
@@ -2623,11 +2620,8 @@ export async function callGatewayTool(
           const action = plan.actions.find(
             (candidate) => candidate.approvalActionId === approvalRequestId,
           );
-          // Fail closed for new dispatches: an action missing from the
-          // reconstructed plan (unknown, resolved, or truncated out of the
-          // newest-1,000 activity window) must never be treated as safe.
-          // A durable dispatched marker lets an uncertain authoritative command
-          // recover without granting that bypass to failed pre-dispatch checks.
+          // Missing actions cannot authorize new dispatches, even if truncated from recent activity.
+          // Only a durable dispatched marker permits uncertain-command recovery to bypass this check.
           if (action === undefined) {
             throw new GatewayError({
               code: "stale_plan",

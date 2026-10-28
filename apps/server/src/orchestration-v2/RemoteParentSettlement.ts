@@ -20,13 +20,9 @@ import { OrchestratorV2 } from "./Orchestrator.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import { manualSettlementAbove } from "./SubRunSettlement.ts";
 
-/**
- * A sub-run under a card on another environment follows that card's manual settle once it
- * finishes. Only that environment can say how its card settled, through a connected T3 app that
- * may take a minute per hop or never answer, so this asks beside the orchestrator: its run-ending
- * handler, which also starts every thread's next queued run, never waits on a relay. The answer
- * comes back as the same `thread.sub-run.settle` command a local parent's cascade sends.
- */
+/** Finished sub-runs follow the remote parent's manual settlement via thread.sub-run.settle.
+ * Relays may take a minute per hop or never answer; query outside the orchestrator so
+ * its run-ending handler can start the next queued run without waiting. */
 
 // Parent links are acyclic; this only bounds a corrupt or adversarial chain.
 const MAX_HOPS = 16;

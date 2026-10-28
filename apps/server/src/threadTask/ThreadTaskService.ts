@@ -222,10 +222,9 @@ export const make = Effect.gen(function* () {
     );
   const requireShell = (threadId: ThreadId) =>
     getShell(threadId).pipe(
-      Effect.flatMap((shell) =>
-        shell === undefined
-          ? Effect.fail(fail("thread_not_found", `Thread ${threadId} was not found.`))
-          : Effect.succeed(shell),
+      Effect.filterOrFail(
+        (shell) => shell !== undefined,
+        () => fail("thread_not_found", `Thread ${threadId} was not found.`),
       ),
     );
   const put = (task: ThreadTask): Effect.Effect<ThreadTask, ThreadTaskError> =>
@@ -1193,13 +1192,13 @@ export const make = Effect.gen(function* () {
     store.getLink(workerThreadId).pipe(
       Effect.catch(unavailable),
       Effect.map(Option.getOrUndefined),
-      Effect.flatMap((link) =>
-        link !== undefined &&
-        link.role === role &&
-        link.peerEnvironmentId === peerEnvironmentId &&
-        sameSecret(link.capability, capability)
-          ? Effect.succeed(link)
-          : Effect.fail(fail("scope_denied", "This task is not shared with that environment.")),
+      Effect.filterOrFail(
+        (link) =>
+          link !== undefined &&
+          link.role === role &&
+          link.peerEnvironmentId === peerEnvironmentId &&
+          sameSecret(link.capability, capability),
+        () => fail("scope_denied", "This task is not shared with that environment."),
       ),
     );
 
@@ -1543,13 +1542,13 @@ export const make = Effect.gen(function* () {
     },
     (effect, workerThreadId) =>
       effect.pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.failCause(cause)
-            : Effect.logWarning("thread task delivery failed", {
-                workerThreadId,
-                cause: Cause.pretty(cause),
-              }),
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) =>
+            Effect.logWarning("thread task delivery failed", {
+              workerThreadId,
+              cause: Cause.pretty(cause),
+            }),
         ),
       ),
   );
@@ -1756,13 +1755,13 @@ export const make = Effect.gen(function* () {
     },
     (effect, stored) =>
       effect.pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.failCause(cause)
-            : Effect.logWarning("thread task reaction failed", {
-                threadId: stored.event.threadId,
-                cause: Cause.pretty(cause),
-              }),
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) =>
+            Effect.logWarning("thread task reaction failed", {
+              threadId: stored.event.threadId,
+              cause: Cause.pretty(cause),
+            }),
         ),
       ),
   );

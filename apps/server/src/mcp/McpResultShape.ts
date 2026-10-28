@@ -1,12 +1,8 @@
 import { McpSchema } from "effect/ai";
 
-/**
- * MCP clients whose model reads `structuredContent`, verified against the
- * installed harness: Claude Code puts only `JSON.stringify(structuredContent)`
- * in context, and Codex puts the whole result in, so a text copy is paid
- * twice. Neither enforces `outputSchema`. Every other client, including older
- * `t3 thread` CLIs that decode with the contract schemas, gets the full shape.
- */
+/** Verified Claude/Codex harnesses read structuredContent without enforcing outputSchema;
+ * their text copy wastes context. Other clients, including older t3 thread schema decoders,
+ * retain the full result shape. */
 const LEAN_CLIENTS: ReadonlySet<string> = new Set(["claude-code", "codex-mcp-client"]);
 
 export const wantsLeanResults = (client: McpSchema.Implementation | undefined): boolean =>

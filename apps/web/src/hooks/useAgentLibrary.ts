@@ -68,6 +68,7 @@ export function AgentLibrarySync() {
   const { environments } = useEnvironments();
   const update = useAtomCommand(serverEnvironment.updateSettings, "agent library sync");
   const pending = useRef(new Set<string>());
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- replicates the merged agent library to connected servers when their streamed settings change
   useEffect(() => {
     const connected = environments.filter(
       (env) =>

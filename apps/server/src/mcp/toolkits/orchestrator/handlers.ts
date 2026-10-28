@@ -1,8 +1,11 @@
+import * as RemoteThreads from "../../agents/remoteThreads.ts";
 import { OrchestratorMcpFailure } from "@t3tools/contracts";
 import { OrchestratorToolkit } from "./tools.ts";
 import * as Effect from "effect/Effect";
 
-import * as RemoteThreads from "../../agents/remoteThreads.ts";
+import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
+import * as PeerLinkRequests from "../../../peer/PeerLinkRequests.ts";
+import * as PeerLinks from "../../../peer/PeerLinks.ts";
 import { readCaller } from "../../threadAccess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -13,7 +16,6 @@ export const layer = McpToolAccess.toLayer(
   OrchestratorToolkit,
   Effect.gen(function* () {
     const gateway = yield* RemoteThreads.gatewayToolContext;
-    /** Where a thread tool's environmentId points: undefined for this environment. */
     const remoteTarget = (environmentId: Parameters<typeof RemoteThreads.resolveEnvironment>[2]) =>
       McpInvocationContext.McpInvocationContext.pipe(
         Effect.flatMap((scope) => RemoteThreads.resolveEnvironment(gateway, scope, environmentId)),
@@ -92,27 +94,47 @@ export const layer = McpToolAccess.toLayer(
             );
         }),
       ),
-      schedule_task: McpToolAccess.startsThreads(
-        () => ({}),
-        (input) =>
-          Effect.gen(function* () {
-            const scope = yield* McpInvocationContext.McpInvocationContext;
-            const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-            return yield* service.scheduleTask(scope, input);
-          }),
+      schedule_task: McpToolAccess.either(
+        (input) => input.scheduledTaskId === undefined,
+        McpToolAccess.startsThreads(
+          () => ({}),
+          ({ prompt, schedule, ...input }) =>
+            Effect.gen(function* () {
+              if (prompt === undefined || schedule === undefined) {
+                return yield* new OrchestratorMcpFailure({
+                  code: "invalid_request",
+                  message: "A new scheduled task needs `prompt` and `schedule`.",
+                });
+              }
+              const scope = yield* McpInvocationContext.McpInvocationContext;
+              const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+              return yield* service.scheduleTask(scope, { ...input, prompt, schedule });
+            }),
+          // A scheduled run starts long after its caller, with nothing to carry the link.
+          { refused: "schedule tasks in this environment" },
+        ),
+        McpToolAccess.writes(
+          ({ scheduledTaskId, prompt, title, schedule, enabled, bindToCurrentThread }) =>
+            Effect.gen(function* () {
+              if (scheduledTaskId === undefined) return yield* Effect.die("unreachable");
+              const scope = yield* McpInvocationContext.McpInvocationContext;
+              const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+              return yield* service.updateScheduledTask(scope, {
+                scheduledTaskId,
+                prompt,
+                title,
+                schedule,
+                enabled,
+                bindToCurrentThread,
+              });
+            }),
+        ),
       ),
       list_scheduled_tasks: McpToolAccess.reads((input) =>
         Effect.gen(function* () {
           const scope = yield* McpInvocationContext.McpInvocationContext;
           const service = yield* OrchestratorMcpService.OrchestratorMcpService;
           return yield* service.listScheduledTasks(scope, input);
-        }),
-      ),
-      update_scheduled_task: McpToolAccess.writes((input) =>
-        Effect.gen(function* () {
-          const scope = yield* McpInvocationContext.McpInvocationContext;
-          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-          return yield* service.updateScheduledTask(scope, input);
         }),
       ),
       delete_scheduled_task: McpToolAccess.writes((input) =>
@@ -162,7 +184,6 @@ export const layer = McpToolAccess.toLayer(
           }),
       ),
       t3_thread_send: McpToolAccess.writesThreads(
-        // A thread on another environment has no shell here; its modes are checked when read there.
         (input) => [input.threadId],
         (input) =>
           Effect.gen(function* () {
@@ -181,6 +202,37 @@ export const layer = McpToolAccess.toLayer(
           const scope = yield* McpInvocationContext.McpInvocationContext;
           const service = yield* OrchestratorMcpService.OrchestratorMcpService;
           return yield* service.waitForThread(scope, input);
+        }),
+      ),
+      t3_environment_links: McpToolAccess.reads(() =>
+        Effect.gen(function* () {
+          const scope = yield* McpInvocationContext.McpInvocationContext;
+          const forwarding = yield* PeerForwarding.PeerForwarding;
+          return yield* forwarding.links(scope);
+        }),
+      ),
+      // A link lets every agent here reach the other environment, so it is an
+      // environment setting: full access, and never for linked work.
+      t3_environment_link: McpToolAccess.writesEnvironment((input) =>
+        Effect.gen(function* () {
+          const scope = yield* McpInvocationContext.McpInvocationContext;
+          const requests = yield* PeerLinkRequests.PeerLinkRequests;
+          return yield* requests.request(scope, input);
+        }),
+      ),
+      t3_environment_unlink: McpToolAccess.writesEnvironment(({ environmentId }) =>
+        Effect.gen(function* () {
+          const links = yield* PeerLinks.PeerLinks;
+          const removed = yield* links.unlink(environmentId).pipe(
+            Effect.mapError(
+              (error) =>
+                new OrchestratorMcpFailure({
+                  code: "orchestration_error",
+                  message: error.message,
+                }),
+            ),
+          );
+          return { environmentId, removed };
         }),
       ),
       t3_thread_interrupt: McpToolAccess.writesThreads(

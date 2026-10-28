@@ -47,6 +47,7 @@ export function ThreadTodosPanel(props: {
   const inputRef = useRef<HTMLInputElement>(null);
   const focusRequested = useTodoFocusStore((state) => state.threadKey === props.threadKey);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- focuses the DOM input after an external TODO focus request and cancels the pending frame on cleanup
   useEffect(() => {
     if (!focusRequested) return;
     useTodoFocusStore.getState().consume();

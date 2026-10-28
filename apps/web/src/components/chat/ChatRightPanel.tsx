@@ -25,8 +25,7 @@ export function ChatRightPanel(props: ChatRightPanelProps) {
     layoutControls,
     ...tabs
   } = props;
-  // One device-local width for every thread, so switching chats keeps the panel steady.
-  const inlineSize = usePreviewPanelInlineSize(undefined, {
+  const inlineSize = usePreviewPanelInlineSize({
     container: workspaceLayoutElement,
   });
   if (!sheet) {
