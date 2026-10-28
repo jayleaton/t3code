@@ -441,6 +441,7 @@ it.effect("keeps a forwarded wait short and its retries scoped to the caller", (
         timeoutMs: 600_000,
       });
       expect(waited.structuredContent).toEqual({
+        environmentId: box.environmentId,
         threadId: boxThread,
         runId: boxRun,
         status: "completed",

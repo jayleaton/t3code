@@ -313,8 +313,7 @@ function registerAppShellCommands(router: AnyRouter, shellElement: Element): () 
   };
 }
 
-function SidebarControl({ hidden }: { hidden: boolean }) {
-  const router = useRouter();
+function SidebarControl() {
   const usagePageOpen = useLocation({ select: (location) => location.pathname === "/usage" });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { toggleSidebar, isMobile, mobileSheetMounted } = useSidebar();
@@ -365,18 +364,9 @@ function SidebarControl({ hidden }: { hidden: boolean }) {
     };
   }, [keybindings, toggleSidebar, usagePageOpen]);
 
-  // The control lives as long as the shell, so it carries the shell's commands. Created
-  // once so re-renders never re-register them.
-  const [appShellCommandsRef] = useState(
-    () => (node: HTMLDivElement | null) =>
-      node === null ? undefined : registerAppShellCommands(router, node),
-  );
-
   return (
     <div
-      ref={appShellCommandsRef}
       className={cn(
-        hidden && "hidden",
         "pointer-events-none fixed left-[var(--workspace-controls-left)] top-[var(--workspace-controls-top)] z-50 ml-px flex h-[var(--workspace-topbar-height)] items-center",
         isMobile && mobileSheetMounted && "hidden",
       )}
@@ -404,6 +394,11 @@ function SidebarControl({ hidden }: { hidden: boolean }) {
 }
 
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
+  const router = useRouter();
+  const [appShellCommandsRef] = useState(
+    () => (node: HTMLDivElement | null) =>
+      node === null ? undefined : registerAppShellCommands(router, node),
+  );
   const toggleWorkspaceView = useToggleWorkspaceView();
   const routeRef = useParams({ strict: false, select: resolveThreadRouteRef });
   const routeThread = useThreadShell(routeRef);
@@ -464,6 +459,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   return (
     <PanelAnimationSuppressionProvider value={panelAnimationsSuppressed}>
       <SidebarProvider
+        ref={appShellCommandsRef}
         className="h-dvh! min-h-0!"
         data-panel-animations={routePanelAnimationsActive ? "true" : "false"}
         defaultOpen
@@ -495,7 +491,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         )}
         {children}
         <BackgroundThreadAnnouncer />
-        <SidebarControl hidden={isOnAgents} />
+        {!isOnAgents && <SidebarControl />}
       </SidebarProvider>
     </PanelAnimationSuppressionProvider>
   );
