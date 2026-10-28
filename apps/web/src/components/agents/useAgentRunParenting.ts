@@ -41,6 +41,7 @@ const keyOf = (thread: { environmentId: string; id: string }) =>
 export function useAgentThreadShells(): readonly EnvironmentThreadShell[] {
   const shells = useThreadShells();
   const overrides = useSyncExternalStore(subscribe, () => pending);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- acknowledges shared optimistic links only after streamed server shells confirm the persisted parent
   useEffect(() => {
     const landed = shells.filter((thread) => {
       const override = overrides.get(keyOf(thread));

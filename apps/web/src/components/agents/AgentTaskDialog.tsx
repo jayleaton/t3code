@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import { ChevronDownIcon } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
@@ -19,7 +19,7 @@ import { useProjects } from "../../state/entities";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { releaseComposerDraftUploads } from "../../lib/composerDraftUploads";
 import { newDraftId, newThreadId, randomUUID } from "../../lib/utils";
-import { useComposerDraftStore } from "../../composerDraftStore";
+import { composerDraftHasUserContent, useComposerDraftStore } from "../../composerDraftStore";
 import ChatView from "../ChatView";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Button } from "../ui/button";
@@ -94,7 +94,16 @@ export function AgentTaskDialog({
   const profile =
     orderedProfiles.find((item) => item.profileId === profileId) ??
     defaultNewChatProfile(orderedProfiles);
-  const [lock, setLock] = useState({ busy: false, hasContent: false });
+  const [creating, setCreating] = useState(false);
+  const [sending, setSending] = useState(false);
+  const busy = creating || sending;
+  const hasContent = useComposerDraftStore((store) => {
+    const session = profile
+      ? store.getDraftSessionByLogicalProjectKey(`agent-task:${profile.profileId}`)
+      : null;
+    const draft = session ? store.draftsByThreadKey[session.draftId] : null;
+    return composerDraftHasUserContent(draft) || (draft?.nonPersistedImageIds.length ?? 0) > 0;
+  });
   const [history] = useNewChatHistory();
   const [showAllAgents, setShowAllAgents] = useState(false);
   const sortedProfiles = sortProfilesByNewChatPick(orderedProfiles, history);
@@ -109,7 +118,7 @@ export function AgentTaskDialog({
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open && !lock.busy) onClose();
+        if (!open && !busy) onClose();
       }}
     >
       <DialogPopup className="w-[min(760px,calc(100vw-32px))] max-w-[760px]">
@@ -118,7 +127,7 @@ export function AgentTaskDialog({
           <DialogDescription className="mt-2">
             Pick an agent and a project, then give it a task.
           </DialogDescription>
-          <fieldset className="agent-choice-group" disabled={lock.busy || lock.hasContent}>
+          <fieldset className="agent-choice-group" disabled={busy || hasContent}>
             <legend>Agent</legend>
             <div className="agent-choice-grid">
               {visibleProfiles.map((item) => (
@@ -156,7 +165,11 @@ export function AgentTaskDialog({
             <AgentTaskForm
               key={profile.profileId}
               profile={profile}
-              onLockChange={setLock}
+              creating={creating}
+              sending={sending}
+              hasContent={hasContent}
+              setCreating={setCreating}
+              setSending={setSending}
               onClose={onClose}
             />
           ) : (
@@ -179,11 +192,19 @@ export function AgentTaskDialog({
 
 function AgentTaskForm({
   profile,
-  onLockChange,
+  creating,
+  sending,
+  hasContent,
+  setCreating,
+  setSending,
   onClose,
 }: {
   profile: McpGatewayProfile;
-  onLockChange: (lock: { busy: boolean; hasContent: boolean }) => void;
+  creating: boolean;
+  sending: boolean;
+  hasContent: boolean;
+  setCreating: (creating: boolean) => void;
+  setSending: (sending: boolean) => void;
   onClose: () => void;
 }) {
   const runtime = useAtomValue(connectionAtomRuntime);
@@ -206,9 +227,6 @@ function AgentTaskForm({
   const [draftId] = useState(() => initialDraft?.draftId ?? newDraftId());
   const [threadId] = useState(() => initialDraft?.threadId ?? newThreadId());
   const draftSession = useComposerDraftStore((store) => store.getDraftSession(draftId));
-  const draft = useComposerDraftStore((store) => store.draftsByThreadKey[draftId]);
-  const [creating, setCreating] = useState(false);
-  const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const busy = creating || sending;
   const machines = environments.map((env) => ({
@@ -251,20 +269,6 @@ function AgentTaskForm({
         providersByEnvironment.get(target.environmentId) ?? [],
       )
     : undefined;
-  const hasContent = Boolean(
-    draft &&
-    (draft.prompt.trim() ||
-      draft.images.length ||
-      draft.files.length ||
-      draft.persistedAttachments.length ||
-      draft.nonPersistedImageIds.length ||
-      draft.terminalContexts.length ||
-      draft.previewAnnotations.length ||
-      draft.reviewComments.length),
-  );
-  useEffect(() => {
-    onLockChange({ busy, hasContent });
-  }, [busy, hasContent, onLockChange]);
   const profileSelection: ThreadProfileSelection = {
     profileId: profile.profileId,
     revision: profile.revision,

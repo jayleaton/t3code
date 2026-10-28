@@ -1,12 +1,5 @@
-// Calls one tool on the T3 MCP gateway the way an MCP host does: start the gateway launcher
-// with stdio, initialize, call the tool, print the result. Exits non-zero on an error result
-// or after 30 s. Run it with the runtime that runs the gateway:
-//
-//   ELECTRON_RUN_AS_NODE=1 <app>/t3code t3-gateway-call.mjs <app>/resources/t3-mcp-gateway.mjs \
-//     t3_get_gateway_health '{}'
-//
-// The launcher reads T3_MCP_BRIDGE_TOKEN, T3_MCP_BRIDGE_PORT and T3_MCP_STATE_FILE from the
-// environment, so pass the same values as the gateway service.
+// Run with the gateway runtime and its T3_MCP_BRIDGE_TOKEN, T3_MCP_BRIDGE_PORT and T3_MCP_STATE_FILE environment.
+// ELECTRON_RUN_AS_NODE=1 <app>/t3code t3-gateway-call.mjs <resources>/t3-mcp-gateway.mjs <tool> <json-args>
 import * as NodeChildProcess from "node:child_process";
 import * as NodeReadline from "node:readline";
 

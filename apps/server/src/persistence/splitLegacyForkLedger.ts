@@ -58,16 +58,9 @@ interface Manifests {
   readonly fork: ReadonlyArray<readonly [id: number, name: string, after: number]>;
 }
 
-/**
- * Moves a database from the single ledger fork builds used to write onto
- * upstream ids plus the fork's own table. The migrator treats every id at or
- * below the latest as applied, so the split keeps exactly that set: each
- * migration up to the latest legacy id is recorded at its new id, and nothing
- * re-runs or gets skipped. Databases already split, fresh, or written by
- * upstream (52 is upstream's ProjectionThreadTitleState) are left alone.
- * Anything else fails before changing the database, since the migrator would
- * otherwise skip upstream migrations whose ids the fork's rows occupy.
- */
+/** Preserve exactly the legacy applied prefix at its new upstream/fork ids; nothing may rerun or skip.
+ * Leave split, fresh and upstream databases alone (upstream 52 is ProjectionThreadTitleState).
+ * Reject unknown ledgers before writing, since fork ids could hide unapplied upstream migrations. */
 export const splitLegacyForkLedger = Effect.fn("splitLegacyForkLedger")(function* (
   manifests: Manifests,
 ) {

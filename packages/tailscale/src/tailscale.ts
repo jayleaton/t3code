@@ -557,13 +557,7 @@ const isServeTargetLive = (target: string) =>
         );
       });
 
-/**
- * Who owns a tailnet port, from the point of view of a server on `localPort`.
- * - `free`: nothing is mapped there.
- * - `ours`: it already forwards to `localPort`.
- * - `stale`: it forwards to a target nothing answers on, so replacing it harms no one.
- * - `taken`: it forwards to another live server, which must not be replaced or removed.
- */
+/** Only a free, dead-target or already-owned port may change; another live server must stay reachable. */
 export type TailscaleServePortOwnership =
   | { readonly _tag: "free" }
   | { readonly _tag: "ours"; readonly target: string }

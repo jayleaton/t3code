@@ -1,11 +1,6 @@
 #!/usr/bin/env node
-// Fails when the fork renames, removes or renumbers an upstream migration. Effect's
-// migrator compares ids only, so a renumbered upstream migration makes fork and upstream
-// databases unreadable to each other and every later upstream migration collide.
-//
-//   node scripts/check-upstream-migrations.ts                      check the fork against the manifest
-//   node scripts/check-upstream-migrations.ts --upstream <file>    also check the manifest against upstream
-//   node scripts/check-upstream-migrations.ts --sync <git-ref>     rewrite the manifest after an upstream sync
+// Effect compares migration IDs only: renumbering makes fork/upstream databases incompatible.
+// Default: check the manifest; --upstream <file>: also compare upstream; --sync <git-ref>: regenerate it.
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";

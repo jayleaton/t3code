@@ -11,15 +11,7 @@ import {
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 
-/**
- * The deliverable state a worker chat reports to the chat that owns its task.
- * It is separate from run state: a finished turn is not a finished task.
- *
- * - WAITING: work continues on a registered continuation (`waitingOn`).
- * - INPUT: the worker cannot continue without the decision or dependency in `needs`.
- * - DONE: the worker reports the deliverable ready, with evidence. Only the
- *   owner's acceptance of that exact revision completes it.
- */
+/** Turn completion is separate: WAITING registers a continuation; INPUT needs a decision; DONE requires owner acceptance of that revision. */
 export const ThreadTaskStatus = Schema.Literals(["WAITING", "INPUT", "DONE"]);
 export type ThreadTaskStatus = typeof ThreadTaskStatus.Type;
 

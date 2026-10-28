@@ -53,15 +53,9 @@ export type GatewayThreadControlAction =
   | "restart";
 export type GatewayApprovalDecision = "accept" | "acceptForSession" | "decline" | "cancel";
 
-/**
- * Canonical execution state for a chat, derived from the authoritative shell
- * session/turn plus pending-request flags. Gateway thread reads expose this as
- * `status`; filters and wait tools accept it as `executionState`.
- *
- * `waiting-input` means the chat is blocked on a user answer; `waiting-approval`
- * means it is blocked on a permission decision. `queued` means a user message is
- * sent but no session has adopted the turn yet.
- */
+/** Derived from authoritative session/turn and pending requests; reads call it status,
+ * filters/waits call it executionState. Waiting states mean blocked on an answer/permission;
+ * queued means a user message was sent but no session has adopted its turn. */
 export const GATEWAY_THREAD_EXECUTION_STATES = [
   "running",
   "queued",

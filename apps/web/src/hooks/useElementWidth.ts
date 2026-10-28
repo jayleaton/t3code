@@ -7,6 +7,7 @@ export function useElementWidth<T extends HTMLElement>() {
   const [element, setElement] = useState<T | null>(null);
   const [width, setWidth] = useState<number | null>(null);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- observes the mounted DOM element and releases its resize subscription when it changes
   useLayoutEffect(() => {
     if (!element) return;
     return observeResize(element, (entries) => {

@@ -11,20 +11,9 @@ const pathKind = (target: string): Promise<"directory" | "file" | "missing" | "u
       cause.code === "ENOENT" || cause.code === "ENOTDIR" ? "missing" : "unknown",
   );
 
-/**
- * Whether Claude's session storage under `configDir` holds a transcript for
- * `sessionId`, which is what `--resume <id>` needs to succeed.
- *
- * The CLI files each transcript as `projects/<encoded cwd>/<id>.jsonl`. The
- * cwd encoding differs by platform and CLI version (drive letters, Windows
- * separators, long-path hashing), so every project directory is searched
- * rather than re-deriving it. Session ids are UUIDs, so a hit in any project
- * is this session.
- *
- * Returns `undefined` when the answer is unknown (no config dir, or storage
- * that cannot be read), so callers keep their previous assumption instead of
- * discarding a session they simply cannot see.
- */
+/** Resume needs projects/<encoded cwd>/<sessionId>.jsonl; encoding varies by platform/version,
+ * so search all project directories for the UUID instead of re-deriving the cwd encoding.
+ * Return undefined for missing config or unreadable storage so callers retain their assumption. */
 export const claudeSessionTranscriptExists = (input: {
   readonly configDir: string;
   readonly sessionId: string;

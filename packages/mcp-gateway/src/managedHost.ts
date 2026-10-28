@@ -1,4 +1,3 @@
-/* oxlint-disable unicorn/prefer-add-event-listener -- MCP clients expose callback properties. */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import * as Effect from "effect/Effect";

@@ -572,7 +572,6 @@ describe("shared MCP gateway", () => {
     const accepted = await first.callTool(request);
     expect(accepted.isError).not.toBe(true);
     const disconnected = Promise.withResolvers<void>();
-    // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client exposes an onclose callback rather than a DOM event API.
     first.onclose = disconnected.resolve;
     await firstOwner!.close();
     await disconnected.promise;
@@ -590,7 +589,6 @@ describe("shared MCP gateway", () => {
     await runtime(input);
     const stale = await mcp(input);
     const staleClosed = Promise.withResolvers<void>();
-    // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client exposes an onclose callback rather than a DOM event API.
     stale.onclose = staleClosed.resolve;
     const launch = vi.fn(async () => {
       await owner(input, { build: { id: "new", isCurrent: () => true } });
@@ -681,7 +679,6 @@ describe("shared MCP gateway", () => {
     const changed = Promise.withResolvers<void>();
     client.setNotificationHandler(ToolListChangedNotificationSchema, () => changed.resolve());
     // A launcher that cannot move the session exits; fail with its reason instead of waiting.
-    // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client exposes an onclose callback rather than a DOM event API.
     client.onclose = () => changed.reject(new Error(`Launcher exited: ${stderr.trim()}`));
     expect((await client.listTools()).tools.length).toBeGreaterThan(0);
 

@@ -20,16 +20,9 @@ export interface TransportProgress {
 
 export type ClientUnresponsiveReason = "client-silent" | "send-stalled";
 
-/**
- * Watches one WebSocket RPC connection for a peer that is gone without closing.
- *
- * A suspended mobile app keeps its TCP connection open: the phone's kernel
- * still acknowledges and advertises a zero window, so neither TCP nor the RPC
- * layer notices, and on resume the app reuses a socket wedged behind a stale
- * backlog. `awaitUnresponsive` completes once the client has sent nothing for
- * {@link CLIENT_SILENCE_LIMIT} or the send queue has not moved for
- * {@link SEND_STALL_LIMIT}, so the caller can reset the connection.
- */
+/** Suspended phones keep TCP alive with a zero window, hiding stale sockets from TCP/RPC checks.
+ * awaitUnresponsive lets callers reset after CLIENT_SILENCE_LIMIT without inbound traffic
+ * or SEND_STALL_LIMIT without send-queue progress. */
 export const make = Effect.fn("wsClientLiveness.make")(function* (
   readProgress: () => TransportProgress,
 ) {

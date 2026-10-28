@@ -25,7 +25,6 @@ export const AgentSkillResourcePath = Schema.String.check(
             part.length > 0 &&
             part !== "." &&
             part !== ".." &&
-            // oxlint-disable-next-line no-control-regex -- Control characters are invalid in portable paths.
             !/[\\\u0000-\u001f\u007f<>:"|?*]/.test(part) &&
             !/[. ]$/.test(part) &&
             !/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(part) &&

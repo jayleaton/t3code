@@ -2,11 +2,7 @@ import type { ReactNode } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { animateSidebarLayoutChanges } from "./Sidebar.logic";
 
-// Subset of useSortable applied to a thread row's root <li>. Listeners go
-// on the whole row (no dedicated handle): the pointer sensor's distance
-// constraint keeps plain clicks working, and we skip dnd-kit's aria
-// attributes since there is no keyboard sensor and the row body already
-// carries its own button semantics.
+// The row owns button semantics; omit dnd-kit ARIA without a keyboard sensor.
 export type SortableThreadRowBag = Pick<
   ReturnType<typeof useSortable>,
   "listeners" | "setNodeRef" | "transform" | "transition" | "isDragging"

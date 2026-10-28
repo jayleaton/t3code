@@ -17,7 +17,7 @@ if (!manifestPath)
   throw new Error(
     "Usage: node packages/mcp-gateway/src/importSkills.ts manifest.json [--apply -- installed-mcp-command args...]",
   );
-const manifest = Schema.decodeUnknownSync(Schema.fromJsonString(SkillImportManifest))(
+const manifest = Schema.decodeSync(Schema.fromJsonString(SkillImportManifest))(
   await NodeFSP.readFile(manifestPath, "utf8"),
 );
 if (!args.includes("--apply")) {

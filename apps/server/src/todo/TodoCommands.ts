@@ -52,14 +52,8 @@ const TodoCommandRejectionJson = Schema.fromJsonString(TodoCommandRejection);
 export const encodeTodoCommandRejection = Schema.encodeSync(TodoCommandRejectionJson);
 export const decodeTodoCommandRejection = Schema.decodeUnknownOption(TodoCommandRejectionJson);
 
-/**
- * Decide one todo command against the todo's row (including a removed one).
- * Every accepted command produces exactly one event.
- *
- * Settle and unsettle follow thread settlement: repeating either re-emits the
- * current state (original `settledAt`, unchanged `updatedAt`), so double
- * clicks and agent retries are silent no-ops rather than errors.
- */
+/** Every accepted command emits one event, including commands against removed rows.
+ * Repeated settle/unsettle re-emits settledAt and updatedAt unchanged for silent retries. */
 export function planTodoCommand(input: {
   readonly command: TodoCommand;
   readonly todo: TodoRow | undefined;

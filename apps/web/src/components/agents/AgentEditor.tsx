@@ -109,6 +109,7 @@ export function AgentEditor({
               }
               setSaving(true);
               setError("");
+              // oxlint-disable-next-line react/purity -- captures the save time inside the submit handler (oxc#27309)
               const now = new Date().toISOString();
               try {
                 const saved = await onSave({

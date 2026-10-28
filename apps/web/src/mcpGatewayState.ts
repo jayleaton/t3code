@@ -80,14 +80,58 @@ export function getMcpGatewayToken(): string {
   return window.desktopBridge?.getMcpGatewayBridgeToken?.() ?? "";
 }
 
+let grantsSource: string | null | undefined;
+let grantsSnapshot: McpGatewayGrants = {};
+
 export function getMcpGatewayGrants(): McpGatewayGrants {
   const raw = window.localStorage.getItem(MCP_GATEWAY_GRANTS_KEY);
-  if (raw === null) return {};
+  if (raw === grantsSource) return grantsSnapshot;
+  grantsSource = raw;
   try {
-    return sanitizeMcpGatewayGrants(JSON.parse(raw) as unknown);
+    grantsSnapshot = raw === null ? {} : sanitizeMcpGatewayGrants(JSON.parse(raw) as unknown);
   } catch {
-    return {};
+    grantsSnapshot = {};
   }
+  return grantsSnapshot;
+}
+
+type McpGatewayConfiguration = {
+  readonly available: boolean;
+  readonly enabled: boolean;
+  readonly port: number;
+  readonly token: string;
+  readonly grants: McpGatewayGrants;
+};
+let configurationSnapshot: McpGatewayConfiguration | undefined;
+
+export function getMcpGatewayConfiguration(): McpGatewayConfiguration {
+  const next = {
+    available: (window.desktopBridge?.getMcpGatewayLaunchConfig?.() ?? null) !== null,
+    enabled: isMcpGatewayEnabled(),
+    port: getMcpGatewayPort(),
+    token: getMcpGatewayToken(),
+    grants: getMcpGatewayGrants(),
+  };
+  if (
+    !configurationSnapshot ||
+    configurationSnapshot.available !== next.available ||
+    configurationSnapshot.enabled !== next.enabled ||
+    configurationSnapshot.port !== next.port ||
+    configurationSnapshot.token !== next.token ||
+    configurationSnapshot.grants !== next.grants
+  )
+    configurationSnapshot = next;
+  return configurationSnapshot;
+}
+
+export function subscribeMcpGatewayStatus(onChange: () => void): () => void {
+  window.addEventListener(`${MCP_GATEWAY_STATE_EVENT}:status`, onChange);
+  return () => window.removeEventListener(`${MCP_GATEWAY_STATE_EVENT}:status`, onChange);
+}
+
+export function subscribeMcpGatewayStatusSnapshot(onChange: () => void): () => void {
+  window.addEventListener(`${MCP_GATEWAY_STATE_EVENT}:snapshot`, onChange);
+  return () => window.removeEventListener(`${MCP_GATEWAY_STATE_EVENT}:snapshot`, onChange);
 }
 
 export function publishMcpGatewayStatus(status: McpGatewayUiState): void {
