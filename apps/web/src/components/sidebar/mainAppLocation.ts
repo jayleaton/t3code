@@ -1,14 +1,10 @@
-import { useLocation, useNavigate } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useLocation, useNavigate, type AnyRouter } from "@tanstack/react-router";
 
-export function isSidebarUtilityPage(pathname: string) {
-  return (
-    pathname === "/settings" ||
-    pathname.startsWith("/settings/") ||
-    pathname.startsWith("/projects/") ||
-    pathname === "/usage" ||
-    pathname === "/pull-requests"
-  );
+import { GUEST_PAGE_PATH } from "../../guestPage";
+
+/** Settings and Usage open as modals over the last main-app view. */
+export function isAppModalPage(pathname: string) {
+  return pathname === "/settings" || pathname.startsWith("/settings/") || pathname === "/usage";
 }
 
 export function isAgentsPage(pathname: string) {
@@ -69,27 +65,41 @@ export function readWorkspaceView(): WorkspaceView {
   return current().view;
 }
 
-export function MainAppLocationTracker() {
-  const href = useLocation({
-    select: (location) => (isSidebarUtilityPage(location.pathname) ? null : location.href),
-  });
-  const pathname = useLocation({ select: (location) => location.pathname });
-  useEffect(() => {
-    if (href === null) return;
-    const previous = current();
-    // Thread routes report their view through enterThreadsView once the chat is known.
-    const view: WorkspaceView | null = isAgentsPage(pathname)
-      ? "agents"
-      : /^\/[^/]+\/[^/]+$/.test(pathname) && !pathname.startsWith("/draft/")
-        ? null
-        : "threads";
-    store({
-      href,
-      view: view ?? previous.view,
-      hrefByView: view ? { ...previous.hrefByView, [view]: href } : previous.hrefByView,
-    });
-  }, [href, pathname]);
-  return null;
+export function isSidebarUtilityPage(pathname: string) {
+  return pathname.startsWith("/projects/") || pathname === "/pull-requests";
+}
+
+// Pages the root route always renders without the app shell, so they are never
+// a page to return to. Other paths seen before auth or on a prompt-link landing
+// are still recorded; they are real app URLs, so returning to one is harmless.
+const SHELL_LESS_PATHS = new Set(["/pair", "/connect", "/connect-agent", GUEST_PAGE_PATH]);
+
+let mainAppHref: string | null = null;
+let appModalReturnHref: string | null = null;
+
+/** Remembers where Settings, Usage, and the utility pages lead back to. */
+export function startMainAppLocationTracking(router: AnyRouter): () => void {
+  const record = () => {
+    const { pathname, href } = router.state.location;
+    if (isAppModalPage(pathname) || SHELL_LESS_PATHS.has(pathname)) return;
+    appModalReturnHref = href;
+    if (!isSidebarUtilityPage(pathname)) {
+      mainAppHref = href;
+      const previous = current();
+      const view = isAgentsPage(pathname)
+        ? "agents"
+        : /^\/[^/]+\/[^/]+$/.test(pathname) && !pathname.startsWith("/draft/")
+          ? null
+          : "threads";
+      store({
+        href,
+        view: view ?? previous.view,
+        hrefByView: view ? { ...previous.hrefByView, [view]: href } : previous.hrefByView,
+      });
+    }
+  };
+  record();
+  return router.subscribe("onResolved", record);
 }
 
 /** The main app URL a utility page returns to: the last one visited, else the thread list. */
@@ -109,7 +119,8 @@ export function useToggleWorkspaceView() {
   return (target?: WorkspaceView) => {
     const onAgents =
       isAgentsPage(pathname) ||
-      (isSidebarUtilityPage(pathname) && readWorkspaceView() === "agents");
+      ((isSidebarUtilityPage(pathname) || isAppModalPage(pathname)) &&
+        readWorkspaceView() === "agents");
     const view = target ?? (onAgents ? "threads" : "agents");
     // Set first: a thread route reads the view to decide where an agent chat belongs.
     store({ ...current(), view });
@@ -117,4 +128,10 @@ export function useToggleWorkspaceView() {
       href: current().hrefByView[view] ?? (view === "agents" ? "/agents" : "/"),
     });
   };
+}
+
+/** Leaves Settings or Usage for the page that opened it. */
+export function useCloseAppModal() {
+  const navigate = useNavigate();
+  return () => navigate({ href: appModalReturnHref ?? mainAppHref ?? "/" });
 }

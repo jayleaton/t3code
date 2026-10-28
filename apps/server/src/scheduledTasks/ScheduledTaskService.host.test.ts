@@ -30,34 +30,33 @@ const environmentLayer = (
   onSend: (input: ThreadManagementService.ThreadManagementSendInput) => Effect.Effect<void> = () =>
     Effect.void,
 ) =>
-  ScheduledTaskService.layer
-    .pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          NodeCrypto.layer,
-          Scheduler.layer,
-          Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
-          Layer.mock(SecretRequests.SecretRequests)({}),
-          Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
-            namedProjectsRoot: "/projects",
-            isScratchProject: () => Effect.succeed(false),
-          }),
-          ScheduledTaskTestkit.layerLocalProjects(
-            (id) => hosted !== null && (id === hosted.projectId || id === otherProject),
-          ),
-          Layer.mock(ThreadManagementService.ThreadManagementService)({
-            getThreadShell: (threadId) =>
-              Effect.succeed(
-                threadId === hosted?.threadId
-                  ? ({ id: threadId, projectId: hosted.projectId, archivedAt: null } as never)
-                  : null,
-              ),
-            sendToThread: (input) => onSend(input).pipe(Effect.as({} as never)),
-          }),
+  ScheduledTaskService.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        NodeCrypto.layer,
+        Scheduler.layer,
+        Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+          namedProjectsRoot: "/projects",
+          isScratchProject: () => Effect.succeed(false),
+        }),
+        ScheduledTaskTestkit.layerLocalProjects(
+          (id) => hosted !== null && (id === hosted.projectId || id === otherProject),
         ),
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadShell: (threadId) =>
+            Effect.succeed(
+              threadId === hosted?.threadId
+                ? ({ id: threadId, projectId: hosted.projectId, archivedAt: null } as never)
+                : null,
+            ),
+          sendToThread: (input) => onSend(input).pipe(Effect.as({} as never)),
+        }),
       ),
-    )
-    .pipe(Layer.provideMerge(SqlitePersistence.layerMemory));
+    ),
+    Layer.provideMerge(SqlitePersistence.layerMemory),
+  );
 
 const nightlyInput = (overrides: Record<string, unknown> = {}) =>
   decodeUpsertInput({

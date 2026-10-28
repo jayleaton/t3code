@@ -1,4 +1,4 @@
-import { planPinnedMove, sortActiveThreadsByOrderKey } from "./threadSort.ts";
+import { planPinnedReorder, sortActiveThreadsByOrderKey } from "./threadSort.ts";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import type { EnvironmentThreadShell } from "./shell.ts";
 import { isSubagentThread } from "@t3tools/contracts";
@@ -202,11 +202,17 @@ export function planAgentThreadMove(
     visible.filter((thread) => thread.settledAt === null && thread.pinnedAt == null),
   );
   const byId = new Map(active.map((thread) => [threadKey(thread), thread]));
-  const plan = planPinnedMove({
-    orderedIds: active.map(threadKey),
+  const orderedIds = active.map(threadKey);
+  const movedId = threadKey(moved);
+  const from = orderedIds.indexOf(movedId);
+  const to = from + (direction === "up" ? -1 : 1);
+  if (from < 0 || to < 0 || to >= orderedIds.length) return null;
+  orderedIds.splice(from, 1);
+  orderedIds.splice(to, 0, movedId);
+  const plan = planPinnedReorder({
+    orderedIds,
     keysById: new Map(all.map((thread) => [threadKey(thread), thread.activeOrderKey])),
-    movedId: threadKey(moved),
-    direction,
+    movedId,
   });
   return plan?.map(({ id, orderKey }) => ({ thread: byId.get(id)!, orderKey })) ?? null;
 }
@@ -274,14 +280,9 @@ function sortSiblingRuns<T extends AgentRun>(runs: readonly T[]): T[] {
   return [...pinned, ...active, ...settled];
 }
 
-/**
- * Folds child chats into the card of their nearest ancestor on the board, on
- * the full board and in the open-chat rail alike. Children come from every run, so a parent's card also shows children of other agents
- * and ones hidden by the current filter. A live card holds children in any
- * state; a settled card holds only settled children, so live work never
- * disappears into the collapsed settled shelf. Callers pass Agent chats only
- * (see selectAgentSidebarThreads): subagents are never cards.
- */
+/** Children nest under their nearest visible ancestor, across agent filters.
+ * Settled cards hold only settled children so they cannot hide live work.
+ * Callers exclude subagents via selectAgentSidebarThreads. */
 export function nestAgentRuns<T extends AgentRun>(input: {
   readonly lists: Readonly<Record<AgentRunList, readonly T[]>>;
   readonly all: readonly T[];
@@ -385,16 +386,9 @@ export interface AgentChildOrder {
   readonly sortedAt: number;
 }
 
-/**
- * Arranges a card's live children (`AgentCardChildren.live`). Pinned children
- * stay on top in pin order; the rest sort by status group, then most recently
- * updated, each carrying its own children along. A subtree ranks by its most
- * urgent row, so a grandchild that needs input lifts its branch. Between
- * re-sorts the previous order holds and new children slot in where a fresh
- * sort would put them. Collapsed, only the first `AGENT_CHILD_LIMIT` subtrees
- * show, plus any that need input. `previous: null` sorts now; the returned
- * order is `previous` itself while nothing moved.
- */
+/** Pinned children lead; subtrees rank by their most urgent row, then update time.
+ * Between re-sorts existing rows hold still and new children slot into rank.
+ * Collapsing retains attention rows beyond AGENT_CHILD_LIMIT. */
 export function arrangeAgentChildRuns<
   T extends {
     readonly environmentId: string;
@@ -515,14 +509,8 @@ export function selectScheduledWakeThreadKeys(
   return keys;
 }
 
-/**
- * Work outside each run's own turn, by key. A run is "working" while a run
- * below it, at any depth, is running, queued, or needs input, so a parent whose
- * own turn finished does not read Done. It is "waiting" when nothing below it
- * works but something will wake it or a run below it later: a scheduled run
- * (`scheduledWakeKeys`), a pull request watch, or other background waits.
- * Waiting never reads as In progress.
- */
+/** Descendant work keeps a finished parent working; scheduled wakes, PR watches,
+ * and other background waits keep it waiting when no descendant is working. */
 export function selectAgentRunPendingWork(
   threads: readonly EnvironmentThreadShell[],
   scheduledWakeKeys: ReadonlySet<string> = new Set(),

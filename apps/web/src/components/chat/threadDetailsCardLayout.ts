@@ -2,8 +2,9 @@ import type { PreviewMiniPlayerFrame } from "../preview/previewMiniPlayerLayout"
 import { DETAILS_CARD_CLEARANCE } from "./chatCanvasLayout";
 
 export const THREAD_DETAILS_CARD_GAP = 12;
-// Keep in sync with --thread-details-panel-width, which sizes the popover and the find bar.
+// Keep in sync with --thread-details-panel-width.
 export const THREAD_DETAILS_CARD_DEFAULT_WIDTH = 280;
+export const THREAD_DETAILS_CARD_WIDTH_STORAGE_KEY = "t3code:thread-details-card-width";
 
 export function resolveThreadDetailsCardMaximumWidth(
   containerWidth: number,
@@ -36,15 +37,15 @@ export function resolveThreadDetailsCardLayout({
   lane,
   frame,
   overlapsDetailsCard = false,
-  preferredWidth = THREAD_DETAILS_CARD_DEFAULT_WIDTH,
   topInset = 0,
+  preferredWidth = THREAD_DETAILS_CARD_DEFAULT_WIDTH,
 }: {
   container: { width: number; height: number };
   lane: { padding: number; minChatWidth: number };
   frame: PreviewMiniPlayerFrame | null;
   overlapsDetailsCard?: boolean;
-  preferredWidth?: number;
   topInset?: number;
+  preferredWidth?: number;
 }) {
   const gap = THREAD_DETAILS_CARD_GAP;
   const width = Math.max(

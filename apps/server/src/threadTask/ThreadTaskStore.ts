@@ -142,7 +142,7 @@ const make = Effect.gen(function* () {
   let eventsSincePrune = 0;
 
   return ThreadTaskStore.of({
-    getLink: (workerThreadId) =>
+    getLink: Effect.fn("ThreadTaskStore.getLink")((workerThreadId) =>
       sql<{ readonly payload: string }>`
         SELECT payload_json AS payload FROM thread_task_links WHERE worker_thread_id = ${workerThreadId}
       `.pipe(
@@ -150,6 +150,7 @@ const make = Effect.gen(function* () {
         Effect.flatMap(decodeLinkRows("get-link")),
         Effect.map((links) => Option.fromNullishOr(links[0])),
       ),
+    ),
     putLink: Effect.fn("ThreadTaskStore.putLink")(function* (link) {
       const payload = yield* encodeLink(link).pipe(Effect.mapError(fail("encode-link")));
       const pending = link.role === "worker" && link.pendingCursor > link.deliveredCursor ? 1 : 0;
@@ -162,17 +163,19 @@ const make = Effect.gen(function* () {
             payload_json = excluded.payload_json
         `.pipe(Effect.mapError(fail("put-link")));
     }),
-    listPendingLinks: () =>
+    listPendingLinks: Effect.fn("ThreadTaskStore.listPendingLinks")(() =>
       sql<{ readonly payload: string }>`
         SELECT payload_json AS payload FROM thread_task_links WHERE role = 'worker' AND pending = 1
       `.pipe(
         Effect.mapError(fail("list-pending-links")),
         Effect.flatMap(decodeLinkRows("list-pending-links")),
       ),
-    listLinks: () =>
+    ),
+    listLinks: Effect.fn("ThreadTaskStore.listLinks")(() =>
       sql<{ readonly payload: string }>`
         SELECT payload_json AS payload FROM thread_task_links
       `.pipe(Effect.mapError(fail("list-links")), Effect.flatMap(decodeLinkRows("list-links"))),
+    ),
     appendEvent: Effect.fn("ThreadTaskStore.appendEvent")(function* (event) {
       yield* sql`
           INSERT INTO thread_task_events (at, worker_thread_id, kind, revision, detail)
@@ -187,7 +190,7 @@ const make = Effect.gen(function* () {
           `.pipe(Effect.mapError(fail("prune-events")));
       }
     }),
-    getSettleRequest: (threadId) =>
+    getSettleRequest: Effect.fn("ThreadTaskStore.getSettleRequest")((threadId) =>
       sql<{ readonly payload: string }>`
         SELECT payload_json AS payload FROM thread_settle_requests WHERE thread_id = ${threadId}
       `.pipe(
@@ -195,13 +198,15 @@ const make = Effect.gen(function* () {
         Effect.flatMap(decodeSettleRows("get-settle-request")),
         Effect.map((requests) => Option.fromNullishOr(requests[0])),
       ),
-    listPendingSettleRequests: () =>
+    ),
+    listPendingSettleRequests: Effect.fn("ThreadTaskStore.listPendingSettleRequests")(() =>
       sql<{ readonly payload: string }>`
         SELECT payload_json AS payload FROM thread_settle_requests WHERE state = 'pending'
       `.pipe(
         Effect.mapError(fail("list-settle-requests")),
         Effect.flatMap(decodeSettleRows("list-settle-requests")),
       ),
+    ),
     putSettleRequest: Effect.fn("ThreadTaskStore.putSettleRequest")(function* (request) {
       const payload = yield* encodeSettleRequest(request).pipe(Effect.mapError(fail("encode")));
       yield* sql`
@@ -212,7 +217,7 @@ const make = Effect.gen(function* () {
             payload_json = excluded.payload_json
         `.pipe(Effect.mapError(fail("put-settle-request")));
     }),
-    get: (workerThreadId) =>
+    get: Effect.fn("ThreadTaskStore.get")((workerThreadId) =>
       sql<{ readonly payload: string }>`
         SELECT payload_json AS payload FROM thread_tasks WHERE worker_thread_id = ${workerThreadId}
       `.pipe(
@@ -220,7 +225,8 @@ const make = Effect.gen(function* () {
         Effect.flatMap(decodeRows("get")),
         Effect.map((tasks) => Option.fromNullishOr(tasks[0])),
       ),
-    listVisible: ({ threadId, afterCursor }) =>
+    ),
+    listVisible: Effect.fn("ThreadTaskStore.listVisible")(({ threadId, afterCursor }) =>
       (threadId === null
         ? sql<{ readonly payload: string }>`
             SELECT payload_json AS payload FROM thread_tasks
@@ -233,7 +239,8 @@ const make = Effect.gen(function* () {
             ORDER BY cursor
           `
       ).pipe(Effect.mapError(fail("list-visible")), Effect.flatMap(decodeRows("list-visible"))),
-    listByProjectKey: ({ projectKey, limit }) =>
+    ),
+    listByProjectKey: Effect.fn("ThreadTaskStore.listByProjectKey")(({ projectKey, limit }) =>
       sql<{ readonly payload: string }>`
         SELECT payload_json AS payload FROM thread_tasks
         WHERE json_extract(payload_json, '$.projectKey') = ${projectKey}
@@ -243,12 +250,14 @@ const make = Effect.gen(function* () {
         Effect.mapError(fail("list-by-project-key")),
         Effect.flatMap(decodeRows("list-by-project-key")),
       ),
-    listByOwner: (ownerThreadId) =>
+    ),
+    listByOwner: Effect.fn("ThreadTaskStore.listByOwner")((ownerThreadId) =>
       sql<{ readonly payload: string }>`
         SELECT payload_json AS payload FROM thread_tasks
         WHERE owner_thread_id = ${ownerThreadId} ORDER BY cursor
       `.pipe(Effect.mapError(fail("list-by-owner")), Effect.flatMap(decodeRows("list-by-owner"))),
-    listUnfinished: () =>
+    ),
+    listUnfinished: Effect.fn("ThreadTaskStore.listUnfinished")(() =>
       sql<{ readonly payload: string }>`
         SELECT payload_json AS payload FROM thread_tasks
         WHERE json_extract(payload_json, '$.wake.state') = 'pending'
@@ -258,6 +267,7 @@ const make = Effect.gen(function* () {
         Effect.mapError(fail("list-unfinished")),
         Effect.flatMap(decodeRows("list-unfinished")),
       ),
+    ),
     latestCursor,
     put: Effect.fn("ThreadTaskStore.put")(function* (task) {
       const cursor = (yield* latestCursor) + 1;

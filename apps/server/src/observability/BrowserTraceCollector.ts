@@ -24,15 +24,16 @@ export const keepBrowserRecord = (record: TraceRecord, sampling: TraceSampling):
   sampling.keepName?.(record.name) === true ||
   Number.parseInt(record.traceId.slice(-8), 16) / 2 ** 32 < sampling.rate;
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = (sink: TraceSink, sampling: TraceSampling): BrowserTraceCollector["Service"] =>
   BrowserTraceCollector.of({
-    record: (records) =>
-      Effect.sync(() => {
+    record: Effect.fn("BrowserTraceCollector.record")(function (records) {
+      return Effect.sync(() => {
         for (const record of records) {
           if (keepBrowserRecord(record, sampling)) sink.push(record);
         }
-      }),
+      });
+    }),
   });
 
 export const layer = (sink: TraceSink, sampling: TraceSampling) =>

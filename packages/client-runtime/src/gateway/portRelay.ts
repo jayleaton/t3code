@@ -56,6 +56,7 @@ export function serveGatewayPortRelays<R>(
   for (const id of granted) {
     const serve = Effect.gen(function* () {
       const registry = yield* EnvironmentRegistry;
+      const runResponse = Effect.runPromiseWith(yield* Effect.context<never>());
       yield* registry
         .followStream(
           EnvironmentId.make(id),
@@ -76,7 +77,7 @@ export function serveGatewayPortRelays<R>(
                   error: error instanceof Error ? error.message : String(error),
                 }))
                 .then((outcome) =>
-                  Effect.runPromise(
+                  runResponse(
                     session.client[WS_METHODS.mcpGatewayRespond]({
                       connectionId: event.connectionId,
                       invocationId: event.invocationId,

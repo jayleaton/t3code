@@ -6,7 +6,7 @@ import {
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import { useAtomCommand } from "../../state/use-atom-command";
 import { threadEnvironment } from "../../state/threads";
@@ -40,16 +40,17 @@ export function useThreadParentActions(threads: readonly EnvironmentThreadShell[
     });
   }, []);
 
-  // Confirmed overrides retire once the synced shells carry the same parent.
-  useEffect(() => {
-    const landed = threads.filter((thread) => {
-      const override = pending.get(parentLinkKey(thread));
-      return override?.confirmed && agentParentOverrideApplied(thread, override);
+  const landed = threads.filter((thread) => {
+    const override = pending.get(parentLinkKey(thread));
+    return override?.confirmed && agentParentOverrideApplied(thread, override);
+  });
+  if (landed.length > 0) {
+    setPending((current) => {
+      const next = new Map(current);
+      for (const thread of landed) next.delete(parentLinkKey(thread));
+      return next;
     });
-    if (landed.length > 0) {
-      change((next) => landed.forEach((thread) => next.delete(parentLinkKey(thread))));
-    }
-  }, [threads, pending, change]);
+  }
 
   const setParent = useCallback(
     async (child: EnvironmentThreadShell, parent: EnvironmentThreadShell | null) => {

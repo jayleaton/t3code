@@ -11,7 +11,7 @@ NODE_ENV=test vp test run \
   apps/web/src/components/agents \
   packages/client-runtime/src/gateway \
   packages/mcp-gateway/src \
-  apps/server/src/mcp/toolkits/workspace \
+  apps/server/src/mcp/toolkits/project \
   apps/server/src/mcp/agents \
   apps/server/src/mcp/McpGatewayBroker.test.ts \
   apps/server/src/orchestration-v2/Orchestrator.parentThread.test.ts \
@@ -35,4 +35,5 @@ NODE_ENV=test vp test run \
   apps/desktop/src/app/DesktopClerk.test.ts \
   apps/desktop/src/app/DesktopConnectionCatalogStore.test.ts
 vp run --filter @t3tools/web --filter @t3tools/desktop --filter @t3tools/client-runtime \
-  --filter @t3tools/mcp-gateway --filter @t3tools/contracts --filter t3 typecheck
+  --filter @t3tools/mcp-gateway --filter @t3tools/contracts --filter @t3tools/scripts \
+  --filter t3 typecheck

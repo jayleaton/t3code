@@ -108,7 +108,7 @@ export const watchTailnetRoute = Effect.fn("TailnetRouteCheck.watch")(function* 
         servePort: input.servePort,
       });
     }),
-    Effect.catch(() => Effect.void),
+    Effect.ignore,
   );
   yield* check;
   return yield* Effect.sleep(RECHECK_INTERVAL).pipe(Effect.andThen(check), Effect.forever);

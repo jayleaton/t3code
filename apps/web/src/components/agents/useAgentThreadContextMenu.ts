@@ -9,14 +9,7 @@ import { useRouter } from "@tanstack/react-router";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { readLocalApi } from "../../localApi";
-import {
-  readEnvironmentSupportsActiveReorder,
-  readEnvironmentSupportsPinning,
-  readEnvironmentSupportsSettlement,
-  readEnvironmentSupportsTitleRegeneration,
-  readThreadShell,
-  useProjects,
-} from "../../state/entities";
+import { readThreadShell, useProjects } from "../../state/entities";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useUiStateStore } from "../../uiStateStore";
@@ -109,9 +102,6 @@ export function useAgentThreadContextMenu(
     if (!api || !current) return;
     const settled = current.settledAt !== null;
     const pinned = current.pinnedAt != null;
-    const supportsPinning = readEnvironmentSupportsPinning(ref.environmentId);
-    const supportsSettlement = readEnvironmentSupportsSettlement(ref.environmentId);
-    const supportsTitleRegeneration = readEnvironmentSupportsTitleRegeneration(ref.environmentId);
     const project = projects.find(
       (candidate) =>
         candidate.environmentId === current.environmentId && candidate.id === current.projectId,
@@ -124,22 +114,16 @@ export function useAgentThreadContextMenu(
           return shell ? [shell] : [];
         });
       const plan = planAgentThreadMove(refresh(visible), refresh(threads), current, direction);
-      return plan?.every(({ thread }) => readEnvironmentSupportsActiveReorder(thread.environmentId))
-        ? plan
-        : null;
+      return plan;
     };
     const items: ContextMenuItem<AgentThreadMenuId>[] = [
-      ...(supportsPinning
-        ? [
-            pinned
-              ? { id: "unpin" as const, label: "Unpin chat", icon: "pin-off" }
-              : {
-                  id: "pin" as const,
-                  label: siblings ? "Pin to top of parent" : "Pin chat to top",
-                  icon: "pin",
-                },
-          ]
-        : []),
+      pinned
+        ? { id: "unpin" as const, label: "Unpin chat", icon: "pin-off" }
+        : {
+            id: "pin" as const,
+            label: siblings ? "Pin to top of parent" : "Pin chat to top",
+            icon: "pin",
+          },
       // Children sort by status (see arrangeAgentChildRuns), so only cards move by hand.
       ...(!pinned && !settled && !siblings
         ? [
@@ -157,25 +141,17 @@ export function useAgentThreadContextMenu(
             },
           ]
         : []),
-      ...(supportsSettlement
-        ? [
-            {
-              id: (settled ? "unsettle" : "settle") as "settle" | "unsettle",
-              label: settled ? "Un-settle chat" : "Settle chat",
-              icon: "circle-check",
-            },
-          ]
-        : []),
-      ...(supportsTitleRegeneration
-        ? [
-            {
-              id: "regenerate-title" as const,
-              label: current.titleRegeneration != null ? "Regenerating…" : "Regenerate title",
-              icon: "refresh-cw",
-              disabled: current.titleRegeneration != null,
-            },
-          ]
-        : []),
+      {
+        id: (settled ? "unsettle" : "settle") as "settle" | "unsettle",
+        label: settled ? "Un-settle chat" : "Settle chat",
+        icon: "circle-check",
+      },
+      {
+        id: "regenerate-title" as const,
+        label: current.titleRegeneration != null ? "Regenerating…" : "Regenerate title",
+        icon: "refresh-cw",
+        disabled: current.titleRegeneration != null,
+      },
       { id: "mark-unread", label: "Mark unread", icon: "mail-open", separatorBefore: true },
       // The board's view, which includes a pending move.
       ...(thread.parentThreadId != null

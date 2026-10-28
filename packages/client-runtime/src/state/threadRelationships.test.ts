@@ -6,12 +6,15 @@ import {
   deriveThreadRelationshipGraph,
   immediateThreadRelationships,
   orderWebThreadLineageRows,
-  relatedThreadIds,
   resolveMergeBackTargetThreadId,
   threadChildChats,
-  walkThreadRelationships,
   threadRelationshipRowStatus,
 } from "./threadRelationships.ts";
+
+const relatedThreadIds = (
+  graph: Parameters<typeof immediateThreadRelationships>[0],
+  threadId: ThreadId,
+) => immediateThreadRelationships(graph, threadId).map((row) => row.threadId);
 
 describe("thread relationships", () => {
   describe("children versus subagents", () => {
@@ -253,14 +256,6 @@ describe("thread relationships", () => {
     });
 
     expect(graph.nodes.get(missing)?.missing).toBe(true);
-    expect(relatedThreadIds(graph, root)).toEqual([child]);
-    expect(relatedThreadIds(graph, child)).toEqual([root, missing]);
-    expect(
-      walkThreadRelationships(graph, root).map(({ threadId, depth }) => [threadId, depth]),
-    ).toEqual([
-      [child, 1],
-      [missing, 2],
-    ]);
     expect(immediateThreadRelationships(graph, root).map(({ threadId }) => threadId)).toEqual([
       child,
     ]);

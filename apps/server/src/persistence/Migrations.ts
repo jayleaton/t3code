@@ -74,6 +74,9 @@ import Migration0066 from "./Migrations/066_RepairClientSettlementTimestamps.ts"
 import Migration0067 from "./Migrations/067_WebhookDedupe.ts";
 import Migration0068 from "./Migrations/068_ShellStopRequestIndex.ts";
 import Migration0069 from "./Migrations/069_ThreadMessageSearch.ts";
+import Migration0070 from "./Migrations/070_PeerLinks.ts";
+import Migration0071 from "./Migrations/071_PeerLinkFence.ts";
+import Migration0072 from "./Migrations/072_WaitingLinkRequestIndex.ts";
 
 import ForkMigration001 from "./Migrations/fork/001_AgentProfileAndPullRequestCompatibility.ts";
 import ForkMigration002 from "./Migrations/fork/002_RepairAgentUpgradeSchema.ts";
@@ -157,18 +160,14 @@ const migrationEntries = [
   [67, "WebhookDedupe", Migration0067],
   [68, "ShellStopRequestIndex", Migration0068],
   [69, "ThreadMessageSearch", Migration0069],
+  [70, "PeerLinks", Migration0070],
+  [71, "PeerLinkFence", Migration0071],
+  [72, "WaitingLinkRequestIndex", Migration0072],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
-/**
- * Fork-only migrations, recorded in their own table. The migrator skips every
- * id at or below the highest recorded one, so sharing upstream's table made
- * every upstream sync renumber. Each runs right after the upstream migration in
- * its last column, the order fork builds shipped them in, so a fresh database
- * replays what existing ones ran. A new one takes the next id and, as its
- * last column, the newest upstream id.
- */
+/** Separate ledgers preserve upstream IDs. The last column replays fork migrations after the upstream slot they shipped with. */
 const forkMigrationEntries = [
   [1, "AgentProfileAndPullRequestCompatibility", ForkMigration001, 51],
   [2, "RepairAgentUpgradeSchema", ForkMigration002, 51],
@@ -247,12 +246,7 @@ const schedule: ReadonlyArray<readonly [Ledger, number]> = [
 
 const FIRST_V2_MIGRATION_ID = 55;
 
-/**
- * Fail before migrating when the migrator would skip one of V2's own
- * migrations. It skips every id up to the highest recorded one, whatever name
- * was recorded, so a database that took a V2 id for another migration would
- * start without V2's schema and fail on first use.
- */
+// Migrators skip ids up to the highest recorded; reject collisions that would skip V2 schema.
 const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function* (
   throughId?: number,
 ) {

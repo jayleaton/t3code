@@ -1,5 +1,4 @@
 import type {
-  EnvironmentId,
   ExecutionEnvironmentCapabilities,
   ServerSettings,
   ServerSettingsPatch,
@@ -15,6 +14,7 @@ const SHARED_SERVER_SETTING_KEYS = [
   "sidebarAutoSettleOnMerge",
   "autoResumeLimitedThreads",
   "snoozeLimitedThreads",
+  "snoozePresets",
   "newWorktreesStartFromOrigin",
   "sourceControlWritingStyle",
   "agentSkills",
@@ -23,8 +23,6 @@ const SHARED_SERVER_SETTING_KEYS = [
   "mcpGatewayProfileDeletedAt",
   "textGenerationModelSelection",
 ] as const satisfies ReadonlyArray<keyof ServerSettings & keyof ServerSettingsPatch>;
-
-export type SharedServerSettingKey = (typeof SHARED_SERVER_SETTING_KEYS)[number];
 
 const SHARED_KEY_SET = new Set<string>(SHARED_SERVER_SETTING_KEYS);
 
@@ -97,30 +95,9 @@ export function filterSharedServerPatch(
     : Struct.omit(patch, ["continueThreadsAfterServerUpdate"]);
 }
 
-export function pickSharedServerSettings(
-  settings: ServerSettings,
-  capabilities?: Pick<
-    ExecutionEnvironmentCapabilities,
-    "threadRestartContinuation" | "agentSkillsSync" | "agentSkillResources"
-  >,
-): ServerSettingsPatch {
-  return filterSharedServerPatch(
-    Struct.pick(settings, SHARED_SERVER_SETTING_KEYS),
-    capabilities,
-    settings,
-  );
-}
-
 export function supportsSharedSettingsSync(environment: {
   readonly connection: { readonly phase: EnvironmentConnectionPhase };
-  readonly serverConfig: {
-    readonly environment: {
-      readonly capabilities: Pick<ExecutionEnvironmentCapabilities, "threadAutoSettlement">;
-    };
-  } | null;
+  readonly serverConfig: object | null;
 }): boolean {
-  return (
-    environment.connection.phase === "connected" &&
-    environment.serverConfig?.environment.capabilities.threadAutoSettlement === true
-  );
+  return environment.connection.phase === "connected" && environment.serverConfig !== null;
 }

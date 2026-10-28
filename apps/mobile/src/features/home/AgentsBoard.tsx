@@ -48,6 +48,7 @@ import { useWorkspaceState } from "../../state/workspace";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
+import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import { useThreadListActions } from "./useThreadListActions";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
 import { agentsBoardExpandedChildrenAtom, agentsBoardSelectionAtom } from "./agents-board-state";
@@ -60,6 +61,7 @@ import {
 import type { ParentDrop } from "./agent-parenting";
 import { useThreadParentActions } from "./useThreadParentActions";
 import * as Dialog from "../../components/ui/Dialog";
+import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 
 const BOARD_TABS = [
   { value: "agents", label: "Agents" },
@@ -195,7 +197,10 @@ export function AgentsBoard(props: {
   const [settledOpen, setSettledOpen] = useState(false);
   const { settleThread, unsettleThread, pinThread, unpinThread } = useThreadListActions();
   const pending = usePendingNewTasks();
-  const { confirmDeletePendingTask } = usePendingTaskListActions();
+  const selectDetail = useSelectWorkspaceDetail();
+  const { confirmDeletePendingTask } = usePendingTaskListActions((params) =>
+    selectDetail({ name: "Thread", params }),
+  );
   const profiles = useAgentProfiles();
   const profileId = profiles.some((profile) => profile.profileId === selection.profileId)
     ? selection.profileId
@@ -269,6 +274,7 @@ export function AgentsBoard(props: {
     () => new Map(),
   );
   const [now, setNow] = useState(() => Date.now());
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- advances the board clock on its timer and clears it on unmount
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), AGENT_CHILD_RESORT_MS);
     return () => clearInterval(id);
@@ -576,6 +582,7 @@ export function AgentsBoard(props: {
   return (
     <AgentCardDragProvider linkTargetsFor={linkTargetsFor} onDrop={onDrop}>
       <LegendList
+        renderScrollComponent={Platform.OS === "ios" ? NativeScrollView : undefined}
         style={{ flex: 1 }}
         data={boardEmpty ? [] : rows}
         keyExtractor={(row) =>

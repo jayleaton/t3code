@@ -13,11 +13,7 @@ import {
   RelayConnectionTarget,
   type SupervisorConnectionState,
 } from "./model.ts";
-import {
-  environmentMcpUrl,
-  presentEnvironmentConnection,
-  presentConnectionState,
-} from "./presentation.ts";
+import { environmentMcpUrl, presentConnectionState } from "./presentation.ts";
 
 const TARGET = new BearerConnectionTarget({
   environmentId: EnvironmentId.make("environment-1"),
@@ -158,7 +154,7 @@ describe("connection presentation", () => {
 
   it("preserves an explicitly available environment while offline", () => {
     expect(
-      presentEnvironmentConnection(
+      presentConnectionState(
         supervisorState({
           desired: false,
           network: "offline",

@@ -104,7 +104,7 @@ export class ElectronDialog extends Context.Service<
   }
 >()("@t3tools/desktop/electron/ElectronDialog") {}
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = ElectronDialog.of({
   pickFolder: Effect.fn("desktop.electron.dialog.pickFolder")(function* (input) {
     const ownerWindowId = Option.match(input.owner, {
@@ -166,8 +166,8 @@ export const make = ElectronDialog.of({
     });
     return result.canceled ? [] : result.filePaths;
   }),
-  showMessageBox: (options, owner) =>
-    Effect.tryPromise({
+  showMessageBox: Effect.fn("ElectronDialog.showMessageBox")(function (options, owner) {
+    return Effect.tryPromise({
       try: () =>
         owner === undefined
           ? Electron.dialog.showMessageBox(options)
@@ -181,13 +181,11 @@ export const make = ElectronDialog.of({
           buttonCount: options.buttons?.length ?? 0,
           cause,
         }),
-    }),
-  // The native error box runs a nested loop that holds the main process, and
-  // with it SIGTERM handling, until someone dismisses it: under a supervisor a
-  // stop then waits out its timeout and ends in SIGKILL. Electron allows only
-  // the native box before `ready`.
-  showErrorBox: (title, content) =>
-    Effect.tryPromise({
+    });
+  }),
+  // Native error boxes block signal handling after ready; use the asynchronous dialog.
+  showErrorBox: Effect.fn("ElectronDialog.showErrorBox")(function (title, content) {
+    return Effect.tryPromise({
       try: async () => {
         if (!Electron.app.isReady()) return Electron.dialog.showErrorBox(title, content);
         await Electron.dialog.showMessageBox({
@@ -203,7 +201,8 @@ export const make = ElectronDialog.of({
           contentLength: content.length,
           cause,
         }),
-    }).pipe(Effect.orDie),
+    }).pipe(Effect.orDie);
+  }),
 });
 
 export const layer = Layer.succeed(ElectronDialog, make);

@@ -93,8 +93,8 @@ it.effect(
               ]);
               return { sequence: 1 };
             }),
-          [WS_METHODS.serverGetSettings]: () =>
-            Effect.sync(() => (id === localId ? local : remote)),
+          [WS_METHODS.serverGetConfig]: () =>
+            Effect.sync(() => ({ settings: id === localId ? local : remote })),
           [WS_METHODS.serverUpdateSettings]: ({
             patch,
             replicateProfiles,
@@ -119,6 +119,7 @@ it.effect(
           session: yield* SubscriptionRef.make<Option.Option<RpcSession>>(
             Option.some({
               client,
+              inboundFrames: Effect.succeed(0),
               initialConfig: Effect.succeed({
                 environment: {
                   capabilities: {

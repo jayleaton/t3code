@@ -14,7 +14,7 @@ const readLiveLibrary = Effect.fn("readLiveLibrary")(function* () {
   if (Option.isNone(session)) return Option.none();
   const config = yield* session.value.initialConfig;
   if (!config.environment.capabilities.agentLibrarySync) return Option.none();
-  const settings = yield* request(WS_METHODS.serverGetSettings, {});
+  const { settings } = yield* request(WS_METHODS.serverGetConfig, {});
   return Option.some({ ...config, settings });
 });
 
@@ -36,7 +36,7 @@ export const syncAgentLibraryBeforeUse = Effect.fn("syncAgentLibraryBeforeUse")(
     const cached = (id: typeof environmentId) =>
       Option.isSome(cache)
         ? cache.value.loadServerConfig(id).pipe(Effect.orElseSucceed(() => Option.none()))
-        : Effect.succeed(Option.none());
+        : Effect.succeedNone;
     const peers = yield* Effect.forEach(
       [...entries.keys()].filter((id) => id !== environmentId),
       Effect.fnUntraced(function* (id) {

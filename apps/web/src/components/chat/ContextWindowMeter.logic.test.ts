@@ -27,7 +27,7 @@ describe("resolveContextWindowModelDisplayName", () => {
         },
         modelOptionsByInstance,
       ),
-    ).toBe("5.6 Sol");
+    ).toBe("GPT-5.6 Sol");
   });
 
   it("falls back to the selected model slug when model metadata is unavailable", () => {

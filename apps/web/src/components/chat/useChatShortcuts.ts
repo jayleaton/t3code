@@ -14,15 +14,15 @@ import { shouldTypeToFocusComposer } from "./composerFocusRedirect";
 import { isComposerEventForSurface } from "./composerEventScope";
 import { composerShortcutCommands } from "./composerShortcuts";
 
-/** Runs a command. Returning false lets the key event through untouched. */
-export type ChatShortcutHandler = (context: {
+/** Returning false lets the key event through untouched. */
+type ChatShortcutHandler = (context: {
   readonly event: KeyboardEvent;
   readonly terminalFocusOwner: TerminalFocusOwner | null;
 }) => boolean | void;
 
 export type ChatShortcutCommands = Partial<Record<KeybindingCommand, ChatShortcutHandler>>;
 
-export interface ChatShortcutsInput {
+interface ChatShortcutsInput {
   readonly enabled: boolean;
   /**
    * Set for a composer embedded outside the chat route, such as the Agents board. Each visible
@@ -110,6 +110,7 @@ export function useChatShortcuts(input: ChatShortcutsInput) {
     event.preventDefault();
     input.closeThreadFind();
   });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- attaches window keydown listeners for chat shortcuts and find dismissal for the component's lifetime
   useEffect(() => {
     const onKeyDownCapture = (event: KeyboardEvent) => handleShortcut(event);
     const onKeyDown = (event: KeyboardEvent) => dismissFind(event);

@@ -255,13 +255,8 @@ export function resolveGatewayDevice(
   );
 }
 
-/**
- * Resolves persisted readable profile labels against a live provider catalog.
- * Exactly one enabled/available provider + model pair must match; duplicate
- * labels stay unresolved rather than routing a thread ambiguously. Legacy
- * profiles without labels validate their persisted routing snapshot against
- * the same live catalog.
- */
+/** Resolve readable labels only when one live provider/model pair matches.
+ * Profiles without labels validate their persisted selection against that catalog. */
 export function resolveGatewayProfileModelSelection(
   profile: Pick<GatewayProfile, "providerLabel" | "modelLabel" | "modelSelection">,
   providers: ReadonlyArray<ServerProvider>,
@@ -545,12 +540,10 @@ export function createGatewayRuntimePort(
                   Option.isNone(session) ||
                   !(yield* session.value.initialConfig).environment.capabilities.agentSkillResources
                 ) {
-                  return yield* Effect.fail(
-                    new EnvironmentRpcUnavailableError({
-                      environmentId,
-                      message: "Update T3 on this machine to import skill resources.",
-                    }),
-                  );
+                  return yield* new EnvironmentRpcUnavailableError({
+                    environmentId,
+                    message: "Update T3 on this machine to import skill resources.",
+                  });
                 }
               }),
             );
@@ -558,7 +551,7 @@ export function createGatewayRuntimePort(
           yield* registry.run(environmentId, syncAgentLibraryBeforeUse());
           const settings = yield* registry.run(
             environmentId,
-            request(WS_METHODS.serverGetSettings, {}),
+            request(WS_METHODS.serverGetConfig, {}).pipe(Effect.map((config) => config.settings)),
           );
           return yield* registry.run(
             environmentId,
@@ -588,7 +581,7 @@ export function createGatewayRuntimePort(
           const registry = yield* EnvironmentRegistry;
           const settings = yield* registry.run(
             EnvironmentId.make(environmentId),
-            request(WS_METHODS.serverGetSettings, {}),
+            request(WS_METHODS.serverGetConfig, {}).pipe(Effect.map((config) => config.settings)),
           );
           return settings.agentSkills;
         }),
@@ -820,12 +813,9 @@ export function createGatewayRuntimePort(
           const profileRouting = Effect.fn("gateway.scheduledTask.profileRouting")(function* (
             profileId: string,
           ) {
-            const [settings, config] = yield* Effect.all([
-              call(request(WS_METHODS.serverGetSettings, {})),
-              call(request(WS_METHODS.serverGetConfig, {})),
-            ]);
+            const config = yield* call(request(WS_METHODS.serverGetConfig, {}));
             const routing = resolveScheduledTaskProfileRouting(
-              settings.mcpGatewayProfiles,
+              config.settings.mcpGatewayProfiles,
               profileId,
               config.providers,
             );
@@ -835,7 +825,12 @@ export function createGatewayRuntimePort(
           });
           switch (scheduled.action) {
             case "list":
-              return yield* call(request(WS_METHODS.scheduledTasksList, {}));
+              return yield* call(
+                subscribe(WS_METHODS.scheduledTasksSubscribe, {}).pipe(
+                  Stream.runHead,
+                  Effect.map(Option.getOrThrow),
+                ),
+              );
             case "create": {
               const { input } = scheduled;
               const routing = yield* profileRouting(input.profileId);
@@ -856,7 +851,12 @@ export function createGatewayRuntimePort(
             }
             case "update": {
               const { patch } = scheduled;
-              const { tasks } = yield* call(request(WS_METHODS.scheduledTasksList, {}));
+              const { tasks } = yield* call(
+                subscribe(WS_METHODS.scheduledTasksSubscribe, {}).pipe(
+                  Stream.runHead,
+                  Effect.map(Option.getOrThrow),
+                ),
+              );
               const existing = tasks.find((task) => task.id === scheduled.taskId);
               if (existing === undefined) {
                 return yield* new ScheduledTaskError({
@@ -1055,7 +1055,7 @@ export function createGatewayRuntimePort(
           const registry = yield* EnvironmentRegistry;
           const settings = yield* registry.run(
             EnvironmentId.make(rawEnvironmentId),
-            request(WS_METHODS.serverGetSettings, {}),
+            request(WS_METHODS.serverGetConfig, {}).pipe(Effect.map((config) => config.settings)),
           );
           return settings.mcpGatewayProfiles.map((profile) => ({
             ...profile,
@@ -1145,11 +1145,8 @@ export function createGatewayRuntimePort(
             environmentId,
             request(WS_METHODS.serverGetConfig, {}),
           );
-          const settings = yield* registry.run(
-            environmentId,
-            request(WS_METHODS.serverGetSettings, {}),
-          );
-          const profile = settings.mcpGatewayProfiles.find(
+          const { settings } = config;
+          const profile = config.settings.mcpGatewayProfiles.find(
             (profile) => profile.profileId === input.profileSelection?.profileId,
           );
           const selection =
@@ -1255,25 +1252,32 @@ export function createGatewayRuntimePort(
           const registry = yield* EnvironmentRegistry;
           yield* registry.run(
             environmentId,
-            input.action === "pause" || input.action === "cancel"
-              ? interruptThreadTurn({ threadId, commandId: CommandId.make(input.requestId) })
-              : input.action === "stop"
-                ? stopThreadSession({ threadId, commandId: CommandId.make(input.requestId) })
-                : startThreadTurn({
-                    threadId,
-                    commandId: CommandId.make(input.requestId),
-                    message: {
-                      messageId: MessageId.make(input.messageId),
-                      role: "user",
-                      text: "Continue the task.",
-                      attachments: [],
-                    },
-                    runtimeMode: thread.runtimeMode,
-                    interactionMode: thread.interactionMode,
-                    dispatchMode: input.action === "restart" ? "restart" : "auto",
-                    createdBy: "agent",
-                    creationSource: "mcp",
-                  }),
+            Effect.gen(function* () {
+              if (input.action === "pause" || input.action === "cancel") {
+                yield* interruptThreadTurn({
+                  threadId,
+                  commandId: CommandId.make(input.requestId),
+                });
+              } else if (input.action === "stop") {
+                yield* stopThreadSession({ threadId, commandId: CommandId.make(input.requestId) });
+              } else {
+                yield* startThreadTurn({
+                  threadId,
+                  commandId: CommandId.make(input.requestId),
+                  message: {
+                    messageId: MessageId.make(input.messageId),
+                    role: "user",
+                    text: "Continue the task.",
+                    attachments: [],
+                  },
+                  runtimeMode: thread.runtimeMode,
+                  interactionMode: thread.interactionMode,
+                  dispatchMode: input.action === "restart" ? "restart" : "auto",
+                  createdBy: "agent",
+                  creationSource: "mcp",
+                });
+              }
+            }),
           );
           return {
             requestId: input.requestId,
