@@ -39,7 +39,9 @@ const emptyShellSnapshot = {
 
 describe("subagent shell events", () => {
   const stored = (threadId: string, type: string) =>
-    ({ event: { threadId, type } }) as ApplicationStoredEvent;
+    ({
+      event: { threadId, type, payload: { kind: "tool_call", runId: "run" } },
+    }) as ApplicationStoredEvent;
 
   it("keeps regular threads and subagent state changes while omitting subagent transcript updates", () => {
     const subagents = new Set(["child"]);

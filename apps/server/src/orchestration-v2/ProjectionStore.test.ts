@@ -9,6 +9,7 @@ import {
   MessageId,
   type ModelSelection,
   type OrchestrationV2AppThread,
+  type OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2TurnItem,
   type OrchestrationV2ThreadHistoryPage,
@@ -39,6 +40,7 @@ import { projectThreadAwarenessV2 } from "@t3tools/shared/agentAwareness";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import { shouldPublishShellApplicationEvent } from "./ShellStream.ts";
 import {
   buildBoundedThreadProjection,
   decodeThreadHistoryCursor,
@@ -4252,7 +4254,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
     }),
   );
 
-  it.effect("shows a reused provider-native subagent working in SQL and memory shells", () =>
+  it.effect("publishes unopened native subagent completion and reuse", () =>
     Effect.gen(function* () {
       const store = yield* ProjectionStore.ProjectionStoreV2;
       const now = yield* DateTime.now;
@@ -4291,10 +4293,12 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           deletedAt: null,
         },
       });
-      const applyRootTurn = (turn: number, status: "running" | "completed") => {
+      const deliveredStatuses: Array<string> = [];
+      const subagents = new Set<string>([threadId]);
+      const applyRootTurn = Effect.fn(function* (turn: number, status: "running" | "completed") {
         const nodeId = NodeId.make(`node:native-subagent:${turn}`);
         const startedAt = DateTime.add(now, { seconds: turn });
-        return store.apply({
+        const event = {
           id: EventId.make(`event:native-subagent:${turn}:${status}`),
           type: "node.updated",
           threadId,
@@ -4318,8 +4322,15 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             startedAt,
             completedAt: status === "completed" ? startedAt : null,
           },
-        });
-      };
+        } satisfies OrchestrationV2DomainEvent;
+        yield* store.apply(event);
+        // Use the shell subscription's filter and projection read without opening thread detail.
+        if (
+          shouldPublishShellApplicationEvent({ sequence: turn, commandId: null, event }, subagents)
+        ) {
+          deliveredStatuses.push((yield* store.getThreadShell(threadId))!.status);
+        }
+      });
       const shells = Effect.gen(function* () {
         const memory = ProjectionStore.threadShellFromProjection(
           yield* store.getThreadProjection(threadId),
@@ -4334,6 +4345,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         assert.equal(shell.status, "completed");
         assert.isNull(shell.activityRunStatus);
       }
+      assert.deepEqual(deliveredStatuses, ["running", "completed"]);
       // The parent resumes the same subagent: a second root turn on the same thread.
       yield* applyRootTurn(2, "running");
       for (const shell of yield* shells) {
@@ -4341,10 +4353,81 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         assert.equal(shell.activityRunStatus, "running");
         assert.isNull(shell.latestRunId);
       }
+      assert.deepEqual(deliveredStatuses, ["running", "completed", "running"]);
       assert.isUndefined(
         (yield* store.getSettlementCandidates(threadId)).find((row) => row.id === threadId),
       );
     }),
+  );
+
+  it.effect.each(["top-level", "named-child"] as const)(
+    "%s completion reaches shell subscribers without a visit or detail read",
+    (kind) =>
+      Effect.gen(function* () {
+        const store = yield* ProjectionStore.ProjectionStoreV2;
+        const threadId = yield* addRolledBackRecoveryCandidate(`unopened-${kind}`);
+        const thread = yield* store.getThread(threadId);
+        const now = yield* DateTime.now;
+        if (kind === "named-child") {
+          const parentThreadId = ThreadId.make("thread:unopened-parent");
+          yield* store.apply({
+            id: EventId.make("event:unopened-child:metadata"),
+            type: "thread.metadata-updated",
+            threadId,
+            occurredAt: now,
+            payload: {
+              ...thread,
+              createdBy: "agent",
+              creationSource: "mcp",
+              parentThreadId,
+              parentRelationship: "child",
+              lineage: {
+                parentThreadId,
+                relationshipToParent: "subagent",
+                rootThreadId: parentThreadId,
+              },
+            },
+          });
+        }
+        const run = {
+          id: RunId.make(`run:unopened-${kind}`),
+          threadId,
+          ordinal: 2,
+          providerInstanceId,
+          modelSelection,
+          providerThreadId: null,
+          userMessageId: MessageId.make(`message:unopened-${kind}`),
+          rootNodeId: null,
+          activeAttemptId: null,
+          requestedAt: now,
+          startedAt: now,
+          checkpointId: null,
+          contextHandoffId: null,
+        };
+        const subagents = new Set<string>(kind === "named-child" ? [threadId] : []);
+        const deliveredStatuses: Array<string> = [];
+        for (const status of ["running", "completed"] as const) {
+          const event = {
+            id: EventId.make(`event:unopened-${kind}:${status}`),
+            type: status === "running" ? "run.created" : "run.updated",
+            threadId,
+            occurredAt: now,
+            payload: { ...run, status, completedAt: status === "completed" ? now : null },
+          } satisfies OrchestrationV2DomainEvent;
+          yield* store.apply(event);
+          if (
+            shouldPublishShellApplicationEvent({ sequence: 1, commandId: null, event }, subagents)
+          ) {
+            const shell = yield* store.getThreadShell(threadId);
+            assert.isNull(shell?.lastVisitedAt);
+            deliveredStatuses.push(shell!.status);
+          }
+        }
+        assert.deepEqual(deliveredStatuses, ["running", "completed"]);
+        const shell = yield* store.getThreadShell(threadId);
+        assert.isNull(shell?.activityRunStatus);
+        assert.deepEqual(shell?.latestRunCompletedAt, now);
+      }),
   );
 
   it.effect("projects only the latest failed root turn's limit into SQL and memory shells", () =>

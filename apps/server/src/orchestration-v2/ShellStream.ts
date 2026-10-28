@@ -281,7 +281,7 @@ export type ShellApplicationEvent =
       readonly event: Pick<OrchestrationV2StoredEvent["event"], "threadId">;
     };
 
-/** Focused subagents receive these updates through their thread subscription. */
+/** Transcript-only updates stay on the focused thread subscription. */
 export function shouldPublishShellApplicationEvent(
   stored: ApplicationStoredEvent,
   subagentThreadIds: Set<string>,
@@ -296,6 +296,14 @@ export function shouldPublishShellApplicationEvent(
   }
   if (event.type === "thread.deleted") {
     // Replay and the live tail overlap; keep known IDs so late events stay filtered.
+    return true;
+  }
+  // Native subagents have no runs; their run-less root node owns shell status.
+  if (
+    event.type === "node.updated" &&
+    event.payload.kind === "root_turn" &&
+    event.payload.runId === null
+  ) {
     return true;
   }
   return !(
