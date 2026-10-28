@@ -180,13 +180,6 @@ jobs:
             echo "T3CODE_DESKTOP_UPDATE_REPOSITORY=$UPDATE_REPOSITORY" >> "$GITHUB_ENV"
           fi
 
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: false
-
       # pnpm checks the lockfile and policy before reusing this result. A missing
       # artifact leaves the cache empty, so installation runs the checks again.
       - name: Download dependency verification
