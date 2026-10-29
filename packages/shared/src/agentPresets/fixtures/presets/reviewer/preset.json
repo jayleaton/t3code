@@ -1,0 +1,12 @@
+{
+  "id": "reviewer",
+  "name": "Reviewer",
+  "description": "Reviews diffs for correctness and missing tests",
+  "color": "#2f80ed",
+  "icon": "shield",
+  "model": { "provider": "codex", "model": "gpt-5.5", "reasoningEffort": "high" },
+  "runtimeMode": "read-only",
+  "interactionMode": "default",
+  "skills": ["review-checklist"],
+  "setupNotes": ["Needs the GitHub CLI (gh) signed in to read pull requests."]
+}

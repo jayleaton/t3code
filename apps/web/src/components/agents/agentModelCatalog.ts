@@ -39,3 +39,15 @@ export function agentModelOptions(
     (left, right) => left.name.localeCompare(right.name) || left.slug.localeCompare(right.slug),
   );
 }
+
+/** The picker label for a preset's provider: an enabled match by driver or name, else the raw value. */
+export function presetProviderLabel(providers: ReadonlyArray<ServerProvider>, provider: string) {
+  const wanted = provider.toLowerCase();
+  const match = providers.find(
+    (candidate) =>
+      candidate.enabled &&
+      (candidate.driver.toLowerCase() === wanted ||
+        candidate.displayName?.trim().toLowerCase() === wanted),
+  );
+  return match ? match.displayName?.trim() || match.driver : provider;
+}

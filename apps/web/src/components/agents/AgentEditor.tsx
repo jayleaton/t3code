@@ -9,17 +9,24 @@ import {
   ComboboxEmpty,
 } from "../ui/combobox";
 import { SelectButton } from "../ui/select";
-import { agentModelOptions } from "./agentModelCatalog";
+import { agentModelOptions, presetProviderLabel } from "./agentModelCatalog";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import type { AgentSkill, McpGatewayProfile, ServerProvider } from "@t3tools/contracts";
 import { MCP_GATEWAY_RUNTIME_MODE_LABELS } from "@t3tools/contracts";
 import { agentColors, agentIconLabels } from "./agents.logic";
 import { AgentIcon } from "./AgentIcon";
+import { AGENT_PRESET_SETUP_NOTE } from "./AgentPresetPicker";
 import { useRef, useState, type CSSProperties } from "react";
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialog";
 import { randomUUID } from "../../lib/utils";
+import {
+  findIdenticalSkill,
+  type AgentPreset,
+  type AgentPresetSkill,
+} from "@t3tools/shared/agentPresets";
 
 const emptySkills: ReadonlyArray<AgentSkill> = [];
+const PRESET_SKILL_PREFIX = "preset:";
 
 export function AgentEditor({
   profile,
@@ -27,7 +34,10 @@ export function AgentEditor({
   skills = emptySkills,
   providers,
   machines,
+  preset = null,
+  skillsAvailable = true,
   onSave,
+  onBack,
   onClose,
 }: {
   profile: McpGatewayProfile | null;
@@ -35,14 +45,51 @@ export function AgentEditor({
   skills?: ReadonlyArray<AgentSkill>;
   providers: ReadonlyArray<ServerProvider & { readonly environmentId: string }>;
   machines: ReadonlyArray<{ environmentId: string; label: string }>;
-  onSave: (profile: McpGatewayProfile) => Promise<boolean | undefined>;
+  /** Prefills a new agent; its skills join the library on save. */
+  preset?: AgentPreset | null;
+  skillsAvailable?: boolean;
+  /** Preset skills not already in the library are passed for the caller to add. */
+  onSave: (
+    profile: McpGatewayProfile,
+    presetSkills: ReadonlyArray<AgentPresetSkill>,
+  ) => Promise<boolean | undefined>;
+  onBack?: () => void;
   onClose: () => void;
 }) {
   const skillsTriggerRef = useRef<HTMLButtonElement>(null);
-  const [skillIds, setSkillIds] = useState<ReadonlyArray<string>>(profile?.skillIds ?? []);
-  const [systemPrompt, setSystemPrompt] = useState(profile?.systemPrompt ?? "");
+  // Preset skills already in the library preselect that skill instead of a copy.
+  const presetSkills = skillsAvailable && preset ? preset.skills : [];
+  const presetSkillIds = presetSkills.map(
+    (skill, index) =>
+      findIdenticalSkill(skills, skill)?.skillId ?? `${PRESET_SKILL_PREFIX}${index}`,
+  );
+  const skillOptions = [
+    ...skills.map((skill) => ({
+      id: skill.skillId,
+      name: skill.name,
+      description: skill.description,
+    })),
+    ...presetSkills.flatMap((skill, index) =>
+      presetSkillIds[index]!.startsWith(PRESET_SKILL_PREFIX)
+        ? [
+            {
+              id: presetSkillIds[index]!,
+              name: `${skill.name} (new)`,
+              description: skill.description,
+            },
+          ]
+        : [],
+    ),
+  ];
+  const [skillIds, setSkillIds] = useState<ReadonlyArray<string>>(
+    profile?.skillIds ?? [...new Set(presetSkillIds)],
+  );
+  const [systemPrompt, setSystemPrompt] = useState(
+    profile?.systemPrompt ?? preset?.systemPrompt ?? "",
+  );
   const [color, setColor] = useState(
     profile?.color ??
+      preset?.color ??
       agentColors[
         Math.max(
           0,
@@ -52,17 +99,23 @@ export function AgentEditor({
         ) % agentColors.length
       ]!,
   );
-  const [icon, setIcon] = useState<NonNullable<McpGatewayProfile["icon"]>>(profile?.icon ?? "orb");
-  const [description, setDescription] = useState(profile?.description ?? "");
-  const [name, setName] = useState(profile?.name ?? "");
-  const [providerLabel, setProviderLabel] = useState(profile?.providerLabel ?? "");
-  const [modelLabel, setModelLabel] = useState(profile?.modelLabel ?? "");
-  const [thinking, setThinking] = useState(profile?.reasoningEffort ?? "");
+  const [icon, setIcon] = useState<NonNullable<McpGatewayProfile["icon"]>>(
+    profile?.icon ?? preset?.icon ?? "orb",
+  );
+  const [description, setDescription] = useState(profile?.description ?? preset?.description ?? "");
+  const [name, setName] = useState(profile?.name ?? preset?.name ?? "");
+  const [providerLabel, setProviderLabel] = useState(
+    profile?.providerLabel ?? (preset ? presetProviderLabel(providers, preset.model.provider) : ""),
+  );
+  const [modelLabel, setModelLabel] = useState(profile?.modelLabel ?? preset?.model.model ?? "");
+  const [thinking, setThinking] = useState(
+    profile?.reasoningEffort ?? preset?.model.reasoningEffort ?? "",
+  );
   const [runtimeMode, setRuntimeMode] = useState<McpGatewayProfile["runtimeMode"]>(
-    profile?.runtimeMode ?? "approval-required",
+    profile?.runtimeMode ?? preset?.runtimeMode ?? "approval-required",
   );
   const [interactionMode, setInteractionMode] = useState<McpGatewayProfile["interactionMode"]>(
-    profile?.interactionMode ?? "default",
+    profile?.interactionMode ?? preset?.interactionMode ?? "default",
   );
   const [environmentIds, setEnvironmentIds] = useState<ReadonlyArray<string>>(
     profile?.environmentIds ?? [],
@@ -92,11 +145,28 @@ export function AgentEditor({
     >
       <DialogPopup>
         <div className="agent-dialog p-6">
-          <DialogTitle>{profile ? "Edit agent" : "Create agent"}</DialogTitle>
+          <DialogTitle>
+            {profile ? "Edit agent" : preset ? `Create agent from ${preset.name}` : "Create agent"}
+          </DialogTitle>
           <DialogDescription className="mt-2">
             Name a specialist. Choose its model and machines. It starts working when you give it a
             task.
           </DialogDescription>
+          {preset && (
+            <div className="agent-preset-setup" role="note">
+              <p>{AGENT_PRESET_SETUP_NOTE}</p>
+              {preset.setupNotes.length > 0 && (
+                <ul>
+                  {preset.setupNotes.map((note) => (
+                    <li key={note}>{note}</li>
+                  ))}
+                </ul>
+              )}
+              {!skillsAvailable && preset.skills.length > 0 && (
+                <p>Update T3 Code on this machine to add this preset’s skills.</p>
+              )}
+            </div>
+          )}
           <form
             className="agent-form"
             onSubmit={async (event) => {
@@ -112,24 +182,31 @@ export function AgentEditor({
               // oxlint-disable-next-line react/purity -- captures the save time inside the submit handler (oxc#27309)
               const now = new Date().toISOString();
               try {
-                const saved = await onSave({
-                  profileId: profile?.profileId ?? randomUUID(),
-                  name: name.trim(),
-                  description: description.trim(),
-                  systemPrompt,
-                  skillIds,
-                  color,
-                  icon,
-                  revision: profile?.revision ?? 1,
-                  providerLabel,
-                  modelLabel: selectedModel?.slug ?? modelLabel,
-                  ...(thinking.trim() ? { reasoningEffort: thinking.trim() } : {}),
-                  runtimeMode,
-                  interactionMode,
-                  ...(environmentIds.length ? { environmentIds } : {}),
-                  createdAt: profile?.createdAt ?? now,
-                  updatedAt: now,
-                });
+                const saved = await onSave(
+                  {
+                    profileId: profile?.profileId ?? randomUUID(),
+                    name: name.trim(),
+                    description: description.trim(),
+                    systemPrompt,
+                    skillIds: skillIds.filter((id) => !id.startsWith(PRESET_SKILL_PREFIX)),
+                    color,
+                    icon,
+                    revision: profile?.revision ?? 1,
+                    providerLabel,
+                    modelLabel: selectedModel?.slug ?? modelLabel,
+                    ...(thinking.trim() ? { reasoningEffort: thinking.trim() } : {}),
+                    runtimeMode,
+                    interactionMode,
+                    ...(environmentIds.length ? { environmentIds } : {}),
+                    createdAt: profile?.createdAt ?? now,
+                    updatedAt: now,
+                  },
+                  presetSkills.filter(
+                    (_, index) =>
+                      presetSkillIds[index]!.startsWith(PRESET_SKILL_PREFIX) &&
+                      skillIds.includes(presetSkillIds[index]!),
+                  ),
+                );
                 if (saved) onClose();
                 else setError("Could not save the agent. Check your connection and try again.");
               } catch (cause) {
@@ -222,19 +299,19 @@ export function AgentEditor({
             </label>
             <fieldset>
               <legend>Skills</legend>
-              {skills.length === 0 && (
+              {skillOptions.length === 0 && (
                 <p className="text-xs text-muted-foreground">
                   Add reusable skills from the Agents board.
                 </p>
               )}
-              {skills.length > 0 && (
+              {skillOptions.length > 0 && (
                 <Combobox
                   multiple
-                  items={skills.map((skill) => skill.skillId)}
+                  items={skillOptions.map((skill) => skill.id)}
                   value={[...skillIds]}
                   onValueChange={setSkillIds}
                   itemToStringLabel={(id) =>
-                    skills.find((skill) => skill.skillId === id)?.name ?? id
+                    skillOptions.find((skill) => skill.id === id)?.name ?? id
                   }
                 >
                   <ComboboxTrigger
@@ -245,7 +322,7 @@ export function AgentEditor({
                     {skillIds.length === 0
                       ? "Select skills…"
                       : skillIds.length === 1
-                        ? (skills.find((skill) => skill.skillId === skillIds[0])?.name ??
+                        ? (skillOptions.find((skill) => skill.id === skillIds[0])?.name ??
                           "1 skill selected")
                         : `${skillIds.length} skills selected`}
                   </ComboboxTrigger>
@@ -254,7 +331,7 @@ export function AgentEditor({
                     <ComboboxEmpty>No skills found.</ComboboxEmpty>
                     <ComboboxList>
                       {(id: string) => {
-                        const skill = skills.find((item) => item.skillId === id);
+                        const skill = skillOptions.find((item) => item.id === id);
                         return (
                           <ComboboxItem key={id} value={id}>
                             <div className="flex items-start gap-2">
@@ -360,6 +437,14 @@ export function AgentEditor({
                 </select>
               </label>
             </div>
+            {preset && modelLabel === preset.model.model && !selectedModel && (
+              <p role="alert" className="text-sm text-warning">
+                {providerLabels.includes(providerLabel)
+                  ? `${modelLabel} isn’t available from ${providerLabel}.`
+                  : `${providerLabel} isn’t installed on a connected machine.`}{" "}
+                Choose an available provider and model to save this agent.
+              </p>
+            )}
             <fieldset>
               <legend>
                 Machines <span className="text-muted-foreground">· none selected means any</span>
@@ -389,6 +474,11 @@ export function AgentEditor({
               </p>
             )}
             <footer>
+              {onBack && (
+                <button type="button" className="mr-auto" onClick={onBack} disabled={saving}>
+                  Back
+                </button>
+              )}
               <button type="button" onClick={onClose} disabled={saving}>
                 Cancel
               </button>

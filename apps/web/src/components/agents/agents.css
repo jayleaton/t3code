@@ -1557,3 +1557,71 @@
   background: var(--accent);
   color: var(--foreground);
 }
+
+/* New agent: start from scratch or from a bundled preset. */
+.agent-start-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 20px;
+}
+.agent-start-options > button,
+.agent-preset-card {
+  display: flex;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  text-align: left;
+  font-size: 12px;
+}
+.agent-start-options > button {
+  flex-direction: column;
+}
+.agent-start-options > button:hover,
+.agent-preset-card:hover {
+  background: var(--accent);
+}
+.agent-start-options span,
+.agent-preset-body > span {
+  color: var(--muted-foreground);
+}
+.agent-preset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 20px;
+}
+.agent-preset-card {
+  align-items: flex-start;
+  gap: 10px;
+}
+.agent-preset-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.agent-preset-meta {
+  overflow-wrap: anywhere;
+}
+.agent-preset-notes,
+.agent-preset-setup ul {
+  margin: 2px 0 0;
+  padding-left: 16px;
+  list-style: disc;
+  color: var(--muted-foreground);
+}
+.agent-preset-setup {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--muted);
+  font-size: 12px;
+}
+@media (max-width: 640px) {
+  .agent-start-options {
+    grid-template-columns: 1fr;
+  }
+}
