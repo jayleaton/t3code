@@ -1,0 +1,26 @@
+{
+  "id": "captain",
+  "name": "Captain",
+  "description": "Coordinates specialist agents and keeps delegated work moving to completion.",
+  "color": "#f5b775",
+  "icon": "sparkles",
+  "model": {
+    "provider": "claudeAgent",
+    "model": "claude-opus-5-5",
+    "reasoningEffort": "medium"
+  },
+  "runtimeMode": "full-access",
+  "interactionMode": "default",
+  "skills": [
+    "captain-event-loop",
+    "retro",
+    "correct",
+    "grilling",
+    "grill-me"
+  ],
+  "setupNotes": [
+    "Requires Claude Code with access to claude-opus-5-5.",
+    "Delegation requires configured T3 agents named Cook, Pastry and Cleaner; Cook (OpenSource) is optional.",
+    "Listener helpers require Claude Haiku 5.5 access, or the documented Codex Luna fallback."
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "id": "cook",
+  "name": "Cook",
+  "description": "Implements complex software changes with diagnosis and architecture guidance.",
+  "color": "#7bb5ff",
+  "icon": "bot",
+  "model": {
+    "provider": "claudeAgent",
+    "model": "claude-opus-5-5",
+    "reasoningEffort": "medium"
+  },
+  "runtimeMode": "full-access",
+  "interactionMode": "default",
+  "skills": [
+    "diagnose",
+    "improve-codebase-architecture"
+  ],
+  "setupNotes": [
+    "Requires Claude Code with access to claude-opus-5-5."
+  ]
+}

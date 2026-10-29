@@ -1,0 +1,18 @@
+{
+  "id": "cleaner",
+  "name": "Cleaner",
+  "description": "Reviews software changes for correctness, feature parity, security and performance.",
+  "color": "#f41f4a",
+  "icon": "shield",
+  "model": {
+    "provider": "codex",
+    "model": "gpt-6.1-sol",
+    "reasoningEffort": "medium"
+  },
+  "runtimeMode": "full-access",
+  "interactionMode": "default",
+  "skills": [
+    "improve-codebase-architecture"
+  ],
+  "setupNotes": []
+}

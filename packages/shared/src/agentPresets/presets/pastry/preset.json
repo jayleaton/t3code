@@ -1,0 +1,21 @@
+{
+  "id": "pastry",
+  "name": "Pastry",
+  "description": "Solves engineering problems and performs research and native computer use.",
+  "color": "#f5b775",
+  "icon": "code",
+  "model": {
+    "provider": "codex",
+    "model": "gpt-6.1-sol",
+    "reasoningEffort": "medium"
+  },
+  "runtimeMode": "full-access",
+  "interactionMode": "default",
+  "skills": [
+    "diagnose",
+    "improve-codebase-architecture"
+  ],
+  "setupNotes": [
+    "Computer use requires Codex with native computer use enabled on a supported machine."
+  ]
+}

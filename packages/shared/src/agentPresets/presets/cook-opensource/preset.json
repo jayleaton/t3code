@@ -1,0 +1,21 @@
+{
+  "id": "cook-opensource",
+  "name": "Cook (OpenSource)",
+  "description": "Implements software changes through an open source model in OpenCode.",
+  "color": "#7bb5ff",
+  "icon": "bot",
+  "model": {
+    "provider": "opencode",
+    "model": "commandcode/deepseek/deepseek-v4.1-flash",
+    "reasoningEffort": "high"
+  },
+  "runtimeMode": "full-access",
+  "interactionMode": "default",
+  "skills": [
+    "diagnose",
+    "improve-codebase-architecture"
+  ],
+  "setupNotes": [
+    "Requires OpenCode with commandcode/deepseek/deepseek-v4.1-flash configured and provider access."
+  ]
+}
