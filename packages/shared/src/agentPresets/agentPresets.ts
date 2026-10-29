@@ -98,11 +98,9 @@ function decodeSkill(name: string, files: Readonly<Record<string, string>>): Age
 }
 
 /**
- * Decodes the bundled presets from file text keyed by path relative to the
- * agentPresets directory: `presets/<id>/preset.json`, `presets/<id>/system-prompt.md`
- * and the shared pool `skills/<name>/SKILL.md` (+ files) that presets name.
- * Bundles carry UTF-8 text only; a leading shebang marks a script executable,
- * since a file can only be run directly when it has one.
+ * Decodes file text keyed by path under agentPresets/: `presets/<id>/…` and the
+ * shared `skills/<name>/…` pool. Bundles carry UTF-8 text, so a script's
+ * executable bit comes from its shebang, the only way it can run directly.
  */
 export function decodeAgentPresets(files: Readonly<Record<string, string>>) {
   const skills = new Map<string, AgentPresetSkill>();
@@ -140,7 +138,7 @@ function bundleKey(skill: Pick<AgentSkill, "content" | "resources">) {
     skill.content.trim(),
     (skill.resources ?? [])
       .map((file) => [file.path, file.contentBase64, file.executable === true] as const)
-      .toSorted(([a], [b]) => a.localeCompare(b)),
+      .sort(([a], [b]) => a.localeCompare(b)),
   ]);
 }
 

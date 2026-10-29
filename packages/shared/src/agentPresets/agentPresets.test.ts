@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Reads the fixture and bundled preset folders the way a bundler sees them.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import type { AgentSkill } from "@t3tools/contracts";
@@ -44,18 +45,30 @@ describe("decodeAgentPresets", () => {
     expect(skill.resources).toEqual([
       {
         path: "scripts/count.sh",
-        contentBase64: Buffer.from(
-          fixtures["skills/review-checklist/scripts/count.sh"]!,
-        ).toString("base64"),
+        contentBase64: Buffer.from(fixtures["skills/review-checklist/scripts/count.sh"]!).toString(
+          "base64",
+        ),
         executable: true,
       },
     ]);
   });
 
   it.each([
-    ["a folder that disagrees with its id", { "presets/reviewer/preset.json": manifest({ id: "other" }) }, /does not match/],
-    ["a missing system prompt", { "presets/reviewer/system-prompt.md": undefined }, /system-prompt\.md/],
-    ["a skill missing from the pool", { "skills/review-checklist/SKILL.md": undefined }, /"review-checklist" is not in the skills pool/],
+    [
+      "a folder that disagrees with its id",
+      { "presets/reviewer/preset.json": manifest({ id: "other" }) },
+      /does not match/,
+    ],
+    [
+      "a missing system prompt",
+      { "presets/reviewer/system-prompt.md": undefined },
+      /system-prompt\.md/,
+    ],
+    [
+      "a skill missing from the pool",
+      { "skills/review-checklist/SKILL.md": undefined },
+      /"review-checklist" is not in the skills pool/,
+    ],
     ["an unknown icon", { "presets/reviewer/preset.json": manifest({ icon: "rocket" }) }, /icon/],
   ])("names the preset when it has %s", (_label, overrides, message) => {
     const files: Record<string, string> = { ...fixtures };
@@ -79,7 +92,10 @@ describe("decodeAgentPresets", () => {
     );
     const decoder = new TextDecoder("utf-8", { fatal: true });
     for (const path of Object.keys(bundled)) {
-      expect(() => decoder.decode(NodeFS.readFileSync(NodePath.join(root, path))), path).not.toThrow();
+      expect(
+        () => decoder.decode(NodeFS.readFileSync(NodePath.join(root, path))),
+        path,
+      ).not.toThrow();
     }
   });
 });
@@ -132,7 +148,10 @@ describe("addPresetSkills", () => {
   it("adds one skill when a preset lists the same bundle twice", () => {
     let id = 0;
     const twin: AgentPresetSkill = { ...presetSkill, name: "twin" };
-    const result = addPresetSkills([], [presetSkill, twin], { ...options, makeId: () => `s${++id}` });
+    const result = addPresetSkills([], [presetSkill, twin], {
+      ...options,
+      makeId: () => `s${++id}`,
+    });
     expect(result.skillIds).toEqual(["s1"]);
     expect(result.agentSkills).toHaveLength(1);
   });

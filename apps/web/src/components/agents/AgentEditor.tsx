@@ -64,10 +64,20 @@ export function AgentEditor({
       findIdenticalSkill(skills, skill)?.skillId ?? `${PRESET_SKILL_PREFIX}${index}`,
   );
   const skillOptions = [
-    ...skills.map((skill) => ({ id: skill.skillId, name: skill.name, description: skill.description })),
+    ...skills.map((skill) => ({
+      id: skill.skillId,
+      name: skill.name,
+      description: skill.description,
+    })),
     ...presetSkills.flatMap((skill, index) =>
       presetSkillIds[index]!.startsWith(PRESET_SKILL_PREFIX)
-        ? [{ id: presetSkillIds[index]!, name: `${skill.name} (new)`, description: skill.description }]
+        ? [
+            {
+              id: presetSkillIds[index]!,
+              name: `${skill.name} (new)`,
+              description: skill.description,
+            },
+          ]
         : [],
     ),
   ];
@@ -92,9 +102,7 @@ export function AgentEditor({
   const [icon, setIcon] = useState<NonNullable<McpGatewayProfile["icon"]>>(
     profile?.icon ?? preset?.icon ?? "orb",
   );
-  const [description, setDescription] = useState(
-    profile?.description ?? preset?.description ?? "",
-  );
+  const [description, setDescription] = useState(profile?.description ?? preset?.description ?? "");
   const [name, setName] = useState(profile?.name ?? preset?.name ?? "");
   const [providerLabel, setProviderLabel] = useState(
     profile?.providerLabel ?? (preset ? presetProviderLabel(providers, preset.model.provider) : ""),
@@ -176,22 +184,22 @@ export function AgentEditor({
               try {
                 const saved = await onSave(
                   {
-                  profileId: profile?.profileId ?? randomUUID(),
-                  name: name.trim(),
-                  description: description.trim(),
-                  systemPrompt,
-                  skillIds: skillIds.filter((id) => !id.startsWith(PRESET_SKILL_PREFIX)),
-                  color,
-                  icon,
-                  revision: profile?.revision ?? 1,
-                  providerLabel,
-                  modelLabel: selectedModel?.slug ?? modelLabel,
-                  ...(thinking.trim() ? { reasoningEffort: thinking.trim() } : {}),
-                  runtimeMode,
-                  interactionMode,
-                  ...(environmentIds.length ? { environmentIds } : {}),
-                  createdAt: profile?.createdAt ?? now,
-                  updatedAt: now,
+                    profileId: profile?.profileId ?? randomUUID(),
+                    name: name.trim(),
+                    description: description.trim(),
+                    systemPrompt,
+                    skillIds: skillIds.filter((id) => !id.startsWith(PRESET_SKILL_PREFIX)),
+                    color,
+                    icon,
+                    revision: profile?.revision ?? 1,
+                    providerLabel,
+                    modelLabel: selectedModel?.slug ?? modelLabel,
+                    ...(thinking.trim() ? { reasoningEffort: thinking.trim() } : {}),
+                    runtimeMode,
+                    interactionMode,
+                    ...(environmentIds.length ? { environmentIds } : {}),
+                    createdAt: profile?.createdAt ?? now,
+                    updatedAt: now,
                   },
                   presetSkills.filter(
                     (_, index) =>
@@ -302,7 +310,9 @@ export function AgentEditor({
                   items={skillOptions.map((skill) => skill.id)}
                   value={[...skillIds]}
                   onValueChange={setSkillIds}
-                  itemToStringLabel={(id) => skillOptions.find((skill) => skill.id === id)?.name ?? id}
+                  itemToStringLabel={(id) =>
+                    skillOptions.find((skill) => skill.id === id)?.name ?? id
+                  }
                 >
                   <ComboboxTrigger
                     ref={skillsTriggerRef}
@@ -428,13 +438,13 @@ export function AgentEditor({
               </label>
             </div>
             {preset && modelLabel === preset.model.model && !selectedModel && (
-                <p role="alert" className="text-sm text-warning">
-                  {providerLabels.includes(providerLabel)
-                    ? `${modelLabel} isn’t available from ${providerLabel}.`
-                    : `${providerLabel} isn’t installed on a connected machine.`}{" "}
-                  Choose an available provider and model to save this agent.
-                </p>
-              )}
+              <p role="alert" className="text-sm text-warning">
+                {providerLabels.includes(providerLabel)
+                  ? `${modelLabel} isn’t available from ${providerLabel}.`
+                  : `${providerLabel} isn’t installed on a connected machine.`}{" "}
+                Choose an available provider and model to save this agent.
+              </p>
+            )}
             <fieldset>
               <legend>
                 Machines <span className="text-muted-foreground">· none selected means any</span>
