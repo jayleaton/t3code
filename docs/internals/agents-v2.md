@@ -146,10 +146,14 @@ An ordinary child has no `task_status` delivery, so a parent learns about it thr
 record (`apps/server/src/threadTask/`). Three distinctions are easy to collapse and must not be:
 
 - **A finished turn is not a finished task.** Run state is read, never stored on the task.
-  Child activity never dispatches automatic parent messages, including task updates, provider
-  questions, check-back deadlines, and named-agent delegation completion. The parent waits for
-  the child thread to end and reads its result, or watches task state. `checkBack` records a
-  watcher T3 cannot see; its deadline affects continuation liveness without scheduling a message.
+  Child activity never dispatches automatic parent messages, including task updates, check-back
+  deadlines, and named-agent delegation completion. The parent waits for the child thread to end
+  and reads its result, or watches task state. `checkBack` records a watcher T3 cannot see; its
+  deadline affects continuation liveness without scheduling a message. A question is the one
+  exception: a waiting child cannot end, so its question wakes its local parent, which answers or
+  asks its own parent, and so on up to the root (`DelegatedTaskQuestionReactor`). The parent's own
+  message to the child closes the child's open async questions, so a late answer cannot start an
+  empty run.
 - **Consent is not acceptance.** `settleWhenAccepted` is the owner's standing permission to settle;
   the owner's `accept` names one DONE revision after its gates pass. Any content change bumps the
   revision and drops acceptance. Settlement waits for both, then for the worker's turn and every

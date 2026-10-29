@@ -880,38 +880,45 @@ it.effect("keeps delegated child pull-request links independent of the parent", 
   }).pipe(Effect.provide(layerTest)),
 );
 
-it.effect("a named child's question never messages or starts its parent", () =>
+it.effect("a named child's or child chat's question wakes its parent", () =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const reactor = yield* DelegatedTaskQuestionReactor.DelegatedTaskQuestionReactor;
+    const eventSink = yield* EventSink.EventSinkV2;
+    const createThread = (threadId: ThreadId, title: string) =>
+      orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`create-${threadId}`),
+        threadId,
+        projectId: ProjectId.make("project:question"),
+        title,
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+    const startRun = (threadId: ThreadId) =>
+      Effect.gen(function* () {
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`start-${threadId}`),
+          threadId,
+          messageId: MessageId.make(`message:start-${threadId}`),
+          text: "Work on it",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        return (yield* projections.getThreadRecords(threadId, ["runs"])).runs[0]!;
+      });
     const parentThreadId = ThreadId.make("thread:named-question-parent");
-    yield* orchestrator.dispatch({
-      type: "thread.create",
-      commandId: CommandId.make("create-named-question-parent"),
-      threadId: parentThreadId,
-      projectId: ProjectId.make("project:question"),
-      title: "Captain",
-      modelSelection,
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      branch: null,
-      worktreePath: null,
-      createdBy: "user",
-      creationSource: "web",
-    });
-    yield* orchestrator.dispatch({
-      type: "message.dispatch",
-      commandId: CommandId.make("start-named-question-parent"),
-      threadId: parentThreadId,
-      messageId: MessageId.make("message:named-question-parent"),
-      text: "Delegate to a named agent",
-      attachments: [],
-      dispatchMode: { type: "start_immediately" },
-      createdBy: "user",
-      creationSource: "web",
-    });
-    const parentRun = (yield* projections.getThreadProjection(parentThreadId)).runs[0]!;
+    yield* createThread(parentThreadId, "Captain");
+    const parentRun = yield* startRun(parentThreadId);
     yield* orchestrator.dispatch({
       type: "delegated_task.request",
       commandId: CommandId.make("delegate-named-question-task"),
@@ -935,40 +942,108 @@ it.effect("a named child's question never messages or starts its parent", () =>
       parentThreadId,
       parentRelationship: "child",
     });
-    const childRun = (yield* projections.getThreadRecords(task.childThreadId!, ["runs"])).runs[0]!;
-    const now = yield* DateTime.now;
-    const question = {
-      id: EventId.make("event:named-question"),
-      type: "runtime-request.updated",
-      threadId: task.childThreadId!,
-      runId: childRun.id,
-      occurredAt: now,
-      payload: {
-        id: RuntimeRequestId.make("request:named-question"),
-        nodeId: childRun.rootNodeId!,
-        providerTurnId: null,
-        nativeRequestRef: null,
-        kind: "user_input",
-        status: "pending",
-        responseCapability: { type: "message" },
-        createdAt: now,
-        resolvedAt: null,
-      },
-    } satisfies OrchestrationV2DomainEvent;
-    yield* (yield* EventSink.EventSinkV2).write({ events: [question] });
-    const runsBefore = (yield* projections.getThreadRecords(parentThreadId, ["runs"])).runs.length;
-    yield* reactor.handle(question);
-    yield* reactor.handle({
-      id: EventId.make("event:named-question-parent-completed"),
-      type: "run.updated",
-      threadId: parentThreadId,
-      runId: parentRun.id,
-      occurredAt: now,
-      payload: { ...parentRun, status: "completed", completedAt: now },
+    // A t3_thread_launch child has no delegated task, only its parent link.
+    const launchedThreadId = ThreadId.make("thread:launched-question-child");
+    yield* createThread(launchedThreadId, "Reviewer");
+    yield* orchestrator.dispatch({
+      type: "thread.parent-link.repair",
+      commandId: CommandId.make("launched-question-child"),
+      threadId: launchedThreadId,
+      parentThreadId,
+      parentRelationship: "child",
     });
-    const parent = yield* projections.getThreadRecords(parentThreadId, ["messages", "runs"]);
-    assert.isFalse(parent.messages.some((message) => message.notification !== undefined));
-    assert.equal(parent.runs.length, runsBefore);
+    const launchedRun = yield* startRun(launchedThreadId);
+    const namedRun = (yield* projections.getThreadRecords(task.childThreadId!, ["runs"])).runs[0]!;
+    const now = yield* DateTime.now;
+    const question = (threadId: ThreadId, run: typeof namedRun, requestId: string) =>
+      ({
+        id: EventId.make(`event:${requestId}`),
+        type: "runtime-request.updated",
+        threadId,
+        runId: run.id,
+        occurredAt: now,
+        payload: {
+          id: RuntimeRequestId.make(requestId),
+          nodeId: run.rootNodeId!,
+          providerTurnId: null,
+          nativeRequestRef: null,
+          kind: "user_input",
+          status: "pending",
+          responseCapability: { type: "message" },
+          createdAt: now,
+          resolvedAt: null,
+        },
+      }) satisfies OrchestrationV2DomainEvent;
+    const named = question(task.childThreadId!, namedRun, "request:named-question");
+    const launched = question(launchedThreadId, launchedRun, "request:launched-question");
+    yield* eventSink.write({ events: [named, launched] });
+    yield* reactor.handle(named);
+    yield* reactor.handle(launched);
+    yield* reactor.handle(launched);
+    const wakes = (yield* projections.getThreadRecords(parentThreadId, ["messages"])).messages
+      .filter((message) => message.notification !== undefined)
+      .toSorted((a, b) => a.text.localeCompare(b.text));
+    assert.deepEqual(
+      wakes.map((wake) => wake.notification),
+      [
+        {
+          source: { kind: "subagent", childThreadId: launchedThreadId },
+          outcome: "updated",
+          summary: 'Child thread "Reviewer" has a question',
+        },
+        {
+          source: {
+            kind: "delegated_task",
+            taskIds: [task.id],
+            childThreadId: task.childThreadId!,
+          },
+          outcome: "updated",
+          summary: 'Delegated task "Research the sources" has a question',
+        },
+      ],
+    );
+    assert.include(
+      wakes[0]?.text,
+      `Child thread ${launchedThreadId} asked a question and is still working. Read it with t3_pending_request action read, threadId ${launchedThreadId}, and requestId ${launched.payload.id}.`,
+    );
+
+    const sendFrom = (senderThreadId: ThreadId, threadId: ThreadId) =>
+      Effect.gen(function* () {
+        const messageId = MessageId.make(`message:answer:${senderThreadId}:${threadId}`);
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`answer:${senderThreadId}:${threadId}`),
+          threadId,
+          messageId,
+          senderThreadId,
+          text: "Use the staging key.",
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "agent",
+          creationSource: "mcp",
+        });
+        const message = (yield* projections.getThreadRecords(threadId, ["messages"])).messages.find(
+          (candidate) => candidate.id === messageId,
+        )!;
+        yield* reactor.handle({
+          id: EventId.make(`event:${messageId}`),
+          type: "message.updated",
+          threadId,
+          occurredAt: now,
+          payload: message,
+        });
+      });
+    yield* sendFrom(parentThreadId, launchedThreadId);
+    // Only the child's own parent answers for it.
+    yield* sendFrom(launchedThreadId, task.childThreadId!);
+    assert.equal(
+      (yield* projections.getRuntimeRequest(launchedThreadId, launched.payload.id))?.status,
+      "resolved",
+    );
+    assert.equal(
+      (yield* projections.getRuntimeRequest(task.childThreadId!, named.payload.id))?.status,
+      "pending",
+    );
   }).pipe(Effect.provide(DelegatedTaskQuestionReactor.layer.pipe(Layer.provideMerge(layerTest)))),
 );
 
