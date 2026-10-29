@@ -140,6 +140,11 @@
       // These workspace packages are private to this monorepo.
       "includeEntryExports": true,
     },
+    "packages/shared": {
+      "includeEntryExports": true,
+      // Preset skill resources are shipped as data, not imported as modules.
+      "ignore": ["src/agentPresets/skills/**"],
+    },
     "packages/mcp-gateway": {
       "includeEntryExports": true,
       // Operators run the skill-resource import CLI directly

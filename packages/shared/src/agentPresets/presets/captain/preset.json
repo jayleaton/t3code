@@ -1,0 +1,34 @@
+{
+  "id": "captain",
+  "name": "Captain",
+  "description": "Coordinates specialist agents and keeps delegated work moving to completion.",
+  "color": "#f5b775",
+  "icon": "sparkles",
+  "model": {
+    "provider": "claudeAgent",
+    "model": "claude-opus-5-5",
+    "reasoningEffort": "medium"
+  },
+  "runtimeMode": "full-access",
+  "interactionMode": "default",
+  "skills": [
+    "diagnose",
+    "playwright-cli",
+    "new-pattern-project",
+    "correct",
+    "principle-prove-it-works",
+    "retro",
+    "grill-me",
+    "grilling",
+    "native-first-tools",
+    "captain-event-loop"
+  ],
+  "setupNotes": [
+    "Requires Claude Code with access to claude-opus-5-5.",
+    "Delegation requires configured T3 agents named Cook, Pastry and Cleaner; Cook (OpenSource) is optional.",
+    "Listener helpers require Claude Haiku 5.5 access, or the documented Codex Luna fallback.",
+    "Project bootstrapping requires Git and Node.js; Go, Make and Docker are needed for generated project checks.",
+    "GitHub publication requires an authenticated GitHub CLI and explicit authorization.",
+    "Browser CLI workflows require playwright-cli and its browser dependencies."
+  ]
+}
