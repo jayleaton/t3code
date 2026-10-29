@@ -4,6 +4,8 @@ import { useState, type CSSProperties } from "react";
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialog";
 import { AgentIcon } from "./AgentIcon";
 
+const loadAgentPresets = () => import("./agentPresetBundle");
+
 export const AGENT_PRESET_SETUP_NOTE =
   "Some agents might require specific software setup for full compatibility.";
 
@@ -26,7 +28,7 @@ export function AgentPresetPicker({
     setStep("presets");
     setError("");
     if (presets) return;
-    import("./agentPresetBundle").then(
+    loadAgentPresets().then(
       (bundle) => setPresets(bundle.agentPresets),
       (cause: unknown) =>
         setError(cause instanceof Error ? cause.message : "Could not load preconfigured agents."),
