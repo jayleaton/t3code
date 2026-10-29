@@ -1106,6 +1106,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       Effect.void,
     onRequest: (method: string, params: unknown) => Effect.Effect<void> = () => Effect.void,
     readChildMetadata?: Parameters<typeof withCodexReplayChildMetadata>[2],
+    runtimePolicy = CODEX_TEST_RUNTIME_POLICY,
   ) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1168,12 +1169,12 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         threadId,
         providerSessionId: ProviderSessionId.make(`provider-session-${transcript.scenario}`),
         modelSelection: CODEX_TEST_MODEL_SELECTION,
-        runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+        runtimePolicy,
       });
       const providerThread = yield* runtime.ensureThread({
         threadId,
         modelSelection: CODEX_TEST_MODEL_SELECTION,
-        runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+        runtimePolicy,
       });
       const events: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
       const firstTerminal = yield* Deferred.make<void>();
@@ -1382,6 +1383,99 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           },
         },
       ]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("disables the user's own skills, by path, for a profiled agent's thread", () =>
+    Effect.gen(function* () {
+      const scenario = "agent-skill-isolation";
+      const preamble = codexReplayPreamble({
+        nativeThreadId: "agent-skills-thread",
+        nativeTurnId: "unused",
+        prompt: "unused",
+      });
+      const skill = (name: string, scope: string, pluginId?: string) => ({
+        name,
+        description: name,
+        enabled: true,
+        path: `/skills/${name}/SKILL.md`,
+        scope,
+        ...(pluginId === undefined ? {} : { pluginId }),
+      });
+      const requests: Array<unknown> = [];
+      yield* makeCodexReplayHarness(
+        makeCodexReplayTranscript({
+          scenario,
+          entries: [
+            ...preamble.slice(0, 3),
+            {
+              type: "expect_outbound",
+              label: "skills/list",
+              frame: { id: 2, method: "skills/list", params: { cwds: ["/workspace"] } },
+            },
+            {
+              type: "emit_inbound",
+              label: "skills/list",
+              frame: {
+                id: 2,
+                result: {
+                  data: [
+                    {
+                      cwd: "/workspace",
+                      errors: [],
+                      skills: [
+                        skill("personal", "user"),
+                        skill("repo-skill", "repo"),
+                        skill("plugin-skill", "user", "plugin@market"),
+                        skill("skill-creator", "system"),
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+            {
+              type: "expect_outbound",
+              label: "thread/start",
+              frame: {
+                id: 3,
+                method: "thread/start",
+                params: {
+                  config: {
+                    ...CodexAdapterV2.CODEX_THREAD_CONFIG,
+                    "skills.config": [{ path: "/skills/personal/SKILL.md", enabled: false }],
+                  },
+                },
+              },
+            },
+            withReplayRequestId(preamble[4]!, 3),
+          ],
+        }),
+        () => Effect.void,
+        (method, params) =>
+          Effect.sync(() => {
+            if (method === "thread/start") requests.push(params);
+          }),
+        undefined,
+        ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          ...CODEX_TEST_RUNTIME_POLICY,
+          hideUserSkills: true,
+        }),
+      );
+      assert.deepEqual(
+        requests.map((params) => (params as { config: Record<string, unknown> }).config),
+        [
+          {
+            ...CodexAdapterV2.CODEX_THREAD_CONFIG,
+            "skills.config": [{ path: "/skills/personal/SKILL.md", enabled: false }],
+          },
+        ],
+      );
     }).pipe(
       Effect.scoped,
       Effect.provide(

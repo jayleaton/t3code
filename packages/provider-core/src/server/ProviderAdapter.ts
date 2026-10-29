@@ -51,6 +51,11 @@ export const ProviderAdapterV2RuntimePolicy = Schema.Struct({
   cwd: Schema.NullOr(Schema.String),
   approvalPolicy: Schema.optional(Schema.Unknown),
   sandboxPolicy: Schema.optional(Schema.Unknown),
+  /**
+   * The agent profile opted out of the user's own provider skills (for example ~/.claude/skills):
+   * keep them away from the model. Project, bundled, and plugin skills stay.
+   */
+  hideUserSkills: Schema.optional(Schema.Boolean),
 });
 export type ProviderAdapterV2RuntimePolicy = typeof ProviderAdapterV2RuntimePolicy.Type;
 

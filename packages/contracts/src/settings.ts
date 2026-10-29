@@ -1026,6 +1026,8 @@ export const McpGatewayProfile = Schema.Struct({
     Schema.Literals(["orb", "bot", "code", "pen", "search", "shield", "sparkles", "terminal"]),
   ),
   skillIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  /** Absent means true: the provider also loads the user's own skills (e.g. ~/.claude/skills). */
+  includeUserSkills: Schema.optional(Schema.Boolean),
   systemPrompt: Schema.optional(Schema.String.check(Schema.isMaxLength(32_000))),
   profileId: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,

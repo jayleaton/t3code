@@ -29,6 +29,7 @@ function makeThread(input: {
   readonly now: DateTime.Utc;
   readonly worktreePath: string | null;
   readonly runtimeMode?: RuntimeMode;
+  readonly profileSnapshot?: OrchestrationV2AppThread["profileSnapshot"] | undefined;
 }): OrchestrationV2AppThread {
   const threadId = ThreadId.make("thread:runtime-policy");
   return {
@@ -57,6 +58,7 @@ function makeThread(input: {
     settledAt: null,
     lastVisitedAt: null,
     deletedAt: null,
+    ...(input.profileSnapshot === undefined ? {} : { profileSnapshot: input.profileSnapshot }),
   };
 }
 
@@ -121,6 +123,37 @@ it.layer(layerTest)("RuntimePolicyV2", (it) => {
       assert.equal(yield* modeFor(grokInstanceId, "auto"), "auto");
       assert.equal(yield* modeFor(grokInstanceId, "full-access"), "full-access");
       assert.equal(yield* modeFor(providerInstanceId, "auto-accept-edits"), "auto-accept-edits");
+    }),
+  );
+
+  it.effect("hides the user's own skills only when the agent opts out of them", () =>
+    Effect.gen(function* () {
+      const policy = yield* RuntimePolicy.RuntimePolicyV2;
+      const now = yield* DateTime.now;
+      const hidden = (profileSnapshot?: OrchestrationV2AppThread["profileSnapshot"]) =>
+        policy
+          .resolve({
+            thread: makeThread({ now, worktreePath: null, profileSnapshot }),
+            modelSelection,
+          })
+          .pipe(Effect.map((resolved) => resolved.hideUserSkills));
+      const profile = (includeUserSkills?: boolean) => ({
+        profileId: "sketch",
+        profileName: "Sketch",
+        revision: 1,
+        effectiveSource: {
+          modelSelection: "profile" as const,
+          runtimeMode: "profile" as const,
+          interactionMode: "profile" as const,
+          reasoningEffort: "profile" as const,
+        },
+        ...(includeUserSkills === undefined ? {} : { includeUserSkills }),
+      });
+
+      assert.isUndefined(yield* hidden());
+      assert.isUndefined(yield* hidden(profile()));
+      assert.isUndefined(yield* hidden(profile(true)));
+      assert.isTrue(yield* hidden(profile(false)));
     }),
   );
 });

@@ -9,6 +9,7 @@ import {
   ComboboxEmpty,
 } from "../ui/combobox";
 import { SelectButton } from "../ui/select";
+import { Switch } from "../ui/switch";
 import { agentModelOptions, presetProviderLabel } from "./agentModelCatalog";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import type { AgentSkill, McpGatewayProfile, ServerProvider } from "@t3tools/contracts";
@@ -84,6 +85,7 @@ export function AgentEditor({
   const [skillIds, setSkillIds] = useState<ReadonlyArray<string>>(
     profile?.skillIds ?? [...new Set(presetSkillIds)],
   );
+  const [includeUserSkills, setIncludeUserSkills] = useState(profile?.includeUserSkills !== false);
   const [systemPrompt, setSystemPrompt] = useState(
     profile?.systemPrompt ?? preset?.systemPrompt ?? "",
   );
@@ -189,6 +191,7 @@ export function AgentEditor({
                     description: description.trim(),
                     systemPrompt,
                     skillIds: skillIds.filter((id) => !id.startsWith(PRESET_SKILL_PREFIX)),
+                    ...(includeUserSkills ? {} : { includeUserSkills: false }),
                     color,
                     icon,
                     revision: profile?.revision ?? 1,
@@ -355,6 +358,19 @@ export function AgentEditor({
                   </ComboboxPopup>
                 </Combobox>
               )}
+              <div className="mt-3 flex items-center gap-2 text-sm">
+                <Switch
+                  id="agent-include-user-skills"
+                  checked={includeUserSkills}
+                  onCheckedChange={(checked) => setIncludeUserSkills(Boolean(checked))}
+                />
+                <label htmlFor="agent-include-user-skills">Include my global skills</label>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                When off, the agent sees only its assigned skills plus built-in, project, and plugin
+                skills. On Codex, $skill won’t work for global skills. Supported on Claude and
+                Codex.
+              </p>
             </fieldset>
             <div className="agent-form-grid">
               <label>

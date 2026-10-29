@@ -163,6 +163,7 @@ export function resolveThreadCreateProfile<
       revision: profile.revision,
       contentHash: profileSnapshotContentHash(profileContent),
       ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+      ...(profile.includeUserSkills === false ? { includeUserSkills: false } : {}),
       effectiveSource: {
         modelSelection: source("modelSelection"),
         runtimeMode: source("runtimeMode"),

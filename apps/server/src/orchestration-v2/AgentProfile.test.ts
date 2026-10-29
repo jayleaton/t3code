@@ -44,6 +44,11 @@ describe("V2 profile association", () => {
     expect(agentProfilePrompt("Check this patch", prompt)).toContain("Review changes carefully.");
     expect(agentProfilePrompt("Check this patch", prompt)).not.toContain("New instructions");
     expect(agentProfilePrompt("Normal chat", undefined)).toBe("Normal chat");
+    expect(resolved.profileSnapshot).not.toHaveProperty("includeUserSkills");
+    expect(
+      resolveThreadCreateProfile(command, [{ ...profile, includeUserSkills: false }])
+        .profileSnapshot?.includeUserSkills,
+    ).toBe(false);
   });
   it("names the agent and its skills in the reminder for turns that skip the full prompt", () => {
     const skill = (name: string) => ({

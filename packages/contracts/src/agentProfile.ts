@@ -19,6 +19,8 @@ export const ThreadProfileSnapshot = Schema.Struct({
     reasoningEffort: Schema.Literals(["profile", "thread-override", "fallback"]),
   }),
   contentHash: Schema.optional(TrimmedNonEmptyString),
+  /** Frozen with the thread; absent means the profile includes the user's own skills. */
+  includeUserSkills: Schema.optional(Schema.Boolean),
 });
 export type ThreadProfileSnapshot = typeof ThreadProfileSnapshot.Type;
 
