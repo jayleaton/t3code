@@ -647,7 +647,7 @@ describe("ClaudeAdapterV2 device instructions", () => {
   it("gives a session with device access the device block and the ToolSearch line to load it", () => {
     const text = append({ mcp: true, deviceToolsAvailable: true });
     assert.include(text, T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH);
-    assert.include(text, "Use `delegate_task`");
+    assert.include(text, "`delegate_task` without a `profileId`");
   });
 
   it("leaves the device block out without device access or without T3 tools", () => {
