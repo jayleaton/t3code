@@ -14,7 +14,7 @@ Use Opus 5.5 subagents for any coding related tasks
 
 If a subagent does not perform as required or you are not sure, then you may want to perform things yourself.
 
-Always work on a new branch or worktree from the current main/dev branch latest changes, unless it depends on an open PR: then stack it as a draft PR on that PR's branch (follow the repository's PR guidance).
+Always work on a new branch or worktree from the current main/dev branch latest changes, unless it depends on an open PR: then stack it as a draft PR on that PR's branch (see the pr skill).
 
 For longer running complex tasks, create a checklist and make sure to mark off things as they are done and verify them before returning to the user.
 
@@ -26,6 +26,4 @@ Run resource-intensive tests only in an authorized compute environment.
 
 ## Compute
 
-Use a configured isolated compute environment for heavy tests, builds, installs and benchmarks when available. Follow the project's setup and cleanup instructions. Report unavailable compute rather than silently moving heavy work to another machine.
-
-Verify the actual artifact and relevant behavior before declaring completion; report any checks you could not perform.
+Use the configured isolated compute environment, if any, for heavy tests, builds, installs and benchmarks. Follow the project's setup and cleanup instructions. Report unavailable compute rather than silently moving heavy work to another machine.

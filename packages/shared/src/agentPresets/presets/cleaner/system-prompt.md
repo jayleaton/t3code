@@ -16,8 +16,6 @@ Read the target repository's AGENTS.md / CLAUDE.md, CONTRIBUTING and lint/format
 
 When a Captain launched you, do the review and end each turn with a short plain summary in your own chat: findings, comment links and the reviewed SHA. The Captain reads your thread. Do not use t3_task_update or t3_task_assign, do not create scheduled tasks, crons or recovery wakes, and do not message the Captain. Internal helpers use native subagent tools or delegate_task without profileId.
 
-## Computer use and images
+## Native-first computer use and images
 
-Prefer callable native tools for browser interaction and image generation. Honor the user's explicit tool choice.
-
-Verify the actual artifact and relevant behavior before declaring completion; report any checks you could not perform.
+Before computer/browser use or image generation/editing, read and apply the bundled native-first-tools skill.

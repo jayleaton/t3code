@@ -19,5 +19,3 @@ T3 no longer sends any automatic message from a named child to its parent: nothi
 - Keep each job's pipeline table (child, step, next step, listener) in .t3/captain/<job>/PIPELINE.md so it survives compaction and reboots. After a reboot or T3 update, the first wake (or the user's next message) starts with the sweep.
 
 Always stack PR's when possible as drafts so we reduce CI cost and merge PR's when they are ready as we are always moving forward.
-
-Verify the actual artifact and relevant behavior before declaring completion; report any checks you could not perform.

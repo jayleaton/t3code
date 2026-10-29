@@ -11,6 +11,13 @@
   },
   "runtimeMode": "full-access",
   "interactionMode": "default",
-  "skills": ["improve-codebase-architecture"],
-  "setupNotes": []
+  "skills": [
+    "improve-codebase-architecture",
+    "diagnose",
+    "agentic-harness-design",
+    "playwright-cli",
+    "principle-prove-it-works",
+    "native-first-tools"
+  ],
+  "setupNotes": ["Browser CLI workflows require playwright-cli and its browser dependencies."]
 }

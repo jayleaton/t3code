@@ -11,8 +11,19 @@
   },
   "runtimeMode": "full-access",
   "interactionMode": "default",
-  "skills": ["diagnose", "improve-codebase-architecture"],
+  "skills": [
+    "diagnose",
+    "improve-codebase-architecture",
+    "new-pattern-project",
+    "playwright-cli",
+    "principle-prove-it-works",
+    "pr",
+    "native-first-tools"
+  ],
   "setupNotes": [
-    "Computer use requires Codex with native computer use enabled on a supported machine."
+    "Computer use requires Codex with native computer use enabled on a supported machine.",
+    "Project bootstrapping requires Git and Node.js; Go, Make and Docker are needed for generated project checks.",
+    "GitHub publication requires an authenticated GitHub CLI and explicit authorization.",
+    "Browser CLI workflows require playwright-cli and its browser dependencies."
   ]
 }

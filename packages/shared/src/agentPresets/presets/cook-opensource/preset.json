@@ -11,8 +11,19 @@
   },
   "runtimeMode": "full-access",
   "interactionMode": "default",
-  "skills": ["diagnose", "improve-codebase-architecture"],
+  "skills": [
+    "agentic-harness-design",
+    "improve-codebase-architecture",
+    "new-pattern-project",
+    "playwright-cli",
+    "principle-prove-it-works",
+    "pr",
+    "diagnose"
+  ],
   "setupNotes": [
-    "Requires OpenCode with commandcode/deepseek/deepseek-v4.1-flash configured and provider access."
+    "Requires OpenCode with commandcode/deepseek/deepseek-v4.1-flash configured and provider access.",
+    "Project bootstrapping requires Git and Node.js; Go, Make and Docker are needed for generated project checks.",
+    "GitHub publication requires an authenticated GitHub CLI and explicit authorization.",
+    "Browser CLI workflows require playwright-cli and its browser dependencies."
   ]
 }
