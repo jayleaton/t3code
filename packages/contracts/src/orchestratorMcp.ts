@@ -545,6 +545,8 @@ export const OrchestratorMcpRemoteThreadReadResult = Schema.Struct({
     interactionMode: Schema.NullOr(ProviderInteractionMode),
     parentThreadId: Schema.NullOr(ThreadId),
     parentEnvironmentId: Schema.NullOr(EnvironmentId),
+    /** The agent the thread runs as; null for a plain thread. */
+    profile: Schema.NullOr(Schema.Struct({ profileId: Schema.String, profileName: Schema.String })),
     pendingRequestCount: NonNegativeInt,
     settled: Schema.Boolean,
     createdAt: Schema.NullOr(Schema.String),
@@ -772,7 +774,14 @@ export const OrchestratorMcpScheduleTaskInput = Schema.Struct({
   enabled: Schema.optional(Schema.Boolean.annotate({ description: "Default true." })),
   bindToCurrentThread: Schema.optional(
     Schema.Boolean.annotate({
-      description: "Default true: runs post in this thread. False: new thread per run.",
+      description:
+        "Default true: runs post in this thread. False: new thread per run. Not with profileId.",
+    }),
+  ),
+  profileId: Schema.optional(
+    TrimmedNonEmptyString.annotate({
+      description:
+        "Agent (from t3_list_agents) that runs the task with its own instructions and modes. Its first run creates the agent's thread; later runs post there.",
     }),
   ),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
@@ -796,6 +805,9 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   enabled: Schema.Boolean,
   projectId: ProjectId,
   boundThreadId: Schema.NullOr(ThreadId),
+  profileId: Schema.optional(Schema.String).annotate({
+    description: "Agent that runs the task. Absent: runs post to boundThreadId or a new thread.",
+  }),
   schedule: ScheduledTaskSchedule,
   nextRunAt: Schema.NullOr(IsoDateTime),
   lastRunStatus: ScheduledTaskRunStatus,
@@ -835,6 +847,7 @@ export const OrchestratorMcpUpdateScheduledTaskInput = Schema.Struct({
   schedule: Schema.optional(OrchestratorMcpSchedule),
   enabled: Schema.optional(Schema.Boolean),
   bindToCurrentThread: Schema.optional(Schema.Boolean),
+  profileId: Schema.optional(TrimmedNonEmptyString),
 });
 export type OrchestratorMcpUpdateScheduledTaskInput =
   typeof OrchestratorMcpUpdateScheduledTaskInput.Type;

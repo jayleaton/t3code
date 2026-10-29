@@ -144,7 +144,7 @@ export const layer = McpToolAccess.toLayer(
                   input.profileId,
                   input.interactionMode,
                 );
-              return yield* RemoteThreads.launchThread(remote, input, {
+              return yield* RemoteThreads.launchThread(remote, scope, input, {
                 runtimeMode,
                 interactionMode,
               });

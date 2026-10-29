@@ -141,6 +141,8 @@ const gatewayFailure = (environmentId: EnvironmentId, error: unknown) => {
       return new OrchestratorMcpFailure({ code: "invalid_request", message });
     case "scope_required":
       return new OrchestratorMcpFailure({ code: "capability_denied", message });
+    case "thread_not_found":
+      return new OrchestratorMcpFailure({ code: "thread_not_found", message });
     default:
       return new OrchestratorMcpFailure({ code: "orchestration_error", message });
   }
@@ -249,6 +251,13 @@ export const readThread = Effect.fn("remoteThreads.readThread")(function* (
       interactionMode: thread.interactionMode ?? null,
       parentThreadId: thread.parentThreadId ?? null,
       parentEnvironmentId: thread.parentEnvironmentId ?? null,
+      profile:
+        thread.profileSnapshot == null
+          ? null
+          : {
+              profileId: thread.profileSnapshot.profileId,
+              profileName: thread.profileSnapshot.profileName,
+            },
       pendingRequestCount: thread.runtimeRequests?.length ?? 0,
       settled: thread.settledAt != null,
       createdAt: thread.createdAt ?? null,
@@ -367,7 +376,7 @@ export const sendToThread = Effect.fn("remoteThreads.sendToThread")(function* (
     if (thread.runtimeMode === undefined || thread.interactionMode === undefined) {
       return yield* new OrchestratorMcpFailure({
         code: "capability_denied",
-        message: `The T3 app relaying ${remote.environmentId} does not report thread ${input.threadId}'s modes, so this send cannot be checked against yours. Update that app, or use t3_send_message.`,
+        message: `The T3 app relaying ${remote.environmentId} does not report thread ${input.threadId}'s modes, so this send cannot be checked against yours. Update that app.`,
       });
     }
     yield* resolveRuntimeMode(limit.runtimeMode, thread.runtimeMode);
@@ -391,7 +400,10 @@ export const sendToThread = Effect.fn("remoteThreads.sendToThread")(function* (
   const sent = yield* callRemote(remote, "t3_send_message", {
     threadId: input.threadId,
     text: input.message,
-    idempotencyKey: yield* idempotencyKeyFor(scope, input.clientRequestId),
+    idempotencyKey: yield* idempotencyKeyFor(
+      scope,
+      input.clientRequestId === undefined ? undefined : `launch:${input.clientRequestId}`,
+    ),
   });
   return {
     environmentId: remote.environmentId,
@@ -406,7 +418,7 @@ export const sendToThread = Effect.fn("remoteThreads.sendToThread")(function* (
  * t3_task_read lists it, as a local launch does with assignLaunchedChild. The child keeps
  * running if this fails; the returned text says why the task is missing.
  */
-export const assignRemoteChild = Effect.fn("remoteThreads.assignRemoteChild")(function* (input: {
+const assignRemoteChild = Effect.fn("remoteThreads.assignRemoteChild")(function* (input: {
   readonly ownerThreadId: ThreadId;
   readonly workerThreadId: ThreadId;
   readonly workerEnvironmentId: EnvironmentId;
@@ -462,6 +474,7 @@ export interface RemoteLaunchInput {
     | undefined;
   readonly message?: string | undefined;
   readonly attachments?: ReadonlyArray<unknown> | undefined;
+  readonly clientRequestId?: string | undefined;
 }
 
 /**
@@ -520,6 +533,7 @@ const remoteModel = Effect.fn("remoteThreads.remoteModel")(function* (
 /** A t3_thread_launch on another environment: it lands there, or it fails. */
 export const launchThread = Effect.fn("remoteThreads.launchThread")(function* (
   remote: RemoteEnvironment,
+  scope: McpInvocationScope,
   input: RemoteLaunchInput,
   modes: { readonly runtimeMode: RuntimeMode; readonly interactionMode: ProviderInteractionMode },
 ) {
@@ -556,7 +570,8 @@ export const launchThread = Effect.fn("remoteThreads.launchThread")(function* (
       ? { interactionMode: modes.interactionMode }
       : {}),
     ...workspace,
-    idempotencyKey: yield* newCommandId(),
+    // The key fixes the remote thread id, so a retry replays the first launch there.
+    idempotencyKey: yield* idempotencyKeyFor(scope, input.clientRequestId),
   };
   const created =
     input.message === undefined

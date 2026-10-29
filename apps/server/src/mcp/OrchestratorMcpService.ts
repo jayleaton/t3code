@@ -1,3 +1,4 @@
+import { resolveScheduledTaskProfileRouting } from "@t3tools/client-runtime/gateway";
 import {
   CommandId,
   type RunId,
@@ -291,6 +292,7 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
     enabled: task.enabled,
     projectId: task.projectId,
     boundThreadId: task.threadId,
+    ...(task.profileId === undefined ? {} : { profileId: task.profileId }),
     schedule: task.schedule,
     nextRunAt: task.nextRunAt,
     lastRunStatus: task.lastRunStatus,
@@ -1922,15 +1924,58 @@ const make = Effect.gen(function* () {
     return task;
   });
 
+  /**
+   * The model and modes an agent's scheduled task stores. Its runs launch with the agent's
+   * own modes, so an agent broader than the caller is refused rather than clamped.
+   */
+  const scheduledTaskAgent = Effect.fn("OrchestratorMcpService.scheduledTaskAgent")(function* (
+    profileId: string,
+    limits: {
+      readonly runtimeMode: RuntimeMode;
+      readonly interactionMode: ProviderInteractionMode;
+    },
+  ) {
+    if (Option.isNone(settings)) {
+      return yield* failure("orchestration_error", "Agent profiles are unavailable.");
+    }
+    const library = yield* settings.value.getSettings.pipe(
+      Effect.mapError(() =>
+        failure("orchestration_error", "This environment's agent settings could not be read."),
+      ),
+    );
+    const routing = resolveScheduledTaskProfileRouting(
+      library.mcpGatewayProfiles,
+      profileId,
+      yield* loadProviders,
+    );
+    if (typeof routing === "string") return yield* failure("invalid_request", routing);
+    yield* resolveRuntimeMode(limits.runtimeMode, routing.runtimeMode);
+    yield* resolveInteractionMode(limits.interactionMode, routing.interactionMode);
+    return routing;
+  });
+
+  const agentTaskBindingRefused = failure(
+    "invalid_request",
+    "An agent's scheduled task runs in the agent's own thread; omit bindToCurrentThread with profileId.",
+  );
+
   return OrchestratorMcpService.of({
     scheduleTask: Effect.fn("OrchestratorMcpService.scheduleTask")(function* (scope, input) {
       const { parent, limits } = yield* loadCaller(scope);
       const projectId = yield* resolveProjectTarget(parent, input.projectId);
       yield* assertLiveCallerForOtherProject(scope, parent, projectId);
       const project = yield* requireProject(projectId);
+      if (input.profileId !== undefined && input.bindToCurrentThread === true) {
+        return yield* agentTaskBindingRefused;
+      }
+      const agent =
+        input.profileId === undefined
+          ? undefined
+          : yield* scheduledTaskAgent(input.profileId, limits);
       const bindToCurrentThread =
-        input.bindToCurrentThread ??
-        (parent !== undefined && parent.thread.projectId === projectId);
+        agent === undefined &&
+        (input.bindToCurrentThread ??
+          (parent !== undefined && parent.thread.projectId === projectId));
       if (bindToCurrentThread && (parent === undefined || parent.thread.projectId !== projectId)) {
         return yield* failure(
           "invalid_request",
@@ -1955,6 +2000,7 @@ const make = Effect.gen(function* () {
         modelSelection,
         runtimeMode: limits.runtimeMode,
         interactionMode: limits.interactionMode,
+        ...agent,
         createdBy: "agent",
         creationSource: "mcp",
         // Scope the idempotency key by provider session so two callers
@@ -2004,6 +2050,16 @@ const make = Effect.gen(function* () {
         yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
         if (
           input.bindToCurrentThread === true &&
+          (input.profileId ?? existing.profileId) !== undefined
+        ) {
+          return yield* agentTaskBindingRefused;
+        }
+        const agent =
+          input.profileId === undefined || input.profileId === existing.profileId
+            ? undefined
+            : yield* scheduledTaskAgent(input.profileId, limits);
+        if (
+          input.bindToCurrentThread === true &&
           (parent === undefined || parent.thread.projectId !== existing.projectId)
         ) {
           return yield* failure(
@@ -2036,6 +2092,7 @@ const make = Effect.gen(function* () {
           modelSelection: existing.modelSelection,
           runtimeMode: existing.runtimeMode,
           interactionMode: existing.interactionMode,
+          ...agent,
           createdBy: existing.createdBy,
           creationSource: existing.creationSource,
         };

@@ -35,7 +35,7 @@ import * as ThreadTaskService from "../../threadTask/ThreadTaskService.ts";
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
 import * as McpGatewayBrokerModule from "../McpGatewayBroker.ts";
 import { McpGatewayBroker } from "../McpGatewayBroker.ts";
-import { layerAgentsToolkit, toolkitRegistration } from "../McpHttpServer.ts";
+import { toolkitRegistration } from "../McpHttpServer.ts";
 import * as McpInvocationContext from "../McpInvocationContext.ts";
 import * as McpToolAccess from "../McpToolAccess.ts";
 import * as OrchestratorMcpService from "../OrchestratorMcpService.ts";
@@ -51,6 +51,8 @@ const devBox = EnvironmentId.make("environment-dev-box");
 const macBook = EnvironmentId.make("2549ba75-2a91-4554-8baa-88e6ae0efa48");
 const captain = ThreadId.make("captain");
 const child = ThreadId.make("mcp-thread-v2-macbook-child");
+/** A thread the MacBook does not have: its snapshot fails and its thread list leaves it out. */
+const missing = ThreadId.make("77647f60-dd5b-4d53-b383-9deb47912b88");
 const instanceId = ProviderInstanceId.make("codex");
 const modelSelection = { instanceId, model: "gpt-5" };
 
@@ -93,6 +95,7 @@ const makeMacBook = (
     interactionMode: "default",
     parentThreadId: captain,
     parentEnvironmentId: devBox,
+    profileSnapshot: { profileId: "cody", profileName: "Cody", revision: 1 },
     settledAt: null,
     runs: runs() ?? [
       {
@@ -157,6 +160,8 @@ const makeMacBook = (
       case "listThreads":
         return { items: [], snapshotAt: "now" };
       case "getThread":
+        if (args[1] === missing)
+          throw new Error(`Failed to load orchestration V2 thread ${missing}`);
         return thread(args[1]);
       default:
         return undefined;
@@ -188,10 +193,17 @@ const makeLayer = (macbook: ReturnType<typeof makeMacBook>, record: TestRecord) 
       yield* broker.connect("desktop", { [macBook]: ["read", "create", "send"] }).pipe(
         Stream.runForEach((event) => {
           macbook.calls.push({ method: event.method, args: event.args });
+          const reply = (() => {
+            try {
+              return { result: macbook.answer(event.method, event.args) };
+            } catch (error) {
+              return { error: (error as Error).message };
+            }
+          })();
           return broker.respond("desktop", {
             connectionId: event.connectionId,
             invocationId: event.invocationId,
-            result: macbook.answer(event.method, event.args),
+            ...reply,
           });
         }),
         Effect.forkScoped({ startImmediately: true }),
@@ -391,6 +403,33 @@ it.effect("a launch naming another environment lands there, never on this one", 
   }).pipe(Effect.provide(makeLayer(macbook, record)));
 });
 
+it.effect("a remote launch retried with its clientRequestId replays the same thread", () => {
+  const macbook = makeMacBook();
+  const record = newRecord();
+  return Effect.gen(function* () {
+    const args = {
+      environmentId: macBook,
+      projectId: "project:macbook",
+      title: "Configure Accessibility",
+      message: "Turn on the six permissions.",
+    };
+    const first = yield* launch({ ...args, clientRequestId: "cody-1" });
+    const retry = yield* launch({ ...args, clientRequestId: "cody-1" });
+    const other = yield* launch(args);
+    const threadIds = macbook
+      .called("createThread")
+      .map((call) => (call.args[0] as { threadId: string }).threadId);
+    expect(threadIds[0]).toBe(threadIds[1]);
+    expect(threadIds[2]).not.toBe(threadIds[0]);
+    expect((retry.result as { threadId: string }).threadId).toBe(
+      (first.result as { threadId: string }).threadId,
+    );
+    expect((other.result as { threadId: string }).threadId).not.toBe(
+      (first.result as { threadId: string }).threadId,
+    );
+  }).pipe(Effect.provide(makeLayer(macbook, record)));
+});
+
 it.effect("an unknown environment is refused before anything launches", () => {
   const macbook = makeMacBook();
   const record = newRecord();
@@ -469,7 +508,12 @@ it.effect("reads and sends reach a remote child through its environmentId", () =
     const read = yield* orchestrate("t3_thread_read", { environmentId: macBook, threadId: child });
     expect(read.result).toMatchObject({
       environmentId: macBook,
-      thread: { threadId: child, status: "running", parentEnvironmentId: devBox },
+      thread: {
+        threadId: child,
+        status: "running",
+        parentEnvironmentId: devBox,
+        profile: { profileId: "cody", profileName: "Cody" },
+      },
       items: [
         { type: "user_message", text: "Turn on the six permissions." },
         { type: "assistant_message", text: "Cloudflare is logged in." },
@@ -490,6 +534,11 @@ it.effect("reads and sends reach a remote child through its environmentId", () =
       threadId: child,
       text: "Accept the dev-box host key.",
     });
+    const absent = yield* orchestrate("t3_thread_read", {
+      environmentId: macBook,
+      threadId: missing,
+    });
+    expect(absent.result).toMatchObject({ code: "thread_not_found" });
     const steer = yield* orchestrate("t3_thread_send", {
       environmentId: macBook,
       threadId: child,
@@ -532,51 +581,6 @@ it.effect("launch, create, delegate, send, and wait reject parameters they do no
     ),
   );
 });
-
-it.effect(
-  "t3_create_and_start_thread on another environment also puts the child in the sweep",
-  () => {
-    const macbook = makeMacBook();
-    const record = newRecord();
-    return Effect.gen(function* () {
-      const mcp = yield* McpServer.McpServer;
-      const result = yield* mcp
-        .callTool({
-          name: "t3_create_and_start_thread",
-          arguments: {
-            environmentId: macBook,
-            projectId: "project:macbook",
-            profileId: "cody",
-            title: "Configure Accessibility",
-            text: "Turn on the six permissions.",
-            idempotencyKey: "cody-macbook-1",
-          },
-        })
-        .pipe(Effect.provideService(McpSchema.McpServerClient, mcpClient));
-      expect(result.isError).toBe(false);
-      const [created] = macbook.called("createThread");
-      expect(created?.args[0]).toMatchObject({ environmentId: macBook, parentThreadId: captain });
-      expect(record.assigned).toEqual([
-        {
-          owner: { kind: "thread", threadId: captain },
-          input: {
-            threadId: (created!.args[0] as { threadId: string }).threadId,
-            summary: "Configure Accessibility",
-            clientRequestId: `launch:${(created!.args[0] as { threadId: string }).threadId}`,
-          },
-          env: macBook,
-        },
-      ]);
-    }).pipe(
-      Effect.provide(
-        layerAgentsToolkit.pipe(
-          Layer.provideMerge(McpServer.McpServer.layer),
-          Layer.provideMerge(makeLayer(macbook, record)),
-        ),
-      ),
-    );
-  },
-);
 
 it.effect("a remote wait follows a restart to the run that continues the work", () => {
   const macbook = makeMacBook(

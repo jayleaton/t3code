@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import { McpSchema, McpServer } from "effect/ai";
+import { SERVER_SUPERSEDED_TOOLS } from "@t3tools/mcp-gateway/catalog";
 
 import * as McpInvocationContext from "../McpInvocationContext.ts";
 import * as McpGatewayBrokerModule from "../McpGatewayBroker.ts";
@@ -60,12 +61,12 @@ const remoteId = "environment-remote";
 const makeLayer = (
   listedFor: Array<string>,
   relayed?: Array<{ method: string; args: unknown }>,
-  scheduledOn: Array<string> = [],
+  addedOn: Array<string> = [],
 ) => {
   const port = {
-    scheduledTask: async (environmentId: string) => {
-      scheduledOn.push(environmentId);
-      return { id: "scheduled-task:local" };
+    todo: async (environmentId: string) => {
+      addedOn.push(environmentId);
+      return { id: "todo:local" };
     },
     listEnvironments: async () => [
       {
@@ -154,15 +155,17 @@ const callTool = (
       );
   });
 
-it.effect("adds every tool that needs no gateway event store", () => {
+it.effect("adds every tool that needs no event store and that no server tool replaces", () => {
   const listedFor: Array<string> = [];
   return Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     const tools = new Map(server.tools.map(({ tool }) => [tool.name, tool]));
     expect(tools.has("t3_list_projects")).toBe(true);
     expect(tools.has("t3_list_environments")).toBe(true);
+    expect(tools.has("t3_control_thread")).toBe(true);
     expect(tools.has("t3_subscribe_events")).toBe(false);
-    const schema = tools.get("t3_get_thread")!.inputSchema as unknown as {
+    for (const superseded of SERVER_SUPERSEDED_TOOLS) expect(tools.has(superseded)).toBe(false);
+    const schema = tools.get("t3_summarize_thread")!.inputSchema as unknown as {
       properties: Record<string, unknown>;
       required?: Array<string>;
     };
@@ -216,26 +219,20 @@ it.effect("reaches granted environments through the connected app", () => {
   }).pipe(Effect.provide(makeLayer(listedFor, relayed)));
 });
 
-it.effect("schedules on this chat's environment while another device's app is connected", () => {
+it.effect("writes on this chat's environment while another device's app is connected", () => {
   const relayed: Array<{ method: string; args: unknown }> = [];
-  const scheduledOn: Array<string> = [];
+  const addedOn: Array<string> = [];
   return Effect.gen(function* () {
-    const result = yield* callTool("t3_create_scheduled_task", {
-      prompt: "Review what the agents did today.",
-      profileId: "reviewer",
-      projectId: "project-1",
-      cron: "0 4 * * *",
-      timezone: "Asia/Bangkok",
-    });
+    const result = yield* callTool("t3_add_todo", { projectId: "project-1", text: "Ship it." });
     expect(result.isError).toBe(false);
-    expect(scheduledOn).toEqual([localId]);
+    expect(addedOn).toEqual([localId]);
     expect(relayed).toEqual([]);
-  }).pipe(Effect.provide(makeLayer([], relayed, scheduledOn)));
+  }).pipe(Effect.provide(makeLayer([], relayed, addedOn)));
 });
 
 it.effect("lets a read-only client read but not change anything", () => {
   const listedFor: Array<string> = [];
-  const scheduledOn: Array<string> = [];
+  const addedOn: Array<string> = [];
   return Effect.gen(function* () {
     const read = yield* callTool(
       "t3_list_projects",
@@ -246,20 +243,13 @@ it.effect("lets a read-only client read but not change anything", () => {
     expect(read.isError).toBe(false);
     expect(listedFor).toEqual([localId]);
     const write = yield* callTool(
-      "t3_create_scheduled_task",
-      {
-        environmentId: localId,
-        prompt: "Review what the agents did today.",
-        profileId: "reviewer",
-        projectId: "project-1",
-        cron: "0 4 * * *",
-        timezone: "Asia/Bangkok",
-      },
+      "t3_add_todo",
+      { environmentId: localId, projectId: "project-1", text: "Ship it." },
       ["orchestration"],
       readOnlyClient,
     );
     expect(write.isError).toBe(true);
     expect(JSON.stringify(write.structuredContent)).toContain("read-only access");
-    expect(scheduledOn).toEqual([]);
-  }).pipe(Effect.provide(makeLayer(listedFor, undefined, scheduledOn)));
+    expect(addedOn).toEqual([]);
+  }).pipe(Effect.provide(makeLayer(listedFor, undefined, addedOn)));
 });
