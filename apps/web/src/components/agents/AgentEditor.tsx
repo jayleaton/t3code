@@ -193,7 +193,11 @@ export function AgentEditor({
                   createdAt: profile?.createdAt ?? now,
                   updatedAt: now,
                   },
-                  presetSkills.filter((_, index) => skillIds.includes(presetSkillIds[index]!)),
+                  presetSkills.filter(
+                    (_, index) =>
+                      presetSkillIds[index]!.startsWith(PRESET_SKILL_PREFIX) &&
+                      skillIds.includes(presetSkillIds[index]!),
+                  ),
                 );
                 if (saved) onClose();
                 else setError("Could not save the agent. Check your connection and try again.");
@@ -423,11 +427,10 @@ export function AgentEditor({
                 </select>
               </label>
             </div>
-            {preset && providerLabel === presetProviderLabel(providers, preset.model.provider) &&
-              !selectedModel && (
+            {preset && modelLabel === preset.model.model && !selectedModel && (
                 <p role="alert" className="text-sm text-warning">
                   {providerLabels.includes(providerLabel)
-                    ? `${preset.model.model} isn’t available from ${providerLabel}.`
+                    ? `${modelLabel} isn’t available from ${providerLabel}.`
                     : `${providerLabel} isn’t installed on a connected machine.`}{" "}
                   Choose an available provider and model to save this agent.
                 </p>
