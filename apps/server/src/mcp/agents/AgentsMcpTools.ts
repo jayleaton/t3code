@@ -5,6 +5,7 @@ import {
   requestContext,
   requiresEnvironment,
   runGatewayTool,
+  SERVER_SUPERSEDED_TOOLS,
   success,
   TOOL_SPECS,
   toolInputJsonSchema,
@@ -58,7 +59,9 @@ const READ_TOOL = /^t3_(?:list|get|summarize)_|^t3_(?:git_status|task_read|task_
 
 const specOf = (name: string) => (TOOL_SPECS as Record<string, ToolSpec>)[name]!;
 
-const AGENTS_TOOL_NAMES = Object.keys(TOOL_SPECS).filter((name) => !GATEWAY_ONLY_TOOLS.has(name));
+const AGENTS_TOOL_NAMES = Object.keys(TOOL_SPECS).filter(
+  (name) => !GATEWAY_ONLY_TOOLS.has(name) && !SERVER_SUPERSEDED_TOOLS.has(name),
+);
 
 // The gateway validates arguments against the catalog's own schema (agentsToolInputSchema),
 // so the toolkit passes the object through.

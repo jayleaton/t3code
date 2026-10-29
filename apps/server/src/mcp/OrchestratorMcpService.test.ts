@@ -11,6 +11,7 @@ import {
   type OrchestrationV2ThreadShell,
   type ScheduledTask,
   ScheduledTaskId,
+  type ScheduledTaskUpsertInput,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -1491,6 +1492,7 @@ describe("OrchestratorMcpService provider resolution", () => {
           completedAt: null,
         };
         let delegated = false;
+        const scheduled: Array<ScheduledTaskUpsertInput> = [];
         let parentModes: { runtimeMode: string; interactionMode: string } | undefined;
         const layerDependencies = Layer.mergeAll(
           NodeServices.layer,
@@ -1547,9 +1549,24 @@ describe("OrchestratorMcpService provider resolution", () => {
             ]),
           }),
           adapterRegistryLayer([codexInstanceId]),
-          Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+          Layer.mock(ScheduledTaskService.ScheduledTaskService)({
+            upsert: (input) => {
+              scheduled.push(input);
+              return Effect.succeed({
+                task: {
+                  ...input,
+                  id: ScheduledTaskId.make("task-agent"),
+                  threadId: input.threadId ?? null,
+                  nextRunAt: null,
+                  lastRunStatus: "never",
+                },
+              } as never);
+            },
+          }),
           Layer.mock(RemoteDelegation.RemoteDelegation)({}),
-          Layer.mock(ProjectService.ProjectService)({}),
+          Layer.mock(ProjectService.ProjectService)({
+            getById: (projectId) => Effect.succeedSome({ id: projectId } as never),
+          }),
           Layer.mock(SecretRequests.SecretRequests)({}),
           ServerSettings.layerTest({
             mcpGatewayProfiles: [
@@ -1561,6 +1578,7 @@ describe("OrchestratorMcpService provider resolution", () => {
                 updatedAt: "2026-10-03T00:00:00.000Z",
                 runtimeMode: "auto",
                 interactionMode: "default",
+                modelSelection: { instanceId: codexInstanceId, model: "gpt-5.4" },
               },
               {
                 profileId: "builder",
@@ -1570,6 +1588,7 @@ describe("OrchestratorMcpService provider resolution", () => {
                 updatedAt: "2026-10-03T00:00:00.000Z",
                 runtimeMode: "full-access",
                 interactionMode: "default",
+                modelSelection: { instanceId: codexInstanceId, model: "gpt-5.4" },
               },
             ],
           }),
@@ -1605,6 +1624,34 @@ describe("OrchestratorMcpService provider resolution", () => {
           assert.equal(unknown.code, "invalid_request");
           assert.lengthOf(yield* Ref.get(dispatched), 1);
 
+          // A scheduled agent task stores the agent's routing and runs in its own thread.
+          const agentTask = yield* service.scheduleTask(scope, {
+            prompt: "Review open PRs.",
+            schedule: { type: "interval", everyMs: 3_600_000 },
+            profileId: "reviewer",
+          });
+          assert.equal(agentTask.profileId, "reviewer");
+          assert.equal(agentTask.boundThreadId, null);
+          assert.deepInclude(scheduled[0], {
+            profileId: "reviewer",
+            runtimeMode: "auto",
+            interactionMode: "default",
+            threadId: null,
+          });
+          assert.deepEqual(scheduled[0]?.modelSelection, {
+            instanceId: codexInstanceId,
+            model: "gpt-5.4",
+          });
+          const boundAgent = yield* service
+            .scheduleTask(scope, {
+              prompt: "Review open PRs.",
+              schedule: { type: "interval", everyMs: 3_600_000 },
+              profileId: "reviewer",
+              bindToCurrentThread: true,
+            })
+            .pipe(Effect.flip);
+          assert.equal(boundAgent.code, "invalid_request");
+
           // A full-access agent called from a narrower parent runs at the
           // parent's modes instead of being rejected as an escalation.
           parentModes = { runtimeMode: "approval-required", interactionMode: "plan" };
@@ -1638,6 +1685,16 @@ describe("OrchestratorMcpService provider resolution", () => {
             })
             .pipe(Effect.flip);
           assert.equal(escalation.code, "runtime_mode_escalation_denied");
+          // A scheduled run launches with the agent's own modes, so it is refused, not clamped.
+          const scheduledEscalation = yield* service
+            .scheduleTask(scope, {
+              prompt: "Build nightly.",
+              schedule: { type: "interval", everyMs: 3_600_000 },
+              profileId: "builder",
+            })
+            .pipe(Effect.flip);
+          assert.equal(scheduledEscalation.code, "runtime_mode_escalation_denied");
+          assert.lengthOf(scheduled, 1);
 
           // A rejection deep in dispatch reaches the calling agent with its reason.
           const rejected = yield* service

@@ -796,6 +796,12 @@ export const GATEWAY_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "t3_list_webhooks",
 ]);
 
+/**
+ * Lifecycle aliases a T3 server's `t3-code` MCP leaves out: t3_control_thread takes the same
+ * arguments, on any environment, and runs the same action. The standalone gateway keeps them.
+ */
+export const SERVER_SUPERSEDED_TOOLS: ReadonlySet<string> = new Set(Object.keys(LIFECYCLE_ALIASES));
+
 /** Runs one tool by its public name (aliases included) and wraps the result in the v3 envelope. */
 export async function runGatewayTool(
   context: GatewayToolContext,

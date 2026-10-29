@@ -141,6 +141,8 @@ const gatewayFailure = (environmentId: EnvironmentId, error: unknown) => {
       return new OrchestratorMcpFailure({ code: "invalid_request", message });
     case "scope_required":
       return new OrchestratorMcpFailure({ code: "capability_denied", message });
+    case "thread_not_found":
+      return new OrchestratorMcpFailure({ code: "thread_not_found", message });
     default:
       return new OrchestratorMcpFailure({ code: "orchestration_error", message });
   }
@@ -249,6 +251,13 @@ export const readThread = Effect.fn("remoteThreads.readThread")(function* (
       interactionMode: thread.interactionMode ?? null,
       parentThreadId: thread.parentThreadId ?? null,
       parentEnvironmentId: thread.parentEnvironmentId ?? null,
+      profile:
+        thread.profileSnapshot == null
+          ? null
+          : {
+              profileId: thread.profileSnapshot.profileId,
+              profileName: thread.profileSnapshot.profileName,
+            },
       pendingRequestCount: thread.runtimeRequests?.length ?? 0,
       settled: thread.settledAt != null,
       createdAt: thread.createdAt ?? null,
@@ -462,6 +471,7 @@ export interface RemoteLaunchInput {
     | undefined;
   readonly message?: string | undefined;
   readonly attachments?: ReadonlyArray<unknown> | undefined;
+  readonly clientRequestId?: string | undefined;
 }
 
 /**
@@ -520,6 +530,7 @@ const remoteModel = Effect.fn("remoteThreads.remoteModel")(function* (
 /** A t3_thread_launch on another environment: it lands there, or it fails. */
 export const launchThread = Effect.fn("remoteThreads.launchThread")(function* (
   remote: RemoteEnvironment,
+  scope: McpInvocationScope,
   input: RemoteLaunchInput,
   modes: { readonly runtimeMode: RuntimeMode; readonly interactionMode: ProviderInteractionMode },
 ) {
@@ -556,7 +567,11 @@ export const launchThread = Effect.fn("remoteThreads.launchThread")(function* (
       ? { interactionMode: modes.interactionMode }
       : {}),
     ...workspace,
-    idempotencyKey: yield* newCommandId(),
+    // The key fixes the remote thread id, so a retry replays the first launch there.
+    idempotencyKey: yield* idempotencyKeyFor(
+      scope,
+      input.clientRequestId === undefined ? undefined : `launch:${input.clientRequestId}`,
+    ),
   };
   const created =
     input.message === undefined

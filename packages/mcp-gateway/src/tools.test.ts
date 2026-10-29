@@ -605,6 +605,32 @@ describe("gateway chat tools", () => {
     },
   );
 
+  it("reports a thread missing from its environment as thread_not_found, not a retryable failure", async () => {
+    const failing = (listed: ReadonlyArray<string>): GatewayRuntimePort => ({
+      ...makePort(),
+      getThread: async (_environmentId, threadId) => {
+        throw new Error(`Failed to load orchestration V2 thread ${threadId}`);
+      },
+      listThreads: async () => ({
+        items: listed.map((id) => ({ id })),
+        snapshotAt: "now",
+      }),
+    });
+    await expect(
+      callGatewayTool({ port: failing([]), grants }, "t3_get_thread", {
+        environmentId: "local",
+        threadId: "77647f60",
+      }),
+    ).rejects.toMatchObject({ code: "thread_not_found", retryable: false, environmentId: "local" });
+    // A thread the environment still lists failed for another reason, which stays as it was.
+    await expect(
+      callGatewayTool({ port: failing(["thread-1"]), grants }, "t3_summarize_thread", {
+        environmentId: "local",
+        threadId: "thread-1",
+      }),
+    ).rejects.toThrow("Failed to load orchestration V2 thread thread-1");
+  });
+
   it("rejects a mutation when the host has only read scope", async () => {
     await expect(
       callGatewayTool({ port: makePort(), grants: { local: ["read"] } }, "t3_send_message", {

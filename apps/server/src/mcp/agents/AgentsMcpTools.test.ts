@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import { McpSchema, McpServer } from "effect/ai";
+import { SERVER_SUPERSEDED_TOOLS } from "@t3tools/mcp-gateway/catalog";
 
 import * as McpInvocationContext from "../McpInvocationContext.ts";
 import * as McpGatewayBrokerModule from "../McpGatewayBroker.ts";
@@ -154,7 +155,7 @@ const callTool = (
       );
   });
 
-it.effect("adds every tool that needs no gateway event store", () => {
+it.effect("adds every tool that needs no event store and is not a lifecycle alias", () => {
   const listedFor: Array<string> = [];
   return Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
@@ -162,6 +163,8 @@ it.effect("adds every tool that needs no gateway event store", () => {
     expect(tools.has("t3_list_projects")).toBe(true);
     expect(tools.has("t3_list_environments")).toBe(true);
     expect(tools.has("t3_subscribe_events")).toBe(false);
+    expect(tools.has("t3_control_thread")).toBe(true);
+    for (const alias of SERVER_SUPERSEDED_TOOLS) expect(tools.has(alias)).toBe(false);
     const schema = tools.get("t3_get_thread")!.inputSchema as unknown as {
       properties: Record<string, unknown>;
       required?: Array<string>;

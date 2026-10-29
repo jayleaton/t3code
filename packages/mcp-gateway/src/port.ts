@@ -60,6 +60,7 @@ export type GatewayErrorCode =
   | "destructive_confirmation_required"
   | "scope_required"
   | "environment_unavailable"
+  | "thread_not_found"
   | "upstream_failure";
 
 export class GatewayError extends Error {

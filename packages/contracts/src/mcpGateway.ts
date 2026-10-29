@@ -61,6 +61,9 @@ export const McpGatewayRelayThread = Schema.Struct({
   interactionMode: Schema.optional(ProviderInteractionMode),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
+  profileSnapshot: Schema.optional(
+    Schema.NullOr(Schema.Struct({ profileId: Schema.String, profileName: Schema.String })),
+  ),
   settledAt: RelaySettledAt,
   settlementSource: Schema.optional(Schema.NullOr(Schema.Literals(["manual", "inactivity"]))),
   runs: Schema.Array(

@@ -1161,6 +1161,29 @@ async function assertRecoverableHistoricalSend(
   }
 }
 
+/**
+ * A thread read whose failure is checked against the environment's thread list. A snapshot
+ * error does not say whether the thread exists, and relays pass errors on only as text.
+ */
+async function getThreadOrNotFound(
+  context: GatewayToolContext,
+  environmentId: string,
+  threadId: string,
+) {
+  try {
+    return await context.port.getThread(environmentId, threadId);
+  } catch (error) {
+    const listed = await context.port.listThreads(environmentId).catch(() => undefined);
+    if (listed === undefined || listed.items.some((thread) => thread.id === threadId)) throw error;
+    throw new GatewayError({
+      code: "thread_not_found",
+      message: `Thread ${threadId} was not found on environment ${environmentId}. Pass the full threadId as t3_list_threads returns it.`,
+      retryable: false,
+      environmentId,
+    });
+  }
+}
+
 function requireOperationPort(context: GatewayToolContext) {
   if (context.port.executeOperation === undefined) {
     throw new GatewayError({
@@ -1643,11 +1666,15 @@ export async function callGatewayTool(
     }
     case "t3_get_thread": {
       const environmentId = environmentWithScope(context, input, "read");
-      return context.port.getThread(environmentId, requiredString(input, "threadId"));
+      return getThreadOrNotFound(context, environmentId, requiredString(input, "threadId"));
     }
     case "t3_summarize_thread": {
       const environmentId = environmentWithScope(context, input, "read");
-      const thread = await context.port.getThread(environmentId, requiredString(input, "threadId"));
+      const thread = await getThreadOrNotFound(
+        context,
+        environmentId,
+        requiredString(input, "threadId"),
+      );
       const plan = approvalPlan(thread);
       const pendingQuestions = pendingQuestionsOf(thread);
       const session =
@@ -1747,7 +1774,11 @@ export async function callGatewayTool(
     }
     case "t3_get_messages": {
       const environmentId = environmentWithScope(context, input, "read");
-      const thread = await context.port.getThread(environmentId, requiredString(input, "threadId"));
+      const thread = await getThreadOrNotFound(
+        context,
+        environmentId,
+        requiredString(input, "threadId"),
+      );
       const messages = Array.isArray(thread.messages) ? thread.messages : [];
       const requestedLimit = typeof input.limit === "number" ? input.limit : 100;
       const limit = Math.max(1, Math.min(100, Math.trunc(requestedLimit)));
@@ -2496,7 +2527,11 @@ export async function callGatewayTool(
     }
     case "t3_get_pending_questions": {
       const environmentId = environmentWithScope(context, input, "read");
-      const thread = await context.port.getThread(environmentId, requiredString(input, "threadId"));
+      const thread = await getThreadOrNotFound(
+        context,
+        environmentId,
+        requiredString(input, "threadId"),
+      );
       return {
         environmentId,
         threadId: thread.id,
@@ -2544,7 +2579,9 @@ export async function callGatewayTool(
         async () => {
           // Answers are checked against the live question, so a stale or
           // mistyped choice fails here instead of reaching the provider.
-          const pending = pendingQuestionsOf(await context.port.getThread(environmentId, threadId));
+          const pending = pendingQuestionsOf(
+            await getThreadOrNotFound(context, environmentId, threadId),
+          );
           const wanted =
             typeof input.questionRequestId === "string" ? input.questionRequestId : undefined;
           const request =
@@ -2615,7 +2652,7 @@ export async function callGatewayTool(
             return { requestId: authoritativeRequestId };
           }
           const approvalRequestId = requiredString(input, "approvalRequestId");
-          const thread = await context.port.getThread(environmentId, threadId);
+          const thread = await getThreadOrNotFound(context, environmentId, threadId);
           const plan = approvalPlan(thread);
           const action = plan.actions.find(
             (candidate) => candidate.approvalActionId === approvalRequestId,
