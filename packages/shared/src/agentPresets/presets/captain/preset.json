@@ -11,13 +11,7 @@
   },
   "runtimeMode": "full-access",
   "interactionMode": "default",
-  "skills": [
-    "captain-event-loop",
-    "retro",
-    "correct",
-    "grilling",
-    "grill-me"
-  ],
+  "skills": ["captain-event-loop", "retro", "correct", "grilling", "grill-me"],
   "setupNotes": [
     "Requires Claude Code with access to claude-opus-5-5.",
     "Delegation requires configured T3 agents named Cook, Pastry and Cleaner; Cook (OpenSource) is optional.",

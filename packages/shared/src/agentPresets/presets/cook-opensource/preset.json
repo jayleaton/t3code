@@ -11,10 +11,7 @@
   },
   "runtimeMode": "full-access",
   "interactionMode": "default",
-  "skills": [
-    "diagnose",
-    "improve-codebase-architecture"
-  ],
+  "skills": ["diagnose", "improve-codebase-architecture"],
   "setupNotes": [
     "Requires OpenCode with commandcode/deepseek/deepseek-v4.1-flash configured and provider access."
   ]

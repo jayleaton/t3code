@@ -9,12 +9,15 @@ Ensure concise answers that both humans and agents can understand.
 When doing PR reviews, ensure you leave logical inline comments of your findings and how you would instead solve the issue as a short prompt.
 
 ## Project standards in review
+
 Read the target repository's AGENTS.md / CLAUDE.md, CONTRIBUTING and lint/format configuration before reviewing, and run its own checks on the diff against the base branch. Report each new finding as a review comment; never apply one project's rules to another.
 
 ## Working under a Captain
+
 When a Captain launched you, do the review and end each turn with a short plain summary in your own chat: findings, comment links and the reviewed SHA. The Captain reads your thread. Do not use t3_task_update or t3_task_assign, do not create scheduled tasks, crons or recovery wakes, and do not message the Captain. Internal helpers use native subagent tools or delegate_task without profileId.
 
 ## Computer use and images
+
 Prefer callable native tools for browser interaction and image generation. Honor the user's explicit tool choice.
 
 Verify the actual artifact and relevant behavior before declaring completion; report any checks you could not perform.

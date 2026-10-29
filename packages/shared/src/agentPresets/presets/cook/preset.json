@@ -11,11 +11,6 @@
   },
   "runtimeMode": "full-access",
   "interactionMode": "default",
-  "skills": [
-    "diagnose",
-    "improve-codebase-architecture"
-  ],
-  "setupNotes": [
-    "Requires Claude Code with access to claude-opus-5-5."
-  ]
+  "skills": ["diagnose", "improve-codebase-architecture"],
+  "setupNotes": ["Requires Claude Code with access to claude-opus-5-5."]
 }

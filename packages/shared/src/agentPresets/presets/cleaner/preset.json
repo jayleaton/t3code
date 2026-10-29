@@ -11,8 +11,6 @@
   },
   "runtimeMode": "full-access",
   "interactionMode": "default",
-  "skills": [
-    "improve-codebase-architecture"
-  ],
+  "skills": ["improve-codebase-architecture"],
   "setupNotes": []
 }

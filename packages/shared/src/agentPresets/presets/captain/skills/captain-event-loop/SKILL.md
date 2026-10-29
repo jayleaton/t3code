@@ -19,10 +19,12 @@ So every running child needs its own listener: a profile-less helper that blocks
 
 - Start named children with `t3_thread_launch` (or `create_threads`). Each gets an automatic task, so it shows in the one-call sweep. For Cleaner, launch one new child per review round with `t3_thread_launch`. Avoid `delegate_task` with a `profileId`: it creates no task, so it is invisible to the sweep and its completion is silently disposed.
 - Send follow-ups with `t3_thread_send`, not `t3_send_message`, because `t3_thread_send` returns the new `runId`.
-- Every brief ends with: *"When you finish, or whenever you need a decision, end your turn with a short summary. Put any question on the last line as `BLOCKED: <question> (default: <what you would pick>)`. Do not use interactive question tools, and do not message Captain."* `t3_thread_wait` does not return while a child sits in `waiting_input`; only a finished turn ends the wait. A child that ignores this rule and asks a question while nothing else is running will not wake Captain. The question is caught at the next wake's sweep, which may be the user's next message.
+- Every brief ends with: _"When you finish, or whenever you need a decision, end your turn with a short summary. Put any question on the last line as `BLOCKED: <question> (default: <what you would pick>)`. Do not use interactive question tools, and do not message Captain."_ `t3_thread_wait` does not return while a child sits in `waiting_input`; only a finished turn ends the wait. A child that ignores this rule and asks a question while nothing else is running will not wake Captain. The question is caught at the next wake's sweep, which may be the user's next message.
 
 ### Children on another machine
+
 `t3_thread_wait`, `t3_thread_send`, `t3_thread_read` and the `t3_task_read` sweep only see threads on this machine. They return `thread_not_found` for a child launched with `t3_create_and_start_thread` on another environment (T3 gap, see bug report). For such a child:
+
 - Record its `environmentId` in PIPELINE.md.
 - Message it with `t3_send_message` + `environmentId`.
 - Read it with `t3_get_messages` / `t3_get_thread` + `environmentId`.

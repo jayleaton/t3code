@@ -4,9 +4,6 @@ description: Investigate nontrivial bugs and performance regressions using repro
   evidence, targeted instrumentation, and a verified fix.
 ---
 
-
-
-
 # Diagnose
 
 Start with the reported behavior, relevant domain docs, recent changes, and the narrowest useful feedback loop. Prefer a failing test, request replay, CLI fixture, browser interaction, or small harness that exercises the real failure. For intermittent bugs, measure reproduction frequency and record the conditions.

@@ -4,9 +4,6 @@ description: Review codebase modularity and test seams, compare interface design
   or stress-test a proposed architecture against domain language and ADRs.
 ---
 
-
-
-
 # Architecture Review
 
 Read relevant source, CONTEXT.md or CONTEXT-MAP.md, and ADRs when present. Use the project's vocabulary; missing domain documents are not a reason to halt or create boilerplate. Identify concrete friction: a change spread across unrelated files, duplicated rules, hidden ordering, leaky state, or tests that miss the real call pattern.
