@@ -167,7 +167,7 @@ export const TOOL_SPECS = {
     },
   ],
   t3_get_agents_view: [
-    "List the Agents board across environments (or one): agent specializations and their chat/run summaries, including thread IDs and status. Use this to find an agent’s running or completed work without searching unrelated threads. Filter by profileId, state (active means unsettled, including completed chats), and executionState (for example running or waiting-input). Finished chats remain active until manually settled or automatically settled after their idle age (3 days by default); new activity and un-settling reset the idle clock. Manually settling a parent chat also settles its child chats. Pass a returned threadId to t3_open_thread, or read it with t3_thread_read in a T3 chat (t3_get_thread elsewhere).",
+    "List the Agents board across environments (or one): agent specializations and their chat/run summaries, including thread IDs and status. Use this to find an agent’s running or completed work without searching unrelated threads. Filter by profileId, state (active means unsettled, including completed chats), and executionState (for example running or waiting-input). Finished chats remain active until manually settled or automatically settled after their idle age (3 days by default); new activity and un-settling reset the idle clock. Manually settling a parent chat also settles its child chats. Use t3_get_thread or t3_open_thread with a returned threadId for details.",
     {
       environmentId: discoveryEnvironmentId,
       profileId: z.string().trim().min(1).optional(),
@@ -797,26 +797,10 @@ export const GATEWAY_ONLY_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Tools a T3 server's `t3-code` MCP leaves out because its own tools do the same job there:
- * lifecycle aliases (t3_control_thread), thread reads and writes (t3_thread_read/send/launch),
- * environment status (t3_list_environments) and scheduled tasks (schedule_task and friends).
- * The standalone gateway keeps them, and the server still calls some internally.
+ * Lifecycle aliases a T3 server's `t3-code` MCP leaves out: t3_control_thread takes the same
+ * arguments, on any environment, and runs the same action. The standalone gateway keeps them.
  */
-export const SERVER_SUPERSEDED_TOOLS: ReadonlySet<string> = new Set([
-  ...Object.keys(LIFECYCLE_ALIASES),
-  "t3_get_thread",
-  "t3_get_messages",
-  "t3_send_message",
-  "t3_create_thread",
-  "t3_create_and_start_thread",
-  "t3_get_environment_status",
-  "t3_get_environment_health",
-  "t3_list_scheduled_tasks",
-  "t3_create_scheduled_task",
-  "t3_update_scheduled_task",
-  "t3_delete_scheduled_task",
-  "t3_run_scheduled_task",
-]);
+export const SERVER_SUPERSEDED_TOOLS: ReadonlySet<string> = new Set(Object.keys(LIFECYCLE_ALIASES));
 
 /** Runs one tool by its public name (aliases included) and wraps the result in the v3 envelope. */
 export async function runGatewayTool(

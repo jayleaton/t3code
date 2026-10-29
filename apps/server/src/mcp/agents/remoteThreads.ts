@@ -376,7 +376,7 @@ export const sendToThread = Effect.fn("remoteThreads.sendToThread")(function* (
     if (thread.runtimeMode === undefined || thread.interactionMode === undefined) {
       return yield* new OrchestratorMcpFailure({
         code: "capability_denied",
-        message: `The T3 app relaying ${remote.environmentId} does not report thread ${input.threadId}'s modes, so this send cannot be checked against yours. Update that app.`,
+        message: `The T3 app relaying ${remote.environmentId} does not report thread ${input.threadId}'s modes, so this send cannot be checked against yours. Update that app, or use t3_send_message.`,
       });
     }
     yield* resolveRuntimeMode(limit.runtimeMode, thread.runtimeMode);
@@ -400,10 +400,7 @@ export const sendToThread = Effect.fn("remoteThreads.sendToThread")(function* (
   const sent = yield* callRemote(remote, "t3_send_message", {
     threadId: input.threadId,
     text: input.message,
-    idempotencyKey: yield* idempotencyKeyFor(
-      scope,
-      input.clientRequestId === undefined ? undefined : `launch:${input.clientRequestId}`,
-    ),
+    idempotencyKey: yield* idempotencyKeyFor(scope, input.clientRequestId),
   });
   return {
     environmentId: remote.environmentId,
@@ -418,7 +415,7 @@ export const sendToThread = Effect.fn("remoteThreads.sendToThread")(function* (
  * t3_task_read lists it, as a local launch does with assignLaunchedChild. The child keeps
  * running if this fails; the returned text says why the task is missing.
  */
-const assignRemoteChild = Effect.fn("remoteThreads.assignRemoteChild")(function* (input: {
+export const assignRemoteChild = Effect.fn("remoteThreads.assignRemoteChild")(function* (input: {
   readonly ownerThreadId: ThreadId;
   readonly workerThreadId: ThreadId;
   readonly workerEnvironmentId: EnvironmentId;
@@ -571,7 +568,10 @@ export const launchThread = Effect.fn("remoteThreads.launchThread")(function* (
       : {}),
     ...workspace,
     // The key fixes the remote thread id, so a retry replays the first launch there.
-    idempotencyKey: yield* idempotencyKeyFor(scope, input.clientRequestId),
+    idempotencyKey: yield* idempotencyKeyFor(
+      scope,
+      input.clientRequestId === undefined ? undefined : `launch:${input.clientRequestId}`,
+    ),
   };
   const created =
     input.message === undefined

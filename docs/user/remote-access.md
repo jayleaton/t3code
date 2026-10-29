@@ -594,8 +594,7 @@ asks for approvals waits for you. Changing a task's agent or project starts a ne
 run. MCP assistants can manage tasks with `t3_list_scheduled_tasks`, `t3_create_scheduled_task`,
 `t3_update_scheduled_task`, and `t3_delete_scheduled_task` (create or admin access), and run one
 immediately with `t3_run_scheduled_task` (send access). Pass `runAt` for a single run, or `cron`
-with an optional IANA `timezone` for a repeating one. Agents in a T3 chat use `schedule_task` instead, passing
-`profileId` to run the task as an agent.
+with an optional IANA `timezone` for a repeating one.
 
 MCP assistants can keep a project's [TODO list](./thread-sidebar.md#keep-a-todo-list) with
 `t3_list_todos` (read access) and `t3_add_todo`, `t3_update_todo`, `t3_settle_todo`,

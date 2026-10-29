@@ -35,7 +35,7 @@ import * as ThreadTaskService from "../../threadTask/ThreadTaskService.ts";
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
 import * as McpGatewayBrokerModule from "../McpGatewayBroker.ts";
 import { McpGatewayBroker } from "../McpGatewayBroker.ts";
-import { toolkitRegistration } from "../McpHttpServer.ts";
+import { layerAgentsToolkit, toolkitRegistration } from "../McpHttpServer.ts";
 import * as McpInvocationContext from "../McpInvocationContext.ts";
 import * as McpToolAccess from "../McpToolAccess.ts";
 import * as OrchestratorMcpService from "../OrchestratorMcpService.ts";
@@ -581,6 +581,51 @@ it.effect("launch, create, delegate, send, and wait reject parameters they do no
     ),
   );
 });
+
+it.effect(
+  "t3_create_and_start_thread on another environment also puts the child in the sweep",
+  () => {
+    const macbook = makeMacBook();
+    const record = newRecord();
+    return Effect.gen(function* () {
+      const mcp = yield* McpServer.McpServer;
+      const result = yield* mcp
+        .callTool({
+          name: "t3_create_and_start_thread",
+          arguments: {
+            environmentId: macBook,
+            projectId: "project:macbook",
+            profileId: "cody",
+            title: "Configure Accessibility",
+            text: "Turn on the six permissions.",
+            idempotencyKey: "cody-macbook-1",
+          },
+        })
+        .pipe(Effect.provideService(McpSchema.McpServerClient, mcpClient));
+      expect(result.isError).toBe(false);
+      const [created] = macbook.called("createThread");
+      expect(created?.args[0]).toMatchObject({ environmentId: macBook, parentThreadId: captain });
+      expect(record.assigned).toEqual([
+        {
+          owner: { kind: "thread", threadId: captain },
+          input: {
+            threadId: (created!.args[0] as { threadId: string }).threadId,
+            summary: "Configure Accessibility",
+            clientRequestId: `launch:${(created!.args[0] as { threadId: string }).threadId}`,
+          },
+          env: macBook,
+        },
+      ]);
+    }).pipe(
+      Effect.provide(
+        layerAgentsToolkit.pipe(
+          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(makeLayer(macbook, record)),
+        ),
+      ),
+    );
+  },
+);
 
 it.effect("a remote wait follows a restart to the run that continues the work", () => {
   const macbook = makeMacBook(
