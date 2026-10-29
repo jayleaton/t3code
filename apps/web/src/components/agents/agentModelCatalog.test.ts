@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import type { ClientSettings } from "@t3tools/contracts/settings";
 import type { ServerProvider } from "@t3tools/contracts";
-import { agentModelOptions, visibleAgentProviders } from "./agentModelCatalog";
+import { agentModelOptions, presetProviderLabel, visibleAgentProviders } from "./agentModelCatalog";
 
 const provider = {
   instanceId: "opencode",
@@ -39,5 +39,11 @@ describe("agent model catalog", () => {
         "OpenCode",
       ),
     ).toEqual([]);
+  });
+  it("maps a preset's provider driver to its label and keeps an unavailable one as written", () => {
+    expect(presetProviderLabel([provider], "opencode")).toBe("OpenCode");
+    expect(presetProviderLabel([provider], "OpenCode")).toBe("OpenCode");
+    expect(presetProviderLabel([{ ...provider, enabled: false }], "opencode")).toBe("opencode");
+    expect(presetProviderLabel([provider], "claudeAgent")).toBe("claudeAgent");
   });
 });

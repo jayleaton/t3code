@@ -56,6 +56,8 @@ export function useAgentLibrary() {
   };
   return {
     skillsAvailable: target?.serverConfig?.environment.capabilities.agentSkillsSync === true,
+    skillResourcesAvailable:
+      target?.serverConfig?.environment.capabilities.agentSkillResources === true,
     skills: library.agentSkills,
     profiles: library.mcpGatewayProfiles,
     available: !!target,

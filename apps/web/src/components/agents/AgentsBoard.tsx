@@ -28,6 +28,7 @@ import {
   ChartNoAxesColumnIcon,
 } from "lucide-react";
 import type { McpGatewayProfile } from "@t3tools/contracts";
+import { addPresetSkills, type AgentPreset } from "@t3tools/shared/agentPresets";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { useAgentLibrary } from "../../hooks/useAgentLibrary";
 import {
@@ -40,6 +41,8 @@ import { useAllEnvironmentShellsBootstrapped } from "../../state/entities";
 import { useAgentThreadShells } from "./useAgentRunParenting";
 import { AgentSkillsEditor } from "./AgentSkillsEditor";
 import { AgentEditor } from "./AgentEditor";
+import { AgentPresetPicker } from "./AgentPresetPicker";
+import { randomUUID } from "../../lib/utils";
 import { AgentTaskDialog } from "./AgentTaskDialog";
 import { AgentsLoadingNotice } from "./AgentsLoadingNotice";
 import { useAgentsPaneWidths } from "./useAgentsPaneWidths";
@@ -67,6 +70,15 @@ import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialo
 const agentFilterSchema = Schema.NullOr(Schema.String);
 const agentOrderSchema = Schema.Array(Schema.String);
 const emptyAgentOrder: readonly string[] = [];
+
+type AgentEditorState =
+  | { readonly step: "start"; readonly presets: ReadonlyArray<AgentPreset> | null }
+  | {
+      readonly step: "new";
+      readonly preset: AgentPreset | null;
+      readonly presets: ReadonlyArray<AgentPreset> | null;
+    }
+  | { readonly step: "edit"; readonly profile: McpGatewayProfile };
 
 function AgentThreadList({
   threads,
@@ -165,7 +177,8 @@ function TopbarIconLink({
 }
 
 export function AgentsBoard() {
-  const { profiles, skills, skillsAvailable, available, updateSettings } = useAgentLibrary();
+  const { profiles, skills, skillsAvailable, skillResourcesAvailable, available, updateSettings } =
+    useAgentLibrary();
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [order, setOrder] = useLocalStorage(
     "t3code:agents:column-order",
@@ -196,7 +209,7 @@ export function AgentsBoard() {
   // Delegated tasks live in the thread details' Lineage section, never this roster.
   const sidebarThreads = selectAgentSidebarThreads(threads);
   const ready = useAllEnvironmentShellsBootstrapped();
-  const [editor, setEditor] = useState<McpGatewayProfile | "new" | null>(null);
+  const [editor, setEditor] = useState<AgentEditorState | null>(null);
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [savedFilter, setFilter] = useLocalStorage("t3code:agents:filter", null, agentFilterSchema);
@@ -336,7 +349,7 @@ export function AgentsBoard() {
             <button
               className="agent-primary agents-new-agent"
               disabled={!available}
-              onClick={() => setEditor("new")}
+              onClick={() => setEditor({ step: "start", presets: null })}
             >
               <PlusIcon size={14} />
               New agent
@@ -400,7 +413,10 @@ export function AgentsBoard() {
                   <MoreHorizontalIcon size={14} />
                 </MenuTrigger>
                 <MenuPopup align="end">
-                  <MenuItem disabled={!available} onClick={() => setEditor(profile)}>
+                  <MenuItem
+                    disabled={!available}
+                    onClick={() => setEditor({ step: "edit", profile })}
+                  >
                     <PencilIcon />
                     Edit agent
                   </MenuItem>
@@ -528,9 +544,20 @@ export function AgentsBoard() {
           onSave={(agentSkills) => updateSettings({ agentSkills })}
         />
       )}
-      {editor !== null && (
+      {editor?.step === "start" && (
+        <AgentPresetPicker
+          loadedPresets={editor.presets}
+          onScratch={() => setEditor({ step: "new", preset: null, presets: editor.presets })}
+          onPick={(preset, presets) => setEditor({ step: "new", preset, presets })}
+          onClose={() => setEditor(null)}
+        />
+      )}
+      {editor !== null && editor.step !== "start" && (
         <AgentEditor
-          profile={editor === "new" ? null : editor}
+          key={editor.step === "new" ? (editor.preset?.id ?? "scratch") : editor.profile.profileId}
+          profile={editor.step === "edit" ? editor.profile : null}
+          preset={editor.step === "new" ? editor.preset : null}
+          skillsAvailable={skillsAvailable}
           profiles={profiles}
           skills={skills}
           providers={online.flatMap((env) =>
@@ -545,15 +572,37 @@ export function AgentsBoard() {
               : [],
           )}
           machines={environments}
+          {...(editor.step === "new" && {
+            onBack: () =>
+              setEditor({ step: "start", presets: editor.preset ? editor.presets : null }),
+          })}
           onClose={() => setEditor(null)}
-          onSave={(profile) =>
-            updateSettings({
-              mcpGatewayProfiles:
-                editor === "new"
-                  ? [...profiles, profile]
-                  : profiles.map((item) => (item.profileId === profile.profileId ? profile : item)),
-            })
-          }
+          onSave={(profile, presetSkills) => {
+            if (editor.step === "edit")
+              return updateSettings({
+                mcpGatewayProfiles: profiles.map((item) =>
+                  item.profileId === profile.profileId ? profile : item,
+                ),
+              });
+            if (presetSkills.length === 0)
+              return updateSettings({ mcpGatewayProfiles: [...profiles, profile] });
+            if (presetSkills.some((skill) => skill.resources.length) && !skillResourcesAvailable)
+              throw new Error("Update T3 Code on this machine to add this preset’s skill files.");
+            const added = addPresetSkills(skills, presetSkills, {
+              now: profile.createdAt,
+              makeId: randomUUID,
+            });
+            return updateSettings({
+              agentSkills: added.agentSkills,
+              mcpGatewayProfiles: [
+                ...profiles,
+                {
+                  ...profile,
+                  skillIds: [...new Set([...(profile.skillIds ?? []), ...added.skillIds])],
+                },
+              ],
+            });
+          }}
         />
       )}
       {newChatOpen && (

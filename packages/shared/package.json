@@ -455,6 +455,10 @@
       "types": "./src/markdownGithubAlerts.ts",
       "import": "./src/markdownGithubAlerts.ts"
     },
+    "./agentPresets": {
+      "types": "./src/agentPresets/agentPresets.ts",
+      "import": "./src/agentPresets/agentPresets.ts"
+    },
     "./markdownFrontmatter": {
       "types": "./src/markdownFrontmatter.ts",
       "import": "./src/markdownFrontmatter.ts"
