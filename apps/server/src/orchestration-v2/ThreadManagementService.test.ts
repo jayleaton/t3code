@@ -14,6 +14,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   RunId,
+  RuntimeRequestId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
@@ -266,6 +267,99 @@ it.effect("waitForThread follows a restart continuation instead of the cut run",
     expect(result).toMatchObject({
       timedOut: false,
       run: { id: continuationId, status: "completed" },
+    });
+  }),
+);
+
+it.effect("waitForThread returns early once the thread blocks on a live question", () =>
+  Effect.gen(function* () {
+    const projectId = ProjectId.make("project:thread-management:wait-question");
+    const threadId = ThreadId.make("thread:thread-management:wait-question");
+    const runId = RunId.make("run:thread-management:wait-question");
+    const subscribed = yield* Deferred.make<void>();
+    const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
+    const question = (id: string, type: "live" | "message") => ({
+      id: RuntimeRequestId.make(id),
+      kind: "user_input",
+      status: "pending",
+      responseCapability: { type },
+    });
+    let runtimeRequests = [question("request:wait-question:live", "live")];
+    const layerTest = ThreadManagementService.layer.pipe(
+      Layer.provide(ProjectionStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory))),
+      Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+      Layer.provide(
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          getThreadEventSequence: () => Effect.succeed(0),
+          restartContinuationPending: () => Effect.succeed(false),
+          streamStoredEventsFrom: (input) =>
+            input?.eventType === "runtime-request.updated"
+              ? Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
+                  Stream.drain,
+                  Stream.concat(Stream.fromQueue(events)),
+                )
+              : Stream.never,
+          getThreadRecords: () =>
+            Effect.sync(
+              () =>
+                ({
+                  thread: { id: threadId, projectId, deletedAt: null },
+                  runs: [{ id: runId, status: "running" }],
+                  runtimeRequests,
+                }) as unknown as OrchestrationV2ThreadProjection,
+            ),
+        }),
+      ),
+      Layer.provide(ServerSettings.layerTest()),
+      Layer.provide(layerReceiptsTest),
+    );
+    const service = yield* ThreadManagementService.ThreadManagementService.pipe(
+      Effect.provide(layerTest),
+    );
+    // Internal waits that follow a run to its end ignore questions.
+    const ignoring = yield* service
+      .waitForThread({ projectId, threadId, runId, timeoutMs: 1_000 })
+      .pipe(Effect.forkChild);
+    yield* TestClock.adjust(Duration.millis(1_000));
+    const ignored = yield* Fiber.join(ignoring);
+    expect(ignored).toMatchObject({ timedOut: true, run: { id: runId } });
+    expect(ignored).not.toHaveProperty("pendingQuestion");
+
+    expect(
+      yield* service.waitForThread({
+        projectId,
+        threadId,
+        runId,
+        timeoutMs: 60 * 60 * 1_000,
+        untilQuestion: true,
+      }),
+    ).toMatchObject({ timedOut: false, pendingQuestion: "request:wait-question:live" });
+
+    // An async question lets the child keep working, so only a live one ends the wait.
+    runtimeRequests = [question("request:wait-question:async", "message")];
+    const fiber = yield* service
+      .waitForThread({
+        projectId,
+        threadId,
+        runId,
+        timeoutMs: 60 * 60 * 1_000,
+        untilQuestion: true,
+      })
+      .pipe(Effect.forkChild);
+    yield* Effect.raceFirst(Deferred.await(subscribed), Fiber.await(fiber));
+    const stored = (sequence: number) =>
+      ({
+        sequence,
+        event: { threadId, type: "runtime-request.updated", payload: {} },
+      }) as unknown as OrchestrationV2StoredEvent;
+    yield* Queue.offer(events, stored(1));
+    runtimeRequests = [...runtimeRequests, question("request:wait-question:later", "live")];
+    yield* Queue.offer(events, stored(2));
+
+    expect(yield* Fiber.join(fiber)).toMatchObject({
+      timedOut: false,
+      run: { id: runId, status: "running" },
+      pendingQuestion: "request:wait-question:later",
     });
   }),
 );

@@ -616,6 +616,8 @@ const make = Effect.gen(function* () {
         // tasks to wake it for the answer, which a task here waits for too.
         // An older peer ignores this and reports the run alone.
         untilDelegatedWorkSettled: true,
+        // This loop follows the task to its end, so a question must not end each wait.
+        returnOnQuestion: false,
       })
       .pipe(Effect.raceFirst(endedHere));
     // The next look reads the result and stops it there.
