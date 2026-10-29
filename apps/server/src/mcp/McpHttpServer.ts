@@ -14,6 +14,7 @@ import type * as Types from "effect/Types";
 import { AiError, McpProtocol, McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import {
+  DeviceToolError,
   OrchestratorMcpFailure,
   PreviewAutomationError,
   ProviderInteractionMode,
@@ -769,7 +770,10 @@ const registerDeviceScreenshot = Effect.fn("McpHttpServer.registerDeviceScreensh
         Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
       ),
     "screenshot",
-    "Device screenshot failed.",
+    (error) =>
+      isDeviceToolError(error) || isOrchestratorMcpFailure(error)
+        ? error.message
+        : "Device screenshot failed.",
   );
 });
 
@@ -824,6 +828,7 @@ const stagedInCatalog = Effect.fn("McpHttpServer.stagedInCatalog")(function* <A,
 });
 
 const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
+const isDeviceToolError = Schema.is(DeviceToolError);
 const isCallToolResult = Schema.is(McpSchema.CallToolResult);
 
 /**

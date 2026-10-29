@@ -3147,6 +3147,7 @@ export const layerWsRpc = (
         [WS_METHODS.mcpGatewayRespond]: (input) =>
           mcpGatewayBroker.respond(currentSessionId, input),
         [WS_METHODS.deviceEasAccount]: (input) => deviceService.easAccount(input),
+        [WS_METHODS.deviceSimlockIdentity]: (input) => deviceService.simlockIdentity(input),
         [WS_METHODS.deviceList]: (input) =>
           input.inspectOnly && !input.updateTool
             ? deviceService.inspect

@@ -1352,8 +1352,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       >
         <View
           className={cn(
-            "min-h-[44px] flex-row items-center gap-2.5 py-2",
-            sidebarPane ? "px-3" : cn(THREAD_LIST_V2_ROW_FRAME_CLASS_NAME, "px-4"),
+            THREAD_LIST_V2_ROW_CONTENT_CLASS_NAME,
+            "min-h-[44px] flex-row items-center gap-2 py-2",
+            sidebarPane ? "px-3" : THREAD_LIST_V2_ROW_FRAME_CLASS_NAME,
           )}
         >
           {props.project ? (

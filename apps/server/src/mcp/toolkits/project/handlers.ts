@@ -26,7 +26,6 @@ import * as Repositories from "../../../sourceControl/SourceControlRepositorySer
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
-import { formatThreadLink } from "@t3tools/shared/threadLinks";
 import { resolveRuntimeMode, resolveInteractionMode } from "../../delegatedTaskModes.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -346,7 +345,7 @@ export const layer = McpToolAccess.toLayer(
             return {
               environmentId: scope.environmentId,
               threadId: thread.id,
-              link: formatThreadLink({ environmentId: scope.environmentId, threadId: thread.id }),
+              link: McpInvocationContext.threadLinkFor(scope, thread.id),
               projectId: thread.projectId,
               modelSelection: thread.modelSelection,
               runId: run?.id ?? null,
