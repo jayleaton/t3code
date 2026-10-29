@@ -56,9 +56,15 @@ export const layer: Layer.Layer<RuntimePolicyV2> = Layer.succeed(RuntimePolicyV2
       runtimeMode: input.thread.runtimeMode,
       interactionMode: input.thread.interactionMode,
       cwd: input.thread.worktreePath,
+      ...hideUserSkills(input.thread),
     });
   }),
 });
+
+// Claude and Codex honour this; OpenCode, Cursor, Grok, Pi and Antigravity have no per-thread
+// skill filter yet, so their agents still see the user's own skills.
+const hideUserSkills = (thread: OrchestrationV2AppThread) =>
+  thread.profileSnapshot?.includeUserSkills === false ? { hideUserSkills: true } : {};
 
 function providerRuntimeMode(
   runtimeMode: RuntimeMode,
@@ -116,6 +122,7 @@ export const layerFromProjectStore: Layer.Layer<
           runtimeMode: providerRuntimeMode(input.thread.runtimeMode, supportedRuntimeModes),
           interactionMode: input.thread.interactionMode,
           cwd,
+          ...hideUserSkills(input.thread),
         });
       }),
     });

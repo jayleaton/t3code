@@ -1323,6 +1323,7 @@ function codexThreadRuntimeParams(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly modelSelection?: { readonly model: string };
   readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
+  readonly hiddenSkillPaths?: ReadonlyArray<string>;
 }): {
   readonly cwd?: string;
   readonly model?: string;
@@ -1334,6 +1335,12 @@ function codexThreadRuntimeParams(input: {
     ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
     config: {
       ...CODEX_THREAD_CONFIG,
+      // Codex appends session skills.config entries after the user's config.toml entries.
+      ...(input.hiddenSkillPaths?.length
+        ? {
+            "skills.config": input.hiddenSkillPaths.map((path) => ({ path, enabled: false })),
+          }
+        : {}),
       ...(mcpSession === undefined
         ? {}
         : {
@@ -1730,6 +1737,30 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             yield* Ref.set(initialized, true);
           }),
         );
+        // Path selectors, because a name would also hide a project skill that shares it.
+        const threadRuntimeParams = Effect.fn("CodexAdapterV2.threadRuntimeParams")(function* (
+          params: Parameters<typeof codexThreadRuntimeParams>[0],
+        ) {
+          const policy = params.runtimePolicy;
+          if (policy?.hideUserSkills !== true) return codexThreadRuntimeParams(params);
+          const hiddenSkillPaths = yield* ensureInitialized.pipe(
+            Effect.andThen(
+              client.request("skills/list", policy.cwd == null ? {} : { cwds: [policy.cwd] }),
+            ),
+            Effect.map((response) =>
+              response.data
+                .flatMap((entry) => entry.skills)
+                .filter((skill) => skill.scope === "user" && skill.pluginId == null)
+                .map((skill) => skill.path),
+            ),
+            Effect.catch((cause) =>
+              Effect.logWarning("Codex skill inventory failed; user skills stay visible.", {
+                cause,
+              }).pipe(Effect.as([])),
+            ),
+          );
+          return codexThreadRuntimeParams({ ...params, hiddenSkillPaths });
+        });
         const now = yield* DateTime.now;
         const session = providerSession({
           providerSessionId: input.providerSessionId,
@@ -6778,15 +6809,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             ensureInitialized.pipe(
               Effect.andThen(mcpSessions.read(threadInput.threadId)),
               Effect.flatMap((mcpSession) =>
-                client.request(
-                  "thread/start",
-                  codexThreadRuntimeParams({
-                    mcpSession,
-                    modelSelection: threadInput.modelSelection,
-                    runtimePolicy: threadInput.runtimePolicy,
-                  }),
-                ),
+                threadRuntimeParams({
+                  mcpSession,
+                  modelSelection: threadInput.modelSelection,
+                  runtimePolicy: threadInput.runtimePolicy,
+                }),
               ),
+              Effect.flatMap((params) => client.request("thread/start", params)),
               Effect.map((response): OrchestrationV2ProviderThread =>
                 providerThreadFromCodexThread({
                   appThreadId: threadInput.threadId,
@@ -6812,7 +6841,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               const resume = client.raw.request("thread/resume", {
                 threadId: nativeThreadId,
                 excludeTurns: true,
-                ...codexThreadRuntimeParams({
+                ...(yield* threadRuntimeParams({
                   mcpSession: yield* readMcpSession(
                     threadInput.threadId ?? threadInput.providerThread.appThreadId,
                   ),
@@ -6822,7 +6851,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   ...(threadInput.runtimePolicy === undefined
                     ? {}
                     : { runtimePolicy: threadInput.runtimePolicy }),
-                }),
+                })),
               });
               const response = yield* ensureInitialized.pipe(
                 Effect.andThen(
@@ -7598,11 +7627,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 yield* client.raw.request("thread/resume", {
                   threadId,
                   excludeTurns: true,
-                  ...codexThreadRuntimeParams({
+                  ...(yield* threadRuntimeParams({
                     mcpSession: yield* readMcpSession(threadInput.providerThread.appThreadId),
                     modelSelection: input.modelSelection,
                     runtimePolicy: input.runtimePolicy,
-                  }),
+                  })),
                 });
               }
               const response = yield* ensureInitialized.pipe(
@@ -7650,7 +7679,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     ...(boundary.lastTurnId === undefined
                       ? {}
                       : { lastTurnId: boundary.lastTurnId }),
-                    ...codexThreadRuntimeParams({
+                    ...(yield* threadRuntimeParams({
                       mcpSession: yield* mcpSessions.read(threadInput.targetThreadId),
                       ...(threadInput.modelSelection === undefined
                         ? {}
@@ -7658,7 +7687,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       ...(threadInput.runtimePolicy === undefined
                         ? {}
                         : { runtimePolicy: threadInput.runtimePolicy }),
-                    }),
+                    })),
                   }),
                 ),
                 Effect.mapError(

@@ -1481,6 +1481,8 @@ export function makeClaudeQueryOptions(input: {
   readonly appendSystemPromptFileText?: string;
   // Flag settings, because a user's settings.json env beats the process env in Claude Code.
   readonly toolSearchOverride?: "true";
+  /** Skill names to keep from the model; the user can still type `/name`. */
+  readonly hiddenUserSkills?: ReadonlyArray<string> | undefined;
 }): ClaudeAgentSdkQueryOptions {
   const compiledSelection = compileClaudeModelSelection(input.modelSelection);
   const {
@@ -1527,12 +1529,25 @@ export function makeClaudeQueryOptions(input: {
           autoCompactWindow: Number(input.settings.autoCompactWindow),
         } as ClaudeSdkSettings);
   // A settings file path cannot take extra keys, so it goes through unchanged.
-  const effectiveQuerySettings =
+  const toolSearchQuerySettings =
     input.toolSearchOverride === undefined || typeof compactQuerySettings === "string"
       ? compactQuerySettings
       : ({
           ...compactQuerySettings,
           env: { ...compactQuerySettings?.env, ENABLE_TOOL_SEARCH: input.toolSearchOverride },
+        } as ClaudeSdkSettings);
+  // Claude Code reads skillOverrides per key from flag settings before the user's own files.
+  const effectiveQuerySettings =
+    !input.hiddenUserSkills?.length || typeof toolSearchQuerySettings === "string"
+      ? toolSearchQuerySettings
+      : ({
+          ...toolSearchQuerySettings,
+          skillOverrides: {
+            ...Object.fromEntries(
+              input.hiddenUserSkills.map((name) => [name, "user-invocable-only"]),
+            ),
+            ...toolSearchQuerySettings?.skillOverrides,
+          },
         } as ClaudeSdkSettings);
   const deviceInstructions = input.mcpServers !== undefined && input.deviceToolsAvailable === true;
   const options: ClaudeAgentSdkQueryOptions = {
@@ -4504,6 +4519,24 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
     );
+
+  // Plugin skills (`plugin:name`) ignore skillOverrides; hiding them means disabling the plugin.
+  const hiddenUserSkills = (policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy) =>
+    policy.hideUserSkills !== true
+      ? Effect.succeed([])
+      : discoverClaudeSkills(
+          adapterOptions.settings,
+          policy.cwd ?? undefined,
+          adapterOptions.environment,
+        ).pipe(
+          Effect.map((skills) =>
+            skills
+              .filter((skill) => skill.scope === "user" && !skill.name.includes(":"))
+              .map((skill) => skill.name),
+          ),
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        );
 
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: adapterOptions.instanceId,
@@ -9947,6 +9980,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             supportedDialogKinds: ["resume_return"],
             ...(appendSystemPromptFileText === undefined ? {} : { appendSystemPromptFileText }),
             ...(toolSearchOverride === undefined ? {} : { toolSearchOverride }),
+            hiddenUserSkills: yield* hiddenUserSkills(turnInput.runtimePolicy),
           });
           const querySession = yield* queryRunner
             .open({

@@ -301,13 +301,19 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
       nativeThreadId: "native-tool-search",
       resume: false,
       cwd: "/workspace",
-      sdkSettings: { env: { OTHER: "kept" } },
+      sdkSettings: { env: { OTHER: "kept" }, skillOverrides: { mine: "on" } },
       toolSearchOverride: "true",
+      hiddenUserSkills: ["mine", "other"],
     });
     assert.deepEqual((options.settings as { env?: Record<string, string> }).env, {
       OTHER: "kept",
       ENABLE_TOOL_SEARCH: "true",
     });
+    // A launch-argument override is the user's explicit choice and wins.
+    assert.deepEqual(
+      (options.settings as { skillOverrides?: Record<string, string> }).skillOverrides,
+      { mine: "on", other: "user-invocable-only" },
+    );
   });
 
   it("projects AskUserQuestion input with question text as the answer key", () => {
@@ -817,6 +823,103 @@ describe("ClaudeAdapterV2 session permissions", () => {
       },
     ]);
   });
+});
+
+describe("ClaudeAdapterV2 agent skills", () => {
+  it.effect("keeps the user's own skills from a profiled agent's model", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const claudeHome = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-claude-agent-skills-home-",
+        });
+        const workspace = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-claude-agent-skills-workspace-",
+        });
+        for (const skillFile of [
+          path.join(claudeHome, "skills", "personal", "SKILL.md"),
+          path.join(workspace, ".claude", "skills", "repo-skill", "SKILL.md"),
+        ]) {
+          yield* fileSystem.makeDirectory(path.dirname(skillFile), { recursive: true });
+          yield* fileSystem.writeFileString(skillFile, "---\ndescription: A skill\n---\nDo it.\n");
+        }
+        const settingsFor = Effect.fn(function* (hideUserSkills: boolean) {
+          let openedOptions: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions | undefined;
+          const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
+            instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+            settings: { ...DEFAULT_CLAUDE_SETTINGS, homePath: claudeHome },
+            environment: {},
+            attachmentsDir: workspace,
+            fileSystem,
+            path,
+            crypto: yield* Crypto.Crypto,
+            idAllocator,
+            queryRunner: {
+              allocateSessionId: Effect.succeed("native-thread-claude-agent-skills"),
+              open: (input) =>
+                Effect.sync(() => {
+                  openedOptions = input.options;
+                  return {
+                    messages: Stream.never,
+                    offer: () => Effect.void,
+                    setModel: () => Effect.void,
+                    applyFlagSettings: () => Effect.void,
+                    setPermissionMode: () => Effect.void,
+                    backgroundTasks: () => Effect.succeed(false),
+                    stopTask: () => Effect.void,
+                    interrupt: Effect.void,
+                    close: Effect.void,
+                  };
+                }),
+              forkSession: () => Effect.die("unused"),
+              subagentLaunchToolUseId: () => Effect.succeed(null),
+              assertComplete: Effect.void,
+            },
+          });
+          const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+            ...CLAUDE_TEST_RUNTIME_POLICY,
+            cwd: workspace,
+            ...(hideUserSkills ? { hideUserSkills } : {}),
+          });
+          const threadId = ThreadId.make("thread-claude-agent-skills");
+          const runtime = yield* adapter.openSession({
+            threadId,
+            providerSessionId: ProviderSessionId.make("provider-session-claude-agent-skills"),
+            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+            runtimePolicy,
+          });
+          const providerThread = yield* runtime.ensureThread({
+            threadId,
+            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+            runtimePolicy,
+          });
+          yield* runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId,
+              providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-claude-agent-skills"),
+              text: "Hello.",
+              attachments: [],
+              runtimePolicy,
+            }),
+          );
+          return (openedOptions?.settings ?? {}) as { skillOverrides?: Record<string, string> };
+        });
+
+        assert.deepEqual((yield* settingsFor(true)).skillOverrides, {
+          personal: "user-invocable-only",
+        });
+        assert.isUndefined((yield* settingsFor(false)).skillOverrides);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
 });
 
 describe("ClaudeAdapterV2 Auto-accept edits", () => {
