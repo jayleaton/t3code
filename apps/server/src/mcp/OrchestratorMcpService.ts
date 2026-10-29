@@ -3104,6 +3104,7 @@ const make = Effect.gen(function* () {
           ...(input.runId === undefined ? {} : { runId: input.runId }),
           timeoutMs: clampWaitTimeoutMs(input.timeoutMs),
           ...(input.untilDelegatedWorkSettled === true ? { untilDelegatedWorkSettled: true } : {}),
+          untilQuestion: input.returnOnQuestion !== false,
         })
         .pipe(Effect.mapError(threadManagementFailure));
       const status = result.run === null ? "idle" : runOutcome(result.run);
@@ -3134,6 +3135,9 @@ const make = Effect.gen(function* () {
         status,
         timedOut: result.timedOut,
         ...(wakesCaller ? { next: ORCHESTRATOR_MCP_RUNNING_TASK_NEXT } : {}),
+        ...(result.pendingQuestion === undefined
+          ? {}
+          : { hasPendingQuestion: true, pendingRequestId: result.pendingQuestion }),
         ...(result.resultRun === undefined
           ? {}
           : {

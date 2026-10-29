@@ -3,6 +3,7 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
 import type {
   OrchestrationV2SearchThreadInput,
+  RuntimeRequestId,
   OrchestrationV2SearchThreadResult,
 } from "@t3tools/contracts";
 import type {
@@ -175,6 +176,8 @@ export interface ThreadManagementWaitInput {
    * completion delivery will wake it again, as a delegated task's result does.
    */
   readonly untilDelegatedWorkSettled?: boolean;
+  /** Also return while the thread is blocked on a live question, which no run end will follow. */
+  readonly untilQuestion?: boolean;
 }
 
 export interface ThreadManagementWaitResult {
@@ -183,6 +186,8 @@ export interface ThreadManagementWaitResult {
   readonly timedOut: boolean;
   /** With `untilDelegatedWorkSettled`, once settled: the run with the thread's final answer. */
   readonly resultRun?: OrchestrationV2Run;
+  /** With `untilQuestion`: the live question the thread is blocked on. */
+  readonly pendingQuestion?: RuntimeRequestId;
 }
 
 export interface ThreadManagementInterruptInput {
@@ -1068,24 +1073,51 @@ const make = Effect.gen(function* () {
         .pipe(Effect.mapError(loadError));
       return pending ? undefined : progress.resultRun;
     });
+    const untilQuestion = input.untilQuestion === true;
+    const blockingQuestion = getProjectThreadRecords(input, ["runtimeRequests"]).pipe(
+      Effect.map(
+        ({ runtimeRequests }) =>
+          runtimeRequests.find(
+            (request) =>
+              request.kind === "user_input" &&
+              request.status === "pending" &&
+              request.responseCapability.type === "live",
+          )?.id,
+      ),
+    );
     const evaluate = Effect.fn("orchestrationV2.threadManagement.evaluate")(function* (
       runs: ReadonlyArray<OrchestrationV2Run>,
     ) {
-      const current = yield* outcome(runs);
-      if (!current.settled || !untilDelegatedWorkSettled) {
-        return { ...current, resultRun: undefined };
-      }
-      const resultRun = yield* delegatedWorkResult;
-      return { ...current, settled: resultRun !== undefined, resultRun };
+      const outcomeNow = yield* outcome(runs);
+      const current =
+        outcomeNow.settled && untilDelegatedWorkSettled
+          ? yield* delegatedWorkResult.pipe(
+              Effect.map((resultRun) => ({
+                ...outcomeNow,
+                settled: resultRun !== undefined,
+                resultRun,
+              })),
+            )
+          : { ...outcomeNow, resultRun: undefined };
+      const pendingQuestion =
+        current.settled || !untilQuestion ? undefined : yield* blockingQuestion;
+      return {
+        ...current,
+        pendingQuestion,
+        done: current.settled || pendingQuestion !== undefined,
+      };
     });
     const settledResult = (current: Effect.Success<ReturnType<typeof evaluate>>) => ({
       threadId: input.threadId,
       run: current.run,
-      timedOut: !current.settled,
+      timedOut: !current.done,
       ...(current.resultRun === undefined ? {} : { resultRun: current.resultRun }),
+      ...(current.pendingQuestion === undefined
+        ? {}
+        : { pendingQuestion: current.pendingQuestion }),
     });
     const initial = yield* evaluate(target.runs);
-    if (initial.settled) return settledResult(initial);
+    if (initial.done) return settledResult(initial);
 
     // A declined continuation records no event, so its effect settling wakes
     // the wait too.
@@ -1100,6 +1132,7 @@ const make = Effect.gen(function* () {
             ...(untilDelegatedWorkSettled
               ? (["subagent.updated", "provider-thread.updated"] as const)
               : []),
+            ...(untilQuestion ? (["runtime-request.updated"] as const) : []),
           ] as const
         ).map((eventType) =>
           orchestrator.streamStoredEventsFrom({
@@ -1128,7 +1161,7 @@ const make = Effect.gen(function* () {
           Effect.flatMap((current) => evaluate(current.runs)),
         ),
       ),
-      Stream.filter((current) => current.settled),
+      Stream.filter((current) => current.done),
       Stream.runHead,
       Effect.timeoutOption(Duration.millis(Math.max(1, input.timeoutMs))),
     );
