@@ -1,5 +1,5 @@
 import { OrchestrationCommandReceiptRepository } from "./persistence/OrchestrationCommandReceipts.ts";
-import { TailnetDevicesError, OrchestrationDispatchCommandError } from "@t3tools/contracts";
+import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as McpGatewayBroker from "./mcp/McpGatewayBroker.ts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -1374,12 +1374,6 @@ export const layerWsRpc = (
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const peerLinks = yield* PeerLinks.PeerLinks;
       const tailnetDevices = yield* TailnetDevices.TailnetDevices;
-      const tailnetDevicesUnavailable = Effect.fail(
-        new TailnetDevicesError({
-          reason: "unreachable",
-          message: "This server cannot link devices yet.",
-        }),
-      );
       const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
@@ -2617,7 +2611,8 @@ export const layerWsRpc = (
         [WS_METHODS.tailnetDevicesSetAccess]: (input) =>
           tailnetDevices.setAccess(input.environmentId, input.access),
         [WS_METHODS.tailnetDevicesUpdateSettings]: (input) => tailnetDevices.updateSettings(input),
-        [WS_METHODS.tailnetDevicesOpenDevice]: () => tailnetDevicesUnavailable,
+        [WS_METHODS.tailnetDevicesOpenDevice]: (input) =>
+          tailnetDevices.openDevice(input.environmentId),
         [WS_METHODS.serverUpdateSettings]:
           /* Request instrumentation already owns the span; keep this helper in that context. */
           Effect.fnUntraced(function* ({ patch, providerInstanceMutation, replicateProfiles }) {

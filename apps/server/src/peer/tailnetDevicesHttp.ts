@@ -13,6 +13,9 @@ export const layer = HttpApiBuilder.group(
       .handle("request", ({ payload }) => devices.handleRequest(payload))
       .handle("confirm", ({ payload }) => devices.handleConfirm(payload))
       .handle("grant", ({ payload }) => devices.handleGrant(payload))
-      .handle("sync", ({ payload, request }) => devices.handleSync(request, payload));
+      .handle("sync", ({ payload, request }) => devices.handleSync(request, payload))
+      .handle("clientCredential", ({ payload, request }) =>
+        devices.handleClientCredential(request, payload),
+      );
   }),
 );

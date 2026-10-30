@@ -57,6 +57,8 @@ import {
 } from "./orchestrationV2.ts";
 import {
   TailnetChallengeConfirm,
+  TailnetDeviceClientCredential,
+  TailnetDeviceClientCredentialRequest,
   TailnetDevicesSyncPayload,
   TailnetDevicesUnauthorizedError,
   TailnetGrant,
@@ -872,6 +874,13 @@ class EnvironmentTailnetDevicesHttpApi extends HttpApiGroup.make("tailnetDevices
     HttpApiEndpoint.post("sync", "/api/tailnet-devices/sync", {
       payload: TailnetDevicesSyncPayload,
       success: TailnetDevicesSyncPayload,
+      error: TailnetDevicesUnauthorizedError,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("clientCredential", "/api/tailnet-devices/client-credential", {
+      payload: TailnetDeviceClientCredentialRequest,
+      success: TailnetDeviceClientCredential,
       error: TailnetDevicesUnauthorizedError,
     }),
   ) {}

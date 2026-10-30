@@ -132,6 +132,12 @@ through another. Each `/mcp` request narrows a device session's token to its
 current entry, so a change applies without re-linking; widening past what the
 token was minted with takes a new handshake.
 
+An app opens another of my devices through the server it is connected to, which
+asks that device over its device session for a one-time pairing credential. The
+app redeems it directly at the first address that answers as that device. App
+sessions carry no agent mode ceiling, so a device below full access opens
+read-only.
+
 **Work a link paired below full access starts stays within that link.** The
 receiving environment knows a session is a peer link because the linking side
 registers its OAuth client with the `t3code-peer-link` software id, and the

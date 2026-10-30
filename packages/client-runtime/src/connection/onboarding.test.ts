@@ -5,6 +5,7 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -56,6 +57,8 @@ function layerPairingHttp(
   calls: Array<{ readonly url: string; readonly init: RequestInit }>,
   options?: {
     readonly failDescriptor?: boolean;
+    /** Hosts whose descriptor does not answer. */
+    readonly downHosts?: ReadonlyArray<string>;
     readonly failExchange?: boolean;
     readonly protocolVersion?: number;
     readonly selfUpdate?: boolean;
@@ -70,7 +73,10 @@ function layerPairingHttp(
     calls.push({ url, init });
 
     if (url.endsWith("/.well-known/t3/environment")) {
-      if (options?.failDescriptor === true) {
+      if (
+        options?.failDescriptor === true ||
+        options?.downHosts?.includes(new URL(url).host) === true
+      ) {
         return Promise.resolve(
           Response.json({ message: "descriptor unavailable" }, { status: 503 }),
         );
@@ -279,6 +285,25 @@ describe("connection onboarding", () => {
       expect(tokenParams.get("client_os")).toBe("Test OS");
     }),
   );
+
+  it.effect("spends a device's credential only at an address that answers as that device", () => {
+    const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
+    return Effect.gen(function* () {
+      const onboarding = yield* Onboarding.ConnectionOnboarding;
+
+      const environmentId = yield* onboarding.registerDevice({
+        environmentId: PAIRED_ENVIRONMENT_ID,
+        urls: ["https://down.example.test", "https://remote.example.test"],
+        credential: "pairing-token",
+        expiresAt: DateTime.makeUnsafe(0),
+      });
+
+      expect(environmentId).toBe(PAIRED_ENVIRONMENT_ID);
+      expect(
+        calls.filter((call) => call.url.endsWith("/oauth/token")).map((call) => call.url),
+      ).toEqual(["https://remote.example.test/oauth/token"]);
+    }).pipe(Effect.provide(layerPairingOnboarding({ downHosts: ["down.example.test"] }, calls)));
+  });
 
   it.effect("turns a switched-off environment back on when it is paired again", () =>
     Effect.gen(function* () {
