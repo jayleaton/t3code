@@ -118,9 +118,11 @@ const WIRE_SNAPSHOT = {
   ],
 };
 
+const decodeWireSnapshot = Schema.decodeSync(Schema.toCodecJson(TailnetDevicesSnapshot));
+
 describe("linkedDeviceRows over the server's snapshot", () => {
   it("keeps every listed device, joined to the link it came from", () => {
-    const snapshot = Schema.decodeSync(Schema.toCodecJson(TailnetDevicesSnapshot))(WIRE_SNAPSHOT);
+    const snapshot = decodeWireSnapshot(WIRE_SNAPSHOT);
     const rows = linkedDeviceRows({
       devices: snapshot.devices,
       links: [link(vps, "VPS"), link(studio, "studio-01")],
