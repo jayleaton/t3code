@@ -12,7 +12,7 @@ and select **Details**. The first part marked as failed is the cause. Find its
 section below.
 
 To see the host's side, run `t3 connect status` on the host, or open
-**Settings > Sharing & access** on the host. Both check the host's T3 Connect
+**Settings > Environments** on the host. Both check the host's T3 Connect
 address from the host, and say why it fails. `t3 connect` runs the same check
 when it finishes setup. This check cannot test another device's network. For a
 problem on one device, use **Details** on that device.
@@ -105,7 +105,7 @@ T3 Connect does not have an active link between your account and the host.
   account on this device and on the host. On the host, run `t3 connect logout`,
   then `t3 connect`.
 - **T3 Connect is off on the host, or the host only publishes agent activity.**
-  On the host, open **Settings > Sharing & access** and turn **T3 Connect** on, or
+  On the host, open **Settings > Environments** and turn **T3 Connect** on, or
   run `t3 connect`.
 - **The host was linked, but the server did not apply the link yet.** Run
   `t3 service restart` on the host, or restart `t3 serve`.

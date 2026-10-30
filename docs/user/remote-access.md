@@ -11,7 +11,7 @@ that machine and shown on connected devices. **Reset name** restores the origina
 
 T3 Connect makes an environment available to your other devices without setting
 up router forwarding. In the desktop app on the host, open **Settings →
-Sharing & access**, sign in, and enable **T3 Connect** for that environment.
+Environments**, sign in, and enable **T3 Connect** for that environment.
 
 For a command-line host, run:
 
@@ -52,7 +52,7 @@ cannot add more until you are under the limit again.
 
 Use direct pairing when the other device can reach the host's network address.
 
-On a desktop host, open **Settings → Sharing & access**, enable **Network access**,
+On a desktop host, open **Settings → Environments**, enable **Network access**,
 then create a pairing link using an address the other device can reach. Changing
 network access restarts the desktop app. You can turn it off in the same place.
 
@@ -85,7 +85,7 @@ Android app then trusts it.
 Pairing authorizes that device for future connections. Use a fresh one-time link
 for each new device; you do not need the original token to reconnect. Links
 created in Settings can only be copied from the client that created them while
-its Sharing & access page stays open. If you leave or reload that page, create
+its Environments page stays open. If you leave or reload that page, create
 another link to share.
 
 ### Reach one machine several ways
@@ -150,7 +150,7 @@ Mobile keeps its manual environment selection.
 ### Tailscale HTTPS
 
 Join both devices to the same tailnet. In the desktop app, enable **Tailscale
-HTTPS** in **Settings → Sharing & access**. Turn it off there to remove that route.
+HTTPS** in **Settings → Environments**. Turn it off there to remove that route.
 
 To start a command-line server with Tailscale HTTPS:
 
@@ -209,7 +209,7 @@ running is left alone.
 
 Each desktop app keeps one session on the host for its SSH connection and reuses
 it when it reconnects. Revoke sessions you no longer use in **Settings →
-Sharing & access** on the host, or on a headless host with `t3 auth session list` and
+Environments** on the host, or on a headless host with `t3 auth session list` and
 `t3 auth session revoke <id>`. A desktop that can still sign in over SSH pairs
 again on its next connect.
 
@@ -289,7 +289,7 @@ choose **Link**, and pick the other machine or enter its address. The list
 holds the machines this app knows and those on your T3 Connect account. If this
 app is connected to that machine with a session that manages access there, it
 makes the pairing code itself; otherwise paste one from that machine's
-**Settings → Sharing & access**. From a terminal, use
+**Settings → Environments**. From a terminal, use
 `t3 environment link <address> --pairing-code <code> --access <mode>`.
 
 You can also ask an agent to link a machine by name, such as "delegate this to
@@ -303,7 +303,7 @@ and the access, then approve.
   access, the link's agents can change only threads it started, not that
   machine's own threads, projects or settings, and they skip its project setup
   scripts.
-- The link shows up in that machine's **Settings → Sharing & access** like any
+- The link shows up in that machine's **Settings → Environments** like any
   outside agent. Revoke it there to end it. **Forget** on this machine only
   removes it here.
 - Links last 30 days. Link again with a new pairing code to renew one.
@@ -317,7 +317,7 @@ fails with that reason.
 
 ## Manage or revoke access
 
-On the host, **Settings → Sharing & access** lets authorized administrators create
+On the host, **Settings → Environments** lets authorized administrators create
 pairing links and revoke client sessions. Revoking an unused link prevents new
 pairings; revoke a device's session to remove its existing access. Command-line
 management is available through `t3 auth --help`.
@@ -373,7 +373,7 @@ page, or **Settings → T3 Connect** on mobile, and choose **Deregister**. This
 revokes its cloud access and frees its host space even when the environment is
 offline or has been wiped. When T3 Connect rejects a host's link, the host
 shows that it was removed from T3 Connect. To link it again, turn on
-**T3 Connect** in **Settings → Sharing & access** on a desktop host, or run
+**T3 Connect** in **Settings → Environments** on a desktop host, or run
 `t3 connect link` on a command-line host and then restart T3 Code there. A
 command-line host that released its tunnel when it last stopped may link itself
 again on its next start; run `t3 connect unlink` on that host to keep it off.
@@ -407,7 +407,7 @@ error, where the problem is, and how to fix it.
 ## Use MCP with connected environments
 
 Agents in T3 Code chats always have the T3 Agents tools for the machine they run on. To let
-them act on your other machines too, enable **Settings → MCP Gateway** in the desktop app and
+them act on your other machines too, enable **Settings → Environments → MCP Gateway** in the desktop app and
 grant access to each environment involved, including the one the chat runs on. Keep this
 desktop connected while agents use it; calls for other machines go through it, under the
 grants you set. Disabling the gateway stops those calls immediately.
@@ -452,7 +452,7 @@ app. Every question in the request needs an answer. Answering needs the same sen
 
 ### Pause or stop work through MCP
 
-Default access does not include pause or stop. In **Settings → MCP Gateway**, open the target
+Default access does not include pause or stop. In **Settings → Environments → MCP Gateway**, open the target
 machine's access menu, enable **Control active work**, and select **Save**. This grants `control`
 only for that environment. The broader `lifecycle` grant also permits thread controls, but neither
 **All capabilities** nor access to other machines is needed. Use `t3_list_environments` to confirm
@@ -473,7 +473,7 @@ an agent to stop is cooperative: message acceptance alone does not prove the age
 
 ### Open a remote chat
 
-In the installed desktop app, connect the remote environment and configure **Settings → MCP Gateway**
+In the installed desktop app, connect the remote environment and configure **Settings → Environments → MCP Gateway**
 with your MCP assistant. Grant the environment read access. Your assistant can use `t3_open_thread`
 with the environment and thread IDs to open that chat and bring this desktop window forward.
 The remote machine supplies the chat; the desktop connected to the gateway displays it. Opening a

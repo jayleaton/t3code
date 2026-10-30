@@ -30,7 +30,7 @@ const ITEMS: ReadonlyArray<SettingsSearchItem> = [
   {
     id: "network-access",
     title: "Network access",
-    to: "/settings/access",
+    to: "/settings/connections",
     searchTerms: ["remote pairing backend"],
   },
   {
@@ -55,7 +55,9 @@ describe("searchSettings", () => {
   it("matches titles, sections, and remembered setting details", () => {
     expect(searchSettings("word", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
     expect(searchSettings("network", ITEMS).map((item) => item.id)).toEqual(["network-access"]);
-    expect(searchSettings("sharing", ITEMS).map((item) => item.id)).toEqual(["network-access"]);
+    expect(searchSettings("environments", ITEMS).map((item) => item.id)).toEqual([
+      "network-access",
+    ]);
     expect(searchSettings("claude", ITEMS).map((item) => item.id)).toEqual(["providers"]);
     expect(searchSettings("long lines", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
   });
@@ -344,14 +346,15 @@ describe("movedSettingsPath", () => {
     expect(movedSettingsPath("/settings/general", "text-generation-model")).toBe(
       "/settings/threads",
     );
-    expect(movedSettingsPath("/settings/connections", "authorized-clients")).toBe(
-      "/settings/access",
+    expect(movedSettingsPath("/settings/access", "authorized-clients")).toBe(
+      "/settings/connections",
     );
+    expect(movedSettingsPath("/settings/access", "")).toBe("/settings/connections");
+    expect(movedSettingsPath("/settings/mcp-gateway", "")).toBe("/settings/connections");
     expect(movedSettingsPath("/settings/source-control", "worktree-branch-naming")).toBe(
       "/settings/worktrees",
     );
     expect(movedSettingsPath("/settings/appearance", "diff-color-scheme")).toBe("/settings/diffs");
-    expect(movedSettingsPath("/settings/connections", "network-access")).toBe("/settings/access");
     expect(movedSettingsPath("/settings/storage", "storage-worktrees")).toBe("/settings/worktrees");
     expect(movedSettingsPath("/settings/storage", "")).toBe("/settings/maintenance");
     expect(movedSettingsPath("/settings/integrations", "devices")).toBe("/settings/devices");
@@ -362,6 +365,7 @@ describe("movedSettingsPath", () => {
     expect(movedSettingsPath("/settings/general", "time-format")).toBeNull();
     expect(movedSettingsPath("/settings/projects", "project-defaults")).toBeNull();
     expect(movedSettingsPath("/settings/connections", "remote-environments")).toBeNull();
+    expect(movedSettingsPath("/settings/connections", "network-access")).toBeNull();
     expect(movedSettingsPath("/settings/appearance", "theme")).toBeNull();
   });
 });

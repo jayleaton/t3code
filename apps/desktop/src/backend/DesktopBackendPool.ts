@@ -135,7 +135,7 @@ export const layer = Layer.effect(
         });
         yield* electronDialog.showErrorBox(
           "WSL backend couldn't start",
-          `${reason}\n\nFalling back to the Windows backend so T3 Agents can open. Re-enable the WSL backend from Settings > Sharing & access once the WSL distro is fixed.`,
+          `${reason}\n\nFalling back to the Windows backend so T3 Agents can open. Re-enable the WSL backend from Settings > Environments once the WSL distro is fixed.`,
         );
         // Clear wslOnly too so enabling WSL cannot restore a failed mode.
         // Keep the in-memory fallback if persistence fails.

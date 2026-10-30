@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import { type GatewayScope, type GatewayStatusSnapshot } from "@t3tools/client-runtime/gateway";
-import { ChevronDownIcon, ServerCogIcon } from "lucide-react";
+import { ChevronDownIcon } from "lucide-react";
 import { useState, useSyncExternalStore } from "react";
 
 import { useEnvironments } from "../../state/environments";
@@ -23,7 +23,7 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { Switch } from "../ui/switch";
-import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
+import { SettingsRow } from "./settingsLayout";
 import {
   getMcpGatewayConfiguration,
   getMcpGatewayPort,
@@ -490,6 +490,7 @@ export function McpGatewayOperationalStatus({
   );
 }
 
+/** The gateway's rows; Environments shows them in a fold. */
 export function McpGatewaySettings() {
   const { environments, isReady: registryReady } = useEnvironments();
   const configuration = useSyncExternalStore(
@@ -550,197 +551,191 @@ export function McpGatewaySettings() {
   );
 
   return (
-    <SettingsPageContainer>
-      <SettingsSection title="MCP Gateway" icon={<ServerCogIcon className="size-5" />}>
-        {configurationError && <p role="alert">{configurationError}</p>}
-        <SettingsRow
-          id="enable-mcp-gateway"
-          title="Enable MCP Gateway"
-          description="Start the desktop gateway and make it available to new T3-managed agent sessions on granted local and remote environments. Restart existing agent sessions to attach the gateway."
-          status={`Status: ${status}`}
-          control={
-            <Switch
-              checked={enabled}
-              aria-label="Enable MCP Gateway"
-              onCheckedChange={(checked) => {
-                const next = Boolean(checked);
-                try {
-                  setMcpGatewayToken(token);
-                  setMcpGatewayEnabled(next);
-                  publishMcpGatewayStatus(next ? "connecting" : "disabled");
-                  setConfigurationError(null);
-                } catch {
-                  setConfigurationError(
-                    "Gateway settings could not be saved. Check browser storage access and try again.",
-                  );
-                }
-              }}
-            />
-          }
-        />
-        <SettingsRow
-          id="mcp-gateway-port"
-          title="Bridge port"
-          description="Use the companion's T3_MCP_BRIDGE_PORT, or leave the default 47631. Connections stay on this computer."
-          control={
-            <Input
-              aria-label="MCP gateway bridge port"
-              type="number"
-              min={1}
-              max={65535}
-              value={bridgePort}
-              onChange={(event) =>
-                setPortDraft({ source: configuration, value: event.target.value })
+    <>
+      {configurationError && <p role="alert">{configurationError}</p>}
+      <SettingsRow
+        id="enable-mcp-gateway"
+        title="Enable MCP Gateway"
+        description="Start the desktop gateway and make it available to new T3-managed agent sessions on granted local and remote environments. Restart existing agent sessions to attach the gateway."
+        status={`Status: ${status}`}
+        control={
+          <Switch
+            checked={enabled}
+            aria-label="Enable MCP Gateway"
+            onCheckedChange={(checked) => {
+              const next = Boolean(checked);
+              try {
+                setMcpGatewayToken(token);
+                setMcpGatewayEnabled(next);
+                publishMcpGatewayStatus(next ? "connecting" : "disabled");
+                setConfigurationError(null);
+              } catch {
+                setConfigurationError(
+                  "Gateway settings could not be saved. Check browser storage access and try again.",
+                );
               }
-              onBlur={() => {
-                try {
-                  setMcpGatewayPort(Number(bridgePort));
-                  setConfigurationError(null);
-                } catch {
-                  setPortDraft(null);
-                  setConfigurationError(
-                    "Choose a port from 1 to 65535 and ensure browser storage is available.",
-                  );
-                }
-              }}
-            />
-          }
-        />
-        <SettingsRow
-          id="mcp-gateway-bridge-token"
-          title="Bridge token"
-          description="Set this to the same T3_MCP_BRIDGE_TOKEN configured in the MCP host. It is kept only for this browser session."
-          control={
-            <Input
-              value={token}
-              type="password"
-              autoComplete="off"
-              placeholder="At least 16 characters"
-              aria-label="MCP gateway bridge token"
-              onChange={(event) =>
-                setTokenDraft({ source: configuration, value: event.target.value })
-              }
-              onBlur={() => setMcpGatewayToken(token)}
-            />
-          }
-        />
-        <SettingsRow
-          id="mcp-gateway-environment-grants"
-          title="Environment grants"
-          description="One access control per machine: off by default, or on with the baseline capabilities. Fine-grained tweaks live in each machine's menu. Changes apply when you save."
-          status={
-            grantsDirty
-              ? "Unsaved changes"
-              : `${Object.keys(savedGrants).length} machine${Object.keys(savedGrants).length === 1 ? "" : "s"} with access grants`
-          }
-          control={
-            grantsDirty ? (
-              <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    try {
-                      setMcpGatewayGrants(pendingGrants);
-                      setGrantsDraft(null);
-                      setConfigurationError(null);
-                    } catch {
-                      setConfigurationError(
-                        "Could not save gateway permissions. Your changes have not been applied.",
-                      );
-                    }
-                  }}
-                >
-                  Save
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setGrantsDraft(null);
-                  }}
-                >
-                  Cancel
-                </Button>
-              </div>
-            ) : undefined
-          }
-        >
-          <McpEnvironmentGrantMatrix
-            environments={environmentRows}
-            registryReady={registryReady}
-            grants={pendingGrants ?? savedGrants}
-            onChange={(value) => setGrantsDraft({ source: savedGrants, value })}
-          />
-        </SettingsRow>
-        <SettingsRow
-          id="mcp-gateway-operational-status"
-          title="Events and delivery"
-          description="Live event retention, cursors, subscriptions, webhooks, and delivery queue health from the authenticated local companion."
-        >
-          <McpGatewayOperationalStatus
-            state={status}
-            snapshot={statusSnapshot}
-            environments={environmentRows}
-            grants={savedGrants}
-            labels={Object.fromEntries(
-              environmentRows.map((row) => [row.environmentId, row.label]),
-            )}
-            onRefresh={() => {
-              requestMcpGatewayStatusSnapshot();
             }}
           />
-        </SettingsRow>
-        <SettingsRow
-          id="mcp-gateway-agents"
-          title="Agents"
-          description="MCP uses the shared Agents library for instructions, provider, model, and execution settings. Changes apply to new chats; existing chats keep their instructions."
-          control={
-            <Link to="/agents" className="text-sm underline underline-offset-4">
-              Manage agents
-            </Link>
-          }
-        />
-        <SettingsRow
-          title="External MCP hosts"
-          description="For assistants outside T3 Code, merge this configuration into their MCP settings on this computer, preserving existing servers, then reconnect the assistant. For OpenCode, use the OpenCode configuration in ~/.config/opencode/opencode.jsonc. The copied configuration includes your bridge token."
-          status={
-            launch === null
-              ? "Available in the installed desktop app."
-              : isCopied
-                ? "Copied"
-                : undefined
-          }
-          control={
-            <div className="flex gap-2">
+        }
+      />
+      <SettingsRow
+        id="mcp-gateway-port"
+        title="Bridge port"
+        description="Use the companion's T3_MCP_BRIDGE_PORT, or leave the default 47631. Connections stay on this computer."
+        control={
+          <Input
+            aria-label="MCP gateway bridge port"
+            type="number"
+            min={1}
+            max={65535}
+            value={bridgePort}
+            onChange={(event) => setPortDraft({ source: configuration, value: event.target.value })}
+            onBlur={() => {
+              try {
+                setMcpGatewayPort(Number(bridgePort));
+                setConfigurationError(null);
+              } catch {
+                setPortDraft(null);
+                setConfigurationError(
+                  "Choose a port from 1 to 65535 and ensure browser storage is available.",
+                );
+              }
+            }}
+          />
+        }
+      />
+      <SettingsRow
+        id="mcp-gateway-bridge-token"
+        title="Bridge token"
+        description="Set this to the same T3_MCP_BRIDGE_TOKEN configured in the MCP host. It is kept only for this browser session."
+        control={
+          <Input
+            value={token}
+            type="password"
+            autoComplete="off"
+            placeholder="At least 16 characters"
+            aria-label="MCP gateway bridge token"
+            onChange={(event) =>
+              setTokenDraft({ source: configuration, value: event.target.value })
+            }
+            onBlur={() => setMcpGatewayToken(token)}
+          />
+        }
+      />
+      <SettingsRow
+        id="mcp-gateway-environment-grants"
+        title="Environment grants"
+        description="One access control per machine: off by default, or on with the baseline capabilities. Fine-grained tweaks live in each machine's menu. Changes apply when you save."
+        status={
+          grantsDirty
+            ? "Unsaved changes"
+            : `${Object.keys(savedGrants).length} machine${Object.keys(savedGrants).length === 1 ? "" : "s"} with access grants`
+        }
+        control={
+          grantsDirty ? (
+            <div className="flex items-center gap-2">
               <Button
                 size="sm"
-                variant="outline"
-                disabled={launch === null || token.length < 16}
-                onClick={() => copyConfig("opencode")}
+                onClick={() => {
+                  try {
+                    setMcpGatewayGrants(pendingGrants);
+                    setGrantsDraft(null);
+                    setConfigurationError(null);
+                  } catch {
+                    setConfigurationError(
+                      "Could not save gateway permissions. Your changes have not been applied.",
+                    );
+                  }
+                }}
               >
-                Copy OpenCode config
+                Save
               </Button>
               <Button
                 size="sm"
-                variant="outline"
-                disabled={launch === null || token.length < 16}
-                onClick={() => copyConfig("standard")}
+                variant="ghost"
+                onClick={() => {
+                  setGrantsDraft(null);
+                }}
               >
-                Copy MCP config
+                Cancel
               </Button>
             </div>
-          }
-        >
-          {failedCopy !== null ? (
-            <Textarea readOnly aria-label="MCP configuration to copy manually" value={failedCopy} />
-          ) : null}
-        </SettingsRow>
-        <SettingsRow
-          title="Companion endpoint"
-          description="The desktop starts the companion when enabled. Managed agents reach it through their T3 environment connection, including remote and relay connections. External MCP hosts can use the configuration above."
-          status={`ws://127.0.0.1:${getMcpGatewayPort()}`}
+          ) : undefined
+        }
+      >
+        <McpEnvironmentGrantMatrix
+          environments={environmentRows}
+          registryReady={registryReady}
+          grants={pendingGrants ?? savedGrants}
+          onChange={(value) => setGrantsDraft({ source: savedGrants, value })}
         />
-      </SettingsSection>
-    </SettingsPageContainer>
+      </SettingsRow>
+      <SettingsRow
+        id="mcp-gateway-operational-status"
+        title="Events and delivery"
+        description="Live event retention, cursors, subscriptions, webhooks, and delivery queue health from the authenticated local companion."
+      >
+        <McpGatewayOperationalStatus
+          state={status}
+          snapshot={statusSnapshot}
+          environments={environmentRows}
+          grants={savedGrants}
+          labels={Object.fromEntries(environmentRows.map((row) => [row.environmentId, row.label]))}
+          onRefresh={() => {
+            requestMcpGatewayStatusSnapshot();
+          }}
+        />
+      </SettingsRow>
+      <SettingsRow
+        id="mcp-gateway-agents"
+        title="Agents"
+        description="MCP uses the shared Agents library for instructions, provider, model, and execution settings. Changes apply to new chats; existing chats keep their instructions."
+        control={
+          <Link to="/agents" className="text-sm underline underline-offset-4">
+            Manage agents
+          </Link>
+        }
+      />
+      <SettingsRow
+        title="External MCP hosts"
+        description="For assistants outside T3 Code, merge this configuration into their MCP settings on this computer, preserving existing servers, then reconnect the assistant. For OpenCode, use the OpenCode configuration in ~/.config/opencode/opencode.jsonc. The copied configuration includes your bridge token."
+        status={
+          launch === null
+            ? "Available in the installed desktop app."
+            : isCopied
+              ? "Copied"
+              : undefined
+        }
+        control={
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={launch === null || token.length < 16}
+              onClick={() => copyConfig("opencode")}
+            >
+              Copy OpenCode config
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={launch === null || token.length < 16}
+              onClick={() => copyConfig("standard")}
+            >
+              Copy MCP config
+            </Button>
+          </div>
+        }
+      >
+        {failedCopy !== null ? (
+          <Textarea readOnly aria-label="MCP configuration to copy manually" value={failedCopy} />
+        ) : null}
+      </SettingsRow>
+      <SettingsRow
+        title="Companion endpoint"
+        description="The desktop starts the companion when enabled. Managed agents reach it through their T3 environment connection, including remote and relay connections. External MCP hosts can use the configuration above."
+        status={`ws://127.0.0.1:${getMcpGatewayPort()}`}
+      />
+    </>
   );
 }
