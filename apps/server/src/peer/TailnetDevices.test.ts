@@ -2,6 +2,12 @@ import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import {
+  AuthAccessReadScope,
+  AuthDiagnosticsReadScope,
+  AuthFilesystemReadScope,
+  AuthOrchestrationReadScope,
+  AuthRelayReadScope,
+  AuthStandardClientScopes,
   EnvironmentHttpApi,
   EnvironmentId,
   type ExecutionEnvironmentDescriptor,
@@ -190,6 +196,8 @@ const serveDeviceOn = (
           ),
         ),
       settings: Context.get(context, ServerSettings.ServerSettingsService),
+      /** One-time pairing credentials this device issued, with their scopes. */
+      pairingLinks: auth.listPairingLinks(),
       /** Grants delivered to this device, each carrying a token. */
       grants,
       /** Sessions this device issued to other devices. */
@@ -505,6 +513,60 @@ describe("tailnet device access", () => {
         Option.some(laptop.environmentId),
       );
       expect(Option.isSome(yield* a.links.get(box.environmentId))).toBe(true);
+    }),
+  );
+});
+
+describe("opening a device from the app", () => {
+  it.live("gets a one-time app credential from the device, within its access", () =>
+    Effect.gen(function* () {
+      const tailnet = yield* makeTailnet;
+      const a = yield* serveDevice(laptop, tailnet);
+      const b = yield* serveDevice(studio, tailnet);
+      yield* tailnet.join(a.url);
+      yield* tailnet.join(b.url);
+      yield* a.devices.linkIfMine({ url: b.url });
+
+      const full = yield* a.devices.openDevice(studio.environmentId);
+      expect([full.environmentId, full.urls]).toEqual([studio.environmentId, [b.url]]);
+      yield* b.devices.setAccess(laptop.environmentId, "read-only");
+      yield* a.devices.openDevice(studio.environmentId);
+
+      expect((yield* b.pairingLinks).map((link) => link.permissions?.toSorted())).toEqual([
+        [
+          AuthAccessReadScope,
+          AuthDiagnosticsReadScope,
+          AuthFilesystemReadScope,
+          AuthOrchestrationReadScope,
+          AuthRelayReadScope,
+        ].toSorted(),
+        [...AuthStandardClientScopes].toSorted(),
+      ]);
+    }),
+  );
+
+  it.live("gets nothing from a device that revoked it, nor without its device session", () =>
+    Effect.gen(function* () {
+      const tailnet = yield* makeTailnet;
+      const a = yield* serveDevice(laptop, tailnet);
+      const b = yield* serveDevice(studio, tailnet);
+      yield* tailnet.join(a.url);
+      yield* tailnet.join(b.url);
+      yield* a.devices.linkIfMine({ url: b.url });
+      yield* b.devices.setAccess(laptop.environmentId, "revoked");
+
+      const refused = yield* a.devices.openDevice(studio.environmentId).pipe(Effect.flip);
+      // Anyone can claim to be a device; without its session the device mints nothing.
+      const forged = yield* Effect.gen(function* () {
+        const client = yield* PeerLinks.peerApiClient(yield* HttpClient.HttpClient, b.url);
+        return yield* client.tailnetDevices.clientCredential({
+          payload: { from: laptop.environmentId },
+        });
+      }).pipe(Effect.flip, Effect.provide(FetchHttpClient.layer));
+
+      expect(refused._tag).toBe("TailnetDevicesError");
+      expect(forged._tag).toBe("TailnetDevicesUnauthorizedError");
+      expect(yield* b.pairingLinks).toEqual([]);
     }),
   );
 });

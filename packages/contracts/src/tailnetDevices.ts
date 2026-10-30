@@ -148,6 +148,10 @@ export const TailnetDeviceClientCredential = Schema.Struct({
 });
 export type TailnetDeviceClientCredential = typeof TailnetDeviceClientCredential.Type;
 
+/** Server to one of my devices, over its device session: a credential for my app. */
+export const TailnetDeviceClientCredentialRequest = Schema.Struct({ from: EnvironmentId });
+export type TailnetDeviceClientCredentialRequest = typeof TailnetDeviceClientCredentialRequest.Type;
+
 export const TailnetDeviceStatus = Schema.Literals(["online", "offline", "revoked"]);
 export type TailnetDeviceStatus = typeof TailnetDeviceStatus.Type;
 

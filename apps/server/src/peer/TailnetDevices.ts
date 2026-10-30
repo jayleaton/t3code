@@ -1,10 +1,20 @@
 import {
+  AuthAccessReadScope,
+  AuthDiagnosticsReadScope,
+  AuthFilesystemReadScope,
+  type AuthGrantScope,
+  type AuthMcpClientAccess,
+  AuthOrchestrationReadScope,
+  AuthRelayReadScope,
+  AuthStandardClientScopes,
   type EnvironmentId,
   type ExecutionEnvironmentDescriptor,
   type PeerLink,
   TAILNET_DEVICE_CAPABILITY,
   type TailnetChallengeConfirm,
   type TailnetDevice,
+  type TailnetDeviceClientCredential,
+  type TailnetDeviceClientCredentialRequest,
   type TailnetDeviceAccess,
   type DevicePolicyEntry,
   type TailnetDeviceDescriptor,
@@ -119,6 +129,21 @@ const unreachable = (message: string, cause?: unknown) =>
     ...(cause === undefined ? {} : { cause }),
   });
 
+/**
+ * App sessions carry no agent mode ceiling, so anything short of full access
+ * opens the app read-only rather than with a shell and full control.
+ */
+const clientScopesFor = (access: AuthMcpClientAccess): ReadonlyArray<AuthGrantScope> =>
+  access === "full-access"
+    ? AuthStandardClientScopes
+    : [
+        AuthOrchestrationReadScope,
+        AuthFilesystemReadScope,
+        AuthDiagnosticsReadScope,
+        AuthAccessReadScope,
+        AuthRelayReadScope,
+      ];
+
 const storageError = (cause: unknown) =>
   new TailnetDevicesError({
     reason: "storage",
@@ -157,6 +182,13 @@ export class TailnetDevices extends Context.Service<
       readonly environmentId?: EnvironmentId;
       readonly url?: string;
     }) => Effect.Effect<Option.Option<PeerLink>>;
+    /**
+     * A one-time pairing credential for my app on another of my devices, asked
+     * for over this device's session there, so the app connects without a code.
+     */
+    readonly openDevice: (
+      environmentId: EnvironmentId,
+    ) => Effect.Effect<TailnetDeviceClientCredential, TailnetDevicesError>;
     /** Runs the handshake again for a device's link, as when its token stops working. */
     readonly refresh: (environmentId: EnvironmentId) => Effect.Effect<void>;
     readonly handleRequest: (request: TailnetLinkRequest) => Effect.Effect<TailnetLinkResult>;
@@ -166,6 +198,10 @@ export class TailnetDevices extends Context.Service<
       request: HttpServerRequest.HttpServerRequest,
       payload: TailnetDevicesSyncPayload,
     ) => Effect.Effect<TailnetDevicesSyncPayload, TailnetDevicesUnauthorizedError>;
+    readonly handleClientCredential: (
+      request: HttpServerRequest.HttpServerRequest,
+      payload: TailnetDeviceClientCredentialRequest,
+    ) => Effect.Effect<TailnetDeviceClientCredential, TailnetDevicesUnauthorizedError>;
     /** Finds and links devices on the tailnet once, and refreshes and syncs existing links. */
     readonly scan: Effect.Effect<void>;
     /** Scans at startup, every ten minutes and when the tailnet's devices change. */
@@ -634,21 +670,95 @@ const make = Effect.gen(function* () {
   const handleSync: TailnetDevices["Service"]["handleSync"] = Effect.fn(
     "TailnetDevices.handleSync",
   )(function* (request, payload) {
-    const caller = yield* auth.authenticateMcpClient(request).pipe(Effect.option);
-    if (
-      Option.isNone(caller) ||
-      caller.value.peerEnvironmentId === undefined ||
-      caller.value.peerEnvironmentId !== payload.from.environmentId
-    ) {
-      return yield* new TailnetDevicesUnauthorizedError({
-        message: "Sync needs the session this machine issued to the calling device.",
-      });
-    }
-    yield* mergeSync(payload, caller.value.peerEnvironmentId).pipe(
+    yield* authenticateDevice(request, payload.from.environmentId);
+    yield* mergeSync(payload, payload.from.environmentId).pipe(
       Effect.tapError((cause) => Effect.logWarning("Could not merge a device's sync", { cause })),
       Effect.ignore,
     );
     return yield* syncPayload;
+  });
+
+  /** The device session a linked device holds here, by the id it claims. */
+  const authenticateDevice = Effect.fn("TailnetDevices.authenticateDevice")(function* (
+    request: HttpServerRequest.HttpServerRequest,
+    claimed: EnvironmentId,
+  ) {
+    const caller = yield* auth.authenticateMcpClient(request).pipe(Effect.option);
+    if (Option.isNone(caller) || caller.value.peerEnvironmentId !== claimed) {
+      return yield* new TailnetDevicesUnauthorizedError({
+        message: "This needs the session this machine issued to the calling device.",
+      });
+    }
+    return caller.value;
+  });
+
+  const handleClientCredential: TailnetDevices["Service"]["handleClientCredential"] = Effect.fn(
+    "TailnetDevices.handleClientCredential",
+  )(function* (request, payload) {
+    const caller = yield* authenticateDevice(request, payload.from);
+    const self = yield* selfDescriptor;
+    const issued = yield* auth
+      .issuePairingCredential({
+        scopes: clientScopesFor(caller.access),
+        label: `Opened from ${caller.label.replace(/^T3 Code · /u, "")}`,
+      })
+      .pipe(Effect.orDie);
+    return {
+      environmentId: self.environmentId,
+      urls: self.urls,
+      credential: issued.credential,
+      expiresAt: issued.expiresAt,
+    } satisfies TailnetDeviceClientCredential;
+  });
+
+  const openDevice: TailnetDevices["Service"]["openDevice"] = Effect.fn(
+    "TailnetDevices.openDevice",
+  )(function* (environmentId) {
+    const self = yield* environment.getEnvironmentId;
+    if (environmentId === self) {
+      return yield* new TailnetDevicesError({
+        reason: "self",
+        message: "This machine is already the one you are using.",
+      });
+    }
+    if ((yield* policy.accessFor(environmentId)) === "revoked") {
+      return yield* new TailnetDevicesError({
+        reason: "revoked",
+        message: "That device is revoked. Restore it to open it.",
+      });
+    }
+    const ask = Effect.gen(function* () {
+      const resolved = yield* links.resolve(environmentId);
+      const authorized = HttpClient.mapRequest(
+        httpClient,
+        HttpClientRequest.bearerToken(resolved.token),
+      );
+      return yield* PeerLinks.peerApiClient(authorized, resolved.url).pipe(
+        Effect.flatMap((client) =>
+          client.tailnetDevices.clientCredential({ payload: { from: self } }),
+        ),
+        Effect.timeout(DESCRIBE_TIMEOUT),
+      );
+    });
+    const credential = yield* ask.pipe(
+      Effect.catchTags({
+        TailnetDevicesUnauthorizedError: () => refresh(environmentId).pipe(Effect.andThen(ask)),
+      }),
+      Effect.mapError((cause) =>
+        cause._tag === "PeerLinkError"
+          ? new TailnetDevicesError({
+              reason: "unknown_device",
+              message: "This machine has no link to that device.",
+              cause,
+            })
+          : unreachable("That device did not answer.", cause),
+      ),
+    );
+    // Only the device it asked may answer for it.
+    if (credential.environmentId !== environmentId) {
+      return yield* unreachable("A different machine answered for that device.");
+    }
+    return credential;
   });
 
   /** Exchanges device hints with a linked device; a refused token starts a new handshake. */
@@ -928,11 +1038,13 @@ const make = Effect.gen(function* () {
     list,
     setAccess,
     linkIfMine,
+    openDevice,
     refresh,
     handleRequest,
     handleConfirm,
     handleGrant,
     handleSync,
+    handleClientCredential,
     scan,
     start,
   });
