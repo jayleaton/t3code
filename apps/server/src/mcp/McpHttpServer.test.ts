@@ -1027,7 +1027,9 @@ it.effect("hides tools for links and refuses another environment while the beta 
           failureMode: "return",
         }),
       );
-      const settingsContext = yield* Layer.build(ServerSettings.layerTest());
+      const settingsContext = yield* Layer.build(
+        ServerSettings.layerTest({ linkedEnvironmentsEnabled: false }),
+      );
       const settings = Context.get(settingsContext, ServerSettings.ServerSettingsService);
       const serverLayer = McpHttpServer.toolkitRegistration(
         LinksToolkit,

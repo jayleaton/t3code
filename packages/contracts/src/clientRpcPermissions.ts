@@ -65,6 +65,11 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.peerLinksUnlink]: AuthAccessWriteScope,
   // A link lets every agent here reach the other environment: Settings' bar.
   [WS_METHODS.peerLinksAnswerRequest]: AuthAccessWriteScope,
+  // Device access and tailnet device settings replicate to every one of my devices.
+  [WS_METHODS.tailnetDevicesSetAccess]: AuthAccessWriteScope,
+  [WS_METHODS.tailnetDevicesUpdateSettings]: AuthAccessWriteScope,
+  // Hands the app a session on another device, as a pairing link does.
+  [WS_METHODS.tailnetDevicesOpenDevice]: AuthAccessWriteScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 
