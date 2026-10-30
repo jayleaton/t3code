@@ -12,7 +12,7 @@ import {
 } from "@t3tools/contracts";
 import { type ReactNode, useState } from "react";
 
-import { connectPairing } from "~/connection/onboarding";
+import { connectDevice } from "~/connection/onboarding";
 import { requestConfirmDialog } from "~/confirmDialog";
 import { tailnetDevices } from "~/state/tailnetDevices";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -58,7 +58,7 @@ export function LinkedDeviceRow({
   const canOpen = useAtomValue(tailnetDevices.openDevice.permissionAtom(hostEnvironmentId));
   const setAccess = useAtomCommand(tailnetDevices.setAccess, { reportFailure: false });
   const openDevice = useAtomCommand(tailnetDevices.openDevice, { reportFailure: false });
-  const connect = useAtomCommand(connectPairing, { reportFailure: false });
+  const connect = useAtomCommand(connectDevice, { reportFailure: false });
   const [busy, setBusy] = useState(false);
   const revoked = device.access === "revoked";
   const linkedVia = (device.outgoing ?? row.link?.origin) === "paired" ? "Paired" : "Tailnet";
@@ -83,39 +83,22 @@ export function LinkedDeviceRow({
     }
   };
 
-  // The credential is one-time, so the first address that pairs uses it up.
   const open = async () => {
     setBusy(true);
     const minted = await openDevice({
       environmentId: hostEnvironmentId,
       input: { environmentId: device.environmentId },
     });
-    if (minted._tag === "Failure") {
-      setBusy(false);
-      if (!isAtomCommandInterrupted(minted)) failureToast(`Could not open ${device.label}`, minted);
-      return;
-    }
-    const { credential, urls, environmentId } = minted.value;
-    let last: Awaited<ReturnType<typeof connect>> | null = null;
-    for (const host of urls) {
-      last = await connect({ host, pairingCode: credential, expectedEnvironmentId: environmentId });
-      if (last._tag === "Success") break;
-    }
+    const result = minted._tag === "Success" ? await connect(minted.value) : minted;
     setBusy(false);
-    if (last?._tag === "Success") {
+    if (result._tag === "Success") {
       toastManager.add({ type: "success", title: `Added ${device.label} to this app` });
-    } else if (last !== null && !isAtomCommandInterrupted(last)) {
-      failureToast(`Could not open ${device.label}`, last);
-    } else if (last === null) {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: `Could not open ${device.label}`,
-          description: "It reported no address this app can reach.",
-        }),
-      );
+    } else if (!isAtomCommandInterrupted(result)) {
+      failureToast(`Could not open ${device.label}`, result);
     }
   };
+  // The server opens the app with standard permissions only at full access (`TailnetDevices.ts`).
+  const opensReadOnly = device.access !== "full-access";
 
   return (
     <div className={ITEM_ROW_CLASSNAME}>
@@ -134,6 +117,7 @@ export function LinkedDeviceRow({
               linkedVia,
               revoked ? "Revoked" : device.status === "online" ? "Online" : "Offline",
               row.savedInApp ? "In this app" : null,
+              !row.savedInApp && !revoked && opensReadOnly ? "Opens read-only" : null,
               device.tailnetName,
             ]
               .filter((part): part is string => part !== null)

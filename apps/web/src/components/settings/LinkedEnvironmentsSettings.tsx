@@ -5,6 +5,7 @@ import {
   AuthMcpClientAccess,
   type EnvironmentId,
   type PeerLinkSummary,
+  TAILNET_DEVICE_CAPABILITY,
   type TailnetDevicesSettings,
   type TailnetDevicesUpdateSettingsInput,
 } from "@t3tools/contracts";
@@ -158,6 +159,18 @@ function YourDevicesSettings({
             disabled={!canUpdate}
             onCheckedChange={(checked) => update({ autoLink: Boolean(checked) })}
             aria-label="Link my tailnet devices automatically"
+          />
+        }
+      />
+      <SettingsRow
+        title="Only devices with the T3 capability"
+        description={`Count a machine as yours only when your Tailscale policy grants it ${TAILNET_DEVICE_CAPABILITY}.`}
+        control={
+          <Switch
+            checked={settings.requireCapability}
+            disabled={!canUpdate}
+            onCheckedChange={(checked) => update({ requireCapability: Boolean(checked) })}
+            aria-label="Only devices with the T3 capability"
           />
         }
       />
