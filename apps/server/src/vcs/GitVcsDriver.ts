@@ -565,7 +565,6 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       ["rev-parse", "--is-inside-work-tree"],
       {
         allowNonZeroExit: true,
-        timeoutMs: 5_000,
         maxOutputBytes: 4_096,
       },
     ).pipe(
