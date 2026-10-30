@@ -2,6 +2,7 @@ import { createAdvertisedEndpoint } from "@t3tools/shared/advertisedEndpoint";
 import type { AdvertisedEndpoint, AdvertisedEndpointProvider } from "@t3tools/contracts";
 import {
   buildTailscaleHttpsBaseUrl,
+  findTailscaleServePortFor,
   isTailscaleIpv4Address,
   parseTailscaleStatus,
   probeTailscaleHttpsEndpoint,
@@ -123,6 +124,12 @@ export const resolveTailscaleAdvertisedEndpoints = Effect.fn("resolveTailscaleAd
       never,
       ChildProcessSpawner.ChildProcessSpawner
     >;
+    /** The tailnet port Serve forwards to this backend; the backend may have picked any. */
+    readonly readServePort?: Effect.Effect<
+      number | null,
+      never,
+      ChildProcessSpawner.ChildProcessSpawner
+    >;
     readonly probe?: (baseUrl: string) => Effect.Effect<boolean, never, HttpClient.HttpClient>;
   }): Effect.fn.Return<
     readonly AdvertisedEndpoint[],
@@ -138,10 +145,20 @@ export const resolveTailscaleAdvertisedEndpoints = Effect.fn("resolveTailscaleAd
           ? yield* parseTailscaleStatus(input.statusJson).pipe(Effect.orElseSucceed(() => null))
           : null;
     const ipEndpoints = resolveTailscaleIpAdvertisedEndpoints({ ...input, status });
+    const servedPort =
+      input.serveEnabled === true && status?.magicDnsName
+        ? yield* (
+            input.readServePort ??
+              findTailscaleServePortFor({ localPort: input.port }).pipe(
+                Effect.orElseSucceed(() => null),
+              )
+          )
+        : null;
+    const servePort = servedPort ?? input.servePort;
     const magicDnsEndpoint = yield* resolveTailscaleMagicDnsAdvertisedEndpoint({
       dnsName: status?.magicDnsName ?? null,
       serveEnabled: input.serveEnabled === true,
-      ...(input.servePort === undefined ? {} : { servePort: input.servePort }),
+      ...(servePort === undefined ? {} : { servePort }),
       ...(input.probe === undefined ? {} : { probe: input.probe }),
     });
 

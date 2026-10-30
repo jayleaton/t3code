@@ -4,11 +4,22 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientError from "effect/http/HttpClientError";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 
 import {
+  findTailscaleExecutable,
   isServeTargetFor,
+  isTailnetAddress,
+  readTailnet,
+  parseTailscaleWhois,
+  selectTailscaleServePort,
+  tailscaleServePortCandidates,
+  whoisTailnetAddress,
   parseTailscaleServeHandlers,
   ensureTailscaleServe,
   parseTailscaleExitNode,
@@ -69,12 +80,13 @@ function mockHandle(result: { stdout?: string; stderr?: string; code?: number })
   });
 }
 
-// The executable name depends on the host platform (`tailscale.exe` on
-// Windows), so pin it: these tests assert the posix spelling.
+// The executable depends on the host platform (`tailscale.exe` on Windows) and
+// on what is installed, so pin both: these tests assert the bare posix name.
 function layerSpawner(spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]) {
-  return Layer.merge(
+  return Layer.mergeAll(
     Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
     Layer.succeed(HostProcess.Platform, "linux"),
+    Layer.succeed(SpawnExecutableResolution, () => undefined),
   );
 }
 
@@ -286,4 +298,272 @@ describe("tailscale serve ownership", () => {
     assert.isFalse(isServeTargetFor("http://127.0.0.1:4077", { localPort: 3773 }));
     assert.isFalse(isServeTargetFor("tcp://127.0.0.1:3773", { localPort: 3773 }));
   });
+});
+
+describe("tailscale executable lookup", () => {
+  const resolverFor =
+    (installed: ReadonlyArray<string>, onPath: Record<string, string> = {}) =>
+    (command: string) =>
+      onPath[command] ?? (installed.includes(command) ? command : undefined);
+
+  it("prefers PATH, then the platform's install locations", () => {
+    const appBinary = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
+    const darwin = (resolve: ReturnType<typeof resolverFor>) =>
+      findTailscaleExecutable({ platform: "darwin", env: {}, resolve });
+    assert.equal(
+      darwin(resolverFor([appBinary], { tailscale: "/opt/homebrew/bin/tailscale" })),
+      "/opt/homebrew/bin/tailscale",
+    );
+    assert.equal(darwin(resolverFor([appBinary, "/usr/local/bin/tailscale"])), appBinary);
+    assert.equal(
+      darwin(resolverFor(["/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale"])),
+      "/opt/homebrew/bin/tailscale",
+    );
+    assert.equal(darwin(resolverFor(["/usr/local/bin/tailscale"])), "/usr/local/bin/tailscale");
+    assert.equal(darwin(resolverFor([])), "tailscale");
+
+    assert.equal(
+      findTailscaleExecutable({
+        platform: "win32",
+        env: { ProgramFiles: "D:\\Apps" },
+        resolve: resolverFor(["D:\\Apps\\Tailscale\\tailscale.exe"]),
+      }),
+      "D:\\Apps\\Tailscale\\tailscale.exe",
+    );
+    assert.equal(
+      findTailscaleExecutable({ platform: "linux", env: {}, resolve: resolverFor([appBinary]) }),
+      "tailscale",
+    );
+  });
+
+  it.effect("spawns the resolved path", () => {
+    const spawned: Array<string> = [];
+    const layer = Layer.mergeAll(
+      Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make((command) => {
+          spawned.push((command as unknown as { readonly command: string }).command);
+          return Effect.succeed(mockHandle({ stdout: "{}" }));
+        }),
+      ),
+      Layer.succeed(HostProcess.Platform, "darwin"),
+      Layer.succeed(SpawnExecutableResolution, (command: string) =>
+        command.startsWith("/Applications/") ? command : undefined,
+      ),
+    );
+    return Effect.gen(function* () {
+      yield* readTailscaleStatus.pipe(Effect.provide(layer));
+      assert.deepEqual(spawned, ["/Applications/Tailscale.app/Contents/MacOS/Tailscale"]);
+    });
+  });
+});
+
+// Trimmed from real `tailscale status --json` and `tailscale whois --json` output.
+const tailnetStatusJson = JSON.stringify({
+  BackendState: "Running",
+  Self: {
+    HostName: "MacBook Pro (3)",
+    DNSName: "macbook.prawn-penny.ts.net.",
+    TailscaleIPs: ["100.111.125.20", "fd7a:115c:a1e0::8401:a43c"],
+    UserID: 431931774855047,
+    Tags: null,
+    OS: "macOS",
+    CapMap: { "default-auto-update": [true], funnel: null, https: null },
+  },
+  Peer: {
+    "nodekey:aa": {
+      HostName: "dgx-01",
+      DNSName: "dgx-01.prawn-penny.ts.net.",
+      TailscaleIPs: ["100.111.125.200", "fd7a:115c:a1e0::a532:9c2b"],
+      UserID: 431931774855047,
+      Online: true,
+      OS: "linux",
+    },
+    "nodekey:bb": {
+      HostName: "localhost",
+      DNSName: "t3-box.prawn-penny.ts.net.",
+      TailscaleIPs: ["100.90.1.2"],
+      UserID: 1234,
+      Tags: ["tag:server"],
+      Online: false,
+      OS: "linux",
+    },
+    "nodekey:cc": { HostName: "phone", DNSName: "", TailscaleIPs: [], UserID: 431931774855047 },
+  },
+});
+
+const whoisJson = JSON.stringify({
+  Node: {
+    ID: 296504211427553,
+    Name: "studio-01.prawn-penny.ts.net.",
+    User: 431931774855047,
+    Addresses: ["100.104.231.93/32", "fd7a:115c:a1e0::5932:e75f/128"],
+  },
+  UserProfile: {
+    ID: 431931774855047,
+    LoginName: "jayleaton@gmail.com",
+    DisplayName: "JJ Eaton",
+  },
+  CapMap: {},
+});
+
+describe("tailnet", () => {
+  it.effect("reads this node and every peer", () =>
+    Effect.gen(function* () {
+      const tailnet = yield* readTailnet.pipe(
+        Effect.provide(layerMockSpawner(() => ({ stdout: tailnetStatusJson }))),
+      );
+      assert.deepEqual(tailnet.self, {
+        userId: "431931774855047",
+        magicDnsName: "macbook.prawn-penny.ts.net",
+        tailnetAddresses: ["100.111.125.20", "fd7a:115c:a1e0::8401:a43c"],
+        httpsServeEnabled: true,
+      });
+      assert.deepEqual(tailnet.peers, [
+        {
+          nodeName: "dgx-01",
+          magicDnsName: "dgx-01.prawn-penny.ts.net",
+          tailnetAddresses: ["100.111.125.200", "fd7a:115c:a1e0::a532:9c2b"],
+          userId: "431931774855047",
+          tags: [],
+          online: true,
+          os: "linux",
+        },
+        {
+          nodeName: "t3-box",
+          magicDnsName: "t3-box.prawn-penny.ts.net",
+          tailnetAddresses: ["100.90.1.2"],
+          userId: "1234",
+          tags: ["tag:server"],
+          online: false,
+          os: "linux",
+        },
+        {
+          nodeName: "phone",
+          magicDnsName: null,
+          tailnetAddresses: [],
+          userId: "431931774855047",
+          tags: [],
+          online: false,
+          os: null,
+        },
+      ]);
+    }),
+  );
+
+  it("recognizes only tailnet addresses", () => {
+    assert.isTrue(isTailnetAddress("100.64.0.1"));
+    assert.isTrue(isTailnetAddress("100.127.255.254"));
+    assert.isTrue(isTailnetAddress("fd7a:115c:a1e0::5932:e75f"));
+    assert.isTrue(isTailnetAddress("FD7A:115C:A1E0:ab12::1"));
+    assert.isFalse(isTailnetAddress("100.128.0.1"));
+    assert.isFalse(isTailnetAddress("192.168.1.10"));
+    assert.isFalse(isTailnetAddress("fd7a:115c:a1e1::1"));
+    assert.isFalse(isTailnetAddress("studio-01"));
+  });
+
+  it.effect("reads who owns a tailnet address", () =>
+    Effect.gen(function* () {
+      assert.deepEqual(yield* parseTailscaleWhois(whoisJson), {
+        userId: "431931774855047",
+        loginName: "jayleaton@gmail.com",
+        nodeName: "studio-01",
+        tags: [],
+        capabilities: [],
+      });
+      const tagged = yield* parseTailscaleWhois(
+        JSON.stringify({
+          Node: { Name: "ci.prawn-penny.ts.net.", Tags: ["tag:ci"] },
+          UserProfile: { ID: 99, LoginName: "tagged-devices" },
+          CapMap: { "t3.codes/device": [{}] },
+        }),
+      );
+      assert.deepEqual(tagged?.tags, ["tag:ci"]);
+      assert.deepEqual(tagged?.capabilities, ["t3.codes/device"]);
+    }),
+  );
+
+  it.effect("answers null for addresses outside the tailnet or unknown to it", () => {
+    const calls: Array<ReadonlyArray<string>> = [];
+    const layer = layerMockSpawner((_command, args) => {
+      calls.push(args);
+      return args.includes("100.64.0.1")
+        ? { code: 1, stderr: "2026/10/30 16:47:06 peer not found" }
+        : { stdout: whoisJson };
+    });
+    return Effect.gen(function* () {
+      assert.isNull(yield* whoisTailnetAddress("192.168.1.10"));
+      assert.isNull(yield* whoisTailnetAddress("studio-01"));
+      assert.isNull(yield* whoisTailnetAddress("100.64.0.1"));
+      assert.equal((yield* whoisTailnetAddress("100.104.231.93"))?.nodeName, "studio-01");
+      assert.deepEqual(calls, [
+        ["whois", "--json", "100.64.0.1"],
+        ["whois", "--json", "100.104.231.93"],
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+describe("tailscale serve port selection", () => {
+  const serveStatus = (targets: Record<number, string>) =>
+    JSON.stringify({
+      Web: Object.fromEntries(
+        Object.entries(targets).map(([port, target]) => [
+          `host.example.ts.net:${port}`,
+          { Handlers: { "/": { Proxy: target } } },
+        ]),
+      ),
+    });
+  // Every target answers except the dead one on port 9.
+  const layerFor = (targets: Record<number, string>) =>
+    Layer.merge(
+      layerMockSpawner(() => ({ stdout: serveStatus(targets) })),
+      Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          new URL(request.url).port === "9"
+            ? Effect.fail(
+                new HttpClientError.HttpClientError({
+                  reason: new HttpClientError.TransportError({ request }),
+                }),
+              )
+            : Effect.succeed(HttpClientResponse.fromWeb(request, new Response("ok"))),
+        ),
+      ),
+    );
+
+  it("tries the preferred port, 443, 8443, then 3443 upward", () => {
+    const first = (preferred: ReadonlyArray<number>, count: number) => {
+      const ports: Array<number> = [];
+      for (const port of tailscaleServePortCandidates(preferred)) {
+        ports.push(port);
+        if (ports.length === count) break;
+      }
+      return ports;
+    };
+    assert.deepEqual(first([], 4), [443, 8443, 3443, 3444]);
+    assert.deepEqual(first([3445], 5), [3445, 443, 8443, 3443, 3444]);
+    assert.deepEqual(first([8443], 3), [8443, 443, 3443]);
+  });
+
+  it.effect("skips ports serving another live server", () =>
+    Effect.gen(function* () {
+      const local = { localPort: 3773 };
+      const pick = (targets: Record<number, string>, preferredPorts: ReadonlyArray<number> = []) =>
+        selectTailscaleServePort({ ...local, preferredPorts }).pipe(
+          Effect.map(({ servePort, ownership }) => [servePort, ownership._tag]),
+          Effect.provide(layerFor(targets)),
+        );
+      assert.deepEqual(yield* pick({}), [443, "free"]);
+      assert.deepEqual(
+        yield* pick({ 443: "http://127.0.0.1:4077", 8443: "http://127.0.0.1:5000" }),
+        [3443, "free"],
+      );
+      assert.deepEqual(
+        yield* pick({ 443: "http://127.0.0.1:4077", 3445: "http://127.0.0.1:3773" }, [3445]),
+        [3445, "ours"],
+      );
+      assert.deepEqual(yield* pick({ 443: "http://127.0.0.1:9" }), [443, "stale"]);
+    }),
+  );
 });

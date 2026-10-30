@@ -1,7 +1,10 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { SpawnExecutableResolution, type SpawnExecutableResolver } from "@t3tools/shared/shell";
+import * as NodeNet from "node:net";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest } from "effect/http";
@@ -25,12 +28,59 @@ const TAILSCALE_KILL_GRACE = Duration.millis(500);
 const TAILSCALE_SERVE_TIMEOUT = Duration.seconds(10);
 const TAILSCALE_PROBE_TIMEOUT = Duration.millis(2_500);
 
-const tailscaleCommandForPlatform = (platform: NodeJS.Platform): "tailscale" | "tailscale.exe" =>
-  platform === "win32" ? "tailscale.exe" : "tailscale";
+/**
+ * Where the CLI lives when it is not on PATH. The Mac app's binary must run from
+ * inside the bundle; a symlink to it crashes, so it is spawned directly.
+ */
+const TAILSCALE_INSTALL_LOCATIONS: Partial<Record<NodeJS.Platform, ReadonlyArray<string>>> = {
+  darwin: [
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    "/opt/homebrew/bin/tailscale",
+    "/usr/local/bin/tailscale",
+  ],
+};
+
+/** PATH first, then the platform's install locations. */
+export function findTailscaleExecutable(input: {
+  readonly platform: NodeJS.Platform;
+  readonly env: NodeJS.ProcessEnv;
+  readonly resolve: SpawnExecutableResolver;
+}): string {
+  const windows = input.platform === "win32";
+  const name = windows ? "tailscale.exe" : "tailscale";
+  const installed = windows
+    ? [`${input.env.ProgramFiles ?? "C:\\Program Files"}\\Tailscale\\tailscale.exe`]
+    : (TAILSCALE_INSTALL_LOCATIONS[input.platform] ?? []);
+  for (const candidate of [name, ...installed]) {
+    const resolved = input.resolve(candidate, input.platform, input.env);
+    if (resolved !== undefined) return resolved;
+  }
+  // Unresolved, the bare name still spawns through PATH and fails as before.
+  return name;
+}
+
+// Keyed by resolver so a test's resolver never sees another's cached path.
+const resolvedTailscaleExecutables = new WeakMap<SpawnExecutableResolver, Map<string, string>>();
+
+const tailscaleExecutable = Effect.gen(function* () {
+  const platform = yield* HostProcess.Platform;
+  const resolve = yield* SpawnExecutableResolution;
+  let byPlatform = resolvedTailscaleExecutables.get(resolve);
+  if (byPlatform === undefined) {
+    byPlatform = new Map();
+    resolvedTailscaleExecutables.set(resolve, byPlatform);
+  }
+  const cached = byPlatform.get(platform);
+  if (cached !== undefined) return cached;
+  const env = yield* HostProcess.Environment;
+  const path = findTailscaleExecutable({ platform, env, resolve });
+  byPlatform.set(platform, path);
+  return path;
+});
 
 const TailscaleCommandContext = {
-  executable: Schema.Literals(["tailscale", "tailscale.exe"]),
-  subcommand: Schema.Literals(["status", "serve", "debug"]),
+  executable: Schema.String,
+  subcommand: Schema.Literals(["status", "serve", "debug", "whois"]),
   argumentCount: Schema.Number,
 };
 
@@ -41,6 +91,7 @@ const TailscaleCommandContext = {
  */
 export const TailscaleStderrDiagnostic = Schema.Literals([
   "no-existing-handler",
+  "peer-not-found",
   "not-logged-in",
   "permission-denied",
   "unknown",
@@ -51,6 +102,7 @@ const STDERR_DIAGNOSTIC_PATTERNS: ReadonlyArray<
   readonly [RegExp, Exclude<TailscaleStderrDiagnostic, "unknown">]
 > = [
   [/handler does not exist/i, "no-existing-handler"],
+  [/peer not found/i, "peer-not-found"],
   [/not logged in|logged out|needs? login/i, "not-logged-in"],
   [/permission denied|access denied|must be root|operation not permitted/i, "permission-denied"],
 ];
@@ -222,12 +274,11 @@ export const parseTailscaleStatus = (
   );
 
 const readTailscaleOutput = Effect.fn("tailscale.readTailscaleOutput")(function* (
-  subcommand: "status" | "debug" | "serve",
+  subcommand: "status" | "debug" | "serve" | "whois",
   args: readonly string[],
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const hostPlatform = yield* HostProcess.Platform;
-  const executable = tailscaleCommandForPlatform(hostPlatform);
+  const executable = yield* tailscaleExecutable;
   const commandContext = {
     executable,
     subcommand,
@@ -287,6 +338,177 @@ const readTailscaleOutput = Effect.fn("tailscale.readTailscaleOutput")(function*
 export const readTailscaleStatus = readTailscaleOutput("status", ["status", "--json"]).pipe(
   Effect.flatMap(parseTailscaleStatus),
 );
+
+const TailscaleStatusNode = Schema.Struct({
+  HostName: Schema.optional(Schema.Unknown),
+  DNSName: Schema.optional(Schema.Unknown),
+  TailscaleIPs: Schema.optional(Schema.Unknown),
+  UserID: Schema.optional(Schema.Unknown),
+  Tags: Schema.optional(Schema.Unknown),
+  Online: Schema.optional(Schema.Unknown),
+  OS: Schema.optional(Schema.Unknown),
+  CapMap: Schema.optional(Schema.Unknown),
+});
+
+const TailnetStatusJson = Schema.Struct({
+  Self: Schema.optional(TailscaleStatusNode),
+  Peer: Schema.optional(Schema.Record(Schema.String, TailscaleStatusNode)),
+});
+
+const decodeTailnetStatusJson = Schema.decodeEffect(Schema.fromJsonString(TailnetStatusJson));
+
+export interface TailnetPeer {
+  /** The tailnet machine name (MagicDNS label), falling back to the OS host name. */
+  readonly nodeName: string;
+  readonly magicDnsName: string | null;
+  readonly tailnetAddresses: readonly string[];
+  readonly userId: string | null;
+  readonly tags: readonly string[];
+  readonly online: boolean;
+  readonly os: string | null;
+}
+
+export interface Tailnet {
+  readonly self: {
+    readonly userId: string | null;
+    readonly magicDnsName: string | null;
+    readonly tailnetAddresses: readonly string[];
+    readonly httpsServeEnabled: boolean | null;
+  };
+  readonly peers: readonly TailnetPeer[];
+}
+
+const nonEmptyString = (value: unknown): string | null =>
+  typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+
+const normalizeDnsName = (value: unknown): string | null =>
+  nonEmptyString(typeof value === "string" ? value.replace(/\.$/u, "") : value);
+
+// Tailscale user IDs are int64; JSON numbers lose precision past 2^53, so ids stay strings.
+const userIdOf = (value: unknown): string | null =>
+  typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? String(value)
+    : nonEmptyString(value);
+
+const stringsOf = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+
+/** 100.64.0.0/10 or fd7a:115c:a1e0::/48: the only addresses Tailscale assigns to nodes. */
+export function isTailnetAddress(address: string): boolean {
+  switch (NodeNet.isIP(address)) {
+    case 4:
+      return isTailscaleIpv4Address(address);
+    case 6: {
+      const groups = address.toLowerCase().split(":");
+      return groups[0] === "fd7a" && groups[1] === "115c" && groups[2] === "a1e0";
+    }
+    default:
+      return false;
+  }
+}
+
+const parseTailnet = (rawStatusJson: string): Effect.Effect<Tailnet, TailscaleStatusParseError> =>
+  decodeTailnetStatusJson(rawStatusJson).pipe(
+    Effect.mapError((cause) => new TailscaleStatusParseError({ cause })),
+    Effect.map((parsed) => {
+      const self = parsed.Self;
+      const capMap = self?.CapMap;
+      return {
+        self: {
+          userId: userIdOf(self?.UserID),
+          magicDnsName: normalizeDnsName(self?.DNSName),
+          tailnetAddresses: stringsOf(self?.TailscaleIPs).filter(isTailnetAddress),
+          httpsServeEnabled: Predicate.isObject(capMap) ? Object.hasOwn(capMap, "https") : null,
+        },
+        peers: Object.values(parsed.Peer ?? {}).flatMap((peer) => {
+          const magicDnsName = normalizeDnsName(peer.DNSName);
+          const nodeName =
+            nonEmptyString(magicDnsName?.split(".")[0]) ?? nonEmptyString(peer.HostName);
+          if (nodeName === null) return [];
+          return [
+            {
+              nodeName,
+              magicDnsName,
+              tailnetAddresses: stringsOf(peer.TailscaleIPs).filter(isTailnetAddress),
+              userId: userIdOf(peer.UserID),
+              tags: stringsOf(peer.Tags),
+              online: peer.Online === true,
+              os: nonEmptyString(peer.OS),
+            },
+          ];
+        }),
+      };
+    }),
+  );
+
+export const readTailnet = readTailscaleOutput("status", ["status", "--json"]).pipe(
+  Effect.flatMap(parseTailnet),
+);
+
+const TailscaleWhoisJson = Schema.Struct({
+  Node: Schema.optional(
+    Schema.Struct({
+      Name: Schema.optional(Schema.Unknown),
+      ComputedName: Schema.optional(Schema.Unknown),
+      Tags: Schema.optional(Schema.Unknown),
+    }),
+  ),
+  UserProfile: Schema.optional(
+    Schema.Struct({
+      ID: Schema.optional(Schema.Unknown),
+      LoginName: Schema.optional(Schema.Unknown),
+    }),
+  ),
+  CapMap: Schema.optional(Schema.Unknown),
+});
+
+const decodeTailscaleWhoisJson = Schema.decodeEffect(Schema.fromJsonString(TailscaleWhoisJson));
+
+export interface TailnetWhois {
+  readonly userId: string | null;
+  readonly loginName: string | null;
+  /** The tailnet machine name (MagicDNS label). */
+  readonly nodeName: string;
+  readonly tags: readonly string[];
+  /** Peer capabilities the tailnet policy grants this node, such as `example.com/cap/x`. */
+  readonly capabilities: readonly string[];
+}
+
+export const parseTailscaleWhois = (
+  rawWhoisJson: string,
+): Effect.Effect<TailnetWhois | null, TailscaleStatusParseError> =>
+  decodeTailscaleWhoisJson(rawWhoisJson).pipe(
+    Effect.mapError((cause) => new TailscaleStatusParseError({ cause })),
+    Effect.map((parsed) => {
+      const nodeName =
+        nonEmptyString(normalizeDnsName(parsed.Node?.Name)?.split(".")[0]) ??
+        nonEmptyString(parsed.Node?.ComputedName);
+      if (nodeName === null) return null;
+      return {
+        userId: userIdOf(parsed.UserProfile?.ID),
+        loginName: nonEmptyString(parsed.UserProfile?.LoginName),
+        nodeName,
+        tags: stringsOf(parsed.Node?.Tags),
+        capabilities: Predicate.isObject(parsed.CapMap) ? Object.keys(parsed.CapMap) : [],
+      };
+    }),
+  );
+
+/** Who owns a tailnet address. `null` for addresses outside the tailnet or unknown to it. */
+export const whoisTailnetAddress = Effect.fn("tailscale.whoisTailnetAddress")(function* (
+  address: string,
+) {
+  // `tailscale whois` also accepts names, but answers them with an HTTP 400.
+  if (!isTailnetAddress(address)) return null;
+  return yield* readTailscaleOutput("whois", ["whois", "--json", address]).pipe(
+    Effect.flatMap(parseTailscaleWhois),
+    Effect.catchIf(
+      (error) =>
+        error._tag === "TailscaleCommandExitError" && error.stderrDiagnostic === "peer-not-found",
+      () => Effect.succeed(null),
+    ),
+  );
+});
 
 const TailscaleExitNodeJson = Schema.Struct({
   ExitNodeStatus: Schema.optional(Schema.Struct({ Online: Schema.optional(Schema.Unknown) })),
@@ -380,8 +602,7 @@ const runTailscaleCommand = Effect.fn("tailscale.runTailscaleCommand")(function*
   timeoutInput: Duration.Input,
 ): Effect.fn.Return<void, TailscaleCommandError, ChildProcessSpawner.ChildProcessSpawner> {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const hostPlatform = yield* HostProcess.Platform;
-  const executable = tailscaleCommandForPlatform(hostPlatform);
+  const executable = yield* tailscaleExecutable;
   const commandContext = {
     executable,
     subcommand: "serve" as const,
@@ -564,20 +785,94 @@ export type TailscaleServePortOwnership =
   | { readonly _tag: "stale"; readonly target: string }
   | { readonly _tag: "taken"; readonly target: string };
 
+const servePortOwnership = Effect.fn("tailscale.servePortOwnership")(function* (
+  handlers: ReadonlyArray<TailscaleServeHandler>,
+  servePort: number,
+  local: { readonly localPort: number; readonly localHost?: string },
+) {
+  const existing = handlers.find((handler) => handler.servePort === servePort);
+  if (existing === undefined) return { _tag: "free" } as TailscaleServePortOwnership;
+  const { target } = existing;
+  if (isServeTargetFor(target, local)) return { _tag: "ours", target } as const;
+  return (yield* isServeTargetLive(target))
+    ? ({ _tag: "taken", target } as const)
+    : ({ _tag: "stale", target } as const);
+});
+
 export const inspectTailscaleServePort = Effect.fn("tailscale.inspectTailscaleServePort")(
   function* (input: {
     readonly localPort: number;
     readonly servePort?: number;
     readonly localHost?: string;
   }) {
-    const servePort = input.servePort ?? DEFAULT_TAILSCALE_SERVE_PORT;
     const handlers = yield* readTailscaleServeHandlers;
-    const existing = handlers.find((handler) => handler.servePort === servePort);
-    if (existing === undefined) return { _tag: "free" } as TailscaleServePortOwnership;
-    const { target } = existing;
-    if (isServeTargetFor(target, input)) return { _tag: "ours", target } as const;
-    return (yield* isServeTargetLive(target))
-      ? ({ _tag: "taken", target } as const)
-      : ({ _tag: "stale", target } as const);
+    return yield* servePortOwnership(
+      handlers,
+      input.servePort ?? DEFAULT_TAILSCALE_SERVE_PORT,
+      input,
+    );
+  },
+);
+
+/** Serve accepts any port; only Funnel is limited to 443, 8443 and 10000. */
+const TAILSCALE_SERVE_FALLBACK_PORTS = [443, 8443] as const;
+const TAILSCALE_SERVE_SCAN_START = 3443;
+const MAX_PORT = 65_535;
+
+/** Ports to try in order: the caller's preferences (such as the last port used), 443, 8443, then 3443 upward. */
+export function* tailscaleServePortCandidates(
+  preferred: ReadonlyArray<number> = [],
+): Generator<number> {
+  const seen = new Set<number>();
+  for (const port of [...preferred, ...TAILSCALE_SERVE_FALLBACK_PORTS]) {
+    if (Number.isInteger(port) && port > 0 && port <= MAX_PORT && !seen.has(port)) {
+      seen.add(port);
+      yield port;
+    }
+  }
+  for (let port = TAILSCALE_SERVE_SCAN_START; port <= MAX_PORT; port += 1) {
+    if (!seen.has(port)) yield port;
+  }
+}
+
+export class TailscaleServePortExhaustedError extends Schema.TaggedError<TailscaleServePortExhaustedError>()(
+  "TailscaleServePortExhaustedError",
+  {},
+) {
+  override get message(): string {
+    return "Every Tailscale Serve port already forwards to another live server.";
+  }
+}
+
+/**
+ * The first port in `tailscaleServePortCandidates` this server may publish on: one
+ * already forwarding here, free, or forwarding to a dead target. Ports serving another
+ * live server are skipped so it stays reachable.
+ */
+export const selectTailscaleServePort = Effect.fn("tailscale.selectTailscaleServePort")(
+  function* (input: {
+    readonly localPort: number;
+    readonly localHost?: string;
+    readonly preferredPorts?: ReadonlyArray<number>;
+  }) {
+    const handlers = yield* readTailscaleServeHandlers;
+    for (const servePort of tailscaleServePortCandidates(input.preferredPorts)) {
+      const ownership = yield* servePortOwnership(handlers, servePort, input);
+      if (ownership._tag !== "taken") return { servePort, ownership };
+    }
+    return yield* new TailscaleServePortExhaustedError();
+  },
+);
+
+/** The tailnet port whose Serve mapping forwards to this local server, if any. */
+export const findTailscaleServePortFor = Effect.fn("tailscale.findTailscaleServePortFor")(
+  function* (local: { readonly localPort: number; readonly localHost?: string }) {
+    const handlers = yield* readTailscaleServeHandlers;
+    return (
+      handlers
+        .filter((handler) => isServeTargetFor(handler.target, local))
+        .map((handler) => handler.servePort)
+        .toSorted((left, right) => left - right)[0] ?? null
+    );
   },
 );
