@@ -3,7 +3,10 @@ import {
   createAtomCommandScheduler,
   createRuntimeCommand,
 } from "@t3tools/client-runtime/state/runtime";
-import type { DesktopSshEnvironmentTarget } from "@t3tools/contracts";
+import type {
+  DesktopSshEnvironmentTarget,
+  TailnetDeviceClientCredential,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import { connectionAtomRuntime } from "./runtime";
@@ -20,6 +23,19 @@ export const connectPairing = createRuntimeCommand(connectionAtomRuntime, {
   execute: (input: ConnectionOnboarding.PairingConnectionInput) =>
     ConnectionOnboarding.ConnectionOnboarding.pipe(
       Effect.flatMap((onboarding) => onboarding.registerPairing(input)),
+    ),
+});
+
+export const connectDevice = createRuntimeCommand(connectionAtomRuntime, {
+  label: "web:connection:connect-device",
+  scheduler: onboardingScheduler,
+  concurrency: {
+    mode: "singleFlight",
+    key: (device: TailnetDeviceClientCredential) => device.environmentId,
+  },
+  execute: (device: TailnetDeviceClientCredential) =>
+    ConnectionOnboarding.ConnectionOnboarding.pipe(
+      Effect.flatMap((onboarding) => onboarding.registerDevice(device)),
     ),
 });
 

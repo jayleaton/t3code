@@ -1,4 +1,4 @@
-import type { RuntimeMode } from "@t3tools/contracts";
+import type { AuthMcpClientAccess, RuntimeMode } from "@t3tools/contracts";
 
 export const RUNTIME_MODE_CHOICES: ReadonlyArray<{
   readonly mode: RuntimeMode;
@@ -45,3 +45,17 @@ export function compatibleRuntimeModeForChoices(
 }
 
 export { selectableProviderOptionChoices as selectableChoices } from "@t3tools/client-runtime/model-traits";
+
+/** The same five levels as web's access picker: read-only, then the runtime modes. */
+export const ACCESS_CHOICES: ReadonlyArray<{
+  readonly access: AuthMcpClientAccess;
+  readonly label: string;
+  readonly description: string;
+}> = [
+  {
+    access: "read-only",
+    label: "Read only",
+    description: "Read projects and threads. Cannot start, message or change anything.",
+  },
+  ...RUNTIME_MODE_CHOICES.map((choice) => ({ ...choice, access: choice.mode })),
+];

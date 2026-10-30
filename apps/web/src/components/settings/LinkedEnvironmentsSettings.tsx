@@ -2,10 +2,17 @@ import { useAtomValue } from "@effect/atom-react";
 import { linkRequestFailureMessage } from "@t3tools/client-runtime/link-request";
 import {
   AuthAccessWriteScope,
-  type AuthMcpClientAccess,
+  AuthMcpClientAccess,
   type EnvironmentId,
   type PeerLinkSummary,
+  TAILNET_DEVICE_CAPABILITY,
+  type TailnetDevicesSettings,
+  type TailnetDevicesUpdateSettingsInput,
 } from "@t3tools/contracts";
+import {
+  isTailnetDevicesForbidden,
+  linkedDeviceRows,
+} from "@t3tools/client-runtime/tailnet-devices";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -20,7 +27,9 @@ import { useId, useRef, useState } from "react";
 import { requestConfirmDialog } from "~/confirmDialog";
 import { mintPairingCodeOn } from "~/state/peerPairingCode";
 import { peerLinkEnvironment, useLinkableMachines } from "~/state/peerLinks";
+import { useEnvironments } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
+import { tailnetDevices } from "~/state/tailnetDevices";
 import { useEnvironmentScope, usePreparedConnection } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { accessConfig } from "../auth/ConnectAgentSurface";
@@ -38,9 +47,12 @@ import {
   DialogTrigger,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
 import { LinkAccessPicker } from "./LinkAccessPicker";
+import { LinkedDeviceRow } from "./LinkedDeviceRow";
 import { ANOTHER_ADDRESS, LinkMachineSelect } from "./LinkMachineSelect";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useNowMinute } from "../../hooks/useNowMinute";
@@ -59,33 +71,134 @@ export function LinkedEnvironmentsSettings({
   readonly isSearchTarget: boolean;
 }) {
   const links = useEnvironmentQuery(peerLinkEnvironment.list({ environmentId, input: {} }));
+  const devices = useEnvironmentQuery(tailnetDevices.list({ environmentId, input: {} }));
   const canLink = useAtomValue(peerLinkEnvironment.link.permissionAtom(environmentId));
+  const { environments } = useEnvironments();
   const search = searchableSetting("linked-environments");
+  // Older servers, and this one until it can link devices, fail the list; that is not an error.
+  const devicesUnavailable = devices.error !== null && !isTailnetDevicesForbidden(devices.failure);
+  const rows = linkedDeviceRows({
+    devices: devices.data?.devices ?? [],
+    links: links.data?.links ?? [],
+    savedEnvironmentIds: new Set(environments.map((environment) => environment.environmentId)),
+  });
   return (
     <SettingsSection
       {...(isSearchTarget ? { id: search.id } : {})}
       title={environmentLabel === null ? search.title : `${search.title} · ${environmentLabel}`}
       headerAction={canLink ? <LinkEnvironmentAction environmentId={environmentId} /> : null}
     >
+      {devices.data ? (
+        <YourDevicesSettings environmentId={environmentId} settings={devices.data.settings} />
+      ) : null}
       {links.error ? (
         <SettingsRow title="Could not load linked environments" description={links.error} />
       ) : !links.data ? (
         <SettingsRow title="Loading linked environments…" role="status" />
-      ) : links.data.links.length === 0 ? (
+      ) : rows.length === 0 ? (
         <SettingsRow
           title="No linked environments"
           description="Link another machine running T3 Code, such as a VPS, so agents here can launch and drive threads there."
         />
       ) : (
-        links.data.links.map((link) => (
-          <LinkedEnvironmentRow
-            key={link.environmentId}
-            environmentId={environmentId}
-            link={link}
-          />
-        ))
+        rows.map((row) =>
+          row.device !== null ? (
+            <LinkedDeviceRow
+              key={row.environmentId}
+              hostEnvironmentId={environmentId}
+              row={row}
+              device={row.device}
+              restoreAccess={devices.data?.settings.defaultAccess ?? "approval-required"}
+              forget={
+                row.link === null ? null : (
+                  <ForgetLinkButton environmentId={environmentId} link={row.link} />
+                )
+              }
+            />
+          ) : row.link !== null ? (
+            <LinkedEnvironmentRow
+              key={row.environmentId}
+              environmentId={environmentId}
+              link={row.link}
+            />
+          ) : null,
+        )
       )}
+      {devicesUnavailable ? (
+        <SettingsRow
+          title="Your devices"
+          description="Not available on this server yet. Update it to see and manage your other machines here."
+        />
+      ) : null}
     </SettingsSection>
+  );
+}
+
+/** Settings every one of your devices shares, changed from any of them. */
+function YourDevicesSettings({
+  environmentId,
+  settings,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly settings: TailnetDevicesSettings;
+}) {
+  const canUpdate = useAtomValue(tailnetDevices.updateSettings.permissionAtom(environmentId));
+  const updateSettings = useAtomCommand(tailnetDevices.updateSettings, {
+    label: "update your devices settings",
+  });
+  const update = (input: TailnetDevicesUpdateSettingsInput) =>
+    void updateSettings({ environmentId, input });
+  return (
+    <>
+      <SettingsRow
+        title="Link my tailnet devices automatically"
+        description="Your other machines on this tailnet, signed in as you, link both ways without a pairing code."
+        control={
+          <Switch
+            checked={settings.autoLink}
+            disabled={!canUpdate}
+            onCheckedChange={(checked) => update({ autoLink: Boolean(checked) })}
+            aria-label="Link my tailnet devices automatically"
+          />
+        }
+      />
+      <SettingsRow
+        title="Only devices with the T3 capability"
+        description={`Count a machine as yours only when your Tailscale policy grants it ${TAILNET_DEVICE_CAPABILITY}.`}
+        control={
+          <Switch
+            checked={settings.requireCapability}
+            disabled={!canUpdate}
+            onCheckedChange={(checked) => update({ requireCapability: Boolean(checked) })}
+            aria-label="Only devices with the T3 capability"
+          />
+        }
+      />
+      <SettingsRow
+        title="Access for new devices"
+        description="What a newly found device may do here until you change it."
+        control={
+          <Select
+            value={settings.defaultAccess}
+            disabled={!canUpdate}
+            onValueChange={(next) => {
+              if (next !== null) update({ defaultAccess: next as AuthMcpClientAccess });
+            }}
+          >
+            <SelectTrigger size="sm" aria-label="Access for new devices">
+              <SelectValue>{accessConfig[settings.defaultAccess].label}</SelectValue>
+            </SelectTrigger>
+            <SelectPopup align="end" alignItemWithTrigger={false}>
+              {AuthMcpClientAccess.literals.map((option) => (
+                <SelectItem key={option} value={option} hideIndicator>
+                  {accessConfig[option].label}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        }
+      />
+    </>
   );
 }
 
@@ -98,22 +211,6 @@ function LinkedEnvironmentRow({
 }) {
   const nowMinute = useNowMinute();
   const health = peerLinkHealth(link, DateTime.makeUnsafe(nowMinute));
-  const unlink = useAtomCommand(peerLinkEnvironment.unlink, { label: "unlink environment" });
-  const canUnlink = useAtomValue(peerLinkEnvironment.unlink.permissionAtom(environmentId));
-  const [busy, setBusy] = useState(false);
-  const forget = async () => {
-    const confirmed = await (requestConfirmDialog(
-      `Forget ${link.label}? Agents here stop working there. Revoke "T3 Code · …" in ${link.label}'s Connections to end the session there too.`,
-      { variant: "destructive" },
-    ) ?? Promise.resolve(false));
-    if (!confirmed) return;
-    setBusy(true);
-    const result = await unlink({ environmentId, input: { environmentId: link.environmentId } });
-    setBusy(false);
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      failureToast("Could not forget the link", String(squashAtomCommandFailure(result)));
-    }
-  };
   const status =
     health.kind === "expired"
       ? "Expired. Link it again with a new pairing code."
@@ -149,20 +246,43 @@ function LinkedEnvironmentRow({
           </p>
           <p className="truncate text-xs text-muted-foreground/80">{link.urls.join(", ")}</p>
         </div>
-        {canUnlink ? (
-          <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
-            <Button
-              size="xs"
-              variant="destructive-outline"
-              disabled={busy}
-              onClick={() => void forget()}
-            >
-              {busy ? "Forgetting…" : "Forget"}
-            </Button>
-          </div>
-        ) : null}
+        <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
+          <ForgetLinkButton environmentId={environmentId} link={link} />
+        </div>
       </div>
     </div>
+  );
+}
+
+/** Drops `environmentId`'s link to `link`, after asking. Hidden without permission. */
+function ForgetLinkButton({
+  environmentId,
+  link,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly link: PeerLinkSummary;
+}) {
+  const unlink = useAtomCommand(peerLinkEnvironment.unlink, { label: "unlink environment" });
+  const canUnlink = useAtomValue(peerLinkEnvironment.unlink.permissionAtom(environmentId));
+  const [busy, setBusy] = useState(false);
+  const forget = async () => {
+    const confirmed = await (requestConfirmDialog(
+      `Forget ${link.label}? Agents here stop working there. Revoke "T3 Code · …" in ${link.label}'s Environments settings to end the session there too.`,
+      { variant: "destructive" },
+    ) ?? Promise.resolve(false));
+    if (!confirmed) return;
+    setBusy(true);
+    const result = await unlink({ environmentId, input: { environmentId: link.environmentId } });
+    setBusy(false);
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      failureToast("Could not forget the link", String(squashAtomCommandFailure(result)));
+    }
+  };
+  if (!canUnlink) return null;
+  return (
+    <Button size="xs" variant="destructive-outline" disabled={busy} onClick={() => void forget()}>
+      {busy ? "Forgetting…" : "Forget"}
+    </Button>
   );
 }
 

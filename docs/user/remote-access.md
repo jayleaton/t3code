@@ -278,11 +278,42 @@ Link two machines, such as your laptop and a VPS, and agents on one can work on
 the other: launch, message, wait on and stop its threads, answer their
 questions, and manage its queues, projects and scheduled tasks.
 
-Linked environments is a beta. Turn it on for both machines in **Settings →
-Labs**; on mobile, **Settings → Labs** lists each connected machine. While it is
-off on either machine, agents start nothing over a link between them. A task
-already running on the other machine still finishes, and if that machine has it
-off, its result arrives once it is back on.
+Linked environments is on by default; turn it off for a machine in **Settings →
+Labs**, or on mobile in **Settings → Labs**. While it is off on either machine,
+agents start nothing over a link between them. A task already running on the
+other machine still finishes, and if that machine has it off, its result
+arrives once it is back on.
+
+### Your tailnet devices
+
+Machines running T3 Code that are signed in to the same Tailscale account link
+to each other on their own, both ways, with no pairing code. Install T3 Code on
+a new machine, sign in to Tailscale, and within ten minutes it appears in
+**Settings → Environments → Linked environments** on your other machines.
+Tagged nodes and machines shared from someone else's tailnet never link this
+way.
+
+- Each device's access there is the most it may do on your machines. Change it
+  from any of them and the change reaches all of them. **Revoke** cuts the
+  device off everywhere; **Restore** gives it back the default access.
+- New devices get the default access set in the same section, and you can turn
+  automatic linking off there.
+- **Open** adds a device to this app without a code. Below full access, it
+  opens read-only.
+- Other people's machines, and anything off your tailnet, still link with a
+  pairing code as described below.
+
+To count only machines you choose, turn on **Only devices with the T3
+capability** and grant `t3.codes/device` in your Tailscale policy file, from
+the machines that should count to your T3 machines:
+
+```json
+"grants": [
+  { "src": ["group:me"], "dst": ["group:me"], "app": { "t3.codes/device": [{}] } }
+]
+```
+
+### Link with a pairing code
 
 On the machine you will work from, open **Settings → Environments → Linked environments**,
 choose **Link**, and pick the other machine or enter its address. The list

@@ -37,21 +37,8 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { ListChoiceRow as SettingsChoiceRow } from "../../components/ui/ListChoiceRow";
 import { SettingsSection } from "../settings/components/SettingsSection";
 import { Button } from "../../components/ui/Button";
-import { RUNTIME_MODE_CHOICES } from "./thread-settings-options";
+import { ACCESS_CHOICES } from "./thread-settings-options";
 
-/** The same five levels as web's access picker: read-only, then the runtime modes. */
-const ACCESS_CHOICES: ReadonlyArray<{
-  readonly access: AuthMcpClientAccess;
-  readonly label: string;
-  readonly description: string;
-}> = [
-  {
-    access: "read-only",
-    label: "Read only",
-    description: "Read projects and threads. Cannot start, message or change anything.",
-  },
-  ...RUNTIME_MODE_CHOICES.map((choice) => ({ ...choice, access: choice.mode })),
-];
 const accessLabel = (access: AuthMcpClientAccess) =>
   ACCESS_CHOICES.find((choice) => choice.access === access)?.label ?? access;
 
