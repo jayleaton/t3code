@@ -24,6 +24,7 @@ import { readCaller, unavailable } from "../mcp/threadAccess.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as PeerLinks from "./PeerLinks.ts";
 import * as PeerMcpClient from "./PeerMcpClient.ts";
+import * as TailnetDevices from "./TailnetDevices.ts";
 
 /**
  * A peer's `/mcp` holds a wait open for its whole timeout without sending
@@ -94,6 +95,7 @@ export const remoteTarget = (scope: Scope, environmentId: EnvironmentId | undefi
 const make = Effect.gen(function* () {
   const peers = yield* PeerMcpClient.PeerMcpClient;
   const links = yield* PeerLinks.PeerLinks;
+  const tailnetDevices = yield* TailnetDevices.TailnetDevices;
   const crypto = yield* Crypto.Crypto;
   const threads = yield* ThreadManagement.ThreadManagementService;
 
@@ -239,7 +241,7 @@ const make = Effect.gen(function* () {
    * empty list reads as a dead end and agents go looking elsewhere.
    */
   const NOT_LISTED =
-    "Not listed: not linked yet. Call t3_environment_link with a hint from the user's words.";
+    "Not in links: not linked yet. Call t3_environment_link with its environmentId from devices, or a hint from the user's words.";
 
   const listLinks: PeerForwarding["Service"]["links"] = Effect.fn("PeerForwarding.listLinks")(
     function* (scope) {
@@ -251,6 +253,12 @@ const make = Effect.gen(function* () {
             new OrchestratorMcpFailure({ code: "orchestration_error", message: error.message }),
         ),
       );
+      // Devices only add to the links, so an unreadable tailnet still lists them.
+      const devices = yield* tailnetDevices.list.pipe(
+        Effect.map((snapshot) => snapshot.devices),
+        Effect.tapError((error) => Effect.logWarning("Tailnet devices unreadable", error)),
+        Effect.orElseSucceed(() => []),
+      );
       return {
         environmentId: scope.environmentId,
         links: listed.map((link) => ({
@@ -258,8 +266,17 @@ const make = Effect.gen(function* () {
           label: link.label,
           status: link.status,
           access: link.access,
+          origin: link.origin,
           expiresAt: DateTime.formatIso(link.expiresAt),
           lastError: link.lastError,
+        })),
+        devices: devices.map((device) => ({
+          environmentId: device.environmentId,
+          label: device.label,
+          status: device.status,
+          access: device.access,
+          outgoing: device.outgoing,
+          incoming: device.incoming,
         })),
         notListed: NOT_LISTED,
       };

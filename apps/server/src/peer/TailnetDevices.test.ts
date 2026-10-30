@@ -30,6 +30,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerHttp from "../http.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as DevicePolicy from "./DevicePolicy.ts";
 import * as PeerLinks from "./PeerLinks.ts";
 import { descriptorOf } from "./PeerLinks.testkit.ts";
 import * as TailnetDevices from "./TailnetDevices.ts";
@@ -180,6 +181,14 @@ const serveDeviceOn = (
       descriptor,
       devices: Context.get(context, TailnetDevices.TailnetDevices),
       links: Context.get(context, PeerLinks.PeerLinks),
+      policy: Context.get(context, DevicePolicy.DevicePolicy),
+      /** What this device lets a caller holding `token` do, as its /mcp would see it. */
+      authenticate: (token: string) =>
+        auth.authenticateMcpClient(
+          HttpServerRequest.fromWeb(
+            new Request(`${origin}/mcp`, { headers: { authorization: `Bearer ${token}` } }),
+          ),
+        ),
       settings: Context.get(context, ServerSettings.ServerSettingsService),
       /** Grants delivered to this device, each carrying a token. */
       grants,
@@ -378,6 +387,124 @@ describe("tailnet device handshake", () => {
       });
       expect(yield* a.devices.linkIfMine({ url: b.url })).toEqual(Option.none());
       expect(yield* Ref.get(a.grants)).toBe(0);
+    }),
+  );
+});
+
+/** Laptop, studio and box, every pair linked both ways. */
+const threeDevices = Effect.gen(function* () {
+  const tailnet = yield* makeTailnet;
+  const a = yield* serveDevice(laptop, tailnet);
+  const b = yield* serveDevice(studio, tailnet);
+  const c = yield* serveDevice(box, tailnet);
+  yield* tailnet.join(a.url);
+  yield* tailnet.join(b.url);
+  yield* tailnet.join(c.url);
+  yield* a.devices.linkIfMine({ url: b.url });
+  yield* a.devices.linkIfMine({ url: c.url });
+  yield* b.devices.linkIfMine({ url: c.url });
+  return { a, b, c };
+});
+
+const box = descriptorOf("env-box", "Box");
+
+describe("tailnet device access", () => {
+  it.live("applies a changed access level to the next request without re-linking", () =>
+    Effect.gen(function* () {
+      const tailnet = yield* makeTailnet;
+      const a = yield* serveDevice(laptop, tailnet);
+      const b = yield* serveDevice(studio, tailnet);
+      yield* tailnet.join(a.url);
+      yield* tailnet.join(b.url);
+      yield* a.devices.linkIfMine({ url: b.url });
+      const { token } = yield* b.links.resolve(laptop.environmentId);
+      expect((yield* a.authenticate(token)).access).toBe("full-access");
+
+      yield* a.devices.setAccess(studio.environmentId, "read-only");
+
+      expect((yield* a.authenticate(token)).access).toBe("read-only");
+    }),
+  );
+
+  it.live("revoking a device on one machine cuts it off on every machine", () =>
+    Effect.gen(function* () {
+      const { a, b, c } = yield* threeDevices;
+      const { token } = yield* c.links.resolve(studio.environmentId);
+
+      yield* a.devices.setAccess(box.environmentId, "revoked");
+
+      for (const device of [a, b]) {
+        expect(yield* device.policy.accessFor(box.environmentId)).toBe("revoked");
+        expect(
+          (yield* device.issued).filter((session) => session.peerEnvironmentId === "env-box"),
+        ).toEqual([]);
+        expect(yield* device.links.get(box.environmentId)).toEqual(Option.none());
+        expect(
+          (yield* device.devices.list).devices.find((row) => row.environmentId === "env-box")
+            ?.status,
+        ).toBe("revoked");
+      }
+      expect(Option.isNone(yield* Effect.option(b.authenticate(token)))).toBe(true);
+      const grants = yield* Ref.get(c.grants);
+      expect(yield* requestAs(b, { environmentId: "env-box", urls: [c.url] })).toEqual({
+        outcome: "refused",
+        reason: "revoked",
+      });
+      expect(yield* c.devices.linkIfMine({ url: b.url })).toEqual(Option.none());
+      expect(yield* Ref.get(c.grants)).toBe(grants);
+    }),
+  );
+
+  it.live("a revoked device cannot restore itself, directly or relayed", () =>
+    Effect.gen(function* () {
+      const { a, b } = yield* threeDevices;
+      yield* a.devices.setAccess(box.environmentId, "revoked");
+      const settings = yield* b.policy.settings;
+      const selfRestore = {
+        environmentId: box.environmentId,
+        access: "full-access" as const,
+        updatedAt: { wallMs: Number.MAX_SAFE_INTEGER, counter: 0, node: box.environmentId },
+        updatedBy: box.environmentId,
+      };
+
+      yield* b.policy.merge(box.environmentId, { policy: [selfRestore], settings });
+      yield* b.policy.merge(laptop.environmentId, { policy: [selfRestore], settings });
+      expect(
+        yield* b.devices.setAccess(studio.environmentId, "full-access").pipe(Effect.flip),
+      ).toMatchObject({ reason: "self" });
+
+      expect(yield* b.policy.accessFor(box.environmentId)).toBe("revoked");
+    }),
+  );
+
+  it.live("ignores policy from a device below full access", () =>
+    Effect.gen(function* () {
+      const { a, b } = yield* threeDevices;
+      yield* b.devices.setAccess(laptop.environmentId, "read-only");
+      const settings = yield* b.policy.settings;
+
+      yield* a.devices.setAccess(box.environmentId, "revoked");
+
+      expect(yield* b.policy.accessFor(box.environmentId)).toBe("full-access");
+      expect(
+        yield* b.policy.merge(laptop.environmentId, { policy: yield* a.policy.entries, settings }),
+      ).toEqual([]);
+    }),
+  );
+
+  it.live("restoring a revoked device lets it link again", () =>
+    Effect.gen(function* () {
+      const { a, b, c } = yield* threeDevices;
+      yield* a.devices.setAccess(box.environmentId, "revoked");
+
+      yield* b.devices.setAccess(box.environmentId, "full-access");
+
+      expect(yield* a.policy.accessFor(box.environmentId)).toBe("full-access");
+      const linked = yield* c.devices.linkIfMine({ url: a.url });
+      expect(Option.map(linked, (link) => link.environmentId)).toEqual(
+        Option.some(laptop.environmentId),
+      );
+      expect(Option.isSome(yield* a.links.get(box.environmentId))).toBe(true);
     }),
   );
 });

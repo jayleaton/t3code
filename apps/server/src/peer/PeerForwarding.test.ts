@@ -3,6 +3,7 @@ import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  DEFAULT_TAILNET_DEVICES_SETTINGS,
   EnvironmentId,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadShell,
@@ -10,6 +11,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   RunId,
+  type TailnetDeviceAccess,
   ThreadId,
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
@@ -39,10 +41,13 @@ import { liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
 import * as PeerForwarding from "./PeerForwarding.ts";
 import * as PeerLinks from "./PeerLinks.ts";
 import * as PeerLinkRequests from "./PeerLinkRequests.ts";
+import * as TailnetDevices from "./TailnetDevices.ts";
 import { descriptorOf, layerLinkingEnvironment, linkTo, servePeer } from "./PeerLinks.testkit.ts";
 
 const laptop = descriptorOf("environment-laptop", "Laptop");
 const box = descriptorOf("environment-box", "Box");
+/** A machine of the user's that is revoked everywhere. */
+const desk = EnvironmentId.make("environment-desk");
 const boxProject = ProjectId.make("project:box");
 const boxThread = ThreadId.make("thread:box-auto");
 const boxRun = RunId.make("run:box-auto");
@@ -233,6 +238,7 @@ const serveBox = (seen: Ref.Ref<Seen>, linkSession: Ref.Ref<string>) =>
       Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
       Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
       Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
+      Layer.provide(Layer.mock(TailnetDevices.TailnetDevices)({})),
     ),
   );
 
@@ -255,6 +261,38 @@ const mcpClient = McpSchema.McpServerClient.of({
  */
 const makeLaptop = Effect.gen(function* () {
   const linking = yield* layerLinkingEnvironment(laptop).pipe(Layer.build);
+  const accessSet = yield* Ref.make<ReadonlyArray<readonly [EnvironmentId, TailnetDeviceAccess]>>(
+    [],
+  );
+  const layerDevices = Layer.mock(TailnetDevices.TailnetDevices)({
+    list: Effect.succeed({
+      self: { environmentId: laptop.environmentId, label: laptop.label, urls: [] },
+      settings: DEFAULT_TAILNET_DEVICES_SETTINGS,
+      devices: [
+        {
+          environmentId: desk,
+          label: "Desk",
+          urls: [],
+          status: "revoked",
+          access: "revoked",
+          policy: null,
+          outgoing: null,
+          incoming: false,
+          tailnetName: "desk",
+          lastSeenAt: null,
+        },
+      ],
+    }),
+    setAccess: (environmentId, access) =>
+      Ref.update(accessSet, (seen) => [...seen, [environmentId, access] as const]).pipe(
+        Effect.as({
+          environmentId,
+          access,
+          updatedAt: { wallMs: 1, counter: 0, node: laptop.environmentId },
+          updatedBy: laptop.environmentId,
+        }),
+      ),
+  });
   const layerHere = Layer.mergeAll(
     McpHttpServer.layerOrchestratorToolkit,
     McpHttpServer.layerProjectRegistration,
@@ -276,6 +314,7 @@ const makeLaptop = Effect.gen(function* () {
     ),
     Layer.provide(NodeServices.layer),
     Layer.provide(PeerForwarding.layer),
+    Layer.provide(layerDevices),
     Layer.provide(Layer.succeedContext(linking)),
     Layer.provide(NodeCrypto.layer),
     Layer.provideMerge(
@@ -347,7 +386,7 @@ const makeLaptop = Effect.gen(function* () {
         ),
         Effect.provideService(McpSchema.McpServerClient, mcpClient),
       );
-  return { links: Context.get(linking, PeerLinks.PeerLinks), call };
+  return { links: Context.get(linking, PeerLinks.PeerLinks), call, accessSet };
 });
 
 const failureOf = (result: McpSchema.CallToolResult) => {
@@ -369,9 +408,33 @@ it.effect("an agent here works on a linked environment's threads within its own 
       expect(listed.structuredContent).toMatchObject({
         environmentId: laptop.environmentId,
         links: [
-          { environmentId: box.environmentId, label: "Box", status: "reachable", access: "auto" },
+          {
+            environmentId: box.environmentId,
+            label: "Box",
+            status: "reachable",
+            access: "auto",
+            origin: "paired",
+          },
+        ],
+        devices: [
+          {
+            environmentId: desk,
+            label: "Desk",
+            status: "revoked",
+            access: "revoked",
+            outgoing: null,
+            incoming: false,
+          },
         ],
       });
+
+      // A full-access agent here may restore one of the user's machines everywhere.
+      const restored = yield* a.call("thread:laptop-full", "t3_environment_device_access", {
+        environmentId: desk,
+        access: "auto",
+      });
+      expect(restored.structuredContent).toEqual({ environmentId: desk, access: "auto" });
+      expect(yield* Ref.get(a.accessSet)).toEqual([[desk, "auto"]]);
 
       const threads = yield* a.call("thread:laptop-full", "t3_thread_list", {
         environmentId: box.environmentId,
@@ -684,6 +747,16 @@ it.effect("refuses what a linked environment cannot take before anything leaves"
         expect(failureOf(relayed), name).toMatchObject({ code: "capability_denied" });
       }
       expect(yield* Ref.get(b.bearers)).toEqual([]);
+
+      // A device's access holds on every machine: full access only, and never linked work.
+      for (const caller of ["thread:laptop-plan", "thread:laptop-from-desk"]) {
+        const refused = yield* a.call(caller, "t3_environment_device_access", {
+          environmentId: desk,
+          access: "revoked",
+        });
+        expect(failureOf(refused), caller).toMatchObject({ code: "capability_denied" });
+      }
+      expect(yield* Ref.get(a.accessSet)).toEqual([]);
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );

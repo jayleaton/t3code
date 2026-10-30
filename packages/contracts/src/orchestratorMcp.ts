@@ -34,6 +34,7 @@ import {
 } from "./threadPullRequest.ts";
 import { hasOnlyPairedSurrogates } from "./threadMetadataMcp.ts";
 import { ThreadTitleRegeneration } from "./threadTitle.ts";
+import { PeerLinkOrigin, TailnetDeviceAccess, TailnetDeviceStatus } from "./tailnetDevices.ts";
 import {
   OrchestrationV2Actor,
   OrchestrationV2CreationSource,
@@ -722,14 +723,31 @@ export const OrchestratorMcpEnvironmentLink = Schema.Struct({
   status: Schema.Literals(["reachable", "unreachable", "expired"]),
   /** The most the linked environment lets this one's agents do there. */
   access: AuthMcpClientAccess,
+  /** tailnet: linked automatically as one of the user's tailnet devices. paired: with a pairing code. */
+  origin: PeerLinkOrigin,
   expiresAt: IsoDateTime,
   lastError: Schema.NullOr(Schema.String),
 });
 export type OrchestratorMcpEnvironmentLink = typeof OrchestratorMcpEnvironmentLink.Type;
 
+/** One of the user's own machines on their tailnet, linked or not. */
+export const OrchestratorMcpTailnetDevice = Schema.Struct({
+  environmentId: EnvironmentId,
+  label: Schema.String,
+  status: TailnetDeviceStatus,
+  /** What it may do on the user's machines; revoked: cut off everywhere. */
+  access: TailnetDeviceAccess,
+  /** This environment links to it, and how; null: not linked from here. */
+  outgoing: Schema.NullOr(PeerLinkOrigin),
+  /** It holds a live session here. */
+  incoming: Schema.Boolean,
+});
+export type OrchestratorMcpTailnetDevice = typeof OrchestratorMcpTailnetDevice.Type;
+
 export const OrchestratorMcpEnvironmentLinksResult = Schema.Struct({
   environmentId: EnvironmentId,
   links: Schema.Array(OrchestratorMcpEnvironmentLink),
+  devices: Schema.Array(OrchestratorMcpTailnetDevice),
   /** What to do when the machine the user means is not among `links`. */
   notListed: Schema.String,
 });
@@ -963,6 +981,22 @@ export const OrchestratorMcpEnvironmentUnlinkResult = Schema.Struct({
 });
 export type OrchestratorMcpEnvironmentUnlinkResult =
   typeof OrchestratorMcpEnvironmentUnlinkResult.Type;
+
+export const OrchestratorMcpEnvironmentDeviceAccessInput = Schema.Struct({
+  environmentId: EnvironmentId.annotate({
+    description: "One of the user's machines, from `devices` in t3_environment_links.",
+  }),
+  access: TailnetDeviceAccess,
+});
+export type OrchestratorMcpEnvironmentDeviceAccessInput =
+  typeof OrchestratorMcpEnvironmentDeviceAccessInput.Type;
+
+export const OrchestratorMcpEnvironmentDeviceAccessResult = Schema.Struct({
+  environmentId: EnvironmentId,
+  access: TailnetDeviceAccess,
+});
+export type OrchestratorMcpEnvironmentDeviceAccessResult =
+  typeof OrchestratorMcpEnvironmentDeviceAccessResult.Type;
 
 export const OrchestratorMcpDeleteScheduledTaskInput = Schema.Struct({
   environmentId: OrchestratorMcpEnvironmentTarget,

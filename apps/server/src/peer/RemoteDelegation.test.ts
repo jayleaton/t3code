@@ -60,6 +60,7 @@ import * as SourceControlRepositoryService from "../sourceControl/SourceControlR
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as PeerForwarding from "./PeerForwarding.ts";
 import * as PeerLinks from "./PeerLinks.ts";
+import * as TailnetDevices from "./TailnetDevices.ts";
 import { descriptorOf, layerLinkingEnvironment, linkTo, servePeer } from "./PeerLinks.testkit.ts";
 import * as RemoteDelegation from "./RemoteDelegation.ts";
 import * as PeerLinkRequests from "./PeerLinkRequests.ts";
@@ -471,6 +472,7 @@ const boxToolkitLayer = (thread: BoxThread) => {
     Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
     Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
     Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
+    Layer.provide(Layer.mock(TailnetDevices.TailnetDevices)({})),
     Layer.provide(
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/p" }),
     ),
@@ -587,6 +589,7 @@ const makeLaptop = (
         ),
       ),
       Layer.provide(Layer.succeedContext(linking)),
+      Layer.provide(Layer.mock(TailnetDevices.TailnetDevices)({})),
       Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
       Layer.provide(NodeCrypto.layer),
       Layer.provideMerge(layerThreads),

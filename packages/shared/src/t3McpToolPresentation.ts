@@ -342,6 +342,10 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     ["Forget", "Forgetting", "Forgot", "a linked environment"],
     "environment-unlink",
   ),
+  t3_environment_device_access: tool(
+    ["Set access for", "Setting access for", "Set access for", "a device"],
+    "environment-update",
+  ),
   t3_environment_preferences_update: tool(
     ["Update", "Updating", "Updated", "environment preferences"],
     "environment-update",

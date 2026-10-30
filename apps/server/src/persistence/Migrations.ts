@@ -90,6 +90,7 @@ import ForkMigration009 from "./Migrations/fork/009_ShellRunlessRootTurnIndex.ts
 import ForkMigration010 from "./Migrations/fork/010_ProjectionThreadParentIndex.ts";
 import ForkMigration011 from "./Migrations/fork/011_ProfileSnapshots.ts";
 import ForkMigration012 from "./Migrations/fork/012_TailnetDevices.ts";
+import ForkMigration013 from "./Migrations/fork/013_TailnetDevicePolicy.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -182,6 +183,7 @@ const forkMigrationEntries = [
   [10, "ProjectionThreadParentIndex", ForkMigration010, 68],
   [11, "ProfileSnapshots", ForkMigration011, 68],
   [12, "TailnetDevices", ForkMigration012, 72],
+  [13, "TailnetDevicePolicy", ForkMigration013, 72],
 ] as const;
 
 export const forkMigrationManifest = forkMigrationEntries.map(

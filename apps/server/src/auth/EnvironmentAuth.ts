@@ -40,6 +40,7 @@ import * as ServerConfig from "../config.ts";
 import * as EnvironmentAuthPolicy from "./EnvironmentAuthPolicy.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
+import * as DevicePolicy from "../peer/DevicePolicy.ts";
 import * as SessionStore from "./SessionStore.ts";
 import { REUSABLE_DEV_SESSION_EXPIRES_AT, resolveReusableDevAuth } from "./ReusableDevAuth.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
@@ -703,6 +704,7 @@ export const make = Effect.gen(function* () {
   const policy = yield* EnvironmentAuthPolicy.EnvironmentAuthPolicy;
   const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
   const sessions = yield* SessionStore.SessionStore;
+  const devicePolicy = yield* DevicePolicy.DevicePolicy;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const crypto = yield* Crypto.Crypto;
   const descriptor = yield* policy.getDescriptor();
@@ -1283,23 +1285,42 @@ export const make = Effect.gen(function* () {
     if (token === null) return Effect.fail(new ServerAuthMissingCredentialError({}));
     return sessions.verify(token).pipe(
       mapSessionVerificationErrors,
-      Effect.flatMap((session) =>
-        session.subject === MCP_CLIENT_SUBJECT && session.method === "bearer-access-token"
-          ? Effect.succeed({
-              sessionId: session.sessionId,
-              label: session.client.label ?? "MCP client",
-              access: session.scopes.includes(AuthOrchestrationOperateScope)
-                ? (session.runtimeModeCeiling ?? "approval-required")
-                : "read-only",
-              peerLink: session.peerLink === true,
-              peerEnvironmentId: session.peerEnvironmentId,
-            } satisfies McpClientSession)
-          : Effect.fail(
-              new ServerAuthInvalidCredentialError({
-                diagnostic: "Only MCP client sessions are accepted here.",
-              }),
-            ),
-      ),
+      Effect.flatMap((session) => {
+        if (session.subject !== MCP_CLIENT_SUBJECT || session.method !== "bearer-access-token") {
+          return Effect.fail(
+            new ServerAuthInvalidCredentialError({
+              diagnostic: "Only MCP client sessions are accepted here.",
+            }),
+          );
+        }
+        const client: McpClientSession = {
+          sessionId: session.sessionId,
+          label: session.client.label ?? "MCP client",
+          access: session.scopes.includes(AuthOrchestrationOperateScope)
+            ? (session.runtimeModeCeiling ?? "approval-required")
+            : "read-only",
+          peerLink: session.peerLink === true,
+          peerEnvironmentId: session.peerEnvironmentId,
+        };
+        if (session.peerEnvironmentId === undefined) return Effect.succeed(client);
+        // The device's current policy narrows what its token was issued with, on every request.
+        return devicePolicy.entryAccess(session.peerEnvironmentId).pipe(
+          Effect.flatMap((entry) =>
+            Option.isNone(entry)
+              ? Effect.succeed(client)
+              : entry.value === "revoked"
+                ? Effect.fail(
+                    new ServerAuthInvalidCredentialError({
+                      diagnostic: "This device's access was revoked.",
+                    }),
+                  )
+                : Effect.succeed({
+                    ...client,
+                    access: DevicePolicy.narrowerAccess(client.access, entry.value),
+                  }),
+          ),
+        );
+      }),
       Effect.withSpan("EnvironmentAuth.authenticateMcpClient"),
     );
   };
@@ -1395,6 +1416,7 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(EnvironmentAuth, make).pipe(
+  Layer.provideMerge(DevicePolicy.layer),
   Layer.provideMerge(PairingGrantStore.layer),
   Layer.provideMerge(SessionStore.layer),
   Layer.provideMerge(EnvironmentAuthPolicy.layer),
