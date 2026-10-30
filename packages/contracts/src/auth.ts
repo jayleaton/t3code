@@ -6,6 +6,7 @@ import {
   ForwardCompatibleArray,
   ClientSurface,
   ClientWebDeployment,
+  EnvironmentId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 
@@ -288,6 +289,8 @@ export const AuthClientSession = Schema.Struct({
   ...authScopeResponseFields,
   method: ServerAuthSessionMethod,
   client: AuthClientMetadata,
+  /** The T3 environment holding the session, when another server holds it. */
+  peerEnvironmentId: Schema.optionalKey(EnvironmentId),
   issuedAt: Schema.DateTimeUtc,
   expiresAt: Schema.DateTimeUtc,
   lastConnectedAt: Schema.NullOr(Schema.DateTimeUtc),
@@ -454,6 +457,8 @@ export const MCP_PEER_LINK_SOFTWARE_ID = "t3code-peer-link";
 export const AuthMcpClientRegistration = Schema.Struct({
   client_name: Schema.optionalKey(Schema.String),
   software_id: Schema.optionalKey(Schema.String),
+  /** A T3 Code environment linking itself names itself, so the peer can list it by machine. */
+  t3_environment_id: Schema.optionalKey(EnvironmentId),
   redirect_uris: Schema.optionalKey(Schema.Array(Schema.String)),
   token_endpoint_auth_method: Schema.optionalKey(Schema.String),
 });

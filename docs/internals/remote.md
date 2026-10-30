@@ -104,6 +104,25 @@ Unlinking on the linking side only forgets the token.
   receiving `/mcp` sends nothing while a wait is open and T3 Connect's edge
   drops idle requests after about 100 s.
 
+### Tailnet devices
+
+[`TailnetDevices`](../../apps/server/src/peer/TailnetDevices.ts) makes the same
+kind of link without a pairing code between servers Tailscale says are the
+same user's untagged nodes. Requests arriving through Serve come from loopback
+with headers any local process can forge, so nothing inbound is trusted:
+
+- **The side giving access dials the other.** The issuer resolves the
+  requester's address itself (a tailnet IP, or an https MagicDNS name, whose
+  certificate only that node holds; plain http on a name is never used),
+  whoises it, and checks its descriptor. It then asks that address to confirm
+  the requester's pending challenge before minting anything, and delivers the
+  token there. A forged request naming a real device's address dies at the
+  confirmation, so no token is ever created for it.
+- **Each direction is its own handshake.** The issuer links back before
+  answering, so one request yields a mutual link, each half proven by the side
+  granting it. Gossip between linked devices only adds addresses to try.
+- The requester stores the issuer address it proved, never one the grant names.
+
 **Work a link paired below full access starts stays within that link.** The
 receiving environment knows a session is a peer link because the linking side
 registers its OAuth client with the `t3code-peer-link` software id, and the

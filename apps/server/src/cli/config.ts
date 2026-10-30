@@ -398,7 +398,8 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
       Option.fromUndefinedOr(env.tailscaleServeEnabled),
       Option.fromUndefinedOr(bootstrap?.tailscaleServeEnabled),
     ),
-    () => false,
+    // Tailnet devices dial each other back over Serve. A dev server never owns the machine's route.
+    () => devUrl === undefined,
   );
   const tailscaleServePort = Option.getOrUndefined(
     resolveOptionPrecedence(

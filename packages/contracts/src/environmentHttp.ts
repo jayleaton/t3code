@@ -55,6 +55,15 @@ import {
   OrchestrationV2ThreadHistoryPage,
   OrchestrationV2ThreadTranscript,
 } from "./orchestrationV2.ts";
+import {
+  TailnetChallengeConfirm,
+  TailnetDevicesSyncPayload,
+  TailnetDevicesUnauthorizedError,
+  TailnetGrant,
+  TailnetGrantResult,
+  TailnetLinkRequest,
+  TailnetLinkResult,
+} from "./tailnetDevices.ts";
 import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
 import {
   PullRequestDiffInput,
@@ -835,6 +844,38 @@ class EnvironmentWebhooksHttpApi extends HttpApiGroup.make("webhooks")
   .add(HttpApiEndpoint.patch("webhookPatch", WEBHOOK_PATH, webhookEndpoint))
   .add(HttpApiEndpoint.get("webhookGet", WEBHOOK_PATH, webhookEndpoint)) {}
 
+/**
+ * Linking one owner's tailnet devices. `request`, `confirm` and `grant` carry
+ * no credential: each side proves the other through Tailscale before trusting
+ * it. `sync` needs a session this environment issued to the calling device.
+ */
+class EnvironmentTailnetDevicesHttpApi extends HttpApiGroup.make("tailnetDevices")
+  .add(
+    HttpApiEndpoint.post("request", "/api/tailnet-devices/request", {
+      payload: TailnetLinkRequest,
+      success: TailnetLinkResult,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("confirm", "/api/tailnet-devices/confirm", {
+      payload: TailnetChallengeConfirm,
+      success: TailnetGrantResult,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("grant", "/api/tailnet-devices/grant", {
+      payload: TailnetGrant,
+      success: TailnetGrantResult,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("sync", "/api/tailnet-devices/sync", {
+      payload: TailnetDevicesSyncPayload,
+      success: TailnetDevicesSyncPayload,
+      error: TailnetDevicesUnauthorizedError,
+    }),
+  ) {}
+
 export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
@@ -843,4 +884,5 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentProjectsHttpApi)
   .add(EnvironmentConnectHttpApi)
-  .add(EnvironmentWebhooksHttpApi) {}
+  .add(EnvironmentWebhooksHttpApi)
+  .add(EnvironmentTailnetDevicesHttpApi) {}
