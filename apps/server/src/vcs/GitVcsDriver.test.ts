@@ -12,6 +12,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
 import * as Metric from "effect/Metric";
 import { assert, it } from "@effect/vitest";
@@ -1018,6 +1020,53 @@ it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       const detectionError = yield* driver.detectRepository(process.cwd()).pipe(Effect.flip);
       assert.strictEqual(detectionError._tag, "VcsProcessSpawnError");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+// macOS holds a process's first read of ~/Documents until the user answers the privacy prompt.
+it.effect("GitVcsDriver detects a repository while git waits on a privacy prompt", () =>
+  Effect.gen(function* () {
+    const consent = yield* Deferred.make<void>();
+    const stdoutFor = (args: ReadonlyArray<string>) =>
+      args.includes("--is-inside-work-tree")
+        ? "true\n"
+        : args.includes("--show-toplevel")
+          ? "/repo\n"
+          : ".git\n";
+    const spawner = ChildProcessSpawner.make((command) => {
+      const args = (command as unknown as { readonly args: ReadonlyArray<string> }).args;
+      return Effect.succeed(
+        ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(1),
+          exitCode: (args.includes("--is-inside-work-tree")
+            ? Deferred.await(consent)
+            : Effect.void
+          ).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+          isRunning: Effect.succeed(false),
+          kill: () => Effect.void,
+          unref: Effect.succeed(Effect.void),
+          stdin: Sink.drain,
+          stdout: Stream.encodeText(Stream.make(stdoutFor(args))),
+          stderr: Stream.empty,
+          all: Stream.empty,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+        }),
+      );
+    });
+    const driver = yield* GitVcsDriver.makeVcsDriverShape().pipe(
+      Effect.provide(
+        VcsProcess.layer.pipe(
+          Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)),
+        ),
+      ),
+    );
+
+    const detection = yield* driver.detectRepository("/repo").pipe(Effect.forkChild);
+    yield* TestClock.adjust("10 seconds");
+    yield* Deferred.succeed(consent, undefined);
+
+    assert.strictEqual((yield* Fiber.join(detection))?.rootPath, "/repo");
+  }).pipe(Effect.provide(NodeServices.layer)),
 );
 
 const gitCommandCount = (operation: string, outcome: string) =>
