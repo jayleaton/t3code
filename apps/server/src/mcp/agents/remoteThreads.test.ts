@@ -25,6 +25,7 @@ import * as DocumentText from "../../provider/DocumentText.ts";
 import * as PeerForwarding from "../../peer/PeerForwarding.ts";
 import * as PeerLinkRequests from "../../peer/PeerLinkRequests.ts";
 import * as PeerLinks from "../../peer/PeerLinks.ts";
+import * as TailnetDevices from "../../peer/TailnetDevices.ts";
 import * as ThreadLaunch from "../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ManagedProjectFolders from "../../project/ManagedProjectFolders.ts";
@@ -263,6 +264,7 @@ const makeLayer = (macbook: ReturnType<typeof makeMacBook>, record: TestRecord) 
     Layer.mock(PeerForwarding.PeerForwarding)({}),
     Layer.mock(PeerLinkRequests.PeerLinkRequests)({}),
     Layer.mock(PeerLinks.PeerLinks)({ get: () => Effect.succeedNone }),
+    Layer.mock(TailnetDevices.TailnetDevices)({}),
     Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
     NodeCrypto.layer,
     NodeServices.layer,

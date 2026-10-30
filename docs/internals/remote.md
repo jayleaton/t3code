@@ -123,6 +123,15 @@ with headers any local process can forge, so nothing inbound is trusted:
   granting it. Gossip between linked devices only adds addresses to try.
 - The requester stores the issuer address it proved, never one the grant names.
 
+What each device may do is a [policy](../../apps/server/src/peer/DevicePolicy.ts)
+every device replicates and merges last-writer-wins by hybrid logical clock, so
+revoking or restoring a device works from any machine. **A write counts only if
+its author is full access on the receiving side and is not the device it
+names**, so a revoked or limited device cannot widen itself, even relayed
+through another. Each `/mcp` request narrows a device session's token to its
+current entry, so a change applies without re-linking; widening past what the
+token was minted with takes a new handshake.
+
 **Work a link paired below full access starts stays within that link.** The
 receiving environment knows a session is a peer link because the linking side
 registers its OAuth client with the `t3code-peer-link` software id, and the

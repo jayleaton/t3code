@@ -2613,9 +2613,9 @@ export const layerWsRpc = (
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(peerLinkRequests.answer(input)),
           ),
-        // Tailnet devices land with the handshake; until then this server has none to manage.
         [WS_METHODS.tailnetDevicesList]: () => tailnetDevices.list,
-        [WS_METHODS.tailnetDevicesSetAccess]: () => tailnetDevicesUnavailable,
+        [WS_METHODS.tailnetDevicesSetAccess]: (input) =>
+          tailnetDevices.setAccess(input.environmentId, input.access),
         [WS_METHODS.tailnetDevicesUpdateSettings]: (input) => tailnetDevices.updateSettings(input),
         [WS_METHODS.tailnetDevicesOpenDevice]: () => tailnetDevicesUnavailable,
         [WS_METHODS.serverUpdateSettings]:

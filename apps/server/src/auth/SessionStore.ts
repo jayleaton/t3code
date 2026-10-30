@@ -354,6 +354,18 @@ export class OtherSessionsRevocationError extends Schema.TaggedError<OtherSessio
   }
 }
 
+export class PeerSessionsRevocationError extends Schema.TaggedError<PeerSessionsRevocationError>()(
+  "PeerSessionsRevocationError",
+  {
+    peerEnvironmentId: Schema.String,
+    ...sessionCredentialInternalErrorContext,
+  },
+) {
+  override get message(): string {
+    return "Failed to revoke another environment's sessions.";
+  }
+}
+
 export const SessionCredentialInternalError = Schema.Union([
   SessionClaimsEncodingError,
   SessionCredentialIssueError,
@@ -363,6 +375,7 @@ export const SessionCredentialInternalError = Schema.Union([
   ActiveSessionsListError,
   SessionRevocationError,
   OtherSessionsRevocationError,
+  PeerSessionsRevocationError,
 ]);
 export type SessionCredentialInternalError = typeof SessionCredentialInternalError.Type;
 
@@ -421,6 +434,10 @@ export class SessionStore extends Context.Service<
     ) => Effect.Effect<boolean, SessionCredentialInternalError>;
     readonly revokeAllExcept: (
       sessionId: AuthSessionId,
+    ) => Effect.Effect<number, SessionCredentialInternalError>;
+    /** Revokes every session another T3 environment holds here. */
+    readonly revokeByPeerEnvironment: (
+      peerEnvironmentId: EnvironmentId,
     ) => Effect.Effect<number, SessionCredentialInternalError>;
     readonly markConnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
     readonly markDisconnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
@@ -1051,6 +1068,27 @@ const make = Effect.gen(function* () {
     return revokedSessionIds.length;
   });
 
+  const revokeByPeerEnvironment: SessionStore["Service"]["revokeByPeerEnvironment"] = Effect.fn(
+    "SessionStore.revokeByPeerEnvironment",
+  )(function* (peerEnvironmentId) {
+    const revokedAt = yield* DateTime.now;
+    const revokedSessionIds = yield* authSessions
+      .revokeByPeerEnvironment({ peerEnvironmentId, revokedAt })
+      .pipe(
+        Effect.mapError((cause) => new PeerSessionsRevocationError({ peerEnvironmentId, cause })),
+      );
+    yield* Ref.update(connectedSessionsRef, (current) => {
+      const next = new Map(current);
+      for (const revokedSessionId of revokedSessionIds) next.delete(revokedSessionId);
+      return next;
+    });
+    yield* Effect.forEach(revokedSessionIds, emitRemoved, {
+      concurrency: "unbounded",
+      discard: true,
+    });
+    return revokedSessionIds.length;
+  });
+
   const awaitInvalidation = Effect.fn(function* (sessionId: AuthSessionId) {
     return yield* Effect.scoped(
       Effect.gen(function* () {
@@ -1094,6 +1132,7 @@ const make = Effect.gen(function* () {
     },
     revoke,
     revokeAllExcept,
+    revokeByPeerEnvironment,
     markConnected,
     markDisconnected,
   });
