@@ -1,7 +1,9 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { AuthMcpClientAccess } from "./auth.ts";
 import { EnvironmentId, ThreadId, TrimmedNonEmptyString, TurnItemId } from "./baseSchemas.ts";
+import { PeerLinkOrigin } from "./tailnetDevices.ts";
 
 /**
  * A link from this environment to another one (the peer). This environment
@@ -15,6 +17,8 @@ export const PeerLink = Schema.Struct({
   /** Addresses the peer was linked at, tried in order. */
   urls: Schema.Array(TrimmedNonEmptyString),
   access: AuthMcpClientAccess,
+  /** Made by the tailnet device handshake, or with a pairing code. */
+  origin: PeerLinkOrigin.pipe(Schema.withDecodingDefault(Effect.succeed("paired" as const))),
   linkedAt: Schema.DateTimeUtc,
   expiresAt: Schema.DateTimeUtc,
   lastReachedAt: Schema.NullOr(Schema.DateTimeUtc),

@@ -38,6 +38,16 @@ import {
   PeerLinkSummary,
 } from "./peerLink.ts";
 import {
+  TailnetDeviceClientCredential,
+  TailnetDevicesSnapshot,
+  TailnetDevicesError,
+  TailnetDeviceOpenInput,
+  TailnetDeviceSetAccessInput,
+  TailnetDevicesSettings,
+  TailnetDevicesUpdateSettingsInput,
+  DevicePolicyEntry,
+} from "./tailnetDevices.ts";
+import {
   ChatGptReconnectProfileInput,
   ChatGptReconnectProfile,
   ChatGptImportProfileInput,
@@ -557,6 +567,10 @@ export const WS_METHODS = {
   peerLinksLink: "peerLinks.link",
   peerLinksUnlink: "peerLinks.unlink",
   peerLinksAnswerRequest: "peerLinks.answerRequest",
+  tailnetDevicesList: "tailnetDevices.list",
+  tailnetDevicesSetAccess: "tailnetDevices.setAccess",
+  tailnetDevicesUpdateSettings: "tailnetDevices.updateSettings",
+  tailnetDevicesOpenDevice: "tailnetDevices.openDevice",
   serverUpdateSettings: "server.updateSettings",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverSearchAcpRegistry: "server.searchAcpRegistry",
@@ -878,6 +892,31 @@ const WsPeerLinksUnlinkRpc = Rpc.make(WS_METHODS.peerLinksUnlink, {
 const WsPeerLinksAnswerRequestRpc = Rpc.make(WS_METHODS.peerLinksAnswerRequest, {
   payload: PeerLinkRequestAnswerInput,
   error: Schema.Union([PeerLinkRequestError, EnvironmentAuthorizationError]),
+});
+
+const WsTailnetDevicesListRpc = Rpc.make(WS_METHODS.tailnetDevicesList, {
+  payload: Schema.Struct({}),
+  success: TailnetDevicesSnapshot,
+  error: Schema.Union([TailnetDevicesError, EnvironmentAuthorizationError]),
+});
+
+const WsTailnetDevicesSetAccessRpc = Rpc.make(WS_METHODS.tailnetDevicesSetAccess, {
+  payload: TailnetDeviceSetAccessInput,
+  success: DevicePolicyEntry,
+  error: Schema.Union([TailnetDevicesError, EnvironmentAuthorizationError]),
+});
+
+const WsTailnetDevicesUpdateSettingsRpc = Rpc.make(WS_METHODS.tailnetDevicesUpdateSettings, {
+  payload: TailnetDevicesUpdateSettingsInput,
+  success: TailnetDevicesSettings,
+  error: Schema.Union([TailnetDevicesError, EnvironmentAuthorizationError]),
+});
+
+/** A one-time credential for the app to connect to that device directly. */
+const WsTailnetDevicesOpenDeviceRpc = Rpc.make(WS_METHODS.tailnetDevicesOpenDevice, {
+  payload: TailnetDeviceOpenInput,
+  success: TailnetDeviceClientCredential,
+  error: Schema.Union([TailnetDevicesError, EnvironmentAuthorizationError]),
 });
 
 const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
@@ -2195,6 +2234,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetDatabaseStorageRpc,
   WsServerUpdateSettingsRpc,
   WsPeerLinksListRpc,
+  WsTailnetDevicesListRpc,
+  WsTailnetDevicesSetAccessRpc,
+  WsTailnetDevicesUpdateSettingsRpc,
+  WsTailnetDevicesOpenDeviceRpc,
   WsPeerLinksLinkRpc,
   WsPeerLinksUnlinkRpc,
   WsPeerLinksAnswerRequestRpc,

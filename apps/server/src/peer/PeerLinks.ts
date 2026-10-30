@@ -202,6 +202,7 @@ const make = Effect.gen(function* () {
       label: row.label,
       urls: yield* decodeUrls(row.urls_json),
       access: yield* decodeAccess(row.access),
+      origin: "paired",
       linkedAt: DateTime.makeUnsafe(row.linked_at),
       // Its token predates link fencing, so the peer would not fence its work:
       // like an expired link, only a new pairing code brings it back.
@@ -433,6 +434,7 @@ const make = Effect.gen(function* () {
       label: peer.label,
       urls: origins,
       access: input.access,
+      origin: "paired",
       linkedAt: now,
       expiresAt: DateTime.add(now, { seconds: issued.expires_in }),
       lastReachedAt: now,
