@@ -680,7 +680,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         desktopBootstrapToken: undefined,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
-        tailscaleServeEnabled: false,
+        tailscaleServeEnabled: true,
         tailscaleServePort: undefined,
       });
     }),

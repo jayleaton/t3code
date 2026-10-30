@@ -5,6 +5,7 @@ import {
   type AuthClientMetadata,
   type AuthClientSession,
   type AuthEnvironmentScope,
+  type EnvironmentId,
   AuthWebSocketTicketUse,
   RuntimeMode,
   type ServerAuthSessionMethod,
@@ -61,6 +62,8 @@ export interface VerifiedSession {
   readonly runtimeModeCeiling?: RuntimeMode;
   /** An MCP client that is another T3 Code environment's peer link. */
   readonly peerLink?: true;
+  /** The environment holding the session, when another T3 server holds it. */
+  readonly peerEnvironmentId?: EnvironmentId;
 }
 
 export interface VerifiedWebSocketTicket extends VerifiedSession {
@@ -383,6 +386,7 @@ export class SessionStore extends Context.Service<
       readonly proofKeyThumbprint?: string;
       readonly runtimeModeCeiling?: RuntimeMode;
       readonly peerLink?: boolean;
+      readonly peerEnvironmentId?: EnvironmentId;
       readonly replaceActiveForSubjectAndMethod?: boolean;
       readonly replaceSessionId?: AuthSessionId;
     }) => Effect.Effect<IssuedSession, SessionCredentialInternalError>;
@@ -566,6 +570,9 @@ const make = Effect.gen(function* () {
         scopes: row.value.scopes,
         method: row.value.method,
         client: toClientMetadata(row.value.client),
+        ...(row.value.peerEnvironmentId === null
+          ? {}
+          : { peerEnvironmentId: row.value.peerEnvironmentId }),
         issuedAt: row.value.issuedAt,
         expiresAt: row.value.expiresAt,
         lastConnectedAt: row.value.lastConnectedAt,
@@ -689,6 +696,9 @@ const make = Effect.gen(function* () {
           os: client.os ?? null,
           browser: client.browser ?? null,
         },
+        ...(input?.peerEnvironmentId === undefined
+          ? {}
+          : { peerEnvironmentId: input.peerEnvironmentId }),
         issuedAt,
         expiresAt,
       } satisfies AuthSessions.CreateAuthSessionInput;
@@ -723,6 +733,9 @@ const make = Effect.gen(function* () {
           scopes: claims.scopes,
           method: claims.method,
           client,
+          ...(input?.peerEnvironmentId === undefined
+            ? {}
+            : { peerEnvironmentId: input.peerEnvironmentId }),
           issuedAt,
           expiresAt,
           lastConnectedAt: null,
@@ -838,6 +851,9 @@ const make = Effect.gen(function* () {
         ...(claims.jkt ? { proofKeyThumbprint: claims.jkt } : {}),
         ...(claims.rtc ? { runtimeModeCeiling: claims.rtc } : {}),
         ...(claims.plk === 1 ? { peerLink: true as const } : {}),
+        ...(row.value.peerEnvironmentId === null
+          ? {}
+          : { peerEnvironmentId: row.value.peerEnvironmentId }),
       } satisfies VerifiedSession;
     },
   );
@@ -969,6 +985,7 @@ const make = Effect.gen(function* () {
           scopes: row.scopes,
           method: row.method,
           client: toClientMetadata(row.client),
+          ...(row.peerEnvironmentId === null ? {} : { peerEnvironmentId: row.peerEnvironmentId }),
           issuedAt: row.issuedAt,
           expiresAt: row.expiresAt,
           lastConnectedAt: row.lastConnectedAt,

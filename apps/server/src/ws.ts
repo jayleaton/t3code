@@ -6,6 +6,7 @@ import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
 import * as PeerLinks from "./peer/PeerLinks.ts";
+import * as TailnetDevices from "./peer/TailnetDevices.ts";
 
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -1372,6 +1373,7 @@ export const layerWsRpc = (
       const databaseStorage = yield* DatabaseStorage.DatabaseStorage;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const peerLinks = yield* PeerLinks.PeerLinks;
+      const tailnetDevices = yield* TailnetDevices.TailnetDevices;
       const tailnetDevicesUnavailable = Effect.fail(
         new TailnetDevicesError({
           reason: "unreachable",
@@ -2612,9 +2614,9 @@ export const layerWsRpc = (
             Effect.andThen(peerLinkRequests.answer(input)),
           ),
         // Tailnet devices land with the handshake; until then this server has none to manage.
-        [WS_METHODS.tailnetDevicesList]: () => tailnetDevicesUnavailable,
+        [WS_METHODS.tailnetDevicesList]: () => tailnetDevices.list,
         [WS_METHODS.tailnetDevicesSetAccess]: () => tailnetDevicesUnavailable,
-        [WS_METHODS.tailnetDevicesUpdateSettings]: () => tailnetDevicesUnavailable,
+        [WS_METHODS.tailnetDevicesUpdateSettings]: (input) => tailnetDevices.updateSettings(input),
         [WS_METHODS.tailnetDevicesOpenDevice]: () => tailnetDevicesUnavailable,
         [WS_METHODS.serverUpdateSettings]:
           /* Request instrumentation already owns the span; keep this helper in that context. */
@@ -3390,14 +3392,22 @@ const provideWsRpcDependencies = <A, E, R>(
   services: {
     readonly sql: SqlClient.SqlClient;
     readonly peerLinks: PeerLinks.PeerLinks["Service"];
+    readonly tailnetDevices: TailnetDevices.TailnetDevices["Service"];
     readonly peerLinkRequests: PeerLinkRequests.PeerLinkRequests["Service"];
     readonly serverSelfUpdate: ServerSelfUpdate.ServerSelfUpdate["Service"];
     readonly pullRequests: PullRequestService.PullRequestService["Service"];
     readonly reviewGuides: PullRequestReviewGuideService.PullRequestReviewGuideService["Service"];
   },
 ) => {
-  const { sql, serverSelfUpdate, pullRequests, reviewGuides, peerLinks, peerLinkRequests } =
-    services;
+  const {
+    sql,
+    serverSelfUpdate,
+    pullRequests,
+    reviewGuides,
+    peerLinks,
+    tailnetDevices,
+    peerLinkRequests,
+  } = services;
   return handlers.pipe(
     Layer.provideMerge(RpcSerialization.layerJson),
     // Request fibers run in the handlers' context, so this reporter sees
@@ -3405,6 +3415,7 @@ const provideWsRpcDependencies = <A, E, R>(
     Layer.provide(DefectReporter.layer),
     Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
     Layer.provide(Layer.succeed(PeerLinks.PeerLinks, peerLinks)),
+    Layer.provide(Layer.succeed(TailnetDevices.TailnetDevices, tailnetDevices)),
     Layer.provide(Layer.succeed(PeerLinkRequests.PeerLinkRequests, peerLinkRequests)),
     Layer.provide(AgentSessionScanner.layer),
     Layer.provide(ProviderMaintenanceRunner.layer),
@@ -3451,6 +3462,7 @@ export const makeInProcessWsRpcLayer = (session: EnvironmentAuth.AuthenticatedSe
           {
             sql: yield* SqlClient.SqlClient,
             peerLinks: yield* PeerLinks.PeerLinks,
+            tailnetDevices: yield* TailnetDevices.TailnetDevices,
             peerLinkRequests: yield* PeerLinkRequests.PeerLinkRequests,
             serverSelfUpdate: yield* ServerSelfUpdate.ServerSelfUpdate,
             pullRequests: yield* PullRequestService.PullRequestService,
@@ -3470,6 +3482,7 @@ export const layer = Layer.unwrap(
     const pullRequests = yield* PullRequestService.PullRequestService;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     const peerLinks = yield* PeerLinks.PeerLinks;
+    const tailnetDevices = yield* TailnetDevices.TailnetDevices;
     const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
@@ -3562,7 +3575,15 @@ export const layer = Layer.unwrap(
                 mcpGatewayBroker,
                 clientFocusBroker,
               ),
-              { sql, serverSelfUpdate, pullRequests, reviewGuides, peerLinks, peerLinkRequests },
+              {
+                sql,
+                serverSelfUpdate,
+                pullRequests,
+                reviewGuides,
+                peerLinks,
+                tailnetDevices,
+                peerLinkRequests,
+              },
             ),
           ),
         );

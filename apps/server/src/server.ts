@@ -79,6 +79,9 @@ import * as PeerForwarding from "./peer/PeerForwarding.ts";
 import * as RemoteDelegation from "./peer/RemoteDelegation.ts";
 import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
 import * as PeerLinks from "./peer/PeerLinks.ts";
+import * as TailnetDevices from "./peer/TailnetDevices.ts";
+import * as TailnetDevicesHttp from "./peer/tailnetDevicesHttp.ts";
+import * as TailnetIdentity from "./peer/TailnetIdentity.ts";
 import * as PeerMcpClient from "./peer/PeerMcpClient.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
@@ -769,6 +772,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(ProjectHttp.layer),
       Layer.provide(ServerHttp.layerServerEnvironmentHttpApi),
       Layer.provide(WebhookRoute.layer.pipe(Layer.provide(RelayDeliveryProof.layer))),
+      Layer.provide(TailnetDevicesHttp.layer),
       Layer.provide(AuthHttp.layerAuthenticatedAuth),
     ),
     ServerHttp.layerOtlpTracesProxyRoute,
@@ -795,6 +799,10 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.effectDiscard(
     RemoteDelegation.RemoteDelegation.pipe(Effect.flatMap((remote) => remote.start())),
   ),
+  // Finds and links this user's other T3 servers on the tailnet.
+  Layer.effectDiscard(
+    TailnetDevices.TailnetDevices.pipe(Effect.flatMap((devices) => devices.start)),
+  ),
 ).pipe(
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
@@ -816,6 +824,7 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(
     PeerForwarding.layer.pipe(
       Layer.provideMerge(PeerMcpClient.layer),
+      Layer.provideMerge(TailnetDevices.layer.pipe(Layer.provide(TailnetIdentity.layer))),
       Layer.provideMerge(PeerLinks.layer),
     ),
   ),

@@ -10,6 +10,9 @@ import { EnvironmentId, NonNegativeInt, TrimmedNonEmptyString } from "./baseSche
  * so no inbound header or source address is ever trusted.
  */
 
+/** The Tailscale app capability that, when required, marks a node as one of my devices. */
+export const TAILNET_DEVICE_CAPABILITY = "t3.codes/device";
+
 /** A hybrid logical clock stamp. Replicated writes merge last-writer-wins by it. */
 export const TailnetHlc = Schema.Struct({
   wallMs: NonNegativeInt,
@@ -45,6 +48,14 @@ export const TailnetDevicesSettings = Schema.Struct({
   updatedBy: Schema.NullOr(EnvironmentId),
 });
 export type TailnetDevicesSettings = typeof TailnetDevicesSettings.Type;
+
+export const DEFAULT_TAILNET_DEVICES_SETTINGS: TailnetDevicesSettings = {
+  autoLink: true,
+  defaultAccess: "full-access",
+  requireCapability: false,
+  updatedAt: null,
+  updatedBy: null,
+};
 
 /** How this environment's outgoing link to a peer was made. */
 export const PeerLinkOrigin = Schema.Literals(["tailnet", "paired"]);
@@ -92,6 +103,16 @@ export const TailnetLinkResult = Schema.Union([
   Schema.Struct({ outcome: Schema.Literal("refused"), reason: TailnetLinkRefusal }),
 ]);
 export type TailnetLinkResult = typeof TailnetLinkResult.Type;
+
+/**
+ * Issuer to requester, before minting anything: is this challenge yours, and
+ * pending for me? A forged request names an address whose owner says no.
+ */
+export const TailnetChallengeConfirm = Schema.Struct({
+  challenge: TailnetChallenge,
+  issuer: TailnetDeviceDescriptor,
+});
+export type TailnetChallengeConfirm = typeof TailnetChallengeConfirm.Type;
 
 /** Issuer to requester, at the address the issuer resolved and verified itself. */
 export const TailnetGrant = Schema.Struct({
@@ -185,4 +206,11 @@ export class TailnetDevicesError extends Schema.TaggedError<TailnetDevicesError>
     message: Schema.String,
     cause: Schema.optionalKey(Schema.Defect()),
   },
+) {}
+
+/** A tailnet device endpoint was called without a session this environment issued to a device. */
+export class TailnetDevicesUnauthorizedError extends Schema.TaggedError<TailnetDevicesUnauthorizedError>()(
+  "TailnetDevicesUnauthorizedError",
+  { message: Schema.String },
+  { httpApiStatus: 401 },
 ) {}

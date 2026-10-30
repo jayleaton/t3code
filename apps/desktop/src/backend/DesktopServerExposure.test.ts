@@ -207,7 +207,7 @@ describe("DesktopServerExposure", () => {
           mode: "network-accessible",
           endpointUrl: "http://192.168.1.20:4173",
           advertisedHost: "192.168.1.20",
-          tailscaleServeEnabled: false,
+          tailscaleServeEnabled: true,
           tailscaleServePort: 443,
         });
 
@@ -375,6 +375,8 @@ describe("DesktopServerExposure", () => {
         Effect.gen(function* () {
           const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
           yield* serverExposure.configureFromSettings({ port: 4173 });
+          // Serve reads status on its own; this counts the endpoint cache's reads alone.
+          yield* serverExposure.setTailscaleServeEnabled({ enabled: false });
           yield* serverExposure.setMode("network-accessible");
 
           const initial = yield* serverExposure.getAdvertisedEndpoints;

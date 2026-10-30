@@ -33,6 +33,7 @@ import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as PeerLinks from "./PeerLinks.ts";
+import * as TailnetDevices from "./TailnetDevices.ts";
 
 type LinkRequestItem = Extract<OrchestrationV2TurnItem, { readonly type: "link_request" }>;
 
@@ -84,6 +85,7 @@ export class PeerLinkRequests extends Context.Service<
 const make = Effect.gen(function* () {
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const peerLinks = yield* PeerLinks.PeerLinks;
+  const tailnetDevices = yield* TailnetDevices.TailnetDevices;
   const crypto = yield* Crypto.Crypto;
 
   const readCard = (threadId: ThreadId, turnItemId: TurnItemId) =>
@@ -170,6 +172,21 @@ const make = Effect.gen(function* () {
               new OrchestratorMcpFailure({ code: "orchestration_error", message: error.message }),
           ),
         );
+        if (Option.isSome(linked)) {
+          return {
+            status: "linked",
+            environmentId: linked.value.environmentId,
+            label: linked.value.label,
+            access: linked.value.access,
+          } as const;
+        }
+      }
+      // One of my tailnet devices needs no card either: Tailscale proves it is mine.
+      if (input.environmentId !== undefined || input.url !== undefined) {
+        const linked = yield* tailnetDevices.linkIfMine({
+          ...(input.environmentId === undefined ? {} : { environmentId: input.environmentId }),
+          ...(input.url === undefined ? {} : { url: input.url }),
+        });
         if (Option.isSome(linked)) {
           return {
             status: "linked",
