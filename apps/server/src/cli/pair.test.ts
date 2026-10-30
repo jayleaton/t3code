@@ -133,7 +133,7 @@ describe("t3 pair", () => {
             Effect.gen(function* () {
               if (!ChildProcess.isStandardCommand(command))
                 return yield* Effect.die("Unexpected pipeline");
-              if (command.args[0] === "serve") {
+              if (command.args[0] === "serve" && command.args[1] !== "status") {
                 const target = command.args.at(-1)!;
                 const descriptor = yield* Effect.promise(async () =>
                   (await fetch(new URL("/.well-known/t3/environment", target))).json(),

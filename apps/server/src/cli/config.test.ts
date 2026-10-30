@@ -369,7 +369,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
-        tailscaleServePort: 443,
+        tailscaleServePort: undefined,
       });
     }),
   );
@@ -447,7 +447,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         autoBootstrapProjectFromCwd: true,
         logWebSocketEvents: true,
         tailscaleServeEnabled: false,
-        tailscaleServePort: 443,
+        tailscaleServePort: undefined,
       });
     }),
   );
@@ -681,7 +681,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
-        tailscaleServePort: 443,
+        tailscaleServePort: undefined,
       });
     }),
   );

@@ -1,6 +1,7 @@
 import type { ServerDirectEndpoint } from "@t3tools/contracts";
 import {
   buildTailscaleHttpsBaseUrl,
+  findTailscaleServePortFor,
   probeTailscaleHttpsEndpoint,
   readTailscaleStatus,
 } from "@t3tools/tailscale";
@@ -130,13 +131,23 @@ export const make = Effect.gen(function* () {
     ];
     // Serve setup can fail without stopping startup; advertise only after it answers as this server.
     if (config.tailscaleServeEnabled) {
-      const servedUrl = yield* readTailscaleStatus.pipe(
-        Effect.map((status) => status.magicDnsName),
-        Effect.flatMap((magicDnsName) => {
-          if (magicDnsName === null) return Effect.succeed(null);
+      // The server may have picked any port, and `t3 pair --tailscale` maps one from
+      // outside, so advertise whichever port Serve forwards here.
+      const servedUrl = yield* Effect.all(
+        [
+          readTailscaleStatus,
+          findTailscaleServePortFor({ localPort: config.port }).pipe(
+            Effect.orElseSucceed(() => null),
+            Effect.map((port) => port ?? config.tailscaleServePort ?? null),
+          ),
+        ],
+        { concurrency: "unbounded" },
+      ).pipe(
+        Effect.flatMap(([status, servePort]) => {
+          if (status.magicDnsName === null || servePort === null) return Effect.succeed(null);
           const httpBaseUrl = buildTailscaleHttpsBaseUrl({
-            magicDnsName,
-            servePort: config.tailscaleServePort,
+            magicDnsName: status.magicDnsName,
+            servePort,
           });
           return probeTailscaleHttpsEndpoint({ baseUrl: httpBaseUrl }).pipe(
             Effect.map((reachable) => (reachable ? httpBaseUrl : null)),

@@ -107,7 +107,8 @@ export class ServerConfig extends Context.Service<
     readonly autoBootstrapProjectFromCwd: boolean;
     readonly logWebSocketEvents: boolean;
     readonly tailscaleServeEnabled: boolean;
-    readonly tailscaleServePort: number;
+    /** A pinned Serve port; unset, the server picks one (`selectTailscaleServePort`). */
+    readonly tailscaleServePort: number | undefined;
   }
 >()("t3/config/ServerConfig") {
   static readonly layerTest = (

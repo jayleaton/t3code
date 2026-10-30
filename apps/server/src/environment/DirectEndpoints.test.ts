@@ -171,26 +171,29 @@ const TAILSCALE_STATUS_JSON = JSON.stringify({
   Self: { DNSName: "bb-1.tail1234.ts.net.", TailscaleIPs: ["100.64.1.2"] },
 });
 
-const layerTailscaleUp = Layer.succeed(
-  ChildProcessSpawner.ChildProcessSpawner,
-  ChildProcessSpawner.make(() =>
-    Effect.succeed(
-      ChildProcessSpawner.makeHandle({
-        pid: ChildProcessSpawner.ProcessId(1),
-        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
-        isRunning: Effect.succeed(false),
-        kill: () => Effect.void,
-        unref: Effect.succeed(Effect.void),
-        stdin: Sink.drain,
-        stdout: Stream.make(new TextEncoder().encode(TAILSCALE_STATUS_JSON)),
-        stderr: Stream.empty,
-        all: Stream.empty,
-        getInputFd: () => Sink.drain,
-        getOutputFd: () => Stream.empty,
-      }),
-    ),
-  ),
-);
+const layerTailscaleUp = (serveStatusJson: string) =>
+  Layer.succeed(
+    ChildProcessSpawner.ChildProcessSpawner,
+    ChildProcessSpawner.make((command) => {
+      const { args } = command as unknown as { readonly args: ReadonlyArray<string> };
+      const stdout = args[0] === "serve" ? serveStatusJson : TAILSCALE_STATUS_JSON;
+      return Effect.succeed(
+        ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(1),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+          isRunning: Effect.succeed(false),
+          kill: () => Effect.void,
+          unref: Effect.succeed(Effect.void),
+          stdin: Sink.drain,
+          stdout: Stream.make(new TextEncoder().encode(stdout)),
+          stderr: Stream.empty,
+          all: Stream.empty,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+        }),
+      );
+    }),
+  );
 
 const layerServeProbe = (status: number) =>
   Layer.succeed(
@@ -200,25 +203,34 @@ const layerServeProbe = (status: number) =>
     ),
   );
 
-const layerServeConfig = Layer.effect(
-  ServerConfig.ServerConfig,
-  Effect.map(ServerConfig.ServerConfig, (config) => ({
-    ...config,
-    host: "127.0.0.1",
-    tailscaleServeEnabled: true,
-    tailscaleServePort: 443,
-  })),
-).pipe(
-  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-direct-" })),
-  Layer.provide(NodeServices.layer),
-);
+const layerServeConfig = (pinnedPort: number | undefined) =>
+  Layer.effect(
+    ServerConfig.ServerConfig,
+    Effect.map(ServerConfig.ServerConfig, (config) => ({
+      ...config,
+      host: "127.0.0.1",
+      port: 3773,
+      tailscaleServeEnabled: true,
+      tailscaleServePort: pinnedPort,
+    })),
+  ).pipe(
+    Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-direct-" })),
+    Layer.provide(NodeServices.layer),
+  );
 
-const resolveWithServe = (probeStatus: number) =>
+const resolveWithServe = (
+  probeStatus: number,
+  serve: { readonly pinnedPort?: number; readonly statusJson?: string } = { pinnedPort: 443 },
+) =>
   Effect.flatMap(DirectEndpoints.DirectEndpoints, (service) => service.resolve()).pipe(
     Effect.provide(
       DirectEndpoints.layer.pipe(
         Layer.provide(
-          Layer.mergeAll(layerServeConfig, layerTailscaleUp, layerServeProbe(probeStatus)),
+          Layer.mergeAll(
+            layerServeConfig(serve.pinnedPort),
+            layerTailscaleUp(serve.statusJson ?? "{}"),
+            layerServeProbe(probeStatus),
+          ),
         ),
       ),
     ),
@@ -236,6 +248,20 @@ describe("DirectEndpoints Tailscale Serve", () => {
   effectIt.effect("leaves the tailnet name out when Serve is not forwarding", () =>
     Effect.gen(function* () {
       expect(yield* resolveWithServe(502)).toEqual([]);
+    }),
+  );
+
+  effectIt.effect("advertises the port Serve picked for this server", () =>
+    Effect.gen(function* () {
+      const statusJson = JSON.stringify({
+        Web: {
+          "bb-1.tail1234.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:4077" } } },
+          "bb-1.tail1234.ts.net:3443": { Handlers: { "/": { Proxy: "http://127.0.0.1:3773" } } },
+        },
+      });
+      expect(yield* resolveWithServe(200, { statusJson })).toEqual([
+        { kind: "tailnet", httpBaseUrl: "https://bb-1.tail1234.ts.net:3443/" },
+      ]);
     }),
   );
 });

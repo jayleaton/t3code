@@ -12,7 +12,6 @@ import { buildPairingAppLink } from "@t3tools/shared/remote";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import {
   buildTailscaleHttpsBaseUrl,
-  DEFAULT_TAILSCALE_SERVE_PORT,
   ensureTailscaleServe,
   readTailscaleStatus,
 } from "@t3tools/tailscale";
@@ -31,6 +30,10 @@ import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } fr
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
 import { resolveBaseDir } from "../os-jank.ts";
+import {
+  chooseTailscaleServePort,
+  writeLastTailscaleServePort,
+} from "../environment/TailscaleServePort.ts";
 import {
   type PersistedServerRuntimeState,
   isProcessAlive,
@@ -342,7 +345,7 @@ const makePairServerConfig = Effect.fn(function* (input: {
     autoBootstrapProjectFromCwd: false,
     logWebSocketEvents: false,
     tailscaleServeEnabled: false,
-    tailscaleServePort: DEFAULT_TAILSCALE_SERVE_PORT,
+    tailscaleServePort: undefined,
   });
 });
 
@@ -359,7 +362,11 @@ const awaitEnvironmentDescriptor = Effect.fn(function* (baseUrl: string) {
 });
 
 const resolveTailscalePairingBase = Effect.fn("pair.resolveTailscalePairingBase")(
-  function* (input: { readonly target: DiscoveredPairTarget; readonly servePort: number }) {
+  function* (input: {
+    readonly target: DiscoveredPairTarget;
+    readonly stateDir: string;
+    readonly pinnedPort: number | undefined;
+  }) {
     const notes: Array<string> = [];
     const status = yield* readTailscaleStatus.pipe(
       Effect.mapError((cause) => new TailscaleUnavailableError({ cause })),
@@ -372,54 +379,61 @@ const resolveTailscalePairingBase = Effect.fn("pair.resolveTailscalePairingBase"
     if (status.httpsServeEnabled === false) {
       return yield* new TailscaleServeNotEnabledError();
     }
+    const localTarget = resolveTailscaleLocalTarget(input.target.state);
+    if (isDevServerNotProxiableError(localTarget)) {
+      return yield* localTarget;
+    }
+    // The descriptor probes below settle a pinned port, so only an unpinned one reads Serve status.
+    const servePort =
+      input.pinnedPort ??
+      (yield* chooseTailscaleServePort({
+        pinnedPort: undefined,
+        stateDir: input.stateDir,
+        ...localTarget,
+      }).pipe(
+        Effect.map((choice) => choice.servePort),
+        Effect.mapError((cause) => new TailscaleUnavailableError({ cause })),
+      ));
     const baseUrl = buildTailscaleHttpsBaseUrl({
       magicDnsName: status.magicDnsName,
-      servePort: input.servePort,
+      servePort,
     });
 
     // Only unreachable ports or this environment's mappings are safe to reconfigure.
     const existing = yield* probeEnvironmentDescriptor(baseUrl);
     if (existing._tag === "descriptor") {
       if (existing.descriptor.environmentId !== input.target.descriptor.environmentId) {
-        return yield* new ServesOtherEnvironmentError({ servePort: input.servePort });
+        return yield* new ServesOtherEnvironmentError({ servePort });
       }
       // A dev backend also answers /.well-known, but /pair needs the web origin.
       if (input.target.state.devUrl === undefined) {
-        return { baseUrl, notes };
+        return { baseUrl, servePort, notes };
       }
     }
     if (existing._tag === "not-a-t3-server") {
-      return yield* new ServePortOccupiedError({ servePort: input.servePort });
+      return yield* new ServePortOccupiedError({ servePort });
     }
 
-    const localTarget = resolveTailscaleLocalTarget(input.target.state);
-    if (isDevServerNotProxiableError(localTarget)) {
-      return yield* localTarget;
-    }
     yield* ensureTailscaleServe({
       localPort: localTarget.localPort,
-      servePort: input.servePort,
+      servePort,
       ...(localTarget.localHost !== undefined ? { localHost: localTarget.localHost } : {}),
-    }).pipe(
-      Effect.mapError(
-        (cause) => new TailscaleServeFailedError({ servePort: input.servePort, cause }),
-      ),
-    );
+    }).pipe(Effect.mapError((cause) => new TailscaleServeFailedError({ servePort, cause })));
     notes.push(
-      `Tailscale Serve now maps ${baseUrl} to this server and persists across restarts. Remove it with \`tailscale serve --https=${String(input.servePort)} off\`.`,
+      `Tailscale Serve now maps ${baseUrl} to this server and persists across restarts. Remove it with \`tailscale serve --https=${String(servePort)} off\`.`,
     );
 
     const probed = yield* awaitEnvironmentDescriptor(baseUrl);
     if (probed._tag === "descriptor") {
       if (probed.descriptor.environmentId !== input.target.descriptor.environmentId) {
-        return yield* new ServesOtherEnvironmentError({ servePort: input.servePort });
+        return yield* new ServesOtherEnvironmentError({ servePort });
       }
     } else {
       notes.push(
         "The HTTPS endpoint has not answered yet. First use can take a moment while Tailscale provisions certificates.",
       );
     }
-    return { baseUrl, notes };
+    return { baseUrl, servePort, notes };
   },
 );
 
@@ -469,8 +483,10 @@ const tailscaleFlag = Flag.Boolean("tailscale").pipe(
 
 const tailscaleServePortFlag = Flag.Int("tailscale-serve-port").pipe(
   Flag.withSchema(PortSchema),
-  Flag.withDescription("HTTPS port for Tailscale Serve when --tailscale is enabled."),
-  Flag.withDefault(DEFAULT_TAILSCALE_SERVE_PORT),
+  Flag.withDescription(
+    "HTTPS port for Tailscale Serve when --tailscale is enabled. Defaults to the last port used, then 443, 8443, or the first free port from 3443.",
+  ),
+  Flag.optional,
 );
 
 export const pairCommand = Command.make("pair", {
@@ -501,13 +517,18 @@ export const pairCommand = Command.make("pair", {
         });
       }
 
+      const config = yield* makePairServerConfig({ target, logLevel });
       const notes: Array<string> = [];
       let pairingBaseUrl: string;
       if (flags.tailscale) {
         const resolved = yield* resolveTailscalePairingBase({
           target,
-          servePort: flags.tailscaleServePort,
+          stateDir: config.stateDir,
+          pinnedPort: Option.getOrUndefined(flags.tailscaleServePort),
         });
+        yield* writeLastTailscaleServePort(config.stateDir, resolved.servePort).pipe(
+          Effect.ignore({ log: true }),
+        );
         pairingBaseUrl = resolved.baseUrl;
         notes.push(...resolved.notes);
       } else {
@@ -528,7 +549,6 @@ export const pairCommand = Command.make("pair", {
         }
       }
 
-      const config = yield* makePairServerConfig({ target, logLevel });
       const issued = yield* mintPairingLink({
         config,
         scopes: flags.scopes,

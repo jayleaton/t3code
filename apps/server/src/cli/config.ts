@@ -7,6 +7,7 @@ import {
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import { DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
+import { DEFAULT_TAILSCALE_SERVE_PORT } from "@t3tools/tailscale";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -81,7 +82,9 @@ const tailscaleServeFlag = Flag.Boolean("tailscale-serve").pipe(
 );
 const tailscaleServePortFlag = Flag.Int("tailscale-serve-port").pipe(
   Flag.withSchema(PortSchema),
-  Flag.withDescription("HTTPS port for Tailscale Serve when --tailscale-serve is enabled."),
+  Flag.withDescription(
+    "HTTPS port for Tailscale Serve when --tailscale-serve is enabled. Defaults to the last port used, then 443, 8443, or the first free port from 3443.",
+  ),
   Flag.optional,
 );
 
@@ -397,13 +400,15 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     ),
     () => false,
   );
-  const tailscaleServePort = Option.getOrElse(
+  const tailscaleServePort = Option.getOrUndefined(
     resolveOptionPrecedence(
       normalizedFlags.tailscaleServePort,
       Option.fromUndefinedOr(env.tailscaleServePort),
-      Option.fromUndefinedOr(bootstrap?.tailscaleServePort),
+      // The desktop always sends its default; only a port the user chose pins Serve.
+      Option.fromUndefinedOr(bootstrap?.tailscaleServePort).pipe(
+        Option.filter((port) => port !== DEFAULT_TAILSCALE_SERVE_PORT),
+      ),
     ),
-    () => 443,
   );
   const staticDir = devUrl ? undefined : yield* ServerConfig.resolveStaticDir();
   const explicitHost = resolveOptionPrecedence(

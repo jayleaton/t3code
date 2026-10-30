@@ -79,4 +79,24 @@ describe("tailscale endpoint provider", () => {
         );
       }).pipe(Effect.provide(layerUnusedTailscaleExternalServices)),
   );
+
+  it.effect("advertises the HTTPS port Serve forwards to the backend", () =>
+    Effect.gen(function* () {
+      const probed: Array<string> = [];
+      const endpoints = yield* resolveTailscaleAdvertisedEndpoints({
+        port: 3773,
+        serveEnabled: true,
+        servePort: 443,
+        networkInterfaces: {},
+        statusJson: `{"Self":{"DNSName":"macbook.example.ts.net.","CapMap":{"https":null}}}`,
+        readServePort: Effect.succeed(3443),
+        probe: (baseUrl) => Effect.sync(() => probed.push(baseUrl) > 0),
+      });
+      assert.deepEqual(probed, ["https://macbook.example.ts.net:3443/"]);
+      assert.deepEqual(
+        endpoints.map((endpoint) => [endpoint.httpBaseUrl, endpoint.status]),
+        [["https://macbook.example.ts.net:3443/", "available"]],
+      );
+    }).pipe(Effect.provide(layerUnusedTailscaleExternalServices)),
+  );
 });
