@@ -407,9 +407,7 @@ export function isTailnetAddress(address: string): boolean {
   }
 }
 
-export const parseTailnet = (
-  rawStatusJson: string,
-): Effect.Effect<Tailnet, TailscaleStatusParseError> =>
+const parseTailnet = (rawStatusJson: string): Effect.Effect<Tailnet, TailscaleStatusParseError> =>
   decodeTailnetStatusJson(rawStatusJson).pipe(
     Effect.mapError((cause) => new TailscaleStatusParseError({ cause })),
     Effect.map((parsed) => {

@@ -15,7 +15,7 @@ import {
   findTailscaleExecutable,
   isServeTargetFor,
   isTailnetAddress,
-  parseTailnet,
+  readTailnet,
   parseTailscaleWhois,
   selectTailscaleServePort,
   tailscaleServePortCandidates,
@@ -410,7 +410,9 @@ const whoisJson = JSON.stringify({
 describe("tailnet", () => {
   it.effect("reads this node and every peer", () =>
     Effect.gen(function* () {
-      const tailnet = yield* parseTailnet(tailnetStatusJson);
+      const tailnet = yield* readTailnet.pipe(
+        Effect.provide(layerMockSpawner(() => ({ stdout: tailnetStatusJson }))),
+      );
       assert.deepEqual(tailnet.self, {
         userId: "431931774855047",
         magicDnsName: "macbook.prawn-penny.ts.net",

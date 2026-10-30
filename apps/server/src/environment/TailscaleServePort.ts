@@ -19,7 +19,7 @@ const lastServePortPath = Effect.fnUntraced(function* (stateDir: string) {
 });
 
 /** The Serve port this server last published on, so a restart keeps its tailnet URL. */
-export const readLastTailscaleServePort = Effect.fn("TailscaleServePort.readLast")(
+const readLastTailscaleServePort = Effect.fn("TailscaleServePort.readLast")(
   function* (stateDir: string) {
     const fs = yield* FileSystem.FileSystem;
     const raw = yield* fs.readFileString(yield* lastServePortPath(stateDir));
