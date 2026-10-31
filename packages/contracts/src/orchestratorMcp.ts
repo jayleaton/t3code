@@ -437,10 +437,7 @@ export const OrchestratorMcpThreadReadInput = Schema.Struct({
   view: Schema.optional(Schema.Literals(["messages", "activity"])),
   afterPosition: Schema.optional(NonNegativeInt),
   tail: Schema.optional(
-    Schema.Boolean.annotate({
-      description:
-        "Return the latest `limit` items (after afterPosition, if set), still in position order. hasMore then means older items exist.",
-    }),
+    Schema.Boolean.annotate({ description: "Latest `limit` items; hasMore means older ones." }),
   ),
   limit: Schema.optional(clampedPositiveInt(100)).annotate({
     description: "Max items, 1 to 100.",
@@ -640,7 +637,7 @@ export const OrchestratorMcpThreadWaitInput = Schema.Struct({
   ),
   returnOnQuestion: Schema.optional(
     Schema.Boolean.annotate({
-      description: "Default true: return when it blocks on a question or an approval.",
+      description: "Default true: return on a question or approval.",
     }),
   ),
 });
