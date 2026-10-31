@@ -2151,6 +2151,25 @@ export async function callGatewayTool(
               ? input.parentEnvironmentId.trim()
               : undefined
             : invocation.caller?.environmentId;
+      // Checked here: the target environment cannot verify a parent on another environment.
+      if (typeof input.parentThreadId === "string" && parentThreadId !== undefined) {
+        const parentEnvironment = parentEnvironmentId ?? environmentId;
+        const parent = await getThreadOrNotFound(context, parentEnvironment, parentThreadId).catch(
+          (error: unknown) => {
+            if (error instanceof GatewayError && error.code === "thread_not_found")
+              return undefined;
+            throw error;
+          },
+        );
+        if (parent === undefined || parent.archivedAt != null || parent.deletedAt != null) {
+          throw new GatewayError({
+            code: "invalid_input",
+            message: `parentThreadId ${parentThreadId} is not a chat on environment ${parentEnvironment}; omit parentThreadId to nest under the calling chat.`,
+            retryable: false,
+            environmentId: parentEnvironment,
+          });
+        }
+      }
       const profileName = typeof input.profile === "string" ? input.profile.trim() : "";
       const profileIdInput = typeof input.profileId === "string" ? input.profileId.trim() : "";
       const legacyIdentity = {

@@ -528,6 +528,21 @@ describe("gateway chat tools", () => {
     const context = {
       port: {
         ...base,
+        listThreads: async (environmentId: string) => ({
+          snapshotAt: "2026-09-02T00:00:00.000Z",
+          items:
+            environmentId === "local"
+              ? [{ id: "coordinator" }, { id: "other-parent" }, { id: "archived-parent" }]
+              : [],
+        }),
+        getThread: async (environmentId: string, threadId: string) => {
+          if (environmentId !== "local" || !["other-parent", "archived-parent"].includes(threadId))
+            throw new Error("Failed to load thread");
+          const thread = await base.getThread(environmentId, threadId);
+          return threadId === "archived-parent"
+            ? { ...thread, archivedAt: "2026-09-01T00:00:00.000Z" }
+            : thread;
+        },
         createThread: async (request: Parameters<typeof base.createThread>[0]) => {
           parents.push([request.parentThreadId, request.parentEnvironmentId]);
           return base.createThread(request);
@@ -577,6 +592,28 @@ describe("gateway chat tools", () => {
       ["coordinator", "local"],
       ["coordinator", undefined],
     ]);
+
+    // An MCP request namespace copied out of a task ID is not a chat on either environment.
+    const fake = "mcp:b33476a4-892a-4ec5-a923-2a98b0bd14e5";
+    for (const [input, key] of [
+      [
+        {
+          environmentId: "remote",
+          projectId: "remote-project",
+          parentThreadId: fake,
+          parentEnvironmentId: "local",
+        },
+        "fake-remote",
+      ],
+      [{ parentThreadId: fake }, "fake-local"],
+      [{ parentThreadId: "archived-parent" }, "archived"],
+    ] as const) {
+      await expect(create(input, key)).rejects.toMatchObject({
+        code: "invalid_input",
+        message: `parentThreadId ${input.parentThreadId} is not a chat on environment local; omit parentThreadId to nest under the calling chat.`,
+      });
+    }
+    expect(parents).toHaveLength(5);
   });
 
   it.each(["constructor", "toString", "__proto__"])(
