@@ -467,9 +467,14 @@ machine with `environmentId` and `environmentLabel`, and `environments` lists an
 was skipped (disconnected or without read access) or failed, so a missing chat is not mistaken
 for one that does not exist. Pass `environmentId` to list one machine.
 
-A chat's `profileSnapshot` names the agent and revision it was created with (`profileId`,
-`profileName`, `revision`), not the agent's instructions. Pass `includeSystemPrompt: true` to
-`t3_list_agents` when you need each agent's current prompt, for example before `t3_update_agent`.
+`t3_list_threads` returns the 20 most recently updated chats unless you pass `limit` (up to
+100). When `hasMore` is true, pass `nextCursor` back as `cursor` with the same filters for the
+next page. `updatedAfter`, `updatedBefore`, and `createdAfter` take ISO times to pick a window.
+Each row is a summary; `t3_get_thread` returns the whole chat.
+
+A chat's `profileId` and `profileName` name the agent it was created with, not the agent's
+instructions. Pass `includeSystemPrompt: true` to `t3_list_agents` when you need each agent's
+current prompt, for example before `t3_update_agent`.
 
 ### Answer an agent's questions through MCP
 
