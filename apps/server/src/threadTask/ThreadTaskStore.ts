@@ -73,6 +73,14 @@ export class ThreadTaskStore extends Context.Service<
       readonly threadId: ThreadId | null;
       readonly afterCursor: number;
     }) => Effect.Effect<ReadonlyArray<ThreadTask>, ThreadTaskStoreError>;
+    /** Tasks that moved from this owner to another after `afterCursor`, under the move's cursor. */
+    readonly listDepartures: (input: {
+      readonly ownerThreadId: ThreadId;
+      readonly afterCursor: number;
+    }) => Effect.Effect<
+      ReadonlyArray<{ readonly workerThreadId: ThreadId; readonly cursor: number }>,
+      ThreadTaskStoreError
+    >;
     /** Tasks with this project key, newest change first, at most `limit`. */
     readonly listByProjectKey: (input: {
       readonly projectKey: string;
@@ -240,6 +248,16 @@ const make = Effect.gen(function* () {
           `
       ).pipe(Effect.mapError(fail("list-visible")), Effect.flatMap(decodeRows("list-visible"))),
     ),
+    listDepartures: Effect.fn("ThreadTaskStore.listDepartures")(({ ownerThreadId, afterCursor }) =>
+      sql<{ readonly workerThreadId: ThreadId; readonly cursor: number }>`
+        SELECT worker_thread_id AS "workerThreadId", cursor FROM thread_task_departures
+        WHERE owner_thread_id = ${ownerThreadId} AND cursor > ${afterCursor}
+        ORDER BY cursor
+      `.pipe(
+        Effect.map((rows) => rows.map((row) => ({ ...row, cursor: Number(row.cursor) }))),
+        Effect.mapError(fail("list-departures")),
+      ),
+    ),
     listByProjectKey: Effect.fn("ThreadTaskStore.listByProjectKey")(({ projectKey, limit }) =>
       sql<{ readonly payload: string }>`
         SELECT payload_json AS payload FROM thread_tasks
@@ -269,11 +287,17 @@ const make = Effect.gen(function* () {
       ),
     ),
     latestCursor,
-    put: Effect.fn("ThreadTaskStore.put")(function* (task) {
-      const cursor = (yield* latestCursor) + 1;
-      const stored = { ...task, cursor };
-      const payload = yield* encodeTask(stored).pipe(Effect.mapError(fail("encode")));
-      yield* sql`
+    put: Effect.fn("ThreadTaskStore.put")((task) =>
+      Effect.gen(function* () {
+        const cursor = (yield* latestCursor) + 1;
+        const stored = { ...task, cursor };
+        const payload = yield* encodeTask(stored).pipe(Effect.mapError(fail("encode")));
+        const previous = yield* sql<{ readonly owner: ThreadId }>`
+          SELECT owner_thread_id AS owner FROM thread_tasks
+          WHERE worker_thread_id = ${stored.workerThreadId}
+        `.pipe(Effect.mapError(fail("put")));
+        const previousOwner = previous[0]?.owner;
+        yield* sql`
           INSERT INTO thread_tasks (worker_thread_id, owner_thread_id, cursor, payload_json)
           VALUES (${stored.workerThreadId}, ${stored.ownerThreadId}, ${cursor}, ${payload})
           ON CONFLICT (worker_thread_id) DO UPDATE SET
@@ -281,8 +305,25 @@ const make = Effect.gen(function* () {
             cursor = excluded.cursor,
             payload_json = excluded.payload_json
         `.pipe(Effect.mapError(fail("put")));
-      return stored;
-    }),
+        if (previousOwner !== undefined && previousOwner !== stored.ownerThreadId) {
+          yield* sql`
+            INSERT INTO thread_task_departures (worker_thread_id, owner_thread_id, cursor)
+            VALUES (${stored.workerThreadId}, ${previousOwner}, ${cursor})
+            ON CONFLICT (worker_thread_id, owner_thread_id) DO UPDATE SET cursor = excluded.cursor
+          `.pipe(Effect.mapError(fail("put")));
+          // Back with an earlier owner: its delta shows the task again, not a departure.
+          yield* sql`
+            DELETE FROM thread_task_departures
+            WHERE worker_thread_id = ${stored.workerThreadId}
+              AND owner_thread_id = ${stored.ownerThreadId}
+          `.pipe(Effect.mapError(fail("put")));
+        }
+        return stored;
+      }).pipe(
+        sql.withTransaction,
+        Effect.catchTags({ SqlError: (cause) => Effect.fail(fail("put")(cause)) }),
+      ),
+    ),
   });
 });
 

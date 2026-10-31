@@ -624,17 +624,38 @@ export const make = Effect.gen(function* () {
         ),
       );
 
-  const visibleTasks = (caller: ThreadTaskCaller, afterCursor: number) =>
-    store
-      .listVisible({ threadId: caller.kind === "user" ? null : caller.threadId, afterCursor })
-      .pipe(Effect.catch(unavailable));
+  /** Tasks the caller sees that changed after `afterCursor`, and those that left its view. */
+  const visibleChanges = (caller: ThreadTaskCaller, afterCursor: number) =>
+    Effect.all({
+      tasks: store.listVisible({
+        threadId: caller.kind === "user" ? null : caller.threadId,
+        afterCursor,
+      }),
+      departures:
+        caller.kind === "user"
+          ? Effect.succeed([])
+          : store.listDepartures({ ownerThreadId: caller.threadId, afterCursor }),
+    }).pipe(Effect.catch(unavailable));
+
+  const changeResult = Effect.fn("ThreadTaskService.changeResult")(function* (
+    changes: Effect.Success<ReturnType<typeof visibleChanges>>,
+    cursor: number,
+  ) {
+    const removed = changes.departures.map((departure) => departure.workerThreadId);
+    return {
+      tasks: yield* Effect.forEach(changes.tasks, view),
+      ...(removed.length === 0 ? {} : { removed }),
+      cursor,
+      timedOut: false,
+    };
+  });
 
   const read: ThreadTaskService["Service"]["read"] = Effect.fn("ThreadTaskService.read")(
     function* (caller, input) {
       const cursor = yield* store.latestCursor.pipe(Effect.catch(unavailable));
       if (input.threadId === undefined) {
-        const tasks = yield* visibleTasks(caller, 0);
-        return { tasks: yield* Effect.forEach(tasks, view), cursor, timedOut: false };
+        // The cursor is read first, so a write racing this read is returned again, never lost.
+        return yield* changeResult(yield* visibleChanges(caller, input.afterCursor ?? 0), cursor);
       }
       const task = yield* getTask(input.threadId);
       if (task === undefined) {
@@ -880,22 +901,23 @@ export const make = Effect.gen(function* () {
         const timeout = Duration.millis(
           Math.min(input.timeoutMs ?? 30_000, THREAD_TASK_WATCH_MAX_MS),
         );
-        const poll = visibleTasks(caller, afterCursor);
+        const poll = visibleChanges(caller, afterCursor);
+        const hasChanges = (changes: Effect.Success<typeof poll>) =>
+          changes.tasks.length > 0 || changes.departures.length > 0;
         const first = yield* poll;
-        const changed =
-          first.length > 0
-            ? first
-            : yield* PubSub.take(subscription).pipe(
-                Effect.andThen(poll),
-                Effect.repeat({ until: (tasks) => tasks.length > 0 }),
-                Effect.timeoutOption(timeout),
-                Effect.map(Option.getOrElse(() => [] as ReadonlyArray<ThreadTask>)),
-              );
-        return {
-          tasks: yield* Effect.forEach(changed, view),
-          cursor: changed.reduce((max, task) => Math.max(max, task.cursor), afterCursor),
-          timedOut: changed.length === 0,
-        };
+        const changed = hasChanges(first)
+          ? first
+          : yield* PubSub.take(subscription).pipe(
+              Effect.andThen(poll),
+              Effect.repeat({ until: hasChanges }),
+              Effect.timeoutOption(timeout),
+              Effect.map(Option.getOrElse(() => first)),
+            );
+        const cursor = [...changed.tasks, ...changed.departures].reduce(
+          (max, change) => Math.max(max, change.cursor),
+          afterCursor,
+        );
+        return { ...(yield* changeResult(changed, cursor)), timedOut: !hasChanges(changed) };
       }),
     );
 

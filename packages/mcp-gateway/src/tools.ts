@@ -109,6 +109,14 @@ export const threadTaskInputFields = {
       .describe(
         "A child chat whose task you own, or your own chat. Omit to list every task you own.",
       ),
+    afterCursor: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe(
+        "Without threadId: only tasks changed after this cursor from an earlier read, plus `removed`. Omit for every task.",
+      ),
   },
   update: {
     threadId: taskThreadId.optional().describe("The worker chat. Omit to update your own task."),
