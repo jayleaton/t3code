@@ -259,9 +259,44 @@ function isAgentSubagentThread(
   return isSubagentThread(run);
 }
 
-/** Every chat that is a card on the board or a row in the sidebar: everything but subagents. */
+/**
+ * Every chat that is a card on the board or a row in the sidebar: everything but subagents.
+ * A chat a subagent launched is listed under the nearest ancestor that is not one.
+ */
 export function selectAgentSidebarThreads(threads: readonly EnvironmentThreadShell[]) {
-  return threads.filter((thread) => !isAgentSubagentThread(thread));
+  const subagents = new Map(
+    threads.filter(isAgentSubagentThread).map((thread) => [threadKey(thread), thread]),
+  );
+  if (subagents.size === 0) return threads;
+  // A subagent's owner: its recorded parent, or for older rows its lineage parent.
+  const ownerOf = (subagent: EnvironmentThreadShell) => ({
+    environmentId: (subagent.parentEnvironmentId ?? subagent.environmentId) as EnvironmentId,
+    id: subagent.parentThreadId ?? subagent.lineage.parentThreadId,
+  });
+  return threads.flatMap((thread) => {
+    if (subagents.has(threadKey(thread))) return [];
+    let parentKey = agentRunParentKey(thread);
+    let owner: ReturnType<typeof ownerOf> | undefined;
+    const seen = new Set<string>();
+    for (
+      let subagent = subagents.get(parentKey ?? "");
+      subagent !== undefined && !seen.has(parentKey!);
+      subagent = subagents.get(parentKey ?? "")
+    ) {
+      seen.add(parentKey!);
+      owner = ownerOf(subagent);
+      parentKey = owner.id === null ? null : threadKey({ ...owner, id: owner.id });
+    }
+    if (owner === undefined) return [thread];
+    return [
+      {
+        ...thread,
+        parentThreadId: owner.id,
+        parentEnvironmentId:
+          owner.environmentId === thread.environmentId ? null : owner.environmentId,
+      },
+    ];
+  });
 }
 
 type AgentRunList = "pinned" | "active" | "settled";

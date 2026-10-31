@@ -928,6 +928,41 @@ export const make = Effect.gen(function* () {
     shell.profileSnapshot?.profileId != null;
 
   /**
+   * The parent link is canonical: a task's owner is always the worker's parent. A child
+   * moved under another chat here takes its task along; otherwise the task goes. Tasks owned
+   * on another environment are kept in step by their link instead.
+   */
+  const followParent = Effect.fn("ThreadTaskService.followParent")(function* (
+    workerThreadId: ThreadId,
+  ) {
+    yield* writes.withPermits(1)(
+      Effect.gen(function* () {
+        const task = yield* getTask(workerThreadId);
+        if (task === undefined || task.ownerEnvironmentId !== null) return;
+        const worker = yield* getShell(workerThreadId);
+        if (worker === undefined) return;
+        const parent = worker.parentEnvironmentId == null ? worker.parentThreadId : null;
+        if (parent === task.ownerThreadId) return;
+        if (parent != null && threadParentRelationship(worker) === "child") {
+          yield* writeAssignment({
+            owner: parent,
+            actor: "server",
+            worker,
+            summary: task.summary,
+            taskId: undefined,
+            settleWhenAccepted: undefined,
+            clientRequestId: undefined,
+            existing: task,
+          });
+          return;
+        }
+        yield* store.remove(workerThreadId).pipe(Effect.catch(unavailable));
+        yield* PubSub.publish(changes, undefined);
+      }),
+    );
+  });
+
+  /**
    * The chat's task, creating it for a named child that has none yet, owned by
    * its parent. A parent on another environment adopts the task on its first
    * delivery. Profile-less chats and top-level chats get no task.
@@ -1763,7 +1798,9 @@ export const make = Effect.gen(function* () {
   const handle = Effect.fnUntraced(
     function* (stored: OrchestrationV2StoredEvent) {
       const event = stored.event;
-      if (event.type === "run.updated" && TERMINAL_RUN_STATUSES.has(event.payload.status)) {
+      if (event.type === "thread.metadata-updated") {
+        yield* followParent(event.threadId);
+      } else if (event.type === "run.updated" && TERMINAL_RUN_STATUSES.has(event.payload.status)) {
         yield* evaluateSettlement(event.threadId);
         yield* reevaluatePendingSettlements;
         yield* reevaluateSettleRequests;
@@ -1799,6 +1836,29 @@ export const make = Effect.gen(function* () {
     const links = yield* projections.getThreadParentLinks();
     // Scan every thread, including owners whose child was deleted or reparented.
     yield* Effect.forEach(links, (link) => clearQueuedWakes(link.threadId), { discard: true });
+    // Tasks whose worker moved while an older server ran follow its parent now.
+    const parentOf = new Map(
+      links.map((link) => [
+        link.threadId,
+        link.parentEnvironmentId === null ? link.parentThreadId : null,
+      ]),
+    );
+    for (const task of tasks) {
+      if (
+        task.ownerEnvironmentId === null &&
+        parentOf.has(task.workerThreadId) &&
+        parentOf.get(task.workerThreadId) !== task.ownerThreadId
+      ) {
+        yield* followParent(task.workerThreadId).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("thread task could not follow its parent", {
+              workerThreadId: task.workerThreadId,
+              error,
+            }),
+          ),
+        );
+      }
+    }
     // Adopt named children launched before tasks existed for readable task state.
     for (const link of links) {
       if (
@@ -1833,7 +1893,9 @@ export const make = Effect.gen(function* () {
       yield* TxRef.set(seenSequence, after).pipe(Effect.tx);
       yield* forkParked(
         Stream.runForEach(eventSink.stream({ afterSequence: after }), (stored) =>
-          (stored.event.type === "run.updated" || stored.event.type === "runtime-request.updated"
+          (stored.event.type === "run.updated" ||
+          stored.event.type === "runtime-request.updated" ||
+          stored.event.type === "thread.metadata-updated"
             ? worker.enqueue(stored)
             : Effect.void
           ).pipe(Effect.andThen(TxRef.set(seenSequence, stored.sequence).pipe(Effect.tx))),

@@ -444,6 +444,41 @@ describe("subagents and Agent chats on the board", () => {
     expect(selectAgentWorkspaceThreads(sidebarThreads, null, "delegation").active).toEqual([]);
   });
 
+  it("nests a chat a subagent launched in the card of the subagent's owner", () => {
+    // Captain's delegate_task helper (a subagent) calls t3_thread_launch: the
+    // chat's parent is the helper, which is never a card.
+    const helper = { ...delegated, parentRelationship: "subagent" as const };
+    const nestedHelper = {
+      ...helper,
+      id: ThreadId.make("nested-helper"),
+      parentThreadId: helper.id,
+      lineage: { ...helper.lineage, parentThreadId: helper.id },
+    };
+    const launched = {
+      ...thread("doug-chat", "doug"),
+      parentThreadId: helper.id,
+      parentRelationship: "child" as const,
+    };
+    const deeper = {
+      ...thread("deeper-chat", "doug"),
+      parentThreadId: nestedHelper.id,
+      parentRelationship: "child" as const,
+    };
+    const sidebarThreads = selectAgentSidebarThreads([
+      captain,
+      helper,
+      nestedHelper,
+      launched,
+      deeper,
+    ]);
+    const board = nestAgentRuns({
+      lists: { pinned: [], ...selectAgentWorkspaceThreads(sidebarThreads, null, "") },
+      all: sidebarThreads,
+    });
+    expect(board.lists.active.map((run) => run.id)).toEqual([captain.id]);
+    expect(childIds(board, "local:captain-chat")).toEqual([deeper.id, launched.id].toSorted());
+  });
+
   it("nests a child Agent chat inside its parent's card instead of its own card", () => {
     const sidebarThreads = selectAgentSidebarThreads(all);
     const lists = { pinned: [], active: sidebarThreads, settled: [] };

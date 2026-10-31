@@ -287,9 +287,16 @@ export const layer = McpToolAccess.toLayer(
               ...(profile === undefined ? {} : { profileSelection: profile.selection }),
               commandId,
               threadId,
-              ...(context.scope.thread === undefined
-                ? {}
-                : { parentThreadId: context.scope.thread.threadId }),
+              // A linked environment's launch reaches here as its link session, not as the
+              // calling thread, so the thread it stamps in delegatedFrom is the parent.
+              ...(context.scope.thread !== undefined
+                ? { parentThreadId: context.scope.thread.threadId }
+                : linkOrigin !== undefined && input.delegatedFrom !== undefined
+                  ? {
+                      parentThreadId: input.delegatedFrom.threadId,
+                      parentEnvironmentId: input.delegatedFrom.environmentId,
+                    }
+                  : {}),
               projectId,
               title: input.title,
               modelSelection,

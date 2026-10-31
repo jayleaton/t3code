@@ -89,6 +89,11 @@ interface BoxThread {
   readonly linkOrigin: Ref.Ref<{ readonly sessionId: string; readonly label: string } | null>;
   /** The parent the launch names, so the thread there can link back to it. */
   readonly delegatedFrom: Ref.Ref<ThreadLaunch.ThreadLaunchInput["delegatedFrom"] | null>;
+  /** The parent the launch nests the thread under there. */
+  readonly parent: Ref.Ref<{
+    readonly parentThreadId: ThreadLaunch.ThreadLaunchInput["parentThreadId"] | undefined;
+    readonly parentEnvironmentId: ThreadLaunch.ThreadLaunchInput["parentEnvironmentId"] | undefined;
+  } | null>;
   /** The model and modes it was launched with. */
   readonly launchedWith: Ref.Ref<LaunchedWith | null>;
   /** The first message the thread there was launched with. */
@@ -137,6 +142,7 @@ const makeBoxThread = Effect.gen(function* () {
       null,
     ),
     delegatedFrom: yield* Ref.make<ThreadLaunch.ThreadLaunchInput["delegatedFrom"] | null>(null),
+    parent: yield* Ref.make<BoxThread["parent"] extends Ref.Ref<infer A> ? A : never>(null),
     launchedWith: yield* Ref.make<LaunchedWith | null>(null),
     message: yield* Ref.make<string | null>(null),
     status: yield* Ref.make<OrchestrationV2Run["status"]>("running"),
@@ -425,6 +431,12 @@ const boxToolkitLayer = (thread: BoxThread) => {
           Ref.set(thread.launched, input.threadId!).pipe(
             Effect.andThen(Ref.set(thread.linkOrigin, input.linkOrigin ?? null)),
             Effect.andThen(Ref.set(thread.delegatedFrom, input.delegatedFrom ?? null)),
+            Effect.andThen(
+              Ref.set(thread.parent, {
+                parentThreadId: input.parentThreadId,
+                parentEnvironmentId: input.parentEnvironmentId,
+              }),
+            ),
             Effect.andThen(Ref.set(thread.message, input.initialMessage?.text ?? null)),
             Effect.andThen(
               Ref.set(thread.launchedWith, {
@@ -820,6 +832,11 @@ it.effect("a task delegated to the box wakes the laptop's parent when it ends th
         environmentId: laptop.environmentId,
         threadId: parentThreadId,
         title: "Laptop parent",
+      });
+      // ...and nests it there under that parent, on the laptop.
+      expect(yield* Ref.get(thread.parent)).toEqual({
+        parentThreadId,
+        parentEnvironmentId: laptop.environmentId,
       });
       // A retry with the same key launches nothing new and records nothing new.
       const retried = yield* delegateToBox(a);

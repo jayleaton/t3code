@@ -148,6 +148,16 @@ const make = Effect.gen(function* () {
     if (typeof args.clientRequestId === "string") {
       args.clientRequestId = yield* scopedRequestId(scope.requestNamespace, args.clientRequestId);
     }
+    // The peer sees only the link session, so a launch names its calling thread to nest under.
+    if (toolName === "t3_thread_launch" && scope.thread !== undefined && !args.delegatedFrom) {
+      const threadId = scope.thread.threadId;
+      const shell = yield* threads.getThreadShell(threadId).pipe(Effect.orElseSucceed(() => null));
+      args.delegatedFrom = {
+        environmentId: scope.environmentId,
+        threadId,
+        title: shell?.title ?? threadId,
+      };
+    }
     return yield* peers.call({
       environmentId,
       tool: toolName,

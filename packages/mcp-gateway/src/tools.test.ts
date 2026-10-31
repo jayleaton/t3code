@@ -536,7 +536,10 @@ describe("gateway chat tools", () => {
               : [],
         }),
         getThread: async (environmentId: string, threadId: string) => {
-          if (environmentId !== "local" || !["other-parent", "archived-parent"].includes(threadId))
+          if (
+            environmentId !== "local" ||
+            !["coordinator", "other-parent", "archived-parent"].includes(threadId)
+          )
             throw new Error("Failed to load thread");
           const thread = await base.getThread(environmentId, threadId);
           return threadId === "archived-parent"
@@ -570,6 +573,11 @@ describe("gateway chat tools", () => {
     await create({ parentThreadId: "other-parent" }, "child-explicit");
     await create({ parentThreadId: null }, "child-standalone");
     await create({ environmentId: "remote", projectId: "remote-project" }, "child-remote");
+    // Naming itself as the parent of a chat on another machine means the caller's environment.
+    await create(
+      { environmentId: "remote", projectId: "remote-project", parentThreadId: "coordinator" },
+      "child-remote-self",
+    );
     await callGatewayTool(
       context,
       "t3_create_and_start_thread",
@@ -589,6 +597,7 @@ describe("gateway chat tools", () => {
       ["other-parent", undefined],
       [undefined, undefined],
       // A chat on another machine records which environment its parent is on.
+      ["coordinator", "local"],
       ["coordinator", "local"],
       ["coordinator", undefined],
     ]);
@@ -613,7 +622,7 @@ describe("gateway chat tools", () => {
         message: `parentThreadId ${input.parentThreadId} is not a chat on environment local; omit parentThreadId to nest under the calling chat.`,
       });
     }
-    expect(parents).toHaveLength(5);
+    expect(parents).toHaveLength(6);
   });
 
   it.each(["constructor", "toString", "__proto__"])(
