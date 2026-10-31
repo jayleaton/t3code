@@ -388,7 +388,7 @@ export const TOOL_SPECS = {
     { environmentId, ...threadTaskInputFields.assign },
   ],
   t3_task_read: [
-    "Read a task: your own as a worker, a child's as its owner, or omit threadId for every task you own or work on. Returns status, revision, needs, evidence, waitingOn, checkBack, whether that continuation is live, the worker's run state, and acceptance and settlement.",
+    "Read a task: your own as a worker, a child's as its owner, or omit threadId for every task you own or work on. Returns status, revision, needs, evidence, waitingOn, checkBack, whether that continuation is live, the worker's run state, and acceptance and settlement, plus a cursor. To re-check your tasks, pass that cursor as afterCursor (without threadId): you get only tasks changed since, and `removed` lists chats whose tasks moved to another owner.",
     { environmentId, ...threadTaskInputFields.read },
   ],
   t3_task_update: [

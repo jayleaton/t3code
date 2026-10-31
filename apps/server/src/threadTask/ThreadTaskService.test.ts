@@ -641,6 +641,80 @@ it.effect("watch returns on the next change and times out without one", () =>
   ).pipe(Effect.provide(testLayer)),
 );
 
+it.effect("a read after a cursor returns only changed, settled and departed tasks", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const store = yield* ThreadTaskStore.ThreadTaskStore;
+      const tasks = yield* makeService;
+      yield* tasks.start();
+      yield* f.create("captain");
+      for (const id of ["alpha", "beta", "gamma"]) {
+        yield* f.create(id, "captain");
+        yield* f.send(id, 1);
+      }
+      const alpha = { kind: "thread", threadId: ThreadId.make("alpha") } as const;
+      yield* tasks.assign(owner, {
+        threadId: alpha.threadId,
+        summary: "Alpha",
+        settleWhenAccepted: true,
+      });
+      yield* tasks.assign(owner, { threadId: ThreadId.make("beta"), summary: "Beta" });
+      yield* tasks.assign(owner, { threadId: ThreadId.make("gamma"), summary: "Gamma" });
+      const full = yield* tasks.read(owner, {});
+      assert.deepEqual(full.tasks.map((view) => view.task.workerThreadId).toSorted(), [
+        "alpha",
+        "beta",
+        "gamma",
+      ]);
+      assert.isUndefined(full.removed);
+
+      yield* tasks.update(owner, {
+        threadId: ThreadId.make("beta"),
+        expectedRevision: 1,
+        summary: "Beta, narrowed",
+      });
+      const changed = yield* tasks.read(owner, { afterCursor: full.cursor });
+      assert.deepEqual(
+        changed.tasks.map((view) => view.task.summary),
+        ["Beta, narrowed"],
+      );
+      assert.isUndefined(changed.removed);
+
+      yield* tasks.update(alpha, { expectedRevision: 1, status: "DONE", evidence: ["sha 1"] });
+      yield* f.endLatestRun("alpha");
+      yield* tasks.drain;
+      const doneCursor = (yield* tasks.read(owner, { afterCursor: changed.cursor })).cursor;
+      yield* tasks.update(owner, { threadId: alpha.threadId, expectedRevision: 2, accept: true });
+      const settled = yield* tasks.read(owner, { afterCursor: doneCursor });
+      assert.deepEqual(
+        settled.tasks.map((view) => [view.task.workerThreadId, view.task.settlement.state]),
+        [["alpha", "settled"]],
+      );
+
+      // A task that moves to another owner leaves the former owner's delta as `removed`.
+      const gamma = Option.getOrThrow(yield* store.get(ThreadId.make("gamma")));
+      yield* store.put({ ...gamma, ownerThreadId: stranger.threadId });
+      const departed = yield* tasks.read(owner, { afterCursor: settled.cursor });
+      assert.deepEqual(departed.tasks, []);
+      assert.deepEqual(departed.removed, [ThreadId.make("gamma")]);
+      assert.deepEqual(
+        (yield* tasks.read(owner, {})).tasks.map((view) => view.task.workerThreadId).toSorted(),
+        ["alpha", "beta"],
+      );
+
+      // Moved back, it is a change again rather than a departure.
+      yield* store.put({ ...gamma, ownerThreadId: owner.threadId });
+      const returned = yield* tasks.read(owner, { afterCursor: departed.cursor });
+      assert.deepEqual(
+        returned.tasks.map((view) => view.task.workerThreadId),
+        ["gamma"],
+      );
+      assert.isUndefined(returned.removed);
+    }),
+  ).pipe(Effect.provide(testLayer)),
+);
+
 it.effect("a captain settles itself after its turn once its children are accepted and quiet", () =>
   Effect.scoped(
     Effect.gen(function* () {
