@@ -9,6 +9,7 @@ import { GatewayError, GATEWAY_THREAD_EXECUTION_STATES } from "./port.ts";
 import {
   callGatewayTool,
   handoffInputSchema,
+  threadListWindowFields,
   threadTaskInputFields,
   type GatewayInvocation,
   type GatewayToolContext,
@@ -249,7 +250,7 @@ export const TOOL_SPECS = {
     { environmentId: discoveryEnvironmentId, ...optionalRequestContext },
   ],
   t3_list_threads: [
-    "List chats across every connected T3 environment (or one), optionally filtered by agent profileId, project, parentThreadId, active/settled state, and executionState. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly. Finished chats remain active until manually settled or automatically settled after their idle age (3 days by default); new activity and un-settling reset the idle clock. Manually settling a parent chat also settles its child chats. hasPendingUserInput marks a chat waiting on a question; pass includeQuestions to attach each one's pendingQuestions (full text and options, as t3_get_pending_questions returns). profileSnapshot names the chat's agent; read its instructions with t3_list_agents includeSystemPrompt.",
+    "List chats across every connected T3 environment (or one), most recently updated first. Returns the latest 20 unless you pass limit (max 100). When hasMore is true, pass nextCursor back as cursor with the same filters for the next page. Narrow with agent profileId, project, parentThreadId, active/settled state, executionState, and the updatedAfter, updatedBefore, and createdAfter ISO times; use updatedBefore or cursor to reach older chats. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly. Finished chats remain active until manually settled or automatically settled after their idle age (3 days by default); new activity and un-settling reset the idle clock. Manually settling a parent chat also settles its child chats. Rows are summaries: read one chat with t3_get_thread or its messages with t3_get_messages. hasPendingUserInput marks a chat waiting on a question; pass includeQuestions to attach each one's pendingQuestions (full text and options, as t3_get_pending_questions returns). profileId and profileName name the chat's agent; read its instructions with t3_list_agents includeSystemPrompt.",
     {
       environmentId: discoveryEnvironmentId,
       state: z.enum(["all", "active", "settled"]).optional(),
@@ -272,6 +273,7 @@ export const TOOL_SPECS = {
         .boolean()
         .optional()
         .describe("Attach pendingQuestions to chats waiting on a question."),
+      ...threadListWindowFields,
       ...optionalRequestContext,
     },
   ],
@@ -396,7 +398,7 @@ export const TOOL_SPECS = {
     { environmentId, ...threadTaskInputFields.update },
   ],
   t3_task_watch: [
-    "Wait up to timeoutMs (max 60000) for changes to tasks you own or work on after afterCursor, returning as soon as one changes. Omit afterCursor for the current tasks and cursor. Wakes already arrive as messages; use this only when this turn must wait.",
+    "Wait up to timeoutMs (max 60000) for changes to tasks you own or work on after afterCursor, returning as soon as one changes. Omit afterCursor for the current tasks and cursor. Task changes never send you a message or wake you after your turn ends; this call only holds the current turn until one arrives.",
     { environmentId, ...threadTaskInputFields.watch },
   ],
   t3_task_board: [

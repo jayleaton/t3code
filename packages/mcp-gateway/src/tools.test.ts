@@ -2559,9 +2559,19 @@ describe("gateway coordinator operations", () => {
     port.listThreads = async () => ({
       snapshotAt: "now",
       items: [
-        { id: "running", projectId: "p", settledAt: null, status: "running" },
-        { id: "waiting", projectId: "p", settledAt: null, status: "waiting-input" },
-        { id: "completed", projectId: "p", settledAt: null, status: "completed" },
+        { id: "running", settledAt: null, status: "running", updatedAt: "2026-09-07T03:00:00Z" },
+        {
+          id: "waiting",
+          settledAt: null,
+          status: "waiting-input",
+          updatedAt: "2026-09-07T02:00:00Z",
+        },
+        {
+          id: "completed",
+          settledAt: null,
+          status: "completed",
+          updatedAt: "2026-09-07T01:00:00Z",
+        },
         {
           id: "settled-done",
           projectId: "p",
@@ -3212,8 +3222,18 @@ describe("pending question tools", () => {
     port.listThreads = async () => ({
       snapshotAt: "runtime",
       items: [
-        { id: "chat", hasPendingUserInput: true, status: "waiting-input" },
-        { id: "busy", hasPendingUserInput: false, status: "running" },
+        {
+          id: "chat",
+          hasPendingUserInput: true,
+          status: "waiting-input",
+          updatedAt: "2026-09-07T02:00:00Z",
+        },
+        {
+          id: "busy",
+          hasPendingUserInput: false,
+          status: "running",
+          updatedAt: "2026-09-07T01:00:00Z",
+        },
       ],
     });
     const listed = (await callGatewayTool({ port, grants }, "t3_list_threads", {
@@ -3222,6 +3242,145 @@ describe("pending question tools", () => {
     })) as { items: ReadonlyArray<Record<string, unknown>> };
     expect(listed.items[0]).toMatchObject({ id: "chat", pendingQuestions });
     expect(listed.items[1]).not.toHaveProperty("pendingQuestions");
+  });
+});
+
+describe("bounded thread list", () => {
+  // 30 chats per machine, one per minute; both machines share every timestamp so ties cross pages.
+  const minute = (n: number) => `2026-09-07T00:${String(n).padStart(2, "0")}:00.000Z`;
+  const chatId = (environmentId: string, n: number) =>
+    `${environmentId}-${String(n).padStart(2, "0")}`;
+  const newestFirst = (count: number) =>
+    Array.from({ length: count }, (_, k) => [chatId("a", 29 - k), chatId("b", 29 - k)]).flat();
+  const chats = (environmentId: string) =>
+    Array.from({ length: 30 }, (_, n) => ({
+      id: chatId(environmentId, n),
+      projectId: n % 2 === 0 ? "even" : "odd",
+      title: `Chat ${n}`,
+      status: n % 3 === 0 ? "running" : "completed",
+      settledAt: null,
+      hasPendingUserInput: n === 29,
+      profileSnapshot: { profileId: n % 5 === 0 ? "review" : "code", profileName: "Code" },
+      modelSelection: { instanceId: "codex", model: "gpt-5", options: [{ id: "effort" }] },
+      latestRunId: `run-${n}`,
+      createdAt: minute(n),
+      updatedAt: minute(n),
+    }));
+  function boundedContext() {
+    const getThread = vi.fn(async () => ({ pendingQuestions: [] }));
+    const port: GatewayRuntimePort = {
+      ...makePort(),
+      listEnvironments: async () =>
+        ["a", "b"].map((environmentId) => ({
+          environmentId,
+          label: environmentId.toUpperCase(),
+          targetKind: "relay" as const,
+          connectionState: "connected" as const,
+        })),
+      listThreads: async (environmentId) => ({ snapshotAt: "now", items: chats(environmentId) }),
+      getThread,
+    };
+    return { port, getThread, grants: { a: ["read"], b: ["read"] } as const };
+  }
+  type Listed = {
+    items: ReadonlyArray<Record<string, unknown>>;
+    hasMore: boolean;
+    nextCursor: string | null;
+  };
+  const list = (context: ReturnType<typeof boundedContext>, input: Record<string, unknown> = {}) =>
+    callGatewayTool(context, "t3_list_threads", input) as Promise<Listed>;
+  const ids = (page: Listed) => page.items.map((row) => row.id);
+
+  it("returns the latest 20 compact rows by default and pages without overlap or gaps", async () => {
+    const context = boundedContext();
+    const first = await list(context);
+    expect(ids(first)).toEqual(newestFirst(10));
+    expect(first.hasMore).toBe(true);
+    expect(first.items[0]).toEqual({
+      id: "a-29",
+      environmentId: "a",
+      environmentLabel: "A",
+      projectId: "odd",
+      title: "Chat 29",
+      status: "completed",
+      hasPendingUserInput: true,
+      hasPendingApprovals: undefined,
+      profileId: "code",
+      profileName: "Code",
+      providerInstanceId: "codex",
+      model: "gpt-5",
+      parentThreadId: null,
+      parentEnvironmentId: null,
+      settledAt: null,
+      createdAt: minute(29),
+      updatedAt: minute(29),
+    });
+
+    const seen: unknown[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const page = await list(context, { limit: 7, ...(cursor ? { cursor } : {}) });
+      seen.push(...ids(page));
+      cursor = page.nextCursor ?? undefined;
+      expect(page.hasMore).toBe(cursor !== undefined);
+      pages += 1;
+    } while (cursor !== undefined);
+    expect(pages).toBe(9);
+    expect(seen).toEqual(newestFirst(30));
+
+    await expect(list(context, { limit: 101 })).rejects.toMatchObject({ code: "invalid_input" });
+    await expect(list(context, { cursor: "not-a-cursor" })).rejects.toMatchObject({
+      code: "invalid_input",
+    });
+  });
+
+  it("applies time windows and combined filters across environments before truncating", async () => {
+    const context = boundedContext();
+    expect(ids(await list(context, { updatedAfter: minute(28) }))).toEqual([
+      "a-29",
+      "b-29",
+      "a-28",
+      "b-28",
+    ]);
+    expect(ids(await list(context, { updatedBefore: minute(2), limit: 100 }))).toEqual([
+      "a-01",
+      "b-01",
+      "a-00",
+      "b-00",
+    ]);
+    expect(
+      ids(await list(context, { createdAfter: minute(27), updatedBefore: minute(29) })),
+    ).toEqual(["a-28", "b-28", "a-27", "b-27"]);
+    await expect(list(context, { updatedAfter: "yesterday" })).rejects.toMatchObject({
+      code: "invalid_input",
+    });
+
+    // Matches sit at n = 0, 6, 12, 18, 24 on each machine; oldest ones still reach the page.
+    const combined = await list(context, {
+      projectId: "even",
+      executionState: "running",
+      profileId: "code",
+      limit: 5,
+    });
+    expect(ids(combined)).toEqual(["a-24", "b-24", "a-18", "b-18", "a-12"]);
+    const rest = await list(context, {
+      projectId: "even",
+      executionState: "running",
+      profileId: "code",
+      cursor: combined.nextCursor,
+    });
+    expect(ids(rest)).toEqual(["b-12", "a-06", "b-06"]);
+    expect(rest.hasMore).toBe(false);
+  });
+
+  it("reads pending questions only for chats on the returned page", async () => {
+    const context = boundedContext();
+    const page = await list(context, { includeQuestions: true, updatedBefore: minute(29) });
+    expect(page.items).toHaveLength(20);
+    expect(context.getThread).not.toHaveBeenCalled();
+    await list(context, { includeQuestions: true, limit: 1 });
+    expect(context.getThread).toHaveBeenCalledExactlyOnceWith("a", "a-29");
   });
 });
 
@@ -3237,7 +3396,13 @@ describe("cross-environment discovery", () => {
   });
   const threadsByEnvironment: Record<string, ReadonlyArray<Record<string, unknown>>> = {
     macbook: [
-      { id: "mac-idle", projectId: "t3", status: "idle", profileSnapshot: { profileId: "code" } },
+      {
+        id: "mac-idle",
+        projectId: "t3",
+        status: "idle",
+        profileSnapshot: { profileId: "code" },
+        updatedAt: "2026-09-07T02:00:00Z",
+      },
     ],
     "dev-box": [
       {
@@ -3245,6 +3410,7 @@ describe("cross-environment discovery", () => {
         projectId: "tf",
         status: "running",
         profileSnapshot: { profileId: "code" },
+        updatedAt: "2026-09-07T01:00:00Z",
       },
     ],
   };
@@ -3344,6 +3510,8 @@ describe("cross-environment discovery", () => {
     expect(listed).toEqual({
       snapshotAt: "now",
       items: [expect.objectContaining({ id: "tensorfold", environmentLabel: "dev-box" })],
+      hasMore: false,
+      nextCursor: null,
     });
     await expect(
       callGatewayTool(context, "t3_list_threads", { environmentId: "phone" }),

@@ -61,6 +61,32 @@ const taskContinuation = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("task"), threadId: taskThreadId }),
 ]);
 
+const THREAD_LIST_DEFAULT_LIMIT = 20;
+const isoTime = z
+  .string()
+  .trim()
+  .refine((value) => !Number.isNaN(Date.parse(value)), "must be an ISO date or time");
+
+/** t3_list_threads paging and time-window inputs. */
+export const threadListWindowFields = {
+  updatedAfter: isoTime.optional().describe("Only chats updated at or after this ISO time."),
+  updatedBefore: isoTime.optional().describe("Only chats updated before this ISO time."),
+  createdAfter: isoTime.optional().describe("Only chats created at or after this ISO time."),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe(`Chats per page, newest first. Default ${THREAD_LIST_DEFAULT_LIMIT}.`),
+  cursor: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe("nextCursor from the previous page; keep the other filters the same."),
+};
+
 /** Tool inputs for thread tasks, without environmentId. The caller is never an input. */
 export const threadTaskInputFields = {
   assign: {
@@ -476,52 +502,189 @@ function tagged(target: DiscoveryTarget, page: GatewayListPage): GatewayListPage
   return { ...page, items: page.items.map((item) => ({ ...item, ...target })) };
 }
 
+type ThreadListFilter = ReturnType<typeof parseThreadListFilter>;
+
+/** Rows sort newest update first; environment and id break ties so pages never overlap. */
+type ThreadListKey = readonly [updatedAt: number, environmentId: string, id: string];
+
+function threadListKey(row: Record<string, unknown>): ThreadListKey {
+  const updatedAt = typeof row.updatedAt === "string" ? Date.parse(row.updatedAt) : Number.NaN;
+  return [
+    Number.isNaN(updatedAt) ? 0 : updatedAt,
+    String(row.environmentId ?? ""),
+    String(row.id ?? ""),
+  ];
+}
+
+function compareThreadListKeys(a: ThreadListKey, b: ThreadListKey): number {
+  if (a[0] !== b[0]) return b[0] - a[0];
+  if (a[1] !== b[1]) return a[1] < b[1] ? -1 : 1;
+  return a[2] === b[2] ? 0 : a[2] < b[2] ? -1 : 1;
+}
+
+function encodeThreadListCursor(key: ThreadListKey): string {
+  return Buffer.from(JSON.stringify(key)).toString("base64url");
+}
+
+function decodeThreadListCursor(cursor: string): ThreadListKey {
+  let key: unknown;
+  try {
+    key = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+  } catch {
+    key = undefined;
+  }
+  if (
+    !Array.isArray(key) ||
+    key.length !== 3 ||
+    typeof key[0] !== "number" ||
+    typeof key[1] !== "string" ||
+    typeof key[2] !== "string"
+  ) {
+    throw new GatewayError({
+      code: "invalid_input",
+      message: "cursor must be a nextCursor returned by t3_list_threads.",
+      retryable: false,
+    });
+  }
+  return [key[0], key[1], key[2]];
+}
+
+function parseThreadListFilter(input: Record<string, unknown>) {
+  const parsed = z
+    .object({
+      state: z.enum(["all", "active", "settled"]).default("all"),
+      projectId: z.string().optional(),
+      profileId: z.string().optional(),
+      parentThreadId: z.string().optional(),
+      parentEnvironmentId: z.string().optional(),
+      ...threadListWindowFields,
+    })
+    .safeParse(input);
+  if (!parsed.success)
+    throw new GatewayError({
+      code: "invalid_input",
+      message: parsed.error.message,
+      retryable: false,
+    });
+  const { updatedAfter, updatedBefore, createdAfter, limit, cursor, ...rest } = parsed.data;
+  const time = (value: string | undefined) => (value === undefined ? undefined : Date.parse(value));
+  return {
+    ...rest,
+    executionState: parseExecutionStateFilter(input),
+    updatedAfter: time(updatedAfter),
+    updatedBefore: time(updatedBefore),
+    createdAfter: time(createdAfter),
+    limit: limit ?? THREAD_LIST_DEFAULT_LIMIT,
+    after: cursor === undefined ? undefined : decodeThreadListCursor(cursor),
+  };
+}
+
+function threadMatches(
+  thread: Record<string, unknown>,
+  environmentId: string,
+  filter: ThreadListFilter,
+): boolean {
+  const snapshot = thread.profileSnapshot as { profileId?: string } | null | undefined;
+  const updatedAt = typeof thread.updatedAt === "string" ? Date.parse(thread.updatedAt) : NaN;
+  const createdAt = typeof thread.createdAt === "string" ? Date.parse(thread.createdAt) : NaN;
+  return (
+    (filter.projectId === undefined || thread.projectId === filter.projectId) &&
+    (filter.parentThreadId === undefined ||
+      (thread.parentThreadId === filter.parentThreadId &&
+        (filter.parentEnvironmentId === undefined ||
+          (thread.parentEnvironmentId ?? environmentId) === filter.parentEnvironmentId))) &&
+    (filter.profileId === undefined || snapshot?.profileId === filter.profileId) &&
+    (filter.state === "all" ||
+      (filter.state === "settled" ? thread.settledAt != null : thread.settledAt == null)) &&
+    (filter.executionState === undefined ||
+      readThreadExecutionState(thread) === filter.executionState) &&
+    (filter.updatedAfter === undefined || updatedAt >= filter.updatedAfter) &&
+    (filter.updatedBefore === undefined || updatedAt < filter.updatedBefore) &&
+    (filter.createdAfter === undefined || createdAt >= filter.createdAfter)
+  );
+}
+
+/** A listing row: enough to pick a chat. t3_get_thread has the rest. */
+function threadListRow(thread: Record<string, unknown>, target: DiscoveryTarget) {
+  const profile = thread.profileSnapshot as
+    | { profileId?: string | null; profileName?: string | null }
+    | null
+    | undefined;
+  const model = thread.modelSelection as { instanceId?: string; model?: string } | null | undefined;
+  return {
+    id: thread.id,
+    ...target,
+    projectId: thread.projectId,
+    title: thread.title,
+    status: thread.status,
+    hasPendingUserInput: thread.hasPendingUserInput,
+    hasPendingApprovals: thread.hasPendingApprovals,
+    profileId: profile?.profileId ?? null,
+    profileName: profile?.profileName ?? null,
+    providerInstanceId: model?.instanceId ?? null,
+    model: model?.model ?? null,
+    parentThreadId: thread.parentThreadId ?? null,
+    parentEnvironmentId: thread.parentEnvironmentId ?? null,
+    settledAt: thread.settledAt ?? null,
+    createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt,
+  };
+}
+
+/** One environment's matching rows past the cursor, newest first, at most one page plus one. */
 async function listGatewayThreads(
   context: GatewayToolContext,
   target: DiscoveryTarget,
-  input: Record<string, unknown>,
+  filter: ThreadListFilter,
 ): Promise<GatewayListPage> {
-  const { environmentId } = target;
-  const state = z.enum(["all", "active", "settled"]).default("all").parse(input.state);
-  const executionState = parseExecutionStateFilter(input);
-  const page = await context.port.listThreads(environmentId);
-  const projectId = typeof input.projectId === "string" ? input.projectId : undefined;
-  const profileId = typeof input.profileId === "string" ? input.profileId : undefined;
-  const parentThreadId =
-    typeof input.parentThreadId === "string" ? input.parentThreadId : undefined;
-  const parentEnvironmentId =
-    typeof input.parentEnvironmentId === "string" ? input.parentEnvironmentId : undefined;
-  const items = page.items.filter((thread) => {
-    const snapshot = thread.profileSnapshot as { profileId?: string } | undefined;
-    return (
-      (projectId === undefined || thread.projectId === projectId) &&
-      (parentThreadId === undefined ||
-        (thread.parentThreadId === parentThreadId &&
-          (parentEnvironmentId === undefined ||
-            (thread.parentEnvironmentId ?? environmentId) === parentEnvironmentId))) &&
-      (profileId === undefined || snapshot?.profileId === profileId) &&
-      (state === "all" ||
-        (state === "settled" ? thread.settledAt != null : thread.settledAt == null)) &&
-      (executionState === undefined || readThreadExecutionState(thread) === executionState)
-    );
-  });
-  if (input.includeQuestions !== true) return tagged(target, { ...page, items });
-  // Only chats waiting on a question need a detail read; the rest pass through.
-  return tagged(target, {
-    ...page,
-    items: await Promise.all(
-      items.map(async (thread) =>
-        thread.hasPendingUserInput === true && typeof thread.id === "string"
-          ? {
-              ...thread,
-              pendingQuestions: pendingQuestionsOf(
-                await context.port.getThread(environmentId, thread.id),
-              ),
-            }
-          : thread,
-      ),
-    ),
-  });
+  const page = await context.port.listThreads(target.environmentId);
+  const rows = page.items
+    .filter((thread) => threadMatches(thread, target.environmentId, filter))
+    .map((thread) => threadListRow(thread, target))
+    .filter(
+      (row) =>
+        filter.after === undefined || compareThreadListKeys(threadListKey(row), filter.after) > 0,
+    )
+    .sort((a, b) => compareThreadListKeys(threadListKey(a), threadListKey(b)));
+  return { items: rows.slice(0, filter.limit + 1), snapshotAt: page.snapshotAt };
+}
+
+async function listThreadsPage(context: GatewayToolContext, input: Record<string, unknown>) {
+  const filter = parseThreadListFilter(input);
+  const discovered = await discover(context, input, (target) =>
+    listGatewayThreads(context, target, filter),
+  );
+  const merged = discovered.results
+    .flatMap(({ value }) => value.items)
+    .sort((a, b) => compareThreadListKeys(threadListKey(a), threadListKey(b)));
+  const rows = merged.slice(0, filter.limit);
+  const hasMore = merged.length > filter.limit;
+  const items =
+    input.includeQuestions !== true
+      ? rows
+      : await Promise.all(
+          // Only chats waiting on a question need a detail read; the rest pass through.
+          rows.map(async (row) =>
+            row.hasPendingUserInput === true &&
+            typeof row.id === "string" &&
+            typeof row.environmentId === "string"
+              ? {
+                  ...row,
+                  pendingQuestions: pendingQuestionsOf(
+                    await context.port.getThread(row.environmentId, row.id),
+                  ),
+                }
+              : row,
+          ),
+        );
+  return {
+    items,
+    hasMore,
+    nextCursor: hasMore ? encodeThreadListCursor(threadListKey(rows.at(-1)!)) : null,
+    ...(discovered.coverage === undefined
+      ? { snapshotAt: discovered.results[0]!.value.snapshotAt }
+      : { environments: discovered.coverage, snapshotAt: "runtime" }),
+  };
 }
 
 async function agentsView(
@@ -1494,14 +1657,8 @@ export async function callGatewayTool(
         ),
       );
     }
-    case "t3_list_threads": {
-      // Validate filters once so a bad input fails the call instead of every environment.
-      z.enum(["all", "active", "settled"]).optional().parse(input.state);
-      parseExecutionStateFilter(input);
-      return discoveredPage(
-        await discover(context, input, (target) => listGatewayThreads(context, target, input)),
-      );
-    }
+    case "t3_list_threads":
+      return listThreadsPage(context, input);
     case "t3_list_devices": {
       const environmentId = environmentWithScope(context, input, "read");
       if (!context.port.listDevices)
