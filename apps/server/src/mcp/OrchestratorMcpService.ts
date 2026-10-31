@@ -3003,6 +3003,7 @@ const make = Effect.gen(function* () {
           afterPosition,
           limit,
           view,
+          ...(input.tail === true ? { tail: true } : {}),
           ...(input.itemId === undefined ? {} : { itemId: input.itemId }),
         })
         .pipe(Effect.mapError(threadManagementFailure));
@@ -3195,6 +3196,9 @@ const make = Effect.gen(function* () {
         ...(result.pendingQuestion === undefined
           ? {}
           : { hasPendingQuestion: true, pendingRequestId: result.pendingQuestion }),
+        ...(result.pendingApproval === undefined
+          ? {}
+          : { pendingApproval: result.pendingApproval }),
         ...(result.resultRun === undefined
           ? {}
           : {

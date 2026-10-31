@@ -6243,6 +6243,20 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       });
       assert.deepEqual(followingPage.items, targetAfterRollback.visibleTurnItems.slice(2));
       assert.isFalse(followingPage.hasMore);
+      const latestReply = yield* projectionStore.getTimelinePage(targetThreadId, {
+        limit: 1,
+        tail: true,
+      });
+      assert.deepEqual(latestReply.items, targetAfterRollback.visibleTurnItems.slice(3, 4));
+      assert.isTrue(latestReply.hasMore);
+      const latestActivity = yield* projectionStore.getTimelinePage(targetThreadId, {
+        view: "activity",
+        limit: 2,
+        tail: true,
+        afterPosition: 1,
+      });
+      assert.deepEqual(latestActivity.items, targetAfterRollback.visibleTurnItems.slice(3));
+      assert.isTrue(latestActivity.hasMore);
 
       assert.deepEqual(
         targetAfterRollback.visibleTurnItems.map((row) => [

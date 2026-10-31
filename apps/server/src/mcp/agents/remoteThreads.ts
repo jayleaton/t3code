@@ -233,7 +233,9 @@ export const readThread = Effect.fn("remoteThreads.readThread")(function* (
     const afterPosition = input.afterPosition ?? -1;
     const limit = input.limit ?? DEFAULT_READ_LIMIT;
     const after = messages.filter(({ position }) => position > afterPosition);
-    items = after.slice(0, limit).map((entry) => item(entry, 0));
+    items = (input.tail === true ? after.slice(-limit) : after.slice(0, limit)).map((entry) =>
+      item(entry, 0),
+    );
     hasMore = after.length > limit;
   }
   const latestRun = thread.runs.at(-1);

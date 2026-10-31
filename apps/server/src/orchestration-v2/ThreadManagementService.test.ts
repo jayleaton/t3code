@@ -276,7 +276,7 @@ it.effect("waitForThread returns early once the thread blocks on a live question
     const projectId = ProjectId.make("project:thread-management:wait-question");
     const threadId = ThreadId.make("thread:thread-management:wait-question");
     const runId = RunId.make("run:thread-management:wait-question");
-    const subscribed = yield* Deferred.make<void>();
+    let subscribed = yield* Deferred.make<void>();
     const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
     const question = (id: string, type: "live" | "message") => ({
       id: RuntimeRequestId.make(id),
@@ -361,6 +361,40 @@ it.effect("waitForThread returns early once the thread blocks on a live question
       run: { id: runId, status: "running" },
       pendingQuestion: "request:wait-question:later",
     });
+
+    // An approval blocks the run on a person too, so it also ends the wait.
+    const approval = (id: string, createdAt: number) => ({
+      id: RuntimeRequestId.make(id),
+      kind: "command",
+      status: "pending",
+      responseCapability: { type: "live" },
+      createdAt: DateTime.makeUnsafe(createdAt),
+    });
+    runtimeRequests = [];
+    subscribed = yield* Deferred.make<void>();
+    const approvalFiber = yield* service
+      .waitForThread({
+        projectId,
+        threadId,
+        runId,
+        timeoutMs: 60 * 60 * 1_000,
+        untilQuestion: true,
+      })
+      .pipe(Effect.forkChild);
+    yield* Effect.raceFirst(Deferred.await(subscribed), Fiber.await(approvalFiber));
+    runtimeRequests = [
+      approval("request:wait-approval:newer", 2_000),
+      approval("request:wait-approval:older", 1_000),
+    ] as unknown as typeof runtimeRequests;
+    yield* Queue.offer(events, stored(3));
+
+    const approvalResult = yield* Fiber.join(approvalFiber);
+    expect(approvalResult).toMatchObject({
+      timedOut: false,
+      run: { id: runId, status: "running" },
+      pendingApproval: { requestId: "request:wait-approval:older", kind: "command" },
+    });
+    expect(approvalResult).not.toHaveProperty("pendingQuestion");
   }),
 );
 
