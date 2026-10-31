@@ -121,6 +121,8 @@ export class ThreadTaskStore extends Context.Service<
     ) => Effect.Effect<void, ThreadTaskStoreError>;
     /** Writes the task under the next cursor and returns it as stored. */
     readonly put: (task: ThreadTask) => Effect.Effect<ThreadTask, ThreadTaskStoreError>;
+    /** Drops the worker's task; its owner's delta reads it as a departure. */
+    readonly remove: (workerThreadId: ThreadId) => Effect.Effect<void, ThreadTaskStoreError>;
   }
 >()("t3/threadTask/ThreadTaskStore") {}
 
@@ -131,8 +133,12 @@ const make = Effect.gen(function* () {
   const decodeRows = (operation: string) => (rows: ReadonlyArray<{ readonly payload: string }>) =>
     Effect.forEach(rows, (row) => decodeTask(row.payload)).pipe(Effect.mapError(fail(operation)));
 
+  // A removed task's departure can hold the latest cursor, so cursors never repeat.
   const latestCursor = sql<{ readonly cursor: number }>`
-    SELECT COALESCE(MAX(cursor), 0) AS cursor FROM thread_tasks
+    SELECT MAX(
+      (SELECT COALESCE(MAX(cursor), 0) FROM thread_tasks),
+      (SELECT COALESCE(MAX(cursor), 0) FROM thread_task_departures)
+    ) AS cursor
   `.pipe(
     Effect.map((rows) => Number(rows[0]?.cursor ?? 0)),
     Effect.mapError(fail("latest-cursor")),
@@ -311,17 +317,39 @@ const make = Effect.gen(function* () {
             VALUES (${stored.workerThreadId}, ${previousOwner}, ${cursor})
             ON CONFLICT (worker_thread_id, owner_thread_id) DO UPDATE SET cursor = excluded.cursor
           `.pipe(Effect.mapError(fail("put")));
-          // Back with an earlier owner: its delta shows the task again, not a departure.
-          yield* sql`
-            DELETE FROM thread_task_departures
-            WHERE worker_thread_id = ${stored.workerThreadId}
-              AND owner_thread_id = ${stored.ownerThreadId}
-          `.pipe(Effect.mapError(fail("put")));
         }
+        // Back with an earlier owner: its delta shows the task again, not a departure.
+        yield* sql`
+          DELETE FROM thread_task_departures
+          WHERE worker_thread_id = ${stored.workerThreadId}
+            AND owner_thread_id = ${stored.ownerThreadId}
+        `.pipe(Effect.mapError(fail("put")));
         return stored;
       }).pipe(
         sql.withTransaction,
         Effect.catchTags({ SqlError: (cause) => Effect.fail(fail("put")(cause)) }),
+      ),
+    ),
+    remove: Effect.fn("ThreadTaskStore.remove")((workerThreadId) =>
+      Effect.gen(function* () {
+        const previous = yield* sql<{ readonly owner: ThreadId }>`
+          SELECT owner_thread_id AS owner FROM thread_tasks
+          WHERE worker_thread_id = ${workerThreadId}
+        `.pipe(Effect.mapError(fail("remove")));
+        const owner = previous[0]?.owner;
+        if (owner === undefined) return;
+        const cursor = (yield* latestCursor) + 1;
+        yield* sql`
+          DELETE FROM thread_tasks WHERE worker_thread_id = ${workerThreadId}
+        `.pipe(Effect.mapError(fail("remove")));
+        yield* sql`
+          INSERT INTO thread_task_departures (worker_thread_id, owner_thread_id, cursor)
+          VALUES (${workerThreadId}, ${owner}, ${cursor})
+          ON CONFLICT (worker_thread_id, owner_thread_id) DO UPDATE SET cursor = excluded.cursor
+        `.pipe(Effect.mapError(fail("remove")));
+      }).pipe(
+        sql.withTransaction,
+        Effect.catchTags({ SqlError: (cause) => Effect.fail(fail("remove")(cause)) }),
       ),
     ),
   });

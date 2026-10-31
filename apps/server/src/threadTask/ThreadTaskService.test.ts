@@ -715,6 +715,56 @@ it.effect("a read after a cursor returns only changed, settled and departed task
   ).pipe(Effect.provide(testLayer)),
 );
 
+it.effect("a task follows its worker's parent: moved, detached, or drifted before a restart", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const orchestrator = yield* OrchestratorV2;
+      const store = yield* ThreadTaskStore.ThreadTaskStore;
+      const tasks = yield* makeService;
+      yield* tasks.start();
+      yield* f.create("captain");
+      yield* f.create("stranger");
+      yield* f.create("worker", "captain");
+      yield* tasks.assign(owner, { threadId: worker.threadId, summary: "Work" });
+      const assigned = Option.getOrThrow(yield* store.get(worker.threadId));
+      const before = yield* tasks.read(owner, {});
+      const moveTo = (parent: string | null, step: string) =>
+        orchestrator.dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make(`move:${step}`),
+          threadId: worker.threadId,
+          parentThreadId: parent === null ? null : ThreadId.make(parent),
+        });
+      const ownerOf = (id: ThreadId) =>
+        store.get(id).pipe(Effect.map((task) => Option.getOrUndefined(task)?.ownerThreadId));
+
+      // Moved under another chat, the task goes with it and leaves the old owner's delta.
+      yield* moveTo("stranger", "1");
+      yield* tasks.drain;
+      assert.strictEqual(yield* ownerOf(worker.threadId), stranger.threadId);
+      assert.deepEqual((yield* tasks.read(owner, { afterCursor: before.cursor })).removed, [
+        worker.threadId,
+      ]);
+
+      // Detached, it is nobody's task.
+      const moved = yield* tasks.read(stranger, {});
+      yield* moveTo(null, "2");
+      yield* tasks.drain;
+      assert.isUndefined(yield* ownerOf(worker.threadId));
+      assert.deepEqual((yield* tasks.read(stranger, { afterCursor: moved.cursor })).removed, [
+        worker.threadId,
+      ]);
+
+      // A detached worker whose task an older server left with its launcher, as M1 was,
+      // loses the task on restart.
+      yield* store.put(assigned);
+      yield* tasks.recover;
+      assert.isUndefined(yield* ownerOf(worker.threadId));
+    }),
+  ).pipe(Effect.provide(testLayer)),
+);
+
 it.effect("a captain settles itself after its turn once its children are accepted and quiet", () =>
   Effect.scoped(
     Effect.gen(function* () {

@@ -2154,11 +2154,13 @@ export async function callGatewayTool(
       const parentEnvironmentId =
         parentThreadId === undefined
           ? undefined
-          : typeof input.parentThreadId === "string"
-            ? typeof input.parentEnvironmentId === "string"
-              ? input.parentEnvironmentId.trim()
-              : undefined
-            : invocation.caller?.environmentId;
+          : typeof input.parentThreadId === "string" &&
+              typeof input.parentEnvironmentId === "string"
+            ? input.parentEnvironmentId.trim()
+            : // The calling chat is on the caller's environment, even when named explicitly.
+              parentThreadId === invocation.caller?.threadId
+              ? invocation.caller.environmentId
+              : undefined;
       // Checked here: the target environment cannot verify a parent on another environment.
       if (typeof input.parentThreadId === "string" && parentThreadId !== undefined) {
         const parentEnvironment = parentEnvironmentId ?? environmentId;

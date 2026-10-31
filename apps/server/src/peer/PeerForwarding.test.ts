@@ -573,6 +573,11 @@ it.effect("launches in a linked environment with the caller's modes, retry-safe"
       // The thread there runs with the caller's own modes here, below the
       // link's full access, and a retry asks for the same thread.
       expect(launched).toMatchObject({ runtimeMode: "full-access", interactionMode: "plan" });
+      // The box sees only the link, so the launch names the caller to nest under.
+      expect(launched).toMatchObject({
+        parentThreadId: "thread:laptop-plan",
+        parentEnvironmentId: laptop.environmentId,
+      });
       expect(relaunched?.threadId).toBe(launched?.threadId);
       expect(retried.structuredContent).toEqual(first.structuredContent);
 
