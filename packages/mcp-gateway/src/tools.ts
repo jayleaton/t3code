@@ -1997,7 +1997,14 @@ export async function callGatewayTool(
       // Checked here: the target environment cannot verify a parent on another environment.
       if (typeof input.parentThreadId === "string" && parentThreadId !== undefined) {
         const parentEnvironment = parentEnvironmentId ?? environmentId;
-        if ((await findGatewayThread(context, parentEnvironment, parentThreadId)) === undefined) {
+        const parent = await getThreadOrNotFound(context, parentEnvironment, parentThreadId).catch(
+          (error: unknown) => {
+            if (error instanceof GatewayError && error.code === "thread_not_found")
+              return undefined;
+            throw error;
+          },
+        );
+        if (parent === undefined || parent.archivedAt != null || parent.deletedAt != null) {
           throw new GatewayError({
             code: "invalid_input",
             message: `parentThreadId ${parentThreadId} is not a chat on environment ${parentEnvironment}; omit parentThreadId to nest under the calling chat.`,
