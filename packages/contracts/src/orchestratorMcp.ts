@@ -436,6 +436,12 @@ export const OrchestratorMcpThreadReadInput = Schema.Struct({
   textOffset: Schema.optional(NonNegativeInt),
   view: Schema.optional(Schema.Literals(["messages", "activity"])),
   afterPosition: Schema.optional(NonNegativeInt),
+  tail: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "Return the latest `limit` items (after afterPosition, if set), still in position order. hasMore then means older items exist.",
+    }),
+  ),
   limit: Schema.optional(clampedPositiveInt(100)).annotate({
     description: "Max items, 1 to 100.",
   }),
@@ -633,7 +639,9 @@ export const OrchestratorMcpThreadWaitInput = Schema.Struct({
     }),
   ),
   returnOnQuestion: Schema.optional(
-    Schema.Boolean.annotate({ description: "Default true: return when it blocks on a question." }),
+    Schema.Boolean.annotate({
+      description: "Default true: return when it blocks on a question or an approval.",
+    }),
   ),
 });
 export type OrchestratorMcpThreadWaitInput = typeof OrchestratorMcpThreadWaitInput.Type;
@@ -649,6 +657,9 @@ export const OrchestratorMcpThreadWaitResult = Schema.Struct({
   resultRun: Schema.optional(Schema.Struct({ runId: RunId, status: OrchestrationV2RunStatus })),
   hasPendingQuestion: Schema.optional(Schema.Boolean),
   pendingRequestId: Schema.optional(RuntimeRequestId),
+  pendingApproval: Schema.optional(
+    Schema.Struct({ requestId: RuntimeRequestId, kind: ProviderRequestKind }),
+  ).annotate({ description: "Oldest pending approval. Grants no approval rights." }),
 });
 export type OrchestratorMcpThreadWaitResult = typeof OrchestratorMcpThreadWaitResult.Type;
 

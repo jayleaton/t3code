@@ -19,6 +19,7 @@ import {
   OrchestrationV2StopWorkflowError,
   type OrchestrationV2StopWorkflowInput,
   type ModelSelection,
+  ProviderRequestKind,
   type OrchestrationV2Actor,
   type OrchestrationV2Command,
   type OrchestrationV2GetTurnItemResult,
@@ -176,7 +177,10 @@ export interface ThreadManagementWaitInput {
    * completion delivery will wake it again, as a delegated task's result does.
    */
   readonly untilDelegatedWorkSettled?: boolean;
-  /** Also return while the thread is blocked on a live question, which no run end will follow. */
+  /**
+   * Also return while the thread is blocked on a live question or approval,
+   * which no run end will follow.
+   */
   readonly untilQuestion?: boolean;
 }
 
@@ -188,6 +192,11 @@ export interface ThreadManagementWaitResult {
   readonly resultRun?: OrchestrationV2Run;
   /** With `untilQuestion`: the live question the thread is blocked on. */
   readonly pendingQuestion?: RuntimeRequestId;
+  /** With `untilQuestion`: the oldest live approval the thread is blocked on. */
+  readonly pendingApproval?: {
+    readonly requestId: RuntimeRequestId;
+    readonly kind: ProviderRequestKind;
+  };
 }
 
 export interface ThreadManagementInterruptInput {
@@ -557,6 +566,7 @@ function latestSteerableRun(
 }
 
 const SETTLE_AFTER_RUN_WAIT_MS = 24 * 60 * 60 * 1_000;
+const isApprovalRequestKind = Schema.is(ProviderRequestKind);
 
 const make = Effect.gen(function* () {
   const threadDispatch = yield* ThreadCommandExecutor.ThreadCommandExecutor;
@@ -1074,16 +1084,25 @@ const make = Effect.gen(function* () {
       return pending ? undefined : progress.resultRun;
     });
     const untilQuestion = input.untilQuestion === true;
-    const blockingQuestion = getProjectThreadRecords(input, ["runtimeRequests"]).pipe(
-      Effect.map(
-        ({ runtimeRequests }) =>
-          runtimeRequests.find(
-            (request) =>
-              request.kind === "user_input" &&
-              request.status === "pending" &&
-              request.responseCapability.type === "live",
-          )?.id,
-      ),
+    const blockingRequests = getProjectThreadRecords(input, ["runtimeRequests"]).pipe(
+      Effect.map(({ runtimeRequests }) => {
+        const live = runtimeRequests.filter(
+          (request) => request.status === "pending" && request.responseCapability.type === "live",
+        );
+        let pendingApproval: ThreadManagementWaitResult["pendingApproval"];
+        let oldestCreatedAt = Infinity;
+        for (const request of live) {
+          if (!isApprovalRequestKind(request.kind)) continue;
+          const createdAt = DateTime.toEpochMillis(request.createdAt);
+          if (createdAt >= oldestCreatedAt) continue;
+          oldestCreatedAt = createdAt;
+          pendingApproval = { requestId: request.id, kind: request.kind };
+        }
+        return {
+          pendingQuestion: live.find((request) => request.kind === "user_input")?.id,
+          pendingApproval,
+        };
+      }),
     );
     const evaluate = Effect.fn("orchestrationV2.threadManagement.evaluate")(function* (
       runs: ReadonlyArray<OrchestrationV2Run>,
@@ -1099,12 +1118,17 @@ const make = Effect.gen(function* () {
               })),
             )
           : { ...outcomeNow, resultRun: undefined };
-      const pendingQuestion =
-        current.settled || !untilQuestion ? undefined : yield* blockingQuestion;
+      const blocked =
+        current.settled || !untilQuestion
+          ? { pendingQuestion: undefined, pendingApproval: undefined }
+          : yield* blockingRequests;
       return {
         ...current,
-        pendingQuestion,
-        done: current.settled || pendingQuestion !== undefined,
+        ...blocked,
+        done:
+          current.settled ||
+          blocked.pendingQuestion !== undefined ||
+          blocked.pendingApproval !== undefined,
       };
     });
     const settledResult = (current: Effect.Success<ReturnType<typeof evaluate>>) => ({
@@ -1115,6 +1139,9 @@ const make = Effect.gen(function* () {
       ...(current.pendingQuestion === undefined
         ? {}
         : { pendingQuestion: current.pendingQuestion }),
+      ...(current.pendingApproval === undefined
+        ? {}
+        : { pendingApproval: current.pendingApproval }),
     });
     const initial = yield* evaluate(target.runs);
     if (initial.done) return settledResult(initial);
