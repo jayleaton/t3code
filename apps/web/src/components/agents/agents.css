@@ -1588,7 +1588,6 @@
 }
 .agent-child-summary-text [data-bucket="needsInput"] {
   font-weight: 600;
-  color: var(--warning);
 }
 .agent-child-avatars {
   position: relative;
@@ -1598,10 +1597,10 @@
   align-items: center;
   padding-inline: 4px;
 }
-/* Static rings: an inner gap in the card colour, then the child's state colour.
+/* Static rings: an inner gap in the card colour, then the child's state colour
+   (CHILD_STATUS_COLORS, set inline).
    The rings sit 3.5px outside the 20px disc, so a 2px step overlaps the ringed discs by 5px. */
 .agent-child-avatar {
-  --agent-state-color: var(--muted-foreground);
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -1623,18 +1622,6 @@
 .agent-child-avatar:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 4px;
-}
-.agent-child-avatar[data-bucket="needsInput"] {
-  --agent-state-color: var(--warning);
-}
-.agent-child-avatar[data-bucket="running"] {
-  --agent-state-color: var(--success);
-}
-.agent-child-avatar[data-bucket="failed"] {
-  --agent-state-color: var(--destructive);
-}
-.agent-child-avatar[data-bucket="done"] {
-  --agent-state-color: color-mix(in srgb, var(--muted-foreground) 40%, transparent);
 }
 .agent-child-avatar .agent-custom-icon,
 .agent-child-avatar .agent-orb,

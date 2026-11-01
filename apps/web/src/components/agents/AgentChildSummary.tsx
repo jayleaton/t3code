@@ -8,6 +8,7 @@ import type { McpGatewayProfile } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import type { CSSProperties } from "react";
 
+import { CHILD_STATUS_COLORS } from "../ChildStatusCounts";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AgentIcon } from "./AgentIcon";
 import { agentThreadStatusLabel, runAgentName, type AgentThreadStatus } from "./agents.logic";
@@ -40,7 +41,11 @@ export function AgentChildSummaryText({ counts }: { readonly counts: ChildStatus
   return (
     <span className="agent-child-summary-text">
       {parts.map((bucket, index) => (
-        <span key={bucket} data-bucket={bucket}>
+        <span
+          key={bucket}
+          data-bucket={bucket}
+          style={bucket === "needsInput" ? { color: CHILD_STATUS_COLORS[bucket] } : undefined}
+        >
           {index > 0 ? " · " : null}
           {counts[bucket]} {BUCKET_LABELS[bucket]}
         </span>
@@ -80,6 +85,7 @@ export function AgentChildAvatarStack({
                   style={
                     {
                       "--agent-color": agent.profile?.color ?? "var(--muted-foreground)",
+                      "--agent-state-color": CHILD_STATUS_COLORS[bucket],
                     } as CSSProperties
                   }
                 />
