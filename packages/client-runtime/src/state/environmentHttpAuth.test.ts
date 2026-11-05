@@ -22,6 +22,7 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import type { HttpClient } from "effect/http";
 
+import { ConnectionDiagnostics, makeConnectionDiagnostics } from "../connection/diagnostics.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import {
   BearerConnectionTarget,
@@ -262,11 +263,22 @@ const LOADERS: ReadonlyArray<{
 describe("authenticated environment HTTP requests", () => {
   it.effect.each(LOADERS)("rejects an invalid $name response", (loader) =>
     Effect.gen(function* () {
+      const diagnostics = makeConnectionDiagnostics();
       const harness = makeHarness(() => Response.json({}));
       const result = yield* loader
         .load(harness.input)
-        .pipe(Effect.provide(harness.httpLayer), Effect.asVoid, Effect.flip);
+        .pipe(
+          Effect.provide(harness.httpLayer),
+          Effect.provideService(ConnectionDiagnostics, diagnostics),
+          Effect.asVoid,
+          Effect.flip,
+        );
       expect(result._tag).toBe("RemoteEnvironmentAuthInvalidJsonError");
+      if (loader.name === "shell snapshot")
+        expect(diagnostics.snapshot()).toMatchObject({
+          milestones: ["shell-headers", "shell-body"],
+          firstFailure: "shell-schema",
+        });
       expect(harness.calls).toHaveLength(1);
     }),
   );
@@ -287,8 +299,23 @@ describe("authenticated environment HTTP requests", () => {
 
   it.effect.each(LOADERS)("uses current relay authorization and endpoint for $name", (loader) =>
     Effect.gen(function* () {
+      const diagnostics = makeConnectionDiagnostics();
       const harness = makeHarness(() => Response.json(loader.response));
-      const result = yield* loader.load(harness.input).pipe(Effect.provide(harness.httpLayer));
+      const result = yield* loader
+        .load(harness.input)
+        .pipe(
+          Effect.provide(harness.httpLayer),
+          Effect.provideService(ConnectionDiagnostics, diagnostics),
+        );
+      if (loader.name === "shell snapshot")
+        expect(diagnostics.snapshot()).toEqual({
+          milestones: ["shell-headers", "shell-body", "shell-decoded"],
+          rx: 0,
+          tx: 0,
+          closes: 0,
+          errors: 0,
+          binary: 0,
+        });
 
       expect(result).toEqual(loader.expected);
       expect(harness.calls).toHaveLength(1);

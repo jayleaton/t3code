@@ -40,7 +40,8 @@ import {
 } from "./model.ts";
 import * as RpcSession from "../rpc/session.ts";
 import { presentConnectionState } from "./presentation.ts";
-import { CONNECTION_LOG_LIMIT } from "./connectionLog.ts";
+import { ConnectionDiagnostics } from "./diagnostics.ts";
+import { connectionTroubleSince, CONNECTION_LOG_LIMIT } from "./connectionLog.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 import { connectionRouteId, entryWithRoutes, isLearned, mergeLearnedRoutes } from "./routes.ts";
@@ -157,6 +158,7 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
   readonly preflight?: (route: ConnectionRoute) => Effect.Effect<ConnectionDriver.RoutePreflight>;
   readonly inboundFrames?: Effect.Effect<number>;
   readonly foreground?: Ref.Ref<boolean>;
+  readonly applicationState?: "active" | "inactive" | "background" | "unknown";
 }) {
   const networkStatus = yield* SubscriptionRef.make<NetworkStatus>(
     options?.networkStatus ?? "online",
@@ -246,6 +248,9 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
           Stream.map((event) => event.reason),
         ),
         ...(options?.foreground === undefined ? {} : { isForeground: Ref.get(options.foreground) }),
+        ...(options?.applicationState === undefined
+          ? {}
+          : { applicationState: Effect.succeed(options.applicationState) }),
       }),
     ),
     Layer.succeed(
@@ -515,8 +520,15 @@ describe("EnvironmentSupervisor", () => {
     Effect.gen(function* () {
       const firstAttemptStarted = yield* Deferred.make<void>();
       const harness = yield* makeHarness({
+        applicationState: "inactive",
         prepare: () =>
-          Deferred.succeed(firstAttemptStarted, undefined).pipe(Effect.andThen(Effect.never)),
+          Effect.gen(function* () {
+            const diagnostics = yield* ConnectionDiagnostics;
+            diagnostics?.mark("shell-headers");
+            diagnostics?.fail("json");
+            yield* Deferred.succeed(firstAttemptStarted, undefined);
+            return yield* Effect.never;
+          }),
       });
       const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
         initiallyDesired: true,
@@ -550,6 +562,13 @@ describe("EnvironmentSupervisor", () => {
       });
       expect(yield* Ref.get(harness.prepareCount)).toBe(1);
       expect(yield* Ref.get(harness.sessionCount)).toBe(0);
+      const report = connectionTroubleSince(yield* SubscriptionRef.get(supervisor.log!), -1);
+      expect(report.at(-1)).toMatchObject({
+        reason: "timeout",
+        stage: "preparing",
+        appState: "inactive",
+        diagnostics: { milestones: ["shell-headers"], firstFailure: "json" },
+      });
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
