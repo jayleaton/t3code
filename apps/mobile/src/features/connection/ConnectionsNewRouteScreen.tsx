@@ -23,6 +23,10 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { AppText as Text, AppTextInput, type AppTextInputProps } from "../../components/ui/AppText";
 import { FrostedCutout } from "../../components/ui/FrostedCutout";
+import { Button } from "../../components/ui/Button";
+import * as Clipboard from "expo-clipboard";
+import { resolveRemotePairingTarget } from "@t3tools/shared/remote";
+import { formatTransportProbe, probeTransports } from "./transportProbe";
 import {
   buildPairingUrl,
   extractPairingUrlFromQrPayload,
@@ -258,12 +262,48 @@ function PairingForm({
               {pairingConnectionError ??
                 "Connect without an account. Use your Mac's Tailscale address, or its LAN IP on the same Wi-Fi. Paste a full pairing link here, or enter the host and pairing code separately. Keep the T3 server running on your Mac."}
             </Text>
+            {pairingConnectionError && hostInput.trim() ? (
+              <TransportProbeRow host={hostInput} />
+            ) : null}
           </View>
 
           {hasCloudPublicConfig() ? <T3ConnectSection /> : null}
         </View>
       </ScrollView>
     </SettingsScreen>
+  );
+}
+
+/** Never rejects: a bad address or a throwing transport becomes the report text. */
+async function runTransportProbe(host: string): Promise<string> {
+  try {
+    const target = resolveRemotePairingTarget({ pairingUrl: buildPairingUrl(host, "probe") });
+    const text = formatTransportProbe(target, await probeTransports(target), new Date());
+    void Clipboard.setStringAsync(text).catch(() => undefined);
+    return `${text}\nCopied to the clipboard.`;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+/** Tells which native network stack, if any, reaches the address a failed add used. */
+function TransportProbeRow({ host }: { readonly host: string }) {
+  const [running, setRunning] = useState(false);
+  const [report, setReport] = useState<string | null>(null);
+  const run = async () => {
+    setRunning(true);
+    setReport(await runTransportProbe(host));
+    setRunning(false);
+  };
+  return (
+    <View className="gap-2 px-4">
+      <Button label="Test this address" loading={running} onPress={() => void run()} />
+      {report ? (
+        <Text selectable className="font-mono text-xs leading-normal text-foreground-muted">
+          {report}
+        </Text>
+      ) : null}
+    </View>
   );
 }
 
