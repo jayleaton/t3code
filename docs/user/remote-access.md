@@ -407,8 +407,8 @@ pairing links and revoke client sessions. Revoking an unused link prevents new
 pairings; revoke a device's session to remove its existing access. **Revoke
 others** ends every other paired phone, browser, desktop, and linked machine at
 once. A revoked device says the machine revoked its pairing; to restore it,
-create a fresh pairing link and use **Pair again** on mobile or **Add route** in
-the machine's route list. Its saved threads stay. Command-line management is
+create a fresh pairing link and use **Pair again** in the connection details on
+that device. Its saved threads stay. Command-line management is
 available through `t3 auth --help`.
 
 A session with an open connection stays listed after its access credential

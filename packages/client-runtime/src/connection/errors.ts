@@ -268,7 +268,11 @@ export function mapRemoteEnvironmentError(
 export function mapRemoteDpopEnvironmentError(
   error: RemoteEnvironmentAuthError,
 ): ConnectionAttemptError {
-  if (error._tag === "EnvironmentAuthInvalidError" && error.reason === "invalid_credential") {
+  if (
+    error._tag === "EnvironmentAuthInvalidError" &&
+    error.reason === "invalid_credential" &&
+    error.sessionFailureReason !== "revoked"
+  ) {
     return new ConnectionBlockedError({
       reason: "authentication",
       detail: dpopFailureMessage("The environment credential is invalid.", error.dpopFailureReason),
