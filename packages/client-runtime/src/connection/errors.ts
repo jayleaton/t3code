@@ -191,10 +191,16 @@ export function mapRemoteEnvironmentError(
     case "EnvironmentAuthInvalidError":
       return new ConnectionBlockedError({
         reason: "authentication",
-        detail: "The environment credential is invalid.",
+        detail:
+          error.sessionFailureReason === "revoked"
+            ? "The environment revoked this device's pairing."
+            : "The environment credential is invalid.",
         traceId: error.traceId,
         hop: "server",
         via,
+        ...(error.sessionFailureReason === "revoked"
+          ? { failureCause: "pairing_revoked" as const }
+          : {}),
       });
     case "EnvironmentScopeRequiredError":
     case "EnvironmentOperationForbiddenError":
