@@ -52,6 +52,7 @@ vi.mock("../../components/ui/AppText", () => ({
 vi.mock("../../components/ui/FrostedCutout", () => ({ FrostedCutout: () => null }));
 vi.mock("../../components/ui/Button", () => ({ Button: () => null }));
 vi.mock("expo-clipboard", () => ({ setStringAsync: vi.fn() }));
+vi.mock("./transportProbe", () => ({ formatTransportProbe: vi.fn(), probeTransports: vi.fn() }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("../../lib/useUniwindTheme", () => ({ useUniwindTheme: () => ({}) }));
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({

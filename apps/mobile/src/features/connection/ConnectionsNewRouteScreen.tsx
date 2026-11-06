@@ -279,8 +279,8 @@ async function runTransportProbe(host: string): Promise<string> {
   try {
     const target = resolveRemotePairingTarget({ pairingUrl: buildPairingUrl(host, "probe") });
     const text = formatTransportProbe(target, await probeTransports(target), new Date());
-    void Clipboard.setStringAsync(text).catch(() => undefined);
-    return `${text}\nCopied to the clipboard.`;
+    const copied = await Clipboard.setStringAsync(text).catch(() => false);
+    return copied ? `${text}\nCopied to the clipboard.` : text;
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
