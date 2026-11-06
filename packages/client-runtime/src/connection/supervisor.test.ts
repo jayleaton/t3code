@@ -1804,6 +1804,54 @@ describe("EnvironmentSupervisor routes", () => {
     }),
   );
 
+  it.effect(
+    "reports the environment's refusal from a slow route over a silent route's timeout",
+    () =>
+      Effect.gen(function* () {
+        const serveTarget = new BearerConnectionTarget({
+          environmentId: TARGET.environmentId,
+          label: TARGET.label,
+          connectionId: "bearer:serve",
+        });
+        const entry = entryWithRoutes(LAN_ENTRY, [
+          LAN_ROUTE,
+          {
+            target: serveTarget,
+            profile: Option.some(
+              new BearerConnectionProfile({
+                connectionId: serveTarget.connectionId,
+                environmentId: TARGET.environmentId,
+                label: TARGET.label,
+                httpBaseUrl: "https://desk.tail1234.ts.net/",
+                wsBaseUrl: "wss://desk.tail1234.ts.net/",
+              }),
+            ),
+          },
+        ]);
+        // Both checks miss the head start: one route is dead, the other is slow but answers.
+        const harness = yield* makeHarness({
+          checkRoute: () => Effect.succeed("silent"),
+          prepare: (_attempt, target) =>
+            target._tag === "BearerConnectionTarget" && target.connectionId === "bearer:serve"
+              ? Effect.fail(
+                  new ConnectionBlockedError({
+                    reason: "authentication",
+                    detail: "The environment credential is invalid.",
+                    hop: "server",
+                    via: "direct",
+                  }),
+                )
+              : Effect.fail(transient("Tailnet endpoint timed out.")),
+        });
+        const supervisor = yield* EnvironmentSupervisor.make(entry, {
+          initiallyDesired: true,
+        }).pipe(Effect.provide(harness.dependencies));
+
+        const state = yield* awaitState(supervisor.state, (value) => value.phase === "blocked");
+        expect(state.lastFailure?.detail).toBe("The environment credential is invalid.");
+      }),
+  );
+
   it.effect("moves back to the LAN route when the network changes and it answers again", () =>
     Effect.gen(function* () {
       const lanReachable = yield* Ref.make(false);
