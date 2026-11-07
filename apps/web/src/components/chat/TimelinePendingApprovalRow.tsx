@@ -2,7 +2,8 @@ import {
   FULL_ACCESS_OVERRIDE_QUESTION,
   fullAccessOverrideExplanation,
 } from "@t3tools/client-runtime/state/thread-requests";
-import { ShieldIcon } from "lucide-react";
+import { classifyCommandRisks } from "@t3tools/shared/commandRisk";
+import { ShieldIcon, TriangleAlertIcon } from "lucide-react";
 import { memo, use } from "react";
 import { type PendingApproval } from "../../session-logic";
 import { InlineButton } from "../ui/button";
@@ -39,6 +40,10 @@ export const TimelinePendingApprovalRow = memo(function TimelinePendingApprovalR
   const { respondingRequestIds, canOperateThread, onRespondToApproval } = use(TimelineRowCtx);
   const presentation = APPROVAL_PRESENTATION[approval.requestKind];
   const canRespond = approval.responseCapability === "live";
+  const commandRisks =
+    approval.requestKind === "command" && approval.detail
+      ? classifyCommandRisks(approval.detail)
+      : [];
   return (
     <WorkLogRow
       role="group"
@@ -71,6 +76,18 @@ export const TimelinePendingApprovalRow = memo(function TimelinePendingApprovalR
         {approval.reason ? (
           <span className="text-muted-foreground select-text wrap-anywhere">{approval.reason}</span>
         ) : null}
+        {commandRisks.map((risk) => (
+          <span
+            key={risk.kind}
+            data-command-risk={risk.kind}
+            className="inline-flex items-start gap-1 text-destructive"
+          >
+            <TriangleAlertIcon aria-hidden className="mt-0.5 size-3 shrink-0" />
+            <span className="wrap-anywhere">
+              <span className="font-medium">{risk.label}.</span> {risk.explanation}
+            </span>
+          </span>
+        ))}
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           {canRespond ? (
             <>
@@ -90,6 +107,11 @@ export const TimelinePendingApprovalRow = memo(function TimelinePendingApprovalR
                     isResponding={respondingRequestIds.includes(approval.requestId)}
                     canRespond={canRespond}
                     options={approval.options}
+                    riskWarning={
+                      commandRisks.length > 0
+                        ? `${commandRisks.map((risk) => risk.label).join(", ")}. Check the command before approving.`
+                        : null
+                    }
                     onRespondToApproval={onRespondToApproval}
                   />
                 </>

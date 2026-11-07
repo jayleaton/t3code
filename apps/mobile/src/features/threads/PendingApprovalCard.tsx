@@ -8,6 +8,7 @@ import {
   FULL_ACCESS_OVERRIDE_QUESTION,
   fullAccessOverrideExplanation,
 } from "@t3tools/client-runtime/state/thread-requests";
+import { classifyCommandRisks } from "@t3tools/shared/commandRisk";
 import { useState } from "react";
 import { Pressable, View } from "react-native";
 
@@ -37,6 +38,10 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
   const canRespond = props.approval.responseCapability === "live";
   const disabled = !canRespond || props.respondingApprovalId === props.approval.requestId;
   const [explanationOpen, setExplanationOpen] = useState(false);
+  const commandRisks =
+    props.approval.requestKind === "command" && props.approval.detail
+      ? classifyCommandRisks(props.approval.detail)
+      : [];
   return (
     <View className="gap-2.5 rounded-[20px] border border-border bg-card-alt p-4">
       <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-foreground-secondary">
@@ -55,6 +60,12 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
           {props.approval.reason}
         </Text>
       ) : null}
+      {commandRisks.map((risk) => (
+        <Text key={risk.kind} className="font-sans text-xs leading-normal text-danger-foreground">
+          <Text className="font-t3-bold text-xs text-danger-foreground">{risk.label}.</Text>{" "}
+          {risk.explanation}
+        </Text>
+      ))}
       {props.approval.fullAccessOverride ? (
         <Pressable
           accessibilityRole="button"

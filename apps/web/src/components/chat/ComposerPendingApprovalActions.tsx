@@ -17,6 +17,8 @@ interface ComposerPendingApprovalActionsProps {
   canRespond: boolean;
   disabled?: boolean;
   options?: ReadonlyArray<ProviderApprovalOption> | undefined;
+  /** Marks the approving choices, e.g. when the command looks destructive. */
+  riskWarning?: string | null | undefined;
   onRespondToApproval: (
     requestId: RuntimeRequestId,
     decision: ProviderApprovalDecision,
@@ -36,9 +38,17 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
   isResponding,
   canRespond,
   disabled = false,
-  options = DEFAULT_APPROVAL_OPTIONS,
+  options: providedOptions = DEFAULT_APPROVAL_OPTIONS,
+  riskWarning,
   onRespondToApproval,
 }: ComposerPendingApprovalActionsProps) {
+  const options = riskWarning
+    ? providedOptions.map((option) =>
+        option.warning || (option.decision !== "accept" && option.decision !== "acceptForSession")
+          ? option
+          : { ...option, warning: riskWarning },
+      )
+    : providedOptions;
   const primaryOptions = options.filter(
     (option) => option.decision === "decline" || option.decision === "accept",
   );

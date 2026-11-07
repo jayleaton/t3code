@@ -6,6 +6,8 @@ import {
   formatContextWindowCost,
 } from "./ContextWindowMeter.logic";
 import { Minimize2Icon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { formatCacheTimeLeft, promptCacheExpiresAt } from "~/lib/promptCache";
 import { composerFloatingLayerProps } from "./composerEventScope";
 
 function formatPercentage(value: number | null): string | null {
@@ -18,8 +20,37 @@ function formatPercentage(value: number | null): string | null {
   return `${Math.round(value)}%`;
 }
 
+// Lives inside the popover, so it only updates (once a minute, or at expiry) while it is open.
+function PromptCacheRow(props: { readonly updatedAt: string; readonly ttlMs: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  const expiresAt = promptCacheExpiresAt(props.updatedAt, props.ttlMs);
+  const left = expiresAt === null ? 0 : expiresAt - now;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- wall-clock timer so the row turns cold at the moment the cache lapses
+  useEffect(() => {
+    if (left <= 0) return;
+    const timer = setTimeout(() => setNow(Date.now()), Math.min(left, 60_000));
+    return () => clearTimeout(timer);
+  }, [left]);
+  if (expiresAt === null) return null;
+  return (
+    <div className="flex items-center justify-between gap-3 text-2xs leading-4">
+      <span className="text-secondary-label">Prompt cache</span>
+      <span
+        className={
+          left > 0
+            ? "font-medium tabular-nums text-secondary-label"
+            : "font-medium tabular-nums text-warning"
+        }
+      >
+        {left > 0 ? `Warm · ${formatCacheTimeLeft(left)} left` : "Cold · next send re-reads it all"}
+      </span>
+    </div>
+  );
+}
+
 export function ContextWindowMeter(props: {
   usage: ContextWindowSnapshot;
+  promptCacheTtlMs?: number | null;
   modelDisplayName?: string | null;
   onCompact?: (() => void) | undefined;
   compactDisabled?: boolean | undefined;
@@ -143,6 +174,9 @@ export function ContextWindowMeter(props: {
                 {formatContextWindowCost(usage.cost)}
               </span>
             </div>
+          ) : null}
+          {props.promptCacheTtlMs ? (
+            <PromptCacheRow updatedAt={usage.updatedAt} ttlMs={props.promptCacheTtlMs} />
           ) : null}
           {usage.compactsAutomatically ? (
             <div className="mt-1 text-pretty text-secondary-label text-2xs font-medium">
