@@ -11,18 +11,25 @@ that machine and shown on connected devices. **Reset name** restores the origina
 
 T3 Connect makes an environment available to your other devices without setting
 up router forwarding. In the desktop app on the host, open **Settings →
-Sharing & access**, sign in, and enable **T3 Connect** for that environment.
+Environments**, sign in, and enable **T3 Connect** for that environment.
 
 For a command-line host, run:
 
 ```bash
-t3 connect
+t3 up
 ```
 
-Follow the sign-in instructions. Setup offers a
-[background service](./background-service.md); if you decline it, start the
-server with `t3 serve`. Saving your sign-in alone does not make the machine
-reachable.
+It asks how your other devices reach the machine: T3 Connect, the local network,
+or both. Choose T3 Connect and follow the sign-in instructions. On Linux and
+macOS, it then runs T3 Code as a [background service](./background-service.md).
+`t3 connect` is the same as `t3 up --connect`. Run `t3 up` again to change your
+choice, and `t3 status` to see it.
+
+The background service is not available on Windows, so there `t3 up` prints the
+`t3 serve` command to keep running in a terminal. You can also keep the desktop
+app running with its local environment enabled. Closing the desktop app's last
+window stops its local server. Saving your sign-in alone does not start a server
+or make the machine reachable.
 
 On your other device, sign in to the same T3 Connect account and choose the
 environment. On the app.t3.codes home page with no computer added yet, signing
@@ -35,6 +42,19 @@ T3 Connect renews access credentials when needed without disconnecting a healthy
 connection. Pull request diffs and provider settings keep working after the
 previous credential expires. A failed renewal affects that request; it does not
 disconnect an otherwise healthy conversation.
+
+### Scripts and agents
+
+`t3 up` asks nothing when you name a choice: `--connect`, `--lan`, or their
+`--no-` forms. Choices you do not name keep their settings, and `--yes` takes
+the defaults. Without a terminal:
+
+- T3 Connect sign-in prints a URL and a code. Approve it on any device.
+- A needed restart runs without asking, and stops running agent turns.
+- With nothing set up and no choice named, `t3 up` stops and names the flags.
+
+`t3 status --json` prints the settings. `t3 up --help` lists every flag with
+examples.
 
 ### More machines with T3 Chat
 
@@ -52,16 +72,19 @@ cannot add more until you are under the limit again.
 
 Use direct pairing when the other device can reach the host's network address.
 
-On a desktop host, open **Settings → Sharing & access**, enable **Network access**,
+On a desktop host, open **Settings → Environments**, enable **Network access**,
 then create a pairing link using an address the other device can reach. Changing
 network access restarts the desktop app. You can turn it off in the same place.
 
-For a command-line host, replace `<private-ip>` with the host's LAN or tailnet
-address:
+For a command-line host, choose the local network in `t3 up`, or run:
 
 ```bash
-t3 serve --host <private-ip>
+t3 up --lan
 ```
+
+For a server in a terminal, run `t3 serve --lan`. Either way, T3 Code then
+accepts connections from your local network and tailnet, so a pairing code is
+all that keeps other devices on them out.
 
 If a server is already running, generate a fresh link without restarting it:
 
@@ -85,7 +108,7 @@ Android app then trusts it.
 Pairing authorizes that device for future connections. Use a fresh one-time link
 for each new device; you do not need the original token to reconnect. Links
 created in Settings can only be copied from the client that created them while
-its Sharing & access page stays open. If you leave or reload that page, create
+its Environments page stays open. If you leave or reload that page, create
 another link to share.
 
 ### Reach one machine several ways
@@ -105,16 +128,20 @@ machine's current LAN and Tailscale addresses and adds them as routes, so
 pairing once through T3 Connect is enough to use the LAN at home. When the
 machine's LAN address changes, for example after it joins another Wi-Fi network,
 the learned route follows it. The machine must allow network access for its LAN
-address to be learned. The [background service](./background-service.md#local-network-access)
-allows it on private networks by default. You can reorder a learned route, but not remove it; it
+address to be learned: **Network access** in the desktop app, or the
+[local network](./background-service.md#local-network-access) choice in `t3 up`.
+You can reorder a learned route, but not remove it; it
 goes away with the route it was learned through, or when the machine stops
 reporting that address.
 
 T3 Code connects over the first route that answers. Away from home, a LAN
 address that does not answer is checked briefly and skipped. It is only tried
 again, after the other routes, if none of them connect. While connected over a
-later route, T3 Code checks the earlier ones when your network changes, when you
-return to the app, and every minute, and moves back as soon as one works.
+later route, T3 Code checks earlier routes on a faster kind of network (LAN
+before Tailscale, Tailscale before T3 Connect) when your network changes, when
+you return to the app, and every minute, and moves as soon as one works. It
+does not drop a working connection for an earlier route of the same kind, such
+as two Tailscale addresses; the order decides which is tried first next time.
 
 On web and desktop, select the route count under the machine's name in
 **Settings → Environments** to see its routes. Drag a route to change the order,
@@ -150,7 +177,7 @@ Mobile keeps its manual environment selection.
 ### Tailscale HTTPS
 
 Join both devices to the same tailnet. In the desktop app, enable **Tailscale
-HTTPS** in **Settings → Sharing & access**. Turn it off there to remove that route.
+HTTPS** in **Settings → Environments**. Turn it off there to remove that route.
 
 To start a command-line server with Tailscale HTTPS:
 
@@ -209,7 +236,7 @@ running is left alone.
 
 Each desktop app keeps one session on the host for its SSH connection and reuses
 it when it reconnects. Revoke sessions you no longer use in **Settings →
-Sharing & access** on the host, or on a headless host with `t3 auth session list` and
+Environments** on the host, or on a headless host with `t3 auth session list` and
 `t3 auth session revoke <id>`. A desktop that can still sign in over SSH pairs
 again on its next connect.
 
@@ -243,6 +270,19 @@ On a phone, tap the floating preview's corner dot to show its controls, then
 **Pop into separate window** to keep watching in picture-in-picture over other
 apps.
 
+### Local servers
+
+The browser lists ports held by processes your terminals and agents started.
+T3 Code reads which process holds each port and never connects to it, so a
+listed port opens as `http://localhost:<port>` and might not be a web page. For
+an HTTPS server or a specific path, set the **Preview URL** on the project
+script that starts it; T3 Code checks that address and opens it as written.
+
+To stop listing ports, set `T3CODE_PORT_DISCOVERY=0` in the environment that
+starts the T3 Code server, such as
+[`service.env`](./background-service.md#configure-the-service-environment) for
+the background service, and restart it. Script preview URLs still appear.
+
 ### Browser host setup
 
 macOS, Windows, and Linux desktops run the browser as is. Some Linux hosts need
@@ -263,8 +303,22 @@ any missing libraries and system fonts with apt; pages that load without text
 can mean the host has no fonts. It is safe to run again. Without `sudo`, it only
 reports what it would change.
 
-The browser always runs in Chrome's sandbox. Where you cannot change the host,
-set `T3CODE_SERVER_BROWSER_SANDBOX=0` for the environment to run without it.
+The browser runs in Chrome's sandbox by default. Chrome cannot start that sandbox
+as root. If your T3 server runs as root, run it as a nonroot user to keep
+sandboxing enabled. `t3 browser setup` does not fix this root restriction.
+
+If you need to run as root, or cannot enable the sandbox on your host, set
+`T3CODE_SERVER_BROWSER_SANDBOX=0` in the **T3 server's environment** and restart
+the server. This disables Chrome's sandbox. For a manual launch:
+
+```sh
+T3CODE_SERVER_BROWSER_SANDBOX=0 t3 serve
+```
+
+For a systemd service, add `Environment=T3CODE_SERVER_BROWSER_SANDBOX=0` under
+`[Service]` in its configuration, run `sudo systemctl daemon-reload`, then restart
+your T3 service. Setting the variable in an agent's terminal does not change the
+environment of an already running T3 server.
 
 ## Connect an outside agent
 
@@ -278,18 +332,49 @@ Link two machines, such as your laptop and a VPS, and agents on one can work on
 the other: launch, message, wait on and stop its threads, answer their
 questions, and manage its queues, projects and scheduled tasks.
 
-Linked environments is a beta. Turn it on for both machines in **Settings →
-Labs**; on mobile, **Settings → Labs** lists each connected machine. While it is
-off on either machine, agents start nothing over a link between them. A task
-already running on the other machine still finishes, and if that machine has it
-off, its result arrives once it is back on.
+Linked environments is on by default; turn it off for a machine in **Settings →
+Labs**, or on mobile in **Settings → Labs**. While it is off on either machine,
+agents start nothing over a link between them. A task already running on the
+other machine still finishes, and if that machine has it off, its result
+arrives once it is back on.
+
+### Your tailnet devices
+
+Machines running T3 Code that are signed in to the same Tailscale account link
+to each other on their own, both ways, with no pairing code. Install T3 Code on
+a new machine, sign in to Tailscale, and within ten minutes it appears in
+**Settings → Environments → Linked environments** on your other machines.
+Tagged nodes and machines shared from someone else's tailnet never link this
+way.
+
+- Each device's access there is the most it may do on your machines. Change it
+  from any of them and the change reaches all of them. **Revoke** cuts the
+  device off everywhere; **Restore** gives it back the default access.
+- New devices get the default access set in the same section, and you can turn
+  automatic linking off there.
+- **Open** adds a device to this app without a code. Below full access, it
+  opens read-only.
+- Other people's machines, and anything off your tailnet, still link with a
+  pairing code as described below.
+
+To count only machines you choose, turn on **Only devices with the T3
+capability** and grant `t3.codes/device` in your Tailscale policy file, from
+the machines that should count to your T3 machines:
+
+```json
+"grants": [
+  { "src": ["group:me"], "dst": ["group:me"], "app": { "t3.codes/device": [{}] } }
+]
+```
+
+### Link with a pairing code
 
 On the machine you will work from, open **Settings → Environments → Linked environments**,
 choose **Link**, and pick the other machine or enter its address. The list
 holds the machines this app knows and those on your T3 Connect account. If this
 app is connected to that machine with a session that manages access there, it
 makes the pairing code itself; otherwise paste one from that machine's
-**Settings → Sharing & access**. From a terminal, use
+**Settings → Environments**. From a terminal, use
 `t3 environment link <address> --pairing-code <code> --access <mode>`.
 
 You can also ask an agent to link a machine by name, such as "delegate this to
@@ -303,7 +388,7 @@ and the access, then approve.
   access, the link's agents can change only threads it started, not that
   machine's own threads, projects or settings, and they skip its project setup
   scripts.
-- The link shows up in that machine's **Settings → Sharing & access** like any
+- The link shows up in that machine's **Settings → Environments** like any
   outside agent. Revoke it there to end it. **Forget** on this machine only
   removes it here.
 - Links last 30 days. Link again with a new pairing code to renew one.
@@ -317,10 +402,14 @@ fails with that reason.
 
 ## Manage or revoke access
 
-On the host, **Settings → Sharing & access** lets authorized administrators create
+On the host, **Settings → Environments** lets authorized administrators create
 pairing links and revoke client sessions. Revoking an unused link prevents new
-pairings; revoke a device's session to remove its existing access. Command-line
-management is available through `t3 auth --help`.
+pairings; revoke a device's session to remove its existing access. **Revoke
+others** ends every other paired phone, browser, desktop, and linked machine at
+once. A revoked device says the machine revoked its pairing; to restore it,
+create a fresh pairing link and use **Pair again** in the connection details on
+that device. Its saved threads stay. Command-line management is
+available through `t3 auth --help`.
 
 A session with an open connection stays listed after its access credential
 expires.
@@ -373,12 +462,13 @@ page, or **Settings → T3 Connect** on mobile, and choose **Deregister**. This
 revokes its cloud access and frees its host space even when the environment is
 offline or has been wiped. When T3 Connect rejects a host's link, the host
 shows that it was removed from T3 Connect. To link it again, turn on
-**T3 Connect** in **Settings → Sharing & access** on a desktop host, or run
+**T3 Connect** in **Settings → Environments** on a desktop host, or run
 `t3 connect link` on a command-line host and then restart T3 Code there. A
 command-line host that released its tunnel when it last stopped may link itself
 again on its next start; run `t3 connect unlink` on that host to keep it off.
 Removing an environment from a device's connection settings only forgets it on
-that device; it stays registered to your account.
+that device and doesn't change your T3 Connect account. A device keeps a saved
+environment after it's deregistered until you remove it from that device.
 
 When idle tunnel cleanup is enabled, T3 Connect removes a linked environment's
 tunnel after it stays offline for several minutes. The environment stays linked
@@ -407,7 +497,7 @@ error, where the problem is, and how to fix it.
 ## Use MCP with connected environments
 
 Agents in T3 Code chats always have the T3 Agents tools for the machine they run on. To let
-them act on your other machines too, enable **Settings → MCP Gateway** in the desktop app and
+them act on your other machines too, enable **Settings → Environments → MCP Gateway** in the desktop app and
 grant access to each environment involved, including the one the chat runs on. Keep this
 desktop connected while agents use it; calls for other machines go through it, under the
 grants you set. Disabling the gateway stops those calls immediately.
@@ -436,9 +526,14 @@ machine with `environmentId` and `environmentLabel`, and `environments` lists an
 was skipped (disconnected or without read access) or failed, so a missing chat is not mistaken
 for one that does not exist. Pass `environmentId` to list one machine.
 
-A chat's `profileSnapshot` names the agent and revision it was created with (`profileId`,
-`profileName`, `revision`), not the agent's instructions. Pass `includeSystemPrompt: true` to
-`t3_list_agents` when you need each agent's current prompt, for example before `t3_update_agent`.
+`t3_list_threads` returns the 20 most recently updated chats unless you pass `limit` (up to
+100). When `hasMore` is true, pass `nextCursor` back as `cursor` with the same filters for the
+next page. `updatedAfter`, `updatedBefore`, and `createdAfter` take ISO times to pick a window.
+Each row is a summary; `t3_get_thread` returns the whole chat.
+
+A chat's `profileId` and `profileName` name the agent it was created with, not the agent's
+instructions. Pass `includeSystemPrompt: true` to `t3_list_agents` when you need each agent's
+current prompt, for example before `t3_update_agent`.
 
 ### Answer an agent's questions through MCP
 
@@ -452,7 +547,7 @@ app. Every question in the request needs an answer. Answering needs the same sen
 
 ### Pause or stop work through MCP
 
-Default access does not include pause or stop. In **Settings → MCP Gateway**, open the target
+Default access does not include pause or stop. In **Settings → Environments → MCP Gateway**, open the target
 machine's access menu, enable **Control active work**, and select **Save**. This grants `control`
 only for that environment. The broader `lifecycle` grant also permits thread controls, but neither
 **All capabilities** nor access to other machines is needed. Use `t3_list_environments` to confirm
@@ -473,7 +568,7 @@ an agent to stop is cooperative: message acceptance alone does not prove the age
 
 ### Open a remote chat
 
-In the installed desktop app, connect the remote environment and configure **Settings → MCP Gateway**
+In the installed desktop app, connect the remote environment and configure **Settings → Environments → MCP Gateway**
 with your MCP assistant. Grant the environment read access. Your assistant can use `t3_open_thread`
 with the environment and thread IDs to open that chat and bring this desktop window forward.
 The remote machine supplies the chat; the desktop connected to the gateway displays it. Opening a
@@ -544,8 +639,11 @@ from any connected machine.
 
 On the Agents board, children appear inside the card of the chat that created them, including
 chats by other agents, on the full board and in the side list next to an open chat. Subagents are
-not cards: they appear only in the **Lineage** panel of the chat that owns them. Each one shows its
-agent, title, and status; click it to open that chat.
+not cards: they appear only in the **Lineage** panel of the chat that owns them. On web and
+desktop, a card's children start collapsed to one line counting them by state (need input,
+running, waiting, failed, done); click it to show or hide them. Each card remembers your choice on
+this device, shared with the same parent's row in the sidebar. Open, each child shows its agent,
+title, and status; click it to open that chat.
 Children that need your input come first, then ones still working or waiting, then failed, idle,
 and finished ones, newest first within each group. The list re-sorts at most once a minute so rows
 stay put while you read them. A card shows eight children until you choose **Show more**, but a

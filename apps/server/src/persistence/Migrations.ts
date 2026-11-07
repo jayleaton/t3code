@@ -59,7 +59,7 @@ import Migration0052 from "./Migrations/052_ProjectionThreadTitleState.ts";
 import Migration0053 from "./Migrations/053_PullRequestFilesViewed.ts";
 import Migration0054 from "./Migrations/054_ProjectionThreadsAutoSettleDisabledAt.ts";
 // The fork moves its own scheduled_tasks aside before upstream creates one.
-import Migration0055 from "./Migrations/055_ForkOrchestrationV2.ts";
+import Migration0055 from "./Migrations/fork/OrchestrationV2LegacyScheduledTasks.ts";
 import Migration0056 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
 import Migration0057 from "./Migrations/057_ScheduledTaskWebhooks.ts";
 import Migration0058 from "./Migrations/058_WebhookRelayDeliveries.ts";
@@ -77,6 +77,10 @@ import Migration0069 from "./Migrations/069_ThreadMessageSearch.ts";
 import Migration0070 from "./Migrations/070_PeerLinks.ts";
 import Migration0071 from "./Migrations/071_PeerLinkFence.ts";
 import Migration0072 from "./Migrations/072_WaitingLinkRequestIndex.ts";
+import Migration0073 from "./Migrations/073_ActiveTurnItemIndexes.ts";
+import Migration0074 from "./Migrations/074_ExcludeAttachmentPlaceholdersFromSearch.ts";
+import Migration0075 from "./Migrations/075_SubagentDeliveryState.ts";
+import Migration0076 from "./Migrations/076_ProjectionProjectsPinArchive.ts";
 
 import ForkMigration001 from "./Migrations/fork/001_AgentProfileAndPullRequestCompatibility.ts";
 import ForkMigration002 from "./Migrations/fork/002_RepairAgentUpgradeSchema.ts";
@@ -89,6 +93,10 @@ import ForkMigration008 from "./Migrations/fork/008_ProjectionThreadSlimPayloads
 import ForkMigration009 from "./Migrations/fork/009_ShellRunlessRootTurnIndex.ts";
 import ForkMigration010 from "./Migrations/fork/010_ProjectionThreadParentIndex.ts";
 import ForkMigration011 from "./Migrations/fork/011_ProfileSnapshots.ts";
+import ForkMigration012 from "./Migrations/fork/012_TailnetDevices.ts";
+import ForkMigration013 from "./Migrations/fork/013_TailnetDevicePolicy.ts";
+import ForkMigration014 from "./Migrations/fork/014_ThreadTaskDepartures.ts";
+import ForkMigration015 from "./Migrations/fork/015_ThreadAutoArchiveIndex.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -163,6 +171,10 @@ const migrationEntries = [
   [70, "PeerLinks", Migration0070],
   [71, "PeerLinkFence", Migration0071],
   [72, "WaitingLinkRequestIndex", Migration0072],
+  [73, "ActiveTurnItemIndexes", Migration0073],
+  [74, "ExcludeAttachmentPlaceholdersFromSearch", Migration0074],
+  [75, "SubagentDeliveryState", Migration0075],
+  [76, "ProjectionProjectsPinArchive", Migration0076],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -180,6 +192,10 @@ const forkMigrationEntries = [
   [9, "ShellRunlessRootTurnIndex", ForkMigration009, 68],
   [10, "ProjectionThreadParentIndex", ForkMigration010, 68],
   [11, "ProfileSnapshots", ForkMigration011, 68],
+  [12, "TailnetDevices", ForkMigration012, 72],
+  [13, "TailnetDevicePolicy", ForkMigration013, 72],
+  [14, "ThreadTaskDepartures", ForkMigration014, 72],
+  [15, "ThreadAutoArchiveIndex", ForkMigration015, 76],
 ] as const;
 
 export const forkMigrationManifest = forkMigrationEntries.map(

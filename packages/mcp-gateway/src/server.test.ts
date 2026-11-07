@@ -277,12 +277,12 @@ describe("MCP gateway server", () => {
     expect(result.structuredContent).toEqual({
       schemaVersion: "3",
       serverTime: expect.any(String),
-      data: { items: [], snapshotAt: "snapshot-1" },
+      data: { items: [], hasMore: false, nextCursor: null, snapshotAt: "snapshot-1" },
     });
     expect(JSON.parse((result.content as Array<{ text: string }>)[0]!.text)).toEqual({
       schemaVersion: "3",
       serverTime: expect.any(String),
-      data: { snapshotAt: "snapshot-1" },
+      data: { hasMore: false, snapshotAt: "snapshot-1" },
     });
 
     await client.close();

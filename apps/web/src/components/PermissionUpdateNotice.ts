@@ -48,10 +48,10 @@ function showPermissionNotice(
     timeout: 0,
     onClose: persistDismissal,
     actionProps: {
-      children: "Open Sharing & access",
+      children: "Open Environments",
       onClick: () => {
         dismiss();
-        void router.navigate({ to: "/settings/access" });
+        void router.navigate({ to: "/settings/connections", hash: "authorized-clients" });
       },
     },
     data: {

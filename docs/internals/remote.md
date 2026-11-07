@@ -39,7 +39,12 @@ connect, including a blocked one such as a signed-out T3 Connect, moves on to
 the next; only an incompatible server stops the walk, because it is the same
 server on every route. While connected over a later route the
 [supervisor](../../packages/client-runtime/src/connection/supervisor.ts)
-preflights the earlier ones and replaces the session when one would connect.
+preflights earlier routes of a better kind (loopback, LAN, tailnet or VPN,
+public, SSH, relay, best first) and replaces the session when one would
+connect. An earlier route of the same kind is not worth a reconnect: MagicDNS
+through `tailscale serve` and the raw tailnet address reach the same host, and
+mobile reconnects over whichever answers first after every resume, so following
+list order would replace the socket on nearly every foreground.
 Preflight includes authorization so a route that answers but rejects this
 client never costs a working session; a route that still fails afterwards is
 held back for a cooldown so a flaky network cannot bounce the connection.
@@ -73,7 +78,7 @@ A [peer link](../../apps/server/src/peer/PeerLinks.ts) lets one environment's
 agents work in another. The linking environment signs in to the other's `/mcp`
 as an outside MCP client, with a pairing code from it, and keeps that session's
 token in its own secret store. The other environment needs nothing new: it
-sees one more OAuth client, lists it in Sharing & access, and revokes it there.
+sees one more OAuth client, lists it in Environments, and revokes it there.
 Unlinking on the linking side only forgets the token.
 
 - **The Linked environments beta (`linkedEnvironmentsEnabled`) gates both
@@ -103,6 +108,40 @@ Unlinking on the linking side only forgets the token.
 - **A forwarded wait is split into calls of at most 50 s**, because the
   receiving `/mcp` sends nothing while a wait is open and T3 Connect's edge
   drops idle requests after about 100 s.
+
+### Tailnet devices
+
+[`TailnetDevices`](../../apps/server/src/peer/TailnetDevices.ts) makes the same
+kind of link without a pairing code between servers Tailscale says are the
+same user's untagged nodes. Requests arriving through Serve come from loopback
+with headers any local process can forge, so nothing inbound is trusted:
+
+- **The side giving access dials the other.** The issuer resolves the
+  requester's address itself (a tailnet IP, or an https MagicDNS name, whose
+  certificate only that node holds; plain http on a name is never used),
+  whoises it, and checks its descriptor. It then asks that address to confirm
+  the requester's pending challenge before minting anything, and delivers the
+  token there. A forged request naming a real device's address dies at the
+  confirmation, so no token is ever created for it.
+- **Each direction is its own handshake.** The issuer links back before
+  answering, so one request yields a mutual link, each half proven by the side
+  granting it. Gossip between linked devices only adds addresses to try.
+- The requester stores the issuer address it proved, never one the grant names.
+
+What each device may do is a [policy](../../apps/server/src/peer/DevicePolicy.ts)
+every device replicates and merges last-writer-wins by hybrid logical clock, so
+revoking or restoring a device works from any machine. **A write counts only if
+its author is full access on the receiving side and is not the device it
+names**, so a revoked or limited device cannot widen itself, even relayed
+through another. Each `/mcp` request narrows a device session's token to its
+current entry, so a change applies without re-linking; widening past what the
+token was minted with takes a new handshake.
+
+An app opens another of my devices through the server it is connected to, which
+asks that device over its device session for a one-time pairing credential. The
+app redeems it directly at the first address that answers as that device. App
+sessions carry no agent mode ceiling, so a device below full access opens
+read-only.
 
 **Work a link paired below full access starts stays within that link.** The
 receiving environment knows a session is a peer link because the linking side

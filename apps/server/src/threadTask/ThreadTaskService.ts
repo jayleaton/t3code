@@ -624,17 +624,38 @@ export const make = Effect.gen(function* () {
         ),
       );
 
-  const visibleTasks = (caller: ThreadTaskCaller, afterCursor: number) =>
-    store
-      .listVisible({ threadId: caller.kind === "user" ? null : caller.threadId, afterCursor })
-      .pipe(Effect.catch(unavailable));
+  /** Tasks the caller sees that changed after `afterCursor`, and those that left its view. */
+  const visibleChanges = (caller: ThreadTaskCaller, afterCursor: number) =>
+    Effect.all({
+      tasks: store.listVisible({
+        threadId: caller.kind === "user" ? null : caller.threadId,
+        afterCursor,
+      }),
+      departures:
+        caller.kind === "user"
+          ? Effect.succeed([])
+          : store.listDepartures({ ownerThreadId: caller.threadId, afterCursor }),
+    }).pipe(Effect.catch(unavailable));
+
+  const changeResult = Effect.fn("ThreadTaskService.changeResult")(function* (
+    changes: Effect.Success<ReturnType<typeof visibleChanges>>,
+    cursor: number,
+  ) {
+    const removed = changes.departures.map((departure) => departure.workerThreadId);
+    return {
+      tasks: yield* Effect.forEach(changes.tasks, view),
+      ...(removed.length === 0 ? {} : { removed }),
+      cursor,
+      timedOut: false,
+    };
+  });
 
   const read: ThreadTaskService["Service"]["read"] = Effect.fn("ThreadTaskService.read")(
     function* (caller, input) {
       const cursor = yield* store.latestCursor.pipe(Effect.catch(unavailable));
       if (input.threadId === undefined) {
-        const tasks = yield* visibleTasks(caller, 0);
-        return { tasks: yield* Effect.forEach(tasks, view), cursor, timedOut: false };
+        // The cursor is read first, so a write racing this read is returned again, never lost.
+        return yield* changeResult(yield* visibleChanges(caller, input.afterCursor ?? 0), cursor);
       }
       const task = yield* getTask(input.threadId);
       if (task === undefined) {
@@ -880,22 +901,23 @@ export const make = Effect.gen(function* () {
         const timeout = Duration.millis(
           Math.min(input.timeoutMs ?? 30_000, THREAD_TASK_WATCH_MAX_MS),
         );
-        const poll = visibleTasks(caller, afterCursor);
+        const poll = visibleChanges(caller, afterCursor);
+        const hasChanges = (changes: Effect.Success<typeof poll>) =>
+          changes.tasks.length > 0 || changes.departures.length > 0;
         const first = yield* poll;
-        const changed =
-          first.length > 0
-            ? first
-            : yield* PubSub.take(subscription).pipe(
-                Effect.andThen(poll),
-                Effect.repeat({ until: (tasks) => tasks.length > 0 }),
-                Effect.timeoutOption(timeout),
-                Effect.map(Option.getOrElse(() => [] as ReadonlyArray<ThreadTask>)),
-              );
-        return {
-          tasks: yield* Effect.forEach(changed, view),
-          cursor: changed.reduce((max, task) => Math.max(max, task.cursor), afterCursor),
-          timedOut: changed.length === 0,
-        };
+        const changed = hasChanges(first)
+          ? first
+          : yield* PubSub.take(subscription).pipe(
+              Effect.andThen(poll),
+              Effect.repeat({ until: hasChanges }),
+              Effect.timeoutOption(timeout),
+              Effect.map(Option.getOrElse(() => first)),
+            );
+        const cursor = [...changed.tasks, ...changed.departures].reduce(
+          (max, change) => Math.max(max, change.cursor),
+          afterCursor,
+        );
+        return { ...(yield* changeResult(changed, cursor)), timedOut: !hasChanges(changed) };
       }),
     );
 
@@ -904,6 +926,41 @@ export const make = Effect.gen(function* () {
     shell.parentThreadId != null &&
     threadParentRelationship(shell) === "child" &&
     shell.profileSnapshot?.profileId != null;
+
+  /**
+   * The parent link is canonical: a task's owner is always the worker's parent. A child
+   * moved under another chat here takes its task along; otherwise the task goes. Tasks owned
+   * on another environment are kept in step by their link instead.
+   */
+  const followParent = Effect.fn("ThreadTaskService.followParent")(function* (
+    workerThreadId: ThreadId,
+  ) {
+    yield* writes.withPermits(1)(
+      Effect.gen(function* () {
+        const task = yield* getTask(workerThreadId);
+        if (task === undefined || task.ownerEnvironmentId !== null) return;
+        const worker = yield* getShell(workerThreadId);
+        if (worker === undefined) return;
+        const parent = worker.parentEnvironmentId == null ? worker.parentThreadId : null;
+        if (parent === task.ownerThreadId) return;
+        if (parent != null && threadParentRelationship(worker) === "child") {
+          yield* writeAssignment({
+            owner: parent,
+            actor: "server",
+            worker,
+            summary: task.summary,
+            taskId: undefined,
+            settleWhenAccepted: undefined,
+            clientRequestId: undefined,
+            existing: task,
+          });
+          return;
+        }
+        yield* store.remove(workerThreadId).pipe(Effect.catch(unavailable));
+        yield* PubSub.publish(changes, undefined);
+      }),
+    );
+  });
 
   /**
    * The chat's task, creating it for a named child that has none yet, owned by
@@ -1741,7 +1798,9 @@ export const make = Effect.gen(function* () {
   const handle = Effect.fnUntraced(
     function* (stored: OrchestrationV2StoredEvent) {
       const event = stored.event;
-      if (event.type === "run.updated" && TERMINAL_RUN_STATUSES.has(event.payload.status)) {
+      if (event.type === "thread.metadata-updated") {
+        yield* followParent(event.threadId);
+      } else if (event.type === "run.updated" && TERMINAL_RUN_STATUSES.has(event.payload.status)) {
         yield* evaluateSettlement(event.threadId);
         yield* reevaluatePendingSettlements;
         yield* reevaluateSettleRequests;
@@ -1777,6 +1836,29 @@ export const make = Effect.gen(function* () {
     const links = yield* projections.getThreadParentLinks();
     // Scan every thread, including owners whose child was deleted or reparented.
     yield* Effect.forEach(links, (link) => clearQueuedWakes(link.threadId), { discard: true });
+    // Tasks whose worker moved while an older server ran follow its parent now.
+    const parentOf = new Map(
+      links.map((link) => [
+        link.threadId,
+        link.parentEnvironmentId === null ? link.parentThreadId : null,
+      ]),
+    );
+    for (const task of tasks) {
+      if (
+        task.ownerEnvironmentId === null &&
+        parentOf.has(task.workerThreadId) &&
+        parentOf.get(task.workerThreadId) !== task.ownerThreadId
+      ) {
+        yield* followParent(task.workerThreadId).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("thread task could not follow its parent", {
+              workerThreadId: task.workerThreadId,
+              error,
+            }),
+          ),
+        );
+      }
+    }
     // Adopt named children launched before tasks existed for readable task state.
     for (const link of links) {
       if (
@@ -1811,7 +1893,9 @@ export const make = Effect.gen(function* () {
       yield* TxRef.set(seenSequence, after).pipe(Effect.tx);
       yield* forkParked(
         Stream.runForEach(eventSink.stream({ afterSequence: after }), (stored) =>
-          (stored.event.type === "run.updated" || stored.event.type === "runtime-request.updated"
+          (stored.event.type === "run.updated" ||
+          stored.event.type === "runtime-request.updated" ||
+          stored.event.type === "thread.metadata-updated"
             ? worker.enqueue(stored)
             : Effect.void
           ).pipe(Effect.andThen(TxRef.set(seenSequence, stored.sequence).pipe(Effect.tx))),

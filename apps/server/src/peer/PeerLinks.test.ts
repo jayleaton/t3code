@@ -136,10 +136,14 @@ it.effect("links with a pairing code, and the peer holds its agents to the limit
         urls: [b.url],
         access: "auto",
       });
-      // B lists the link under A's name, where it can be revoked.
-      expect((yield* linkedSessions(b)).map((session) => session.client.label)).toEqual([
-        "T3 Code · Laptop",
-      ]);
+      // B lists the link under A's name and environment, where it can be revoked.
+      expect(
+        (yield* linkedSessions(b)).map((session) => [
+          session.client.label,
+          session.peerEnvironmentId,
+        ]),
+      ).toEqual([["T3 Code · Laptop", laptop.environmentId]]);
+      expect(linked.origin).toBe("paired");
       expect(
         (yield* a.links.list).map(({ environmentId, status }) => [environmentId, status]),
       ).toEqual([[box.environmentId, "reachable"]]);

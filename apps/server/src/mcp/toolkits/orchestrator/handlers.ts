@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
 import * as PeerLinkRequests from "../../../peer/PeerLinkRequests.ts";
 import * as PeerLinks from "../../../peer/PeerLinks.ts";
+import * as TailnetDevices from "../../../peer/TailnetDevices.ts";
 import { readCaller } from "../../threadAccess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -234,6 +235,26 @@ export const layer = McpToolAccess.toLayer(
             ),
           );
           return { environmentId, removed };
+        }),
+      ),
+      // A device's access holds on every one of the user's machines, so it is
+      // an environment setting too.
+      t3_environment_device_access: McpToolAccess.writesEnvironment(({ environmentId, access }) =>
+        Effect.gen(function* () {
+          const devices = yield* TailnetDevices.TailnetDevices;
+          const entry = yield* devices.setAccess(environmentId, access).pipe(
+            Effect.mapError(
+              (error) =>
+                new OrchestratorMcpFailure({
+                  code:
+                    error.reason === "unknown_device" || error.reason === "self"
+                      ? "invalid_request"
+                      : "orchestration_error",
+                  message: error.message,
+                }),
+            ),
+          );
+          return { environmentId: entry.environmentId, access: entry.access };
         }),
       ),
       t3_thread_interrupt: McpToolAccess.writesThreads(

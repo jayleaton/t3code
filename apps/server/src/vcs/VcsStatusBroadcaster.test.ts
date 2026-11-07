@@ -27,6 +27,7 @@ import { GitCommandError, GitManagerError } from "@t3tools/contracts";
 import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import * as WorkspaceIoGate from "../workspace/WorkspaceIoGate.ts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
@@ -76,10 +77,19 @@ function layerTestFor(state: {
   backgroundWorkEnabled?: boolean;
   automaticFetchInterval?: Effect.Effect<Duration.Duration>;
   beforeRemoteStatus?: Effect.Effect<void>;
+  beforeLocalStatus?: Effect.Effect<void>;
   fileSystem?: FileSystem.FileSystem;
   pullCurrentBranch?: GitWorkflowService.GitWorkflowService["Service"]["pullCurrentBranch"];
 }) {
   return VcsStatusBroadcaster.layer.pipe(
+    // These tests pin down refresh coalescing, which needs callers to reach the lock in order.
+    Layer.provideMerge(
+      Layer.succeed(WorkspaceIoGate.WorkspaceIoGate, {
+        run: (_root, _path, effect) => effect,
+        forget: () => Effect.void,
+        trackedRoots: () => 0,
+      }),
+    ),
     Layer.provideMerge(
       state.fileSystem
         ? Layer.succeed(FileSystem.FileSystem, state.fileSystem)
@@ -95,9 +105,11 @@ function layerTestFor(state: {
     Layer.provide(
       Layer.mock(GitWorkflowService.GitWorkflowService)({
         localStatus: () =>
-          Effect.sync(() => {
+          Effect.suspend(() => {
             state.localStatusCalls += 1;
-            return state.currentLocalStatus;
+            return (state.beforeLocalStatus ?? Effect.void).pipe(
+              Effect.as(state.currentLocalStatus),
+            );
           }),
         currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
         remoteStatus: (_input, options) =>
@@ -163,6 +175,47 @@ function layerBackgroundPolicy(shouldRunScopeWork: (scope: BackgroundScope) => b
 }
 
 describe("VcsStatusBroadcaster", () => {
+  it.effect("refreshes queued behind a running one share the next git status read", () => {
+    const state: Parameters<typeof layerTestFor>[0] = {
+      currentLocalStatus: baseLocalStatus,
+      currentRemoteStatus: baseRemoteStatus,
+      localStatusCalls: 0,
+      remoteStatusCalls: 0,
+      localInvalidationCalls: 0,
+      remoteInvalidationCalls: 0,
+      fileSystem: FileSystem.makeNoop({ realPath: (cwd) => Effect.succeed(cwd) }),
+    };
+
+    return Effect.gen(function* () {
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      state.beforeLocalStatus = Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+      );
+      const running = yield* broadcaster
+        .refreshLocalStatus("/repo")
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* Deferred.await(started);
+      // Requested while the first read runs, so that read may predate their change.
+      state.currentLocalStatus = { ...baseLocalStatus, hasWorkingTreeChanges: true };
+      const queued = yield* Effect.all(
+        [broadcaster.refreshLocalStatus("/repo"), broadcaster.refreshLocalStatus("/repo")],
+        { concurrency: "unbounded" },
+      ).pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* Deferred.succeed(release, undefined);
+
+      assert.isFalse((yield* Fiber.join(running)).hasWorkingTreeChanges);
+      const [second, third] = yield* Fiber.join(queued);
+      assert.isTrue(second.hasWorkingTreeChanges);
+      assert.isTrue(third.hasWorkingTreeChanges);
+      assert.strictEqual(state.localStatusCalls, 2);
+
+      yield* broadcaster.refreshLocalStatus("/repo");
+      assert.strictEqual(state.localStatusCalls, 3);
+    }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);
+  });
+
   it.effect("publishes a terminal branch switch without reading remote status", () => {
     const state = {
       currentLocalStatus: baseLocalStatus,

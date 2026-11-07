@@ -112,6 +112,13 @@ const ROUTE_KIND_RANK: Record<ConnectionRouteKind, number> = {
   relay: 5,
 };
 
+/** Whether `candidate` is on a better kind of network than `current`, not merely earlier in the list. */
+export function isBetterRouteKind(candidate: ConnectionRoute, current: ConnectionRoute): boolean {
+  return (
+    ROUTE_KIND_RANK[connectionRouteKind(candidate)] < ROUTE_KIND_RANK[connectionRouteKind(current)]
+  );
+}
+
 export function insertRoute(
   routes: ReadonlyArray<ConnectionRoute>,
   route: ConnectionRoute,
@@ -420,6 +427,22 @@ export function routesAfterRemoving(
     }
     return credentialConnectionId(connectionRouteId(route.target)) !== removedId;
   });
+}
+
+/**
+ * A dragged route order shows until the saved routes catch up with it. It is
+ * stale, and returns null, once the saved order matches it or the saved routes
+ * are no longer the same set: kept any longer, it would hide a route added
+ * later whenever the count happened to match again.
+ */
+export function pendingRouteOrder(
+  pending: ReadonlyArray<string> | null,
+  savedIds: ReadonlyArray<string>,
+): ReadonlyArray<string> | null {
+  if (pending === null || pending.length !== savedIds.length) return null;
+  const saved = new Set(savedIds);
+  if (!pending.every((id) => saved.has(id))) return null;
+  return pending.some((id, index) => id !== savedIds[index]) ? pending : null;
 }
 
 export function removedWithRelay(entry: ConnectionCatalogEntry): boolean {

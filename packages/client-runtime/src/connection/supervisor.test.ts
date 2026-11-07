@@ -1,14 +1,19 @@
 import { AuthStandardClientScopes, EnvironmentId, type ServerConfig } from "@t3tools/contracts";
+import { RelayClientTracer } from "@t3tools/shared/relayTracing";
 import { describe, expect, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
+import * as Exit from "effect/Exit";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Random from "effect/Random";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
+import * as Tracer from "effect/Tracer";
 
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as TokenStore from "../authorization/tokenStore.ts";
@@ -35,6 +40,8 @@ import {
 } from "./model.ts";
 import * as RpcSession from "../rpc/session.ts";
 import { presentConnectionState } from "./presentation.ts";
+import { ConnectionDiagnostics } from "./diagnostics.ts";
+import { connectionTroubleSince, CONNECTION_LOG_LIMIT } from "./connectionLog.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 import { connectionRouteId, entryWithRoutes, isLearned, mergeLearnedRoutes } from "./routes.ts";
@@ -148,7 +155,10 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
   readonly initialConfig?: (attempt: number) => Effect.Effect<ServerConfig, ConnectionAttemptError>;
   readonly checkRoute?: (route: ConnectionRoute) => Effect.Effect<ConnectionDriver.RouteCheck>;
   readonly checkHost?: (prepared: PreparedConnection) => Effect.Effect<ConnectionDriver.RouteCheck>;
+  readonly preflight?: (route: ConnectionRoute) => Effect.Effect<ConnectionDriver.RoutePreflight>;
   readonly inboundFrames?: Effect.Effect<number>;
+  readonly foreground?: Ref.Ref<boolean>;
+  readonly applicationState?: "active" | "inactive" | "background" | "unknown";
 }) {
   const networkStatus = yield* SubscriptionRef.make<NetworkStatus>(
     options?.networkStatus ?? "online",
@@ -237,6 +247,10 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
           Stream.drop(1),
           Stream.map((event) => event.reason),
         ),
+        ...(options?.foreground === undefined ? {} : { isForeground: Ref.get(options.foreground) }),
+        ...(options?.applicationState === undefined
+          ? {}
+          : { applicationState: Effect.succeed(options.applicationState) }),
       }),
     ),
     Layer.succeed(
@@ -244,7 +258,12 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
       ConnectionDriver.ConnectionDriver.of({
         connect,
         preflight: (_entry, route) =>
-          checkRoute(route).pipe(Effect.map((check) => check === "answered")),
+          options?.preflight?.(route) ??
+          checkRoute(route).pipe(
+            Effect.map((check): ConnectionDriver.RoutePreflight =>
+              check === "answered" ? "ready" : check,
+            ),
+          ),
         checkHost: (prepared) =>
           options?.checkHost?.(prepared) ??
           Effect.succeed<ConnectionDriver.RouteCheck>("unchecked"),
@@ -276,6 +295,55 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
 });
 
 describe("EnvironmentSupervisor", () => {
+  it.effect("exports each relay setup as a standalone linked trace that ends at readiness", () =>
+    Effect.gen(function* () {
+      const spans: Array<Tracer.NativeSpan> = [];
+      const tracer = Tracer.make({
+        span: (options) => {
+          const span = new Tracer.NativeSpan(options);
+          const end = span.end.bind(span);
+          span.end = (endTime, exit) => {
+            end(endTime, exit);
+            spans.push(span);
+          };
+          return span;
+        },
+      });
+      const failure = transient();
+      const harness = yield* makeHarness({
+        prepare: (attempt) =>
+          attempt === 1 ? Effect.fail(failure) : Effect.succeed(PREPARED_CONNECTION),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(RELAY_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(
+        Effect.provide(harness.dependencies),
+        Effect.provideService(RelayClientTracer, Option.some(tracer)),
+      );
+
+      yield* awaitState(
+        supervisor.state,
+        (state) => state.phase === "backoff" && state.attempt === 1,
+      );
+      const firstAttempt = spans.find((span) => span.name === "relay.connection.attempt");
+      expect(firstAttempt).toBeDefined();
+      if (firstAttempt?.status._tag !== "Ended" || !Exit.isFailure(firstAttempt.status.exit)) {
+        throw new Error("Expected the failed relay attempt to have ended.");
+      }
+      const tracedFailure = Cause.findError(firstAttempt.status.exit.cause);
+      expect(Result.isSuccess(tracedFailure) ? tracedFailure.success : undefined).toBe(failure);
+
+      yield* TestClock.adjust("3 seconds");
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+
+      const attempts = spans.filter((span) => span.name === "relay.connection.attempt");
+      expect(attempts).toHaveLength(2);
+      expect(attempts[0]?.traceId).not.toBe(attempts[1]?.traceId);
+      expect(attempts[1]?.links.map((link) => link.span.spanId)).toContain(attempts[0]?.spanId);
+      expect(yield* Ref.get(harness.releaseCount)).toBe(0);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
   it.effect("does not attempt a connection until it is desired", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
@@ -452,8 +520,15 @@ describe("EnvironmentSupervisor", () => {
     Effect.gen(function* () {
       const firstAttemptStarted = yield* Deferred.make<void>();
       const harness = yield* makeHarness({
+        applicationState: "inactive",
         prepare: () =>
-          Deferred.succeed(firstAttemptStarted, undefined).pipe(Effect.andThen(Effect.never)),
+          Effect.gen(function* () {
+            const diagnostics = yield* ConnectionDiagnostics;
+            diagnostics?.mark("shell-headers");
+            diagnostics?.fail("json");
+            yield* Deferred.succeed(firstAttemptStarted, undefined);
+            return yield* Effect.never;
+          }),
       });
       const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
         initiallyDesired: true,
@@ -487,6 +562,13 @@ describe("EnvironmentSupervisor", () => {
       });
       expect(yield* Ref.get(harness.prepareCount)).toBe(1);
       expect(yield* Ref.get(harness.sessionCount)).toBe(0);
+      const report = connectionTroubleSince(yield* SubscriptionRef.get(supervisor.log!), -1);
+      expect(report.at(-1)).toMatchObject({
+        reason: "timeout",
+        stage: "preparing",
+        appState: "inactive",
+        diagnostics: { milestones: ["shell-headers"], firstFailure: "json" },
+      });
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
@@ -513,6 +595,91 @@ describe("EnvironmentSupervisor", () => {
 
       expect(yield* Ref.get(harness.sessionCount)).toBe(2);
       expect(Option.isSome(yield* SubscriptionRef.get(supervisor.prepared))).toBe(true);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("retries a host that stays down quietly and recovers by itself", () =>
+    Effect.gen(function* () {
+      const hostUp = yield* Ref.make(true);
+      const harness = yield* makeHarness({
+        prepare: (_attempt, target) =>
+          Ref.get(hostUp).pipe(
+            Effect.flatMap((up) =>
+              up ? Effect.succeed(preparedFor(target)) : Effect.fail(transient("Tunnel is down.")),
+            ),
+          ),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      yield* Ref.set(hostUp, false);
+      yield* harness.closeLatestSession();
+      const lost = yield* awaitState(supervisor.state, (state) => state.phase === "backoff");
+      // A short outage is still reported as reconnecting.
+      expect(presentConnectionState(lost).phase).toBe("reconnecting");
+
+      // Retries land at most 16 seconds apart this early, so one falls past the grace period.
+      yield* TestClock.adjust("60 seconds");
+      const settled = yield* awaitState(supervisor.state, (state) => state.unreachable === true);
+      expect(settled.lastConnectedAt).toBeDefined();
+      const seen = yield* Ref.make<ReadonlyArray<SupervisorConnectionState>>([]);
+      yield* SubscriptionRef.changes(supervisor.state).pipe(
+        Stream.runForEach((state) => Ref.update(seen, (states) => [...states, state])),
+        Effect.forkScoped,
+      );
+      const attemptsBefore = yield* Ref.get(harness.prepareCount);
+      for (let minute = 0; minute < 30; minute += 1) {
+        yield* TestClock.adjust("60 seconds");
+      }
+      expect(yield* Ref.get(harness.prepareCount)).toBeGreaterThan(attemptsBefore);
+      for (const state of yield* Ref.get(seen)) {
+        expect(presentConnectionState(state)).toMatchObject({ phase: "offline", error: null });
+      }
+
+      yield* Ref.set(hostUp, true);
+      yield* harness.wake("application-active");
+      const back = yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      expect(back.unreachable).toBeUndefined();
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("retries at least every 15 seconds while foregrounded and logs each attempt", () =>
+    Effect.gen(function* () {
+      const foreground = yield* Ref.make(true);
+      const harness = yield* makeHarness({
+        foreground,
+        prepare: () => Effect.fail(transient("The host did not answer.")),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+      yield* awaitState(supervisor.state, (state) => state.phase === "backoff");
+
+      // Uncapped, ten failures back off for minutes; foregrounded, each waits 15 seconds at most.
+      for (let tick = 0; tick < 40; tick += 1) {
+        yield* TestClock.adjust("15 seconds");
+      }
+      const foregroundAttempts = yield* Ref.get(harness.prepareCount);
+      expect(foregroundAttempts).toBeGreaterThanOrEqual(30);
+
+      yield* Ref.set(foreground, false);
+      for (let tick = 0; tick < 40; tick += 1) {
+        yield* TestClock.adjust("15 seconds");
+      }
+      expect((yield* Ref.get(harness.prepareCount)) - foregroundAttempts).toBeLessThan(10);
+
+      const log = yield* SubscriptionRef.get(supervisor.log!);
+      expect(log).toHaveLength(CONNECTION_LOG_LIMIT);
+      expect(log.at(-1)).toMatchObject({
+        kind: "failed",
+        reason: "transport",
+        detail: "The host did not answer.",
+        network: "online",
+        foreground: false,
+      });
+      expect(log.filter((event) => event.kind === "attempt").length).toBeGreaterThan(0);
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
@@ -1637,6 +1804,54 @@ describe("EnvironmentSupervisor routes", () => {
     }),
   );
 
+  it.effect(
+    "reports the environment's refusal from a slow route over a silent route's timeout",
+    () =>
+      Effect.gen(function* () {
+        const serveTarget = new BearerConnectionTarget({
+          environmentId: TARGET.environmentId,
+          label: TARGET.label,
+          connectionId: "bearer:serve",
+        });
+        const entry = entryWithRoutes(LAN_ENTRY, [
+          LAN_ROUTE,
+          {
+            target: serveTarget,
+            profile: Option.some(
+              new BearerConnectionProfile({
+                connectionId: serveTarget.connectionId,
+                environmentId: TARGET.environmentId,
+                label: TARGET.label,
+                httpBaseUrl: "https://desk.tail1234.ts.net/",
+                wsBaseUrl: "wss://desk.tail1234.ts.net/",
+              }),
+            ),
+          },
+        ]);
+        // Both checks miss the head start: one route is dead, the other is slow but answers.
+        const harness = yield* makeHarness({
+          checkRoute: () => Effect.succeed("silent"),
+          prepare: (_attempt, target) =>
+            target._tag === "BearerConnectionTarget" && target.connectionId === "bearer:serve"
+              ? Effect.fail(
+                  new ConnectionBlockedError({
+                    reason: "authentication",
+                    detail: "The environment credential is invalid.",
+                    hop: "server",
+                    via: "direct",
+                  }),
+                )
+              : Effect.fail(transient("Tailnet endpoint timed out.")),
+        });
+        const supervisor = yield* EnvironmentSupervisor.make(entry, {
+          initiallyDesired: true,
+        }).pipe(Effect.provide(harness.dependencies));
+
+        const state = yield* awaitState(supervisor.state, (value) => value.phase === "blocked");
+        expect(state.lastFailure?.detail).toBe("The environment credential is invalid.");
+      }),
+  );
+
   it.effect("moves back to the LAN route when the network changes and it answers again", () =>
     Effect.gen(function* () {
       const lanReachable = yield* Ref.make(false);
@@ -1673,6 +1888,195 @@ describe("EnvironmentSupervisor routes", () => {
         "BearerConnectionTarget",
       );
       expect(yield* Ref.get(harness.releaseCount)).toBe(1);
+    }),
+  );
+
+  it.effect("keeps a live socket on an earlier route of the same kind", () =>
+    Effect.gen(function* () {
+      const tailnetRoute = (connectionId: string, origin: string): ConnectionRoute => ({
+        target: new BearerConnectionTarget({
+          environmentId: TARGET.environmentId,
+          label: TARGET.label,
+          connectionId,
+        }),
+        profile: Option.some(
+          new BearerConnectionProfile({
+            connectionId,
+            environmentId: TARGET.environmentId,
+            label: TARGET.label,
+            httpBaseUrl: `${origin}/`,
+            wsBaseUrl: `${origin.replace(/^http/, "ws")}/`,
+            network: "tailscale",
+          }),
+        ),
+      });
+      // MagicDNS over `tailscale serve` and the raw tailnet address reach the same host.
+      const entry = entryWithRoutes(TARGET_ENTRY, [
+        tailnetRoute("bearer:magicdns", "https://host.tailnet.ts.net"),
+        tailnetRoute("bearer:tailnet-ip", "http://100.100.1.2:3773"),
+      ]);
+      const magicDnsAnswers = yield* Ref.make(false);
+      const harness = yield* makeHarness({
+        checkRoute: (route) =>
+          connectionRouteId(route.target) === "bearer:magicdns"
+            ? Ref.get(magicDnsAnswers).pipe(
+                Effect.map((answers) => (answers ? "answered" : "silent")),
+              )
+            : Effect.succeed("answered"),
+        prepare: (_attempt, target) => Effect.succeed(preparedFor(target)),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(entry, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      yield* awaitState(
+        supervisor.state,
+        (state) => state.phase === "connected" && state.generation === 1,
+      );
+      expect(
+        connectionRouteId(
+          Option.getOrThrow(yield* SubscriptionRef.get(supervisor.prepared)).target,
+        ),
+      ).toBe("bearer:tailnet-ip");
+
+      yield* Ref.set(magicDnsAnswers, true);
+      yield* harness.wake("application-active");
+      for (let minute = 0; minute < 5; minute += 1) {
+        yield* TestClock.adjust("60 seconds");
+      }
+
+      expect(yield* Ref.get(harness.releaseCount)).toBe(0);
+      expect(yield* SubscriptionRef.get(supervisor.state)).toMatchObject({
+        phase: "connected",
+        generation: 1,
+      });
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("checks a dead LAN route less often until the network changes", () =>
+    Effect.gen(function* () {
+      const lanReachable = yield* Ref.make(false);
+      const lanChecks = yield* Ref.make(0);
+      const harness = yield* makeHarness({
+        checkRoute: (route) =>
+          route.target._tag === "BearerConnectionTarget"
+            ? Ref.update(lanChecks, (count) => count + 1).pipe(
+                Effect.andThen(Ref.get(lanReachable)),
+                Effect.map((reachable) => (reachable ? "answered" : "silent")),
+              )
+            : Effect.succeed("unchecked"),
+        prepare: (_attempt, target) => Effect.succeed(preparedFor(target)),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(LAN_THEN_RELAY_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      yield* awaitState(
+        supervisor.state,
+        (state) => state.phase === "connected" && state.generation === 1,
+      );
+      yield* Ref.set(lanChecks, 0);
+
+      // Checked at 1, 3 and 7 minutes instead of every minute.
+      for (let minute = 0; minute < 10; minute += 1) {
+        yield* TestClock.adjust("60 seconds");
+      }
+      expect(yield* Ref.get(lanChecks)).toBe(3);
+
+      yield* Ref.set(lanReachable, true);
+      yield* harness.wake("network-changed");
+      yield* awaitState(
+        supervisor.state,
+        (state) => state.phase === "connected" && state.generation === 2,
+      );
+      expect(Option.getOrThrow(yield* SubscriptionRef.get(supervisor.prepared)).target._tag).toBe(
+        "BearerConnectionTarget",
+      );
+    }),
+  );
+
+  it.effect("keeps checking a LAN route every minute when it answers but cannot be prepared", () =>
+    Effect.gen(function* () {
+      const lanPreflights = yield* Ref.make(0);
+      const harness = yield* makeHarness({
+        checkRoute: (route) =>
+          Effect.succeed(route.target._tag === "BearerConnectionTarget" ? "silent" : "unchecked"),
+        preflight: (route) =>
+          route.target._tag === "BearerConnectionTarget"
+            ? Ref.update(lanPreflights, (count) => count + 1).pipe(Effect.as("unprepared" as const))
+            : Effect.succeed("unchecked"),
+        prepare: (_attempt, target) => Effect.succeed(preparedFor(target)),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(LAN_THEN_RELAY_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      yield* awaitState(
+        supervisor.state,
+        (state) => state.phase === "connected" && state.generation === 1,
+      );
+      for (let minute = 0; minute < 10; minute += 1) {
+        yield* TestClock.adjust("60 seconds");
+      }
+      expect(yield* Ref.get(lanPreflights)).toBe(10);
+    }),
+  );
+
+  it.effect("ignores a dead LAN check that was running when the network changed", () =>
+    Effect.gen(function* () {
+      const lanChecks = yield* Ref.make(0);
+      const checkStarted = yield* Deferred.make<void>();
+      const finishCheck = yield* Deferred.make<void>();
+      const woke = yield* Ref.make(false);
+      const wakeupHandled = yield* Deferred.make<void>();
+      const harness = yield* makeHarness({
+        checkRoute: (route) =>
+          route.target._tag === "BearerConnectionTarget"
+            ? Ref.updateAndGet(lanChecks, (count) => count + 1).pipe(
+                Effect.flatMap((check) =>
+                  check === 1
+                    ? Effect.succeed("silent" as const)
+                    : check === 2
+                      ? Deferred.succeed(checkStarted, undefined).pipe(
+                          Effect.andThen(Deferred.await(finishCheck)),
+                          Effect.as("silent" as const),
+                        )
+                      : Effect.succeed("answered" as const),
+                ),
+              )
+            : Effect.succeed("unchecked"),
+        prepare: (_attempt, target) => Effect.succeed(preparedFor(target)),
+        // The wakeup probes the session only after it forgets the silent routes.
+        probe: () =>
+          Ref.get(woke).pipe(
+            Effect.flatMap((afterWake) =>
+              afterWake ? Deferred.succeed(wakeupHandled, undefined) : Effect.void,
+            ),
+            Effect.asVoid,
+          ),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(LAN_THEN_RELAY_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      yield* awaitState(
+        supervisor.state,
+        (state) => state.phase === "connected" && state.generation === 1,
+      );
+      yield* TestClock.adjust("60 seconds");
+      yield* Deferred.await(checkStarted);
+      yield* Ref.set(woke, true);
+      yield* harness.wake("network-changed");
+      yield* Deferred.await(wakeupHandled);
+      yield* Deferred.succeed(finishCheck, undefined);
+
+      yield* awaitState(
+        supervisor.state,
+        (state) => state.phase === "connected" && state.generation === 2,
+      );
+      expect(Option.getOrThrow(yield* SubscriptionRef.get(supervisor.prepared)).target._tag).toBe(
+        "BearerConnectionTarget",
+      );
     }),
   );
 

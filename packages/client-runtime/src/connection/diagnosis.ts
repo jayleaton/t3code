@@ -28,6 +28,8 @@ export interface ConnectionDiagnosis {
   readonly facts: ReadonlyArray<readonly [label: string, value: string]>;
   /** The troubleshooting guide section for this failure. Null for direct routes. */
   readonly moreInfoUrl: string | null;
+  /** A fix the client can start: pairing again adds a route with a new grant to this environment. */
+  readonly recovery: "pair-again" | null;
 }
 
 export interface ConnectionDiagnosisInput {
@@ -96,6 +98,8 @@ function headline(host: string, located: Located, failure: ConnectionAttemptErro
       return `${host}'s tunnel is still being set up`;
     case "tunnel_not_enabled":
       return `T3 Connect is not turned on for ${host}`;
+    case "pairing_revoked":
+      return `${host} revoked this device's pairing`;
     case "released":
     case "tunnel_down":
       return `${host}'s tunnel is offline`;
@@ -137,7 +141,7 @@ function headline(host: string, located: Located, failure: ConnectionAttemptErro
 }
 
 function steps(host: string, located: Located, failure: ConnectionAttemptError | null): string[] {
-  const checkHost = `On ${host}, check Settings > Sharing & access or run \`t3 connect status\`.`;
+  const checkHost = `On ${host}, check Settings > Environments or run \`t3 connect status\`.`;
   switch (located.cause) {
     case "offline":
       return ["Connect this device to the internet. T3 Code reconnects on its own."];
@@ -148,7 +152,7 @@ function steps(host: string, located: Located, failure: ConnectionAttemptError |
     case "not_linked":
       return [
         "Check that this device is signed in to the same T3 Connect account as the host.",
-        `On ${host}, open Settings > Sharing & access and turn T3 Connect on.`,
+        `On ${host}, open Settings > Environments and turn T3 Connect on.`,
       ];
     case "tunnel_pending":
       return ["Wait a minute. T3 Code retries on its own.", checkHost];
@@ -158,7 +162,12 @@ function steps(host: string, located: Located, failure: ConnectionAttemptError |
         "If it keeps failing, copy the diagnostics and report it.",
       ];
     case "tunnel_not_enabled":
-      return [`On ${host}, open Settings > Sharing & access and turn T3 Connect on.`];
+      return [`On ${host}, open Settings > Environments and turn T3 Connect on.`];
+    case "pairing_revoked":
+      return [
+        `On ${host}, open Settings > Connections and create a pairing link.`,
+        "On this device, add it as a route to this environment. Your threads stay.",
+      ];
     case "released":
     case "tunnel_down":
       return [
@@ -222,6 +231,7 @@ function helpSection(
       return "the-clock-is-off";
     case "not_linked":
     case "tunnel_not_enabled":
+    case "pairing_revoked":
       return "sign-in-account-or-link-problems";
     case "relay_error":
       return "t3-connect-returned-an-error";
@@ -330,6 +340,7 @@ export function presentConnectionDiagnosis(
     steps: steps(host, located, failure),
     facts,
     moreInfoUrl: relayPath ? t3ConnectTroubleshootingUrl(helpSection(located, failure)) : null,
+    recovery: located.cause === "pairing_revoked" ? "pair-again" : null,
   };
 }
 

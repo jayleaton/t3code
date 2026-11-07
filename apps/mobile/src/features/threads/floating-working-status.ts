@@ -31,6 +31,12 @@ export type FloatingWorkingStatus =
       readonly label: string;
       readonly action: FloatingStatusAction;
     }
+  | {
+      readonly kind: "stop";
+      readonly label: string;
+      readonly unresponsive: boolean;
+      readonly action: FloatingStatusAction | null;
+    }
   | { readonly kind: "goal"; readonly label: string; readonly accessibilityLabel: string }
   | { readonly kind: "preparing"; readonly label: string }
   | {
@@ -67,7 +73,7 @@ export function connectionFloatingStatus(input: {
         onPress: input.onReconnect,
       };
     case "offline":
-      return unavailable("You are offline");
+      return unavailable(`${environmentLabel} is offline`);
     case "unsupported":
       return unavailable("Client not supported");
     case "error":

@@ -15,11 +15,13 @@ import {
   RunId,
   ThreadId,
   TurnItemId,
+  type PeerLink,
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Ref from "effect/Ref";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -57,6 +59,7 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as PeerForwarding from "./PeerForwarding.ts";
 import * as PeerLinkRequests from "./PeerLinkRequests.ts";
 import * as PeerLinks from "./PeerLinks.ts";
+import * as TailnetDevices from "./TailnetDevices.ts";
 import {
   descriptorOf,
   layerLinkingEnvironment,
@@ -128,6 +131,8 @@ const scope: McpInvocationContext.McpInvocationScope = {
 /** The laptop: a real orchestrator, its orchestrator toolkit, and its links. */
 const makeLaptop = Effect.gen(function* () {
   const linking = yield* layerLinkingEnvironment(laptop).pipe(Layer.build);
+  // What Tailscale proves: none of these machines is one of the user's tailnet devices unless set.
+  const tailnetLink = yield* Ref.make(Option.none<PeerLink>());
   // The orchestrator's own database, apart from the one links are kept in.
   const database = yield* SqlitePersistence.layerMemory.pipe(Layer.build);
   const layerDatabase = Layer.succeedContext(database);
@@ -155,6 +160,9 @@ const makeLaptop = Effect.gen(function* () {
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provideMerge(PeerLinkRequests.layer),
     Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
+    Layer.provide(
+      Layer.mock(TailnetDevices.TailnetDevices)({ linkIfMine: () => Ref.get(tailnetLink) }),
+    ),
     Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
     Layer.provide(Layer.succeedContext(linking)),
     Layer.provide(NodeCrypto.layer),
@@ -177,6 +185,7 @@ const makeLaptop = Effect.gen(function* () {
   const here = yield* Layer.build(layerHere);
   const server = Context.get(here, McpServer.McpServer);
   return {
+    tailnetLink,
     links: Context.get(linking, PeerLinks.PeerLinks),
     linksSql: Context.get(linking, SqlClient.SqlClient),
     requests: Context.get(here, PeerLinkRequests.PeerLinkRequests),
@@ -912,6 +921,37 @@ it.live("naming a machine that is already linked returns the link at once, with 
       // Not both: the address could name another machine than the id.
       const both = yield* a.call({ environmentId: box.environmentId, url: b.url });
       expect(errorOf(both)).toMatchObject({ code: "invalid_request" });
+    }),
+  ),
+);
+
+it.live("naming one of the user's tailnet devices links it at once, with no card", () =>
+  withBoth((a) =>
+    Effect.gen(function* () {
+      yield* seedThread(a);
+      const linkedAt = yield* DateTime.now;
+      yield* Ref.set(
+        a.tailnetLink,
+        Option.some({
+          environmentId: box.environmentId,
+          label: "Box",
+          urls: ["https://box.tail.ts.net"],
+          access: "full-access",
+          origin: "tailnet",
+          linkedAt,
+          expiresAt: DateTime.add(linkedAt, { days: 30 }),
+          lastReachedAt: linkedAt,
+          lastError: null,
+        }),
+      );
+      const asked = yield* a.call({ environmentId: box.environmentId });
+      expect(asked.structuredContent).toEqual({
+        status: "linked",
+        environmentId: box.environmentId,
+        label: "Box",
+        access: "full-access",
+      });
+      expect(yield* cardOf(a)).toBeUndefined();
     }),
   ),
 );

@@ -5,10 +5,12 @@ import {
   type ServerConfig as ServerConfigType,
   ServerConfigStreamEvent,
   type ServerConfigStreamEvent as ServerConfigStreamEventType,
+  DEFLATED_RPC_FRAMES_QUERY_PARAM,
   WS_METHODS,
   UsageLimitSourceId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as NodeZlib from "node:zlib";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -29,7 +31,9 @@ import {
   ConnectionTransientError,
   PrimaryConnectionTarget,
   type PreparedConnection,
+  RelayConnectionTarget,
 } from "../connection/model.ts";
+import { ConnectionDiagnostics, makeConnectionDiagnostics } from "../connection/diagnostics.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as Persistence from "../platform/persistence.ts";
 import * as RpcSession from "./session.ts";
@@ -90,7 +94,7 @@ class TestWebSocket {
     this.emit("open", { type: "open" });
   }
 
-  serverMessage(data: string) {
+  serverMessage(data: string | ArrayBuffer) {
     this.emit("message", { data, type: "message" });
   }
 
@@ -376,6 +380,58 @@ describe("RpcSessionFactory", () => {
 
       expect(yield* session.inboundFrames).toBe(before + 1);
     }),
+  );
+
+  it.effect(
+    "asks a direct route for deflated frames and reads them; a relay route keeps text",
+    () =>
+      Effect.gen(function* () {
+        const { factory, sockets } = yield* makeFactory({ deflatedFrames: true });
+        const diagnostics = makeConnectionDiagnostics();
+        const session = yield* factory
+          .connect(PREPARED)
+          .pipe(Effect.provideService(ConnectionDiagnostics, diagnostics));
+        const readyFiber = yield* Effect.forkChild(session.ready);
+        const socket = yield* awaitSocket(sockets);
+        expect(new URL(socket.url).searchParams.get(DEFLATED_RPC_FRAMES_QUERY_PARAM)).toBe("1");
+        socket.open();
+        const request = yield* awaitRequest(socket);
+        const frame = NodeZlib.deflateRawSync(
+          encodeJson({
+            _tag: "Chunk",
+            requestId: request.id,
+            values: [{ version: 1, type: "snapshot", config: ENCODED_SERVER_CONFIG }],
+          }),
+        );
+        socket.serverMessage(frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.length));
+        yield* Fiber.join(readyFiber);
+        expect(yield* session.initialConfig).toEqual(SERVER_CONFIG);
+        const healthy = diagnostics.snapshot();
+        expect(healthy).toMatchObject({ milestones: ["config-decoded"], rx: 1, binary: 1 });
+        expect(healthy.tx).toBeGreaterThan(0);
+        socket.serverMessage(new Uint8Array([255]).buffer);
+        yield* session.closed.pipe(Effect.flip);
+        socket.close(1012, "private close reason");
+        expect(diagnostics.snapshot()).toMatchObject({
+          firstFailure: "inflate",
+          closes: 1,
+          closeCode: 1012,
+        });
+        expect(healthy).toMatchObject({ rx: 1, closes: 0 });
+        expect(JSON.stringify(diagnostics.snapshot())).not.toContain("private");
+
+        const relay = yield* makeFactory({ deflatedFrames: true });
+        yield* relay.factory.connect({
+          ...PREPARED,
+          target: new RelayConnectionTarget({
+            environmentId: TARGET.environmentId,
+            label: TARGET.label,
+          }),
+        });
+        const relaySocket = yield* awaitSocket(relay.sockets);
+        expect(relaySocket.url).toBe(PREPARED.socketUrl);
+        relaySocket.open();
+      }),
   );
 
   it.effect("closes the websocket when the session scope is released", () =>

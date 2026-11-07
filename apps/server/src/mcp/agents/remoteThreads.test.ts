@@ -25,6 +25,7 @@ import * as DocumentText from "../../provider/DocumentText.ts";
 import * as PeerForwarding from "../../peer/PeerForwarding.ts";
 import * as PeerLinkRequests from "../../peer/PeerLinkRequests.ts";
 import * as PeerLinks from "../../peer/PeerLinks.ts";
+import * as TailnetDevices from "../../peer/TailnetDevices.ts";
 import * as ThreadLaunch from "../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ManagedProjectFolders from "../../project/ManagedProjectFolders.ts";
@@ -43,6 +44,8 @@ import * as ThreadMetadataMcpService from "../ThreadMetadataMcpService.ts";
 import * as OrchestratorHandlers from "../toolkits/orchestrator/handlers.ts";
 import { OrchestratorToolkit } from "../toolkits/orchestrator/tools.ts";
 import * as ProjectHandlers from "../toolkits/project/handlers.ts";
+import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
+import * as ProjectCloneTracker from "../../project/ProjectCloneTracker.ts";
 import { ProjectToolkit } from "../toolkits/project/tools.ts";
 import { LocalGatewayPort } from "./LocalGatewayPort.ts";
 
@@ -124,7 +127,11 @@ const makeMacBook = (
     createdAt: "2026-10-22T03:40:00.000Z",
     updatedAt: "2026-10-22T03:44:00.000Z",
   });
+  let readsLeft = Infinity;
   const answer = (method: string, args: ReadonlyArray<any>): unknown => {
+    if (readsLeft <= 0 || (method === "getThread" && readsLeft-- <= 0)) {
+      throw new Error("The MacBook did not answer.");
+    }
     switch (method) {
       case "listEnvironments":
         return [
@@ -171,6 +178,10 @@ const makeMacBook = (
     calls,
     answer,
     called: (method: string) => calls.filter((call) => call.method === method),
+    /** Answers `reads` more thread reads, then nothing at all. */
+    stopAnsweringAfter: (reads: number) => {
+      readsLeft = reads;
+    },
   };
 };
 
@@ -213,6 +224,8 @@ const makeLayer = (macbook: ReturnType<typeof makeMacBook>, record: TestRecord) 
   ).pipe(Layer.provide(NodeServices.layer));
   return Layer.mergeAll(
     broker,
+    Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+    Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ discard: () => Effect.void }),
     Layer.succeed(LocalGatewayPort, {
       environmentId: devBox,
       label: "dev-box",
@@ -263,6 +276,7 @@ const makeLayer = (macbook: ReturnType<typeof makeMacBook>, record: TestRecord) 
     Layer.mock(PeerForwarding.PeerForwarding)({}),
     Layer.mock(PeerLinkRequests.PeerLinkRequests)({}),
     Layer.mock(PeerLinks.PeerLinks)({ get: () => Effect.succeedNone }),
+    Layer.mock(TailnetDevices.TailnetDevices)({}),
     Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
     NodeCrypto.layer,
     NodeServices.layer,
@@ -499,6 +513,37 @@ it.effect("waiting on a remote child returns when its run completes", () => {
       timedOut: false,
     });
     expect(macbook.called("getThread")).toHaveLength(3);
+  }).pipe(Effect.provide(makeLayer(macbook, newRecord())));
+});
+
+it.effect("a remote wait reports an environment that stops answering instead of failing", () => {
+  const macbook = makeMacBook(["running"]);
+  return Effect.gen(function* () {
+    const clock = yield* makeSteppedClock;
+    const wait = orchestrate("t3_thread_wait", {
+      environmentId: macBook,
+      threadId: child,
+      timeoutMs: 60 * 60 * 1_000,
+    }).pipe(Effect.provideService(Clock.Clock, clock.stepped));
+    macbook.stopAnsweringAfter(1);
+    const fiber = yield* Effect.forkChild(wait);
+    // Each failed poll is tolerated until the last one.
+    expect([yield* clock.step, yield* clock.step, yield* clock.step]).toEqual([
+      1_000, 2_000, 4_000,
+    ]);
+    expect((yield* Fiber.join(fiber)).result).toMatchObject({
+      runId: "run-macbook-1",
+      status: "running",
+      timedOut: true,
+      unreachable: expect.stringContaining("did not answer"),
+    });
+    // Nothing seen yet: the wait still answers, with no run.
+    expect((yield* wait).result).toMatchObject({
+      runId: null,
+      status: "idle",
+      timedOut: true,
+      unreachable: expect.any(String),
+    });
   }).pipe(Effect.provide(makeLayer(macbook, newRecord())));
 });
 

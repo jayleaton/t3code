@@ -364,7 +364,9 @@ Pass the task in `message`. Project, model, and modes inherit when omitted;
 workspace does not. `scratch: true` launches without a project, in a folder of
 its own under the environment's Scratch project. For stacked PRs, use the parent branch as `baseRef` with
 `startFromOrigin: false`. The new thread may not run with broader runtime or
-interaction modes than the caller. Launch has no retry key, so inspect existing threads after a failed or lost response before
+interaction modes than the caller. As for `delegate_task`, a runtime mode the
+provider does not offer is refused, and an inherited or default one steps down
+to the broadest mode it offers. Launch has no retry key, so inspect existing threads after a failed or lost response before
 launching again. `create_threads` remains the batch option for a shared checkout.
 
 `environmentId` launches on another environment instead, with a `projectId` from there. An
@@ -450,7 +452,13 @@ idempotent retries.
 Waits for a selected run to become `completed`, `failed`, `cancelled`,
 `interrupted`, or `rolled_back`. Without `runId`, it pins the latest run at call
 time; an idle thread returns immediately. A timeout reports the latest durable
-status and does not cancel work.
+status and does not cancel work. With `untilDelegatedWorkSettled`, the wait also
+holds for the work that will wake the thread again, by the same rule as
+`task_status` (`delegatedTaskProgress`), and `workState` says which part a
+timeout is still waiting on. Only background work the agent marked awaited holds,
+so a dev server left running never blocks it. On another environment, a route that
+stops answering ends the agent's wait with `unreachable` instead of an error;
+RemoteDelegation's follower still gets the error, because it backs off on it.
 
 ### `t3_thread_interrupt`
 

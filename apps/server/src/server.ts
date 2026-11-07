@@ -71,6 +71,7 @@ import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts"
 import * as SourceControlSignIn from "./sourceControl/SourceControlSignIn.ts";
 import { BUILT_IN_SOURCE_CONTROL_DRIVER_LIST } from "./sourceControl/sourceControlDefinitions.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
+import * as SecretResolver from "./secrets/SecretResolver.ts";
 import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceRegistryHydration.ts";
 import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -79,6 +80,9 @@ import * as PeerForwarding from "./peer/PeerForwarding.ts";
 import * as RemoteDelegation from "./peer/RemoteDelegation.ts";
 import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
 import * as PeerLinks from "./peer/PeerLinks.ts";
+import * as TailnetDevices from "./peer/TailnetDevices.ts";
+import * as TailnetDevicesHttp from "./peer/tailnetDevicesHttp.ts";
+import * as TailnetIdentity from "./peer/TailnetIdentity.ts";
 import * as PeerMcpClient from "./peer/PeerMcpClient.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
@@ -217,6 +221,11 @@ import {
   ensureTailscaleServe,
   inspectTailscaleServePort,
 } from "@t3tools/tailscale";
+import {
+  chooseTailscaleServePort,
+  expectedTailscaleServePort,
+  writeLastTailscaleServePort,
+} from "./environment/TailscaleServePort.ts";
 import * as ServerActivation from "./serverActivation.ts";
 
 // Escaped MCP handoff provenance can exceed find-my-way's 100-character segment default.
@@ -666,6 +675,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(layerOrchestrationApplication),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
   Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
+  Layer.provideMerge(SecretResolver.layer),
   Layer.provideMerge(layerServerSettings),
   Layer.provideMerge(layerSourceControlProviderRegistry),
   Layer.provideMerge(layerGit),
@@ -764,6 +774,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(ProjectHttp.layer),
       Layer.provide(ServerHttp.layerServerEnvironmentHttpApi),
       Layer.provide(WebhookRoute.layer.pipe(Layer.provide(RelayDeliveryProof.layer))),
+      Layer.provide(TailnetDevicesHttp.layer),
       Layer.provide(AuthHttp.layerAuthenticatedAuth),
     ),
     ServerHttp.layerOtlpTracesProxyRoute,
@@ -790,6 +801,10 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.effectDiscard(
     RemoteDelegation.RemoteDelegation.pipe(Effect.flatMap((remote) => remote.start())),
   ),
+  // Finds and links this user's other T3 servers on the tailnet.
+  Layer.effectDiscard(
+    TailnetDevices.TailnetDevices.pipe(Effect.flatMap((devices) => devices.start)),
+  ),
 ).pipe(
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
@@ -811,6 +826,7 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(
     PeerForwarding.layer.pipe(
       Layer.provideMerge(PeerMcpClient.layer),
+      Layer.provideMerge(TailnetDevices.layer.pipe(Layer.provide(TailnetIdentity.layer))),
       Layer.provideMerge(PeerLinks.layer),
     ),
   ),
@@ -839,6 +855,8 @@ const layerMakeServer = Layer.unwrap(
     const layerActivation = Layer.succeed(ServerActivation.ServerActivation, awaitActivation);
     const runtimeStateParked = yield* Deferred.make<void>();
     const tailscaleParked = yield* Deferred.make<void>();
+    // The port Serve published on, or null when it did not; the route check watches it.
+    const tailscaleServePortChosen = yield* Deferred.make<number | null>();
     const cloudLinkParked = yield* Deferred.make<void>();
     const routesReady = yield* Deferred.make<void>();
     const layerLauncher = ServiceLauncherClient.layer;
@@ -892,50 +910,52 @@ const layerMakeServer = Layer.unwrap(
               }
 
               const localPort = address.port;
-              const local = {
-                localPort,
-                servePort: config.tailscaleServePort,
-                localHost: loopbackUrlHostForAddress(address),
-              };
-              // Another live server on this tailnet port (the machine's main
-              // T3, say, when this one is a second instance) keeps its mapping:
+              const localHost = loopbackUrlHostForAddress(address);
+              // Another live server on a tailnet port (the machine's main T3,
+              // say, when this one is a second instance) keeps its mapping:
               // replacing it cuts off every remote client reaching it.
-              const ownership = yield* inspectTailscaleServePort(local).pipe(Effect.option);
-              if (Option.isNone(ownership)) {
+              const choice = yield* chooseTailscaleServePort({
+                pinnedPort: config.tailscaleServePort,
+                stateDir: config.stateDir,
+                localPort,
+                localHost,
+              }).pipe(Effect.option);
+              if (Option.isNone(choice)) {
                 yield* Effect.logWarning(
-                  "Could not read Tailscale Serve status; not configuring Tailscale Serve",
-                  { servePort: config.tailscaleServePort, localPort },
+                  "Could not choose a Tailscale Serve port; not configuring Tailscale Serve",
+                  { pinnedPort: config.tailscaleServePort, localPort },
                 );
                 return null;
               }
-              if (ownership.value._tag === "taken") {
+              const { servePort, ownership } = choice.value;
+              if (ownership._tag === "taken") {
                 yield* Effect.logWarning(
                   "Tailscale Serve port already forwards to another live server; leaving it alone",
-                  {
-                    servePort: config.tailscaleServePort,
-                    target: ownership.value.target,
-                    localPort,
-                  },
+                  { servePort, target: ownership.target, localPort },
                 );
                 return null;
               }
+              const local = { localPort, servePort, localHost };
               return yield* ensureTailscaleServe(local).pipe(
                 Effect.as(local),
                 Effect.tap(() =>
-                  Effect.logInfo("Tailscale Serve configured", {
-                    localPort,
-                    servePort: config.tailscaleServePort,
-                  }),
+                  Effect.all([
+                    Deferred.succeed(tailscaleServePortChosen, servePort),
+                    writeLastTailscaleServePort(config.stateDir, servePort).pipe(
+                      Effect.ignore({ log: true }),
+                    ),
+                    Effect.logInfo("Tailscale Serve configured", { localPort, servePort }),
+                  ]),
                 ),
                 Effect.catch((cause) =>
                   Effect.logWarning("Failed to configure Tailscale Serve", {
                     cause,
                     localPort,
-                    servePort: config.tailscaleServePort,
+                    servePort,
                   }).pipe(Effect.as(null)),
                 ),
               );
-            }),
+            }).pipe(Effect.ensuring(Deferred.succeed(tailscaleServePortChosen, null))),
             (configured) =>
               configured
                 ? inspectTailscaleServePort(configured).pipe(
@@ -973,17 +993,24 @@ const layerMakeServer = Layer.unwrap(
               const address = (yield* HttpServer.HttpServer).address;
               if (typeof address === "string" || !("port" in address)) return;
               const environment = yield* ServerEnvironment.ServerEnvironment;
-              yield* awaitActivation.pipe(
-                Effect.andThen(environment.getEnvironmentId),
-                Effect.flatMap((environmentId) =>
-                  watchTailnetRoute({
-                    servePort: config.tailscaleServePort,
-                    localPort: address.port,
-                    environmentId,
-                  }),
-                ),
-                Effect.forkScoped,
-              );
+              yield* Effect.gen(function* () {
+                yield* awaitActivation;
+                const environmentId = yield* environment.getEnvironmentId;
+                const chosenPort = config.tailscaleServeEnabled
+                  ? yield* Deferred.await(tailscaleServePortChosen)
+                  : null;
+                const servePort =
+                  chosenPort ??
+                  (yield* expectedTailscaleServePort({
+                    pinnedPort: config.tailscaleServePort,
+                    stateDir: config.stateDir,
+                  }));
+                return yield* watchTailnetRoute({
+                  servePort,
+                  localPort: address.port,
+                  environmentId,
+                });
+              }).pipe(Effect.forkScoped);
             }),
           )
         : Layer.empty;

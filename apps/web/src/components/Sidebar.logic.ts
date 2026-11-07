@@ -1,3 +1,10 @@
+import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
+import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
+import {
+  emptyChildStatusCounts,
+  type ChildStatusBucket,
+  type ChildStatusCounts,
+} from "@t3tools/client-runtime/state/child-status-counts";
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
@@ -14,8 +21,10 @@ import {
   type ThreadSearchShell,
 } from "@t3tools/client-runtime/state/thread-search";
 import { foldSearchQuery, rankSearchItems, scoreThreadSearch } from "@t3tools/shared/paletteSearch";
+import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import {
-  isSubagentThread,
+  isListedThread,
+  threadParentRelationship,
   type ContextMenuItem,
   type EnvironmentId,
   type ThreadId,
@@ -182,6 +191,29 @@ export function resolveSidebarThreadSection(input: {
   return "active";
 }
 
+// Keep cached placement on the first connection attempt, matching mobile's threadRouteIsHydrating.
+export function isSidebarEnvironmentDisconnected(
+  phase: EnvironmentConnectionPhase,
+  shellIsLive: boolean,
+): boolean {
+  return phase !== "connecting" && (phase !== "connected" || !shellIsLive);
+}
+
+export function belongsInSidebarWorkingShelf<T extends { readonly environmentId: EnvironmentId }>(
+  thread: T,
+  input: {
+    readonly enabled: boolean;
+    readonly disconnectedEnvironmentIds: ReadonlySet<EnvironmentId>;
+    readonly isWorking: (thread: T) => boolean;
+  },
+): boolean {
+  return (
+    input.enabled &&
+    !input.disconnectedEnvironmentIds.has(thread.environmentId) &&
+    input.isWorking(thread)
+  );
+}
+
 const SIDEBAR_MARKER_PREFIX = "sidebar-marker-";
 
 export type SidebarListMarker =
@@ -314,6 +346,32 @@ export function sidebarThreadKeyAtY(list: HTMLElement, y: number): string | null
   return key;
 }
 
+export function resolveSidebarReorderableThreadKeys(input: {
+  readonly threads: ReadonlyArray<Pick<SidebarThreadSummary, "environmentId" | "id">>;
+  readonly serverConfigs: ReadonlyMap<EnvironmentId, Pick<EnvironmentServerConfig, "environment">>;
+  readonly connectedEnvironmentIds: readonly EnvironmentId[];
+}) {
+  const connectedEnvironmentIds = new Set(input.connectedEnvironmentIds);
+  const draggableThreadKeys = new Set<string>();
+  const activeReorderableThreadKeys = new Set<string>();
+
+  for (const thread of input.threads) {
+    // Config is cached for offline rendering, so its presence does not make a row writable.
+    if (
+      !connectedEnvironmentIds.has(thread.environmentId) ||
+      !input.serverConfigs.has(thread.environmentId)
+    ) {
+      continue;
+    }
+
+    const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+    activeReorderableThreadKeys.add(threadKey);
+    draggableThreadKeys.add(threadKey);
+  }
+
+  return { draggableThreadKeys, activeReorderableThreadKeys };
+}
+
 export function planSidebarThreadDrop(input: {
   readonly activeKey: string;
   readonly activeSection: SidebarSection;
@@ -358,7 +416,28 @@ export function planSidebarThreadDrop(input: {
       keysById,
       movedId: activeKey,
     });
-    return assignments.every(({ id }) => writable.has(id)) ? assignments : null;
+    if (assignments.some(({ id }) => !writable.has(id))) return null;
+
+    // Keyless Active rows sort before keyed rows; keyless Pinned rows sort after them.
+    // Materializing any row across a frozen keyless boundary cannot persist that position.
+    const assignedIds = new Set(assignments.map(({ id }) => id));
+    let hasFrozenKeylessBefore = false;
+    let hasAssignedBefore = false;
+    for (const id of order) {
+      const isFrozenKeyless = !writable.has(id) && keysById.get(id) == null;
+      const isAssigned = assignedIds.has(id);
+      if (
+        (target.section === "active" && isFrozenKeyless && hasAssignedBefore) ||
+        (target.section === "pinned" && isAssigned && hasFrozenKeylessBefore)
+      ) {
+        return null;
+      }
+
+      hasFrozenKeylessBefore ||= isFrozenKeyless;
+      hasAssignedBefore ||= isAssigned;
+    }
+
+    return assignments;
   };
   switch (target.section) {
     case "active": {
@@ -546,16 +625,16 @@ export async function archiveSelectedThreadEntries<
   return { archivedThreadKeys, mutationFailure: null, followupFailures };
 }
 
-/** Subagents show only in their owner's Lineage panel; child chats are sidebar rows. */
-export function isSidebarSubagentThread(
+/** Subagents and side chats have no sidebar row; child chats are sidebar rows. */
+export function isSidebarHiddenThread(
   thread: Pick<SidebarThreadSummary, "lineage"> &
     Partial<Pick<SidebarThreadSummary, "parentThreadId" | "parentRelationship">>,
 ): boolean {
-  return isSubagentThread(thread);
+  return !isListedThread(thread);
 }
 
-// Subagent threads have no sidebar row, so an open subagent is represented by
-// its nearest non-subagent ancestor. A broken chain (missing parent, cycle,
+// Subagent and side-chat threads have no sidebar row, so an open one is represented by
+// its nearest listed ancestor. A broken chain (missing parent, cycle,
 // other environment) resolves to the thread itself, which then matches no row.
 export function resolveSidebarRowThreadId(
   threadId: ThreadId,
@@ -569,7 +648,7 @@ export function resolveSidebarRowThreadId(
     threads.find((thread) => thread.id === id && thread.environmentId === environmentId);
   const visited = new Set<ThreadId>();
   let thread = findThread(threadId);
-  while (thread !== undefined && isSidebarSubagentThread(thread)) {
+  while (thread !== undefined && isSidebarHiddenThread(thread)) {
     if (thread.lineage.parentThreadId === null || visited.has(thread.id)) return threadId;
     visited.add(thread.id);
     thread = findThread(thread.lineage.parentThreadId);
@@ -743,11 +822,13 @@ export function isSidebarNestedLinkClick(target: EventTarget | null): boolean {
   return nodeClosest(parent, "a[href]") !== null;
 }
 
+/** The "New thread in" picker opens unless there is one open project or none; then the current context decides. */
 export function shouldCreateNewThreadInCurrentProject(
   shiftKey: boolean,
+  openProjectGroupCount: number,
   projectGroupCount: number,
 ): boolean {
-  return shiftKey || projectGroupCount <= 1;
+  return shiftKey || openProjectGroupCount === 1 || projectGroupCount === 0;
 }
 
 export function orderItemsByPreferredIds<TItem, TId>(input: {
@@ -914,6 +995,164 @@ export function resolveSidebarFolderDot(
 }
 
 /**
+ * A child chat's bucket in its parent's collapsed summary, read from the same
+ * status its own row shows. Guest requests wait on the owner, so they count as
+ * input; a settled child is done unless it still asks for something.
+ */
+export function sidebarChildBucket(
+  thread: SidebarThreadStatusInput & Pick<SidebarThreadSummary, "settledOverride">,
+): ChildStatusBucket {
+  const status = resolveSidebarThreadStatus(thread);
+  if (status === "approval" || status === "input" || status === "request") return "needsInput";
+  if (thread.settledOverride === "settled") return "done";
+  if (status === "working") return "running";
+  if (status === "waiting") return "waiting";
+  if (status === "failed" || status === "limited") return "failed";
+  return "done";
+}
+
+type SidebarNestingThread = SidebarThreadStatusInput &
+  Pick<
+    SidebarThreadSummary,
+    | "environmentId"
+    | "id"
+    | "lineage"
+    | "parentThreadId"
+    | "parentEnvironmentId"
+    | "parentRelationship"
+    | "pinnedAt"
+    | "settledOverride"
+  >;
+
+function sidebarThreadKeyOf(thread: Pick<SidebarThreadSummary, "environmentId" | "id">): string {
+  return scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+}
+
+function sidebarParentKeyOf(thread: SidebarNestingThread): string | null {
+  if (thread.parentThreadId === null || threadParentRelationship(thread) !== "child") return null;
+  return scopedThreadKey(
+    scopeThreadRef(thread.parentEnvironmentId ?? thread.environmentId, thread.parentThreadId),
+  );
+}
+
+export interface SidebarThreadNesting<T> {
+  /** Direct children under each parent, in the order `threads` lists them. */
+  readonly childrenByParentKey: ReadonlyMap<string, readonly T[]>;
+  /** Bucket counts over each parent's whole subtree. */
+  readonly countsByParentKey: ReadonlyMap<string, ChildStatusCounts>;
+  readonly parentKeyByKey: ReadonlyMap<string, string>;
+}
+
+/**
+ * Child chats fold under their parent when the sidebar draws that parent, so a
+ * child whose parent is filtered out, archived, or in a closed shelf keeps its
+ * own row, and so does a child the user pinned. Like the Agents board, a
+ * settled parent holds only settled children so it cannot bury live work.
+ */
+export function nestSidebarChildThreads<T extends SidebarNestingThread>(input: {
+  readonly threads: readonly T[];
+  readonly drawnKeys: ReadonlySet<string>;
+}): SidebarThreadNesting<T> {
+  const byKey = new Map(input.threads.map((thread) => [sidebarThreadKeyOf(thread), thread]));
+  const nested = new Map<string, boolean>();
+  const isNested = (key: string, visiting: Set<string>): boolean => {
+    const cached = nested.get(key);
+    if (cached !== undefined) return cached;
+    const thread = byKey.get(key)!;
+    const parentKey = sidebarParentKeyOf(thread);
+    const parent = parentKey === null ? undefined : byKey.get(parentKey);
+    let result = false;
+    if (
+      parent !== undefined &&
+      parentKey !== null &&
+      thread.pinnedAt == null &&
+      !visiting.has(parentKey)
+    ) {
+      visiting.add(key);
+      result =
+        (parent.settledOverride !== "settled" || thread.settledOverride === "settled") &&
+        (input.drawnKeys.has(parentKey) || isNested(parentKey, visiting));
+      visiting.delete(key);
+    }
+    nested.set(key, result);
+    return result;
+  };
+  const childrenByParentKey = new Map<string, T[]>();
+  const parentKeyByKey = new Map<string, string>();
+  for (const [key, thread] of byKey) {
+    if (!isNested(key, new Set())) continue;
+    const parentKey = sidebarParentKeyOf(thread)!;
+    parentKeyByKey.set(key, parentKey);
+    const siblings = childrenByParentKey.get(parentKey);
+    if (siblings === undefined) childrenByParentKey.set(parentKey, [thread]);
+    else siblings.push(thread);
+  }
+  const countsByParentKey = new Map<string, Record<ChildStatusBucket, number>>();
+  for (const [key, thread] of byKey) {
+    if (!parentKeyByKey.has(key)) continue;
+    const bucket = sidebarChildBucket(thread);
+    const seen = new Set<string>();
+    for (
+      let parentKey = parentKeyByKey.get(key);
+      parentKey !== undefined && !seen.has(parentKey);
+      parentKey = parentKeyByKey.get(parentKey)
+    ) {
+      seen.add(parentKey);
+      let counts = countsByParentKey.get(parentKey);
+      if (counts === undefined) {
+        counts = emptyChildStatusCounts();
+        countsByParentKey.set(parentKey, counts);
+      }
+      counts[bucket] += 1;
+    }
+  }
+  return { childrenByParentKey, countsByParentKey, parentKeyByKey };
+}
+
+/**
+ * The children each parent row shows: all of them while it is expanded,
+ * otherwise only the branch holding the open thread, so collapsing never hides
+ * the thread on screen.
+ */
+export function resolveSidebarShownChildren<
+  T extends Pick<SidebarThreadSummary, "environmentId" | "id">,
+>(
+  nesting: SidebarThreadNesting<T>,
+  expandedParentKeys: ReadonlySet<string>,
+  routeKey: string | null,
+): ReadonlyMap<string, readonly T[]> {
+  const routeBranch = new Set<string>();
+  for (
+    let key = routeKey ?? undefined;
+    key !== undefined && !routeBranch.has(key);
+    key = nesting.parentKeyByKey.get(key)
+  ) {
+    routeBranch.add(key);
+  }
+  const shown = new Map<string, readonly T[]>();
+  for (const [parentKey, children] of nesting.childrenByParentKey) {
+    const visible = expandedParentKeys.has(parentKey)
+      ? children
+      : children.filter((child) => routeBranch.has(sidebarThreadKeyOf(child)));
+    if (visible.length > 0) shown.set(parentKey, visible);
+  }
+  return shown;
+}
+
+/** Rows top to bottom: each top-level row, then the children it shows, depth first. */
+export function flattenSidebarThreadTree<
+  T extends Pick<SidebarThreadSummary, "environmentId" | "id">,
+>(topLevel: readonly T[], shownChildren: ReadonlyMap<string, readonly T[]>): T[] {
+  const rows: T[] = [];
+  const visit = (thread: T) => {
+    rows.push(thread);
+    for (const child of shownChildren.get(sidebarThreadKeyOf(thread)) ?? []) visit(child);
+  };
+  for (const thread of topLevel) visit(thread);
+  return rows;
+}
+
+/**
  * Keys the old per-project sidebar saved folder open state under, most
  * specific first, for `resolveProjectExpanded`. Boring folders read and write
  * the same keys, so a legacy user's closed folders stay closed after regrouping.
@@ -934,7 +1173,7 @@ export function sidebarFolderExpansionKeys(group: {
 
 /**
  * Boring sidebar folders. Folders follow `groups` order and threads keep their
- * input order. A project with no threads gets a folder only with `keepEmpty`.
+ * input order. A project with no threads gets a folder only when `keepEmpty` says so.
  * A thread whose project is in no group has no folder and is left out.
  */
 export function groupSidebarThreadsByProject<
@@ -948,7 +1187,7 @@ export function groupSidebarThreadsByProject<
 >(
   groups: readonly TGroup[],
   threads: readonly TThread[],
-  keepEmpty: boolean,
+  keepEmpty: (group: TGroup) => boolean,
 ): Array<{ group: TGroup; threads: TThread[] }> {
   const folders = groups.map((group) => ({ group, threads: [] as TThread[] }));
   const folderByProject = new Map<string, (typeof folders)[number]>();
@@ -960,7 +1199,7 @@ export function groupSidebarThreadsByProject<
   for (const thread of threads) {
     folderByProject.get(`${thread.environmentId}:${thread.projectId}`)?.threads.push(thread);
   }
-  return keepEmpty ? folders : folders.filter((folder) => folder.threads.length > 0);
+  return folders.filter((folder) => folder.threads.length > 0 || keepEmpty(folder.group));
 }
 
 export type SidebarV2TopStatusKind =

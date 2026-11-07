@@ -1,4 +1,8 @@
-import type { DesktopSshEnvironmentTarget, EnvironmentId } from "@t3tools/contracts";
+import type {
+  DesktopSshEnvironmentTarget,
+  EnvironmentId,
+  TailnetDeviceClientCredential,
+} from "@t3tools/contracts";
 import { resolveRemotePairingTarget } from "@t3tools/shared/remote";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -58,6 +62,13 @@ export class ConnectionOnboarding extends Context.Service<
   {
     readonly registerPairing: (
       input: PairingConnectionInput,
+    ) => Effect.Effect<
+      EnvironmentId,
+      ConnectionAttemptError | Persistence.ConnectionPersistenceError
+    >;
+    /** Saves one of my devices from the one-time credential its server handed out. */
+    readonly registerDevice: (
+      device: TailnetDeviceClientCredential,
     ) => Effect.Effect<
       EnvironmentId,
       ConnectionAttemptError | Persistence.ConnectionPersistenceError
@@ -166,6 +177,23 @@ const registerPairingConnection = Effect.fn(
     .setEnabled(registration.target.environmentId, true)
     .pipe(Effect.catchTags({ EnvironmentNotRegisteredError: () => Effect.void }));
   return registration.target.environmentId;
+});
+
+const registerDeviceConnection = Effect.fn(
+  "clientRuntime.connection.onboarding.registerDeviceConnection",
+)(function* (device: TailnetDeviceClientCredential) {
+  // The credential works once, so it goes to the first address that answers as the device.
+  const answering = yield* Effect.findFirst(device.urls, (url) =>
+    fetchRemoteEnvironmentDescriptor({ httpBaseUrl: url }).pipe(
+      Effect.map((descriptor) => descriptor.environmentId === device.environmentId),
+      Effect.orElseSucceed(() => false),
+    ),
+  );
+  return yield* registerPairingConnection({
+    host: Option.getOrElse(answering, () => device.urls[0] ?? ""),
+    pairingCode: device.credential,
+    expectedEnvironmentId: device.environmentId,
+  });
 });
 
 const isBearerCredential = Schema.is(BearerConnectionCredential);
@@ -310,6 +338,14 @@ export const make = Effect.gen(function* () {
     registerPairing: Effect.fnUntraced(
       function* (input) {
         return yield* registerPairingConnection(input);
+      },
+      Effect.provideService(EnvironmentRegistry.EnvironmentRegistry, registry),
+      Effect.provideService(ClientCapabilities.ClientPresentation, presentation),
+      Effect.provideService(HttpClient.HttpClient, httpClient),
+    ),
+    registerDevice: Effect.fnUntraced(
+      function* (device) {
+        return yield* registerDeviceConnection(device);
       },
       Effect.provideService(EnvironmentRegistry.EnvironmentRegistry, registry),
       Effect.provideService(ClientCapabilities.ClientPresentation, presentation),

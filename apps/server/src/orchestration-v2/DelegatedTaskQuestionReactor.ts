@@ -5,6 +5,7 @@ import {
   type OrchestrationV2DomainEvent,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2Subagent,
+  ProviderRequestKind,
   type ThreadId,
   threadParentRelationship,
 } from "@t3tools/contracts";
@@ -12,6 +13,7 @@ import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
@@ -38,6 +40,10 @@ function localParentThreadId(thread: OrchestrationV2AppThread): ThreadId | null 
     : thread.lineage.parentThreadId;
 }
 
+const isApprovalRequestKind = Schema.is(ProviderRequestKind);
+const wakesParent = (kind: OrchestrationV2RuntimeRequest["kind"]) =>
+  kind === "user_input" || isApprovalRequestKind(kind);
+
 const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -52,6 +58,7 @@ const make = Effect.gen(function* () {
     const key = `${parentThreadId}:${request.id}`;
     const label = reportLabel(task === undefined ? child.title : task.title?.trim() || task.prompt);
     const subject = task === undefined ? `Child thread ${child.id}` : `Delegated task ${task.id}`;
+    const approval = isApprovalRequestKind(request.kind);
     const situation =
       request.responseCapability.type === "message"
         ? `${subject} asked a question and is still working.`
@@ -61,14 +68,16 @@ const make = Effect.gen(function* () {
       commandId: CommandId.make(`server:delegated-task-question:${key}`),
       threadId: parentThreadId,
       messageId: MessageId.make(`message:delegated-task-question:${key}`),
-      text: `${situation} Read it with t3_pending_request action read, threadId ${child.id}, and requestId ${request.id}. Answer it with action respond when the answer follows from the task or the user's instructions; otherwise ask the user, then answer it. If it is no longer pending, it was answered or dismissed.`,
+      text: approval
+        ? `${subject} is blocked on an approval and cannot continue. Read it with t3_thread_read view activity on threadId ${child.id} (the approval_request item), or t3_get_pending_questions. Answer with t3_respond_to_approval threadId ${child.id}, approvalRequestId ${request.id} (add confirmDestructive true for a destructive-command check you approve). Approve it only if the command fits the child's task; otherwise decline and tell the child the safe form.`
+        : `${situation} Read it with t3_pending_request action read, threadId ${child.id}, and requestId ${request.id}. Answer it with action respond when the answer follows from the task or the user's instructions; otherwise ask the user, then answer it. If it is no longer pending, it was answered or dismissed.`,
       notification: {
         source:
           task === undefined
             ? { kind: "subagent", childThreadId: child.id }
             : { kind: "delegated_task", taskIds: [task.id], childThreadId: child.id },
         outcome: "updated",
-        summary: `${task === undefined ? "Child thread" : "Delegated task"}${label === undefined ? "" : ` "${label}"`} has a question`,
+        summary: `${task === undefined ? "Child thread" : "Delegated task"}${label === undefined ? "" : ` "${label}"`} ${approval ? "is waiting for approval" : "has a question"}`,
       },
       attachments: [],
       dispatchMode: { type: "queue_after_active" },
@@ -139,7 +148,7 @@ const make = Effect.gen(function* () {
           ]);
           for (const request of child.runtimeRequests) {
             if (
-              request.kind !== "user_input" ||
+              !wakesParent(request.kind) ||
               request.status !== "pending" ||
               request.responseCapability.type !== "live"
             ) {
@@ -158,7 +167,7 @@ const make = Effect.gen(function* () {
         }
         return;
       }
-      if (event.type !== "runtime-request.updated" || event.payload.kind !== "user_input") {
+      if (event.type !== "runtime-request.updated" || !wakesParent(event.payload.kind)) {
         return;
       }
       const child = yield* projections.getThread(event.threadId);

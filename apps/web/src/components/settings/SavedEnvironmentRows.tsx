@@ -14,6 +14,7 @@ import {
   hasSavedBearerRoute,
   connectionStatusText,
   environmentMcpUrl,
+  lastSeenLabel,
 } from "@t3tools/client-runtime/connection";
 import * as Option from "effect/Option";
 
@@ -93,12 +94,19 @@ function savedBackendStatus(environment: EnvironmentPresentation): {
     case "unsupported":
       return { text: "Client not supported", tone: "muted" };
     case "error":
+      if (connection.needsPairing === true) return { text: "Needs pairing again", tone: "error" };
       return {
         text: connection.error ? `Connection failed: ${connection.error}` : "Connection failed",
         tone: "error",
       };
     case "offline":
-      return { text: "Offline", tone: "muted" };
+      return {
+        text:
+          connection.lastConnectedAt === undefined
+            ? "Offline"
+            : `Offline · ${lastSeenLabel(connection.lastConnectedAt, Date.now())}`,
+        tone: "muted",
+      };
     case "available":
       return { text: "Not connected", tone: "muted" };
   }
@@ -328,7 +336,11 @@ export function SavedBackendListRow({
               hostLabel={environment.label}
               diagnosis={diagnosis}
               onRetry={() => void retryNow(environmentId)}
-              onAddRoute={relayOnly ? () => onAddRoute(environment) : null}
+              onAddRoute={
+                relayOnly || diagnosis.recovery === "pair-again"
+                  ? () => onAddRoute(environment)
+                  : null
+              }
             />
           ) : null}
           {routesOpen && (
