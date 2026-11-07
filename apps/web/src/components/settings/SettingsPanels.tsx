@@ -494,6 +494,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.enableProviderUpdateChecks !== DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks
       ? ["Provider update checks"]
       : []),
+    ...(settings.simplifiedTechnicalEnglish !== DEFAULT_UNIFIED_SETTINGS.simplifiedTechnicalEnglish
+      ? ["Plain technical English replies"]
+      : []),
     ...(settings.continueThreadsAfterServerUpdate !==
     DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate
       ? ["Continue threads after restarts"]
@@ -615,6 +618,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       snoozePresets: DEFAULT_UNIFIED_SETTINGS.snoozePresets,
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
+      simplifiedTechnicalEnglish: DEFAULT_UNIFIED_SETTINGS.simplifiedTechnicalEnglish,
       continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
       backgroundActivityProfile: DEFAULT_UNIFIED_SETTINGS.backgroundActivityProfile,
@@ -1918,6 +1922,35 @@ export function ThreadsSettingsPanel() {
                 ) : null}
               </div>
             )
+          }
+        />
+        <SettingsRow
+          serverScoped
+          settingKeys={["simplifiedTechnicalEnglish"]}
+          {...searchableSetting("simplified-technical-english")}
+          description="Agents write their replies in Simplified Technical English (ASD-STE100): short sentences, one idea each, common words. Code and commands stay as they are."
+          resetAction={
+            settings.simplifiedTechnicalEnglish !==
+            DEFAULT_UNIFIED_SETTINGS.simplifiedTechnicalEnglish ? (
+              <SettingResetButton
+                label="plain technical English"
+                onClick={() =>
+                  updateSettings({
+                    simplifiedTechnicalEnglish: DEFAULT_UNIFIED_SETTINGS.simplifiedTechnicalEnglish,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <ScopedSwitch
+              settingKeys={["simplifiedTechnicalEnglish"]}
+              checked={settings.simplifiedTechnicalEnglish}
+              onCheckedChange={(checked) =>
+                updateSettings({ simplifiedTechnicalEnglish: Boolean(checked) })
+              }
+              aria-label="Plain technical English replies"
+            />
           }
         />
         <AdvancedSettings

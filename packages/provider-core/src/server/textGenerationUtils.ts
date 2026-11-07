@@ -23,6 +23,26 @@ export function limitSection(value: string, maxChars: number): string {
   return `${truncated}\n\n[truncated]`;
 }
 
+/** Models sometimes nest the JSON reply inside the text field; unwrap it once. */
+export function sanitizeDraftRewrite(raw: string): string {
+  const text = raw.trim();
+  if (!text.startsWith("{")) return text;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "text" in parsed &&
+      typeof parsed.text === "string"
+    ) {
+      return parsed.text.trim();
+    }
+  } catch {
+    // Not JSON; a draft can start with a brace.
+  }
+  return text;
+}
+
 export function sanitizeCommitSubject(raw: string): string {
   const singleLine = raw.trim().split(/\r?\n/g)[0]?.trim() ?? "";
   const withoutTrailingPeriod = singleLine.replace(/[.]+$/g, "").trim();

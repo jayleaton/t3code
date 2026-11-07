@@ -151,6 +151,11 @@ function selectOpenCodeRuntimeTextGeneration(
         v1: v1.generateReviewGuide(input),
         v2: v2.generateReviewGuide(input),
       }),
+    rewriteDraft: (input) =>
+      byOpenCodeRuntime(probe.get, {
+        v1: v1.rewriteDraft(input),
+        v2: v2.rewriteDraft(input),
+      }),
   };
 }
 

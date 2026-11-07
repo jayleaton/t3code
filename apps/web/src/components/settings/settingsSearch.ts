@@ -549,6 +549,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["timestamp clock locale system browser os 12 hour 24 hour"],
   },
   {
+    id: "simplified-technical-english",
+    title: "Plain technical English replies",
+    to: "/settings/threads",
+    scope: "environment-defaults",
+    searchTerms: [
+      "ste asd-ste100 simplified technical english karpathy writing style plain language",
+    ],
+  },
+  {
     id: "response-streaming",
     title: "Response streaming",
     to: "/settings/threads",
