@@ -129,6 +129,7 @@ const serveDeviceOn = (
   Effect.gen(function* () {
     const url = yield* Ref.make("http://127.0.0.1:0");
     const grants = yield* Ref.make(0);
+    const descriptorReads = yield* Ref.make(0);
     const context = yield* TailnetDevices.layer.pipe(
       Layer.provideMerge(PeerLinks.layer),
       Layer.provideMerge(EnvironmentAuth.layer),
@@ -173,6 +174,9 @@ const serveDeviceOn = (
           if (request.url.startsWith("/api/tailnet-devices/grant")) {
             yield* Ref.update(grants, (count) => count + 1);
           }
+          if (request.url.startsWith("/.well-known/t3/environment")) {
+            yield* Ref.update(descriptorReads, (count) => count + 1);
+          }
           return yield* httpEffect;
         }),
       { global: true },
@@ -209,6 +213,8 @@ const serveDeviceOn = (
       pairingLinks: auth.listPairingLinks(),
       /** Grants delivered to this device, each carrying a token. */
       grants,
+      /** Descriptor reads this device answered, each one a probe of it. */
+      descriptorReads,
       /** Sessions this device issued to other devices. */
       issued: auth
         .listSessions()
@@ -436,6 +442,28 @@ const threeDevices = Effect.gen(function* () {
 });
 
 const box = descriptorOf("env-box", "Box");
+
+describe("tailnet scan", () => {
+  // Stored links are listed with a reachability probe each, all at once; a scan only needs the rows.
+  it.live("probes a linked device only where it sends the link's token", () =>
+    Effect.gen(function* () {
+      const tailnet = yield* makeTailnet;
+      const a = yield* serveDevice(laptop, tailnet);
+      const b = yield* serveDevice(studio, tailnet);
+      yield* tailnet.join(a.url);
+      yield* tailnet.join(b.url);
+      yield* a.devices.linkIfMine({ url: b.url });
+
+      yield* Ref.set(b.descriptorReads, 0);
+      yield* a.devices.scan;
+      expect(yield* Ref.get(b.descriptorReads)).toBe(1);
+
+      yield* Ref.set(b.descriptorReads, 0);
+      yield* a.devices.updateSettings({ defaultAccess: "auto" });
+      expect(yield* Ref.get(b.descriptorReads)).toBe(1);
+    }),
+  );
+});
 
 describe("tailnet device access", () => {
   it.live("applies a changed access level to the next request without re-linking", () =>
