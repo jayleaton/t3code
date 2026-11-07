@@ -6,7 +6,7 @@ import {
   formatContextWindowCost,
 } from "./ContextWindowMeter.logic";
 import { Minimize2Icon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { formatCacheTimeLeft, promptCacheExpiresAt } from "~/lib/promptCache";
 import { composerFloatingLayerProps } from "./composerEventScope";
 
@@ -20,12 +20,18 @@ function formatPercentage(value: number | null): string | null {
   return `${Math.round(value)}%`;
 }
 
-// Mounts with the popover, so the time is read when it opens; no ticking while it is closed.
+// Lives inside the popover, so it only updates (once a minute, or at expiry) while it is open.
 function PromptCacheRow(props: { readonly updatedAt: string; readonly ttlMs: number }) {
-  const [openedAt] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now());
   const expiresAt = promptCacheExpiresAt(props.updatedAt, props.ttlMs);
+  const left = expiresAt === null ? 0 : expiresAt - now;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- wall-clock timer so the row turns cold at the moment the cache lapses
+  useEffect(() => {
+    if (left <= 0) return;
+    const timer = setTimeout(() => setNow(Date.now()), Math.min(left, 60_000));
+    return () => clearTimeout(timer);
+  }, [left]);
   if (expiresAt === null) return null;
-  const left = expiresAt - openedAt;
   return (
     <div className="flex items-center justify-between gap-3 text-2xs leading-4">
       <span className="text-secondary-label">Prompt cache</span>
