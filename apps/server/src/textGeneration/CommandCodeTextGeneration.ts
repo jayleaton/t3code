@@ -20,6 +20,7 @@ import {
   sanitizeCommitSubject,
   sanitizePrTitle,
   sanitizeThreadTitle,
+  sanitizeDraftRewrite,
 } from "@t3tools/provider-core/server/textGenerationUtils";
 import { investigationUnsupported } from "@t3tools/provider-core/server/textGenerationOperations";
 import { collectCommandCode } from "../provider/commandCodeProcess.ts";
@@ -197,7 +198,7 @@ export const makeCommandCodeTextGeneration = Effect.fn("makeCommandCodeTextGener
       outputSchemaJson: outputSchema,
       modelSelection: input.modelSelection,
     });
-    return { text: generated.text.trim() };
+    return { text: sanitizeDraftRewrite(generated.text) };
   });
 
   // Text generation runs Command Code for a single planning turn, which cannot investigate a checkout.

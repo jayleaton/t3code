@@ -52,6 +52,8 @@ export function ComposerRewriteButton({
       type: "success",
       title: "Draft rewritten in plain technical English",
       description: "Check it before you send.",
+      // Long enough to read the rewrite and still reach Undo.
+      timeout: 30_000,
       actionProps: {
         children: "Undo",
         onClick: () => {

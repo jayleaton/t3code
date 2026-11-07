@@ -16,6 +16,7 @@ import {
 } from "./textGenerationPrompts.ts";
 import {
   sanitizeCommitSubject,
+  sanitizeDraftRewrite,
   sanitizePrTitle,
   sanitizeThreadTitle,
 } from "./textGenerationUtils.ts";
@@ -176,7 +177,7 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
         modelSelection: input.modelSelection,
         ...buildDraftRewritePrompt(input),
       });
-      return { text: generated.text.trim() };
+      return { text: sanitizeDraftRewrite(generated.text) };
     },
   );
 

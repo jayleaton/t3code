@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import { describe, expect, it } from "@effect/vitest";
 
 import { fromRunner, type Request } from "./textGenerationOperations.ts";
+import { sanitizeDraftRewrite } from "./textGenerationUtils.ts";
 
 describe("rewriteDraft", () => {
   it.effect("sends the draft as-is and trims the rewrite", () =>
@@ -24,4 +25,12 @@ describe("rewriteDraft", () => {
       expect(requests[0]?.prompt.endsWith(`Draft:\n${draft}`)).toBe(true);
     }),
   );
+
+  it.each([
+    ['{"text": "Go to src/auth.ts."}', "Go to src/auth.ts."],
+    ["{ not json } keep me", "{ not json } keep me"],
+    ['{"other": 1}', '{"other": 1}'],
+  ])("unwraps a nested JSON reply only when it holds text: %s", (raw, expected) => {
+    expect(sanitizeDraftRewrite(raw)).toBe(expected);
+  });
 });

@@ -493,7 +493,7 @@ const DRAFT_REWRITE_PROMPT = `Rewrite the user's draft message to a coding agent
 - Use common words, the active voice, and numbered steps for a sequence of actions.
 - Keep code, commands, paths, names, URLs, @mentions, and quoted text exactly as they are.
 - Write as the user, in the first person. Do not reply to the draft.
-Return JSON with one key, "text", that holds the rewritten draft.`;
+Return a JSON object with key: text. Its value is the rewritten message as plain text, never JSON.`;
 
 export function buildDraftRewritePrompt(input: { readonly text: string }) {
   return {
