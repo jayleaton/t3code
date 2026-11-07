@@ -10,6 +10,98 @@
 > without notice. For the supported, maintained product, use
 > **[T3 Code](https://github.com/pingdotgg/t3code)**.
 
+## Grant's fork
+
+This is Grant Charge's copy of T3 Agents. It comes from
+[jayleaton/t3code](https://github.com/jayleaton/t3code). Jayj Eaton makes T3 Agents.
+Grant adds a small number of changes on top of it.
+
+### What Grant added
+
+**1. Warnings for risky commands**
+
+- Sometimes an agent asks you to approve a command.
+- If the command can delete or destroy work, the app shows a red warning.
+- The warning tells you what the command does.
+- Examples: delete many files, force push, or delete a database.
+- You see the warning only in Supervised mode. In Full access mode, the agent does not ask.
+
+**2. A warning for a cold prompt cache**
+
+- Claude keeps your chat in a fast memory for a short time. This memory is the prompt cache.
+- On a subscription, this time is 1 hour. With an API key, it is 5 minutes.
+- After that time, your next message is slower and costs more.
+- A Claude chat can have more than 100,000 tokens. Then a banner tells you when the cache is cold.
+- The banner has a "Compact first" button. You can also close the banner.
+- The context meter shows how long the cache stays warm.
+
+**3. Plain technical English replies**
+
+- Agents reply in short, clear sentences. This is the default.
+- The style follows ASD-STE100 (Simplified Technical English).
+- To stop it, go to Settings → Threads → "Plain technical English replies".
+
+**4. The rewrite button (wand)**
+
+- The wand button is next to the paperclip.
+- Click it to make your draft short and clear before you send it.
+- Code, file paths, names and @mentions do not change.
+- To get your old text back, click Undo. Undo stays on the screen for 30 seconds.
+- The button uses the text model in Settings. Grant uses OpenCode with DeepSeek V4.1 Flash.
+
+**5. Jayj's newest changes**
+
+- On 7 November 2026, the fork got 772 changes from jayleaton/t3code.
+
+### How the fork stays up to date
+
+The fork updates itself. A GitHub workflow does these steps
+([grant-upstream-sync.yml](.github/workflows/grant-upstream-sync.yml)):
+
+1. Every 6 hours, it looks for Jayj's newest nightly release.
+2. If the fork has that release, it stops.
+3. If not, it merges the release into `main`.
+4. Then it runs Jayj's checks and Grant's tests.
+5. If all checks pass, it pushes the merge to `main`.
+6. If the merge has a conflict, or a check fails, it opens a pull request. A person or an agent must
+   fix the problem.
+
+When `main` changes, a second workflow makes a new release
+([grant-release.yml](.github/workflows/grant-release.yml)):
+
+1. It builds a Mac app (Apple silicon) and a Linux app (AppImage).
+2. It puts them on this fork's [Releases page](https://github.com/GrantCharge/t3code/releases).
+
+The sync workflow needs a secret with the name `FORK_SYNC_TOKEN`. This is a GitHub token. It must
+have permission to write code, pull requests and workflows. The built-in GitHub token cannot do this.
+
+### How to update your apps
+
+**Linux server**
+
+- A timer starts `t3-headless-update` each day at 04:30 (Bangkok time).
+- The script gets the newest release from this fork and installs it.
+- If the new version does not start, the script goes back to the old version.
+
+**Mac**
+
+- Apple did not sign this app. Because of this, the app cannot install updates itself.
+- The app tells you when an update is ready. Then do these steps:
+  1. Get the `.dmg` file from the [Releases page](https://github.com/GrantCharge/t3code/releases).
+  2. Quit T3 Agents.
+  3. Open the `.dmg` file. Drag the app into Applications.
+
+**After an update**
+
+- Sometimes OpenCode shows no models after the server starts again.
+- Wait 5 minutes. Or go to Settings → Providers and click Refresh.
+
+### Rules for this fork
+
+- Grant's changes go only to this fork. They do not go to jayleaton/t3code or pingdotgg/t3code.
+- Do not change Jayj's `fork-*` workflows. They run only on his repository. If you change them,
+  you get merge conflicts.
+
 T3 Agents is a focused front end for the [T3 Code](https://github.com/pingdotgg/t3code) agent harness
 control surface. It lets you direct the agents on your machine — Claude Code, Codex, Cursor, Grok
 Build, OpenCode, Google Antigravity, and fx — from one workspace, with the same mobile app
