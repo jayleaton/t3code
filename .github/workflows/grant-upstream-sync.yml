@@ -1,0 +1,151 @@
+name: Grant fork sync from jayleaton
+
+# Pulls Jayj Eaton's newest published T3 Agents nightly (jayleaton/t3code) into
+# GrantCharge/t3code. A clean merge whose checks pass goes straight to main, which
+# starts grant-release.yml. A merge conflict or a failed check opens a PR instead.
+# Jayleaton's own fork-* workflows stay inactive here: they only run on his repository.
+#
+# Needs the FORK_SYNC_TOKEN secret: a token with contents, pull requests and
+# workflows write access to this repository. The built-in token can neither push
+# upstream workflow-file changes nor start the release workflow with its push.
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grant-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'GrantCharge/t3code'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
+      UPSTREAM_REPO: jayleaton/t3code
+    steps:
+      - name: Require the sync token
+        env:
+          TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
+        run: |
+          if [[ -z "$TOKEN" ]]; then
+            echo "::error::Add the FORK_SYNC_TOKEN repository secret (see the top of this workflow)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.FORK_SYNC_TOKEN }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Merge jayleaton's newest nightly
+        id: merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          pending=$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --state open --json headRefName \
+            --jq '[.[] | select(.headRefName | startswith("automation/jayleaton/"))] | length')
+          if [[ "$pending" != 0 ]]; then
+            echo "A jayleaton sync PR is still open. Merge or close it first."
+            echo "state=pending" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          tag=$(gh api "repos/$UPSTREAM_REPO/releases?per_page=30" \
+            --jq '[.[] | select((.draft | not) and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-nightly\\.[0-9]{8}\\.[0-9]+$")))][0].tag_name')
+          if [[ -z "$tag" || "$tag" == "null" ]]; then
+            echo "::error::No published nightly found on $UPSTREAM_REPO."
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+          git fetch --no-tags "https://github.com/$UPSTREAM_REPO.git" "refs/tags/$tag"
+          upstream=$(git rev-parse 'FETCH_HEAD^{commit}')
+          echo "upstream=$upstream" >> "$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor "$upstream" HEAD; then
+            echo "main already contains $tag."
+            echo "state=current" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if git merge --no-edit -m "Merge jayleaton nightly $tag" "$upstream"; then
+            echo "state=merged" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git merge --abort
+          branch="automation/jayleaton/$tag"
+          git push origin "$upstream:refs/heads/$branch"
+          printf 'Jayleaton nightly `%s` clashes with this fork, so it was not merged automatically.\n\nFix the conflicts on this branch, keeping both sides, then merge. Merging starts the fork release.\n' "$tag" > "$RUNNER_TEMP/body.md"
+          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+            --title "Sync jayleaton $tag (conflicts to fix)" --body-file "$RUNNER_TEMP/body.md"
+          echo "state=conflict" >> "$GITHUB_OUTPUT"
+
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        if: steps.merge.outputs.state == 'merged'
+        with:
+          node-version-file: package.json
+          run-install: false
+
+      - name: Install dependencies
+        if: steps.merge.outputs.state == 'merged'
+        env:
+          NODE_ENV: development
+        run: vp install --frozen-lockfile
+
+      - name: Install Electron before parallel tests
+        if: steps.merge.outputs.state == 'merged'
+        working-directory: apps/desktop
+        run: node -e "require('electron')"
+
+      - name: Install Chromium for web browser tests
+        if: steps.merge.outputs.state == 'merged'
+        run: |
+          node apps/web/node_modules/playwright/cli.js install --only-shell chromium
+          browser=$(find "$HOME/.cache/ms-playwright" -name chrome-headless-shell -type f -print -quit)
+          if ldd "$browser" | grep '=> not found'; then
+            node apps/web/node_modules/playwright/cli.js install-deps chromium
+          fi
+
+      - name: Run jayleaton's release checks
+        if: steps.merge.outputs.state == 'merged'
+        run: scripts/fork-release-validate.sh
+
+      - name: Run Grant's feature checks
+        if: steps.merge.outputs.state == 'merged'
+        run: |
+          NODE_ENV=test vp test run \
+            apps/server/src/orchestration-v2/ResponseStyle.test.ts \
+            packages/provider-core/src/server/textGenerationOperations.test.ts
+          vp run --filter @t3tools/server --filter @t3tools/provider-core typecheck
+
+      - name: Push the merge to main
+        if: steps.merge.outputs.state == 'merged'
+        run: git push origin HEAD:main
+
+      - name: Open a PR for a merge whose checks failed
+        if: failure() && steps.merge.outputs.state == 'merged'
+        env:
+          TAG: ${{ steps.merge.outputs.tag }}
+        run: |
+          set -euo pipefail
+          branch="automation/jayleaton/$TAG-checks-failed"
+          git push origin "HEAD:refs/heads/$branch"
+          printf 'Jayleaton nightly `%s` merged cleanly, but the checks failed: %s/%s/actions/runs/%s\n\nFix the failing checks on this branch, then merge. Merging starts the fork release.\n' \
+            "$TAG" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > "$RUNNER_TEMP/body.md"
+          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+            --title "Sync jayleaton $TAG (checks failed)" --body-file "$RUNNER_TEMP/body.md"
