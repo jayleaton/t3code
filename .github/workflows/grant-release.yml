@@ -1,0 +1,153 @@
+name: Grant fork release
+
+# Builds GrantCharge/t3code's own nightly: an unsigned macOS arm64 app and a Linux
+# x64 AppImage, published as a prerelease on this repository. The omarchy server's
+# t3-headless-update reads nightly-linux.yml from here; the Mac app is installed by hand.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: grant-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 'GrantCharge/t3code'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      ref: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Choose version
+        id: version
+        # 900000 + keeps every version above the hand-built 0.1.6-nightly.20261107.900001.
+        run: |
+          base=$(node -p 'JSON.parse(require("fs").readFileSync("apps/desktop/package.json", "utf8")).version.split("-")[0]')
+          echo "version=$base-nightly.$(date -u +%Y%m%d).$((900000 + GITHUB_RUN_NUMBER * 100 + GITHUB_RUN_ATTEMPT))" >> "$GITHUB_OUTPUT"
+
+  build_bundle:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    env:
+      NODE_ENV: production
+      T3CODE_DESKTOP_BRAND: agents
+      APP_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          run-install: false
+      - name: Install build dependencies
+        env:
+          NODE_ENV: development
+        run: vp install --frozen-lockfile
+      - run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+      - run: node scripts/update-release-package-versions.ts "$APP_VERSION"
+      - run: vp run build:desktop
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: js-bundle
+          path: |
+            apps/server/dist
+            apps/desktop/dist-electron
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: mcp-gateway-bundle
+          path: packages/mcp-gateway/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  desktop_mac_arm64:
+    name: Desktop macOS arm64
+    needs: [prepare, build_bundle]
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      ref: ${{ needs.prepare.outputs.ref }}
+      release_channel: nightly
+      relay_client_tracing: false
+      brand: agents
+      app_id: com.jayleaton.t3agents
+      product_name: T3 Agents
+      update_repository: ${{ github.repository }}
+      clerk_publishable_key: ""
+      clerk_jwt_template: ""
+      clerk_cli_oauth_client_id: ""
+      relay_url: ""
+      label: macOS arm64
+      runner: macos-15
+      platform: mac
+      target: dmg
+      arch: arm64
+      rust_target: aarch64-apple-darwin
+      resource_key: darwin-arm64
+
+  desktop_linux_x64:
+    name: Desktop Linux x64
+    needs: [prepare, build_bundle]
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      ref: ${{ needs.prepare.outputs.ref }}
+      release_channel: nightly
+      relay_client_tracing: false
+      brand: agents
+      app_id: com.jayleaton.t3agents
+      product_name: T3 Agents
+      update_repository: ${{ github.repository }}
+      clerk_publishable_key: ""
+      clerk_jwt_template: ""
+      clerk_cli_oauth_client_id: ""
+      relay_url: ""
+      label: Linux x64
+      runner: ubuntu-24.04
+      platform: linux
+      target: AppImage
+      arch: x64
+      rust_target: x86_64-unknown-linux-gnu
+      resource_key: linux-x64
+
+  publish:
+    needs: [prepare, desktop_mac_arm64, desktop_linux_x64]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_COMMIT: ${{ needs.prepare.outputs.ref }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: release-assets
+      - name: Publish release
+        run: |
+          set -euo pipefail
+          rm -f release-assets/builder-debug.yml
+          ls -la release-assets
+          test -f release-assets/nightly-linux.yml
+          test -f release-assets/nightly-mac.yml
+          printf 'Grant'"'"'s T3 Agents build from `%s` (jayleaton/t3code plus Grant'"'"'s changes).\n\n- **Mac:** download the `.dmg`, quit T3 Agents, drag the new app into Applications. This build is unsigned, so it does not update itself.\n- **omarchy:** `t3-headless-update` installs the AppImage.\n' "$RELEASE_COMMIT" > "$RUNNER_TEMP/notes.md"
+          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --target "$RELEASE_COMMIT" \
+            --title "T3 Agents (Grant) $VERSION" --notes-file "$RUNNER_TEMP/notes.md" --prerelease --draft
+          gh release upload "v$VERSION" release-assets/* --repo "$GITHUB_REPOSITORY"
+          gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
