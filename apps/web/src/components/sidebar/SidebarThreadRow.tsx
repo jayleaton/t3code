@@ -109,6 +109,7 @@ import { getTriggerDisplayModelName } from "../chat/providerIconUtils";
 import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../providerInstances";
 import { useThreadRunningTerminalIds } from "../../state/terminalSessions";
 import { InlineButton } from "../ui/button";
+import { Kbd } from "../ui/kbd";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { MiddleTruncate } from "../ui/middle-truncate";
@@ -150,14 +151,14 @@ function threadTimeTimestamp(thread: SidebarThreadSummary): string {
 
 function JumpHintBadge(props: { label: string }) {
   return (
-    <span
-      aria-hidden
-      className="pointer-events-none absolute right-1.5 top-1/2 z-10 inline-flex h-5 -translate-y-1/2 items-center rounded-full border border-border/80 bg-background/95 px-1.5 font-mono text-3xs font-medium tracking-tight text-foreground shadow-sm"
-    >
+    <Kbd aria-hidden data-jump-hint>
       {props.label}
-    </span>
+    </Kbd>
   );
 }
+
+const JUMP_HINT_SLOT_CLASS_NAME =
+  "[&>:not([data-jump-hint])]:invisible [&>:not([data-jump-hint])]:absolute";
 
 function WorkingDuration(props: { startedAt: string | null }) {
   const startedMs = props.startedAt !== null ? Date.parse(props.startedAt) : Number.NaN;
@@ -439,6 +440,8 @@ export const draftPenClassName = "size-3 shrink-0 text-warning-foreground";
 // useSortable memoizes on its `disabled` object, so a fresh one per render
 // re-renders every row and marker on each sidebar update.
 export const SIDEBAR_SORTABLE_DRAG_DISABLED = { draggable: true } as const;
+// Child rows sit outside the sortable list, so they neither drag nor take drops.
+const SIDEBAR_SORTABLE_NESTED = { draggable: true, droppable: true } as const;
 const SIDEBAR_SORTABLE_DRAG_ENABLED = { draggable: false } as const;
 
 // Takes the row's props rather than a render function: a closure from the
@@ -459,9 +462,11 @@ export function SortableThreadRow(
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: sortableId,
     disabled:
-      sortableDisabled || !canOperateThread
-        ? SIDEBAR_SORTABLE_DRAG_DISABLED
-        : SIDEBAR_SORTABLE_DRAG_ENABLED,
+      (rowProps.nestDepth ?? 0) > 0
+        ? SIDEBAR_SORTABLE_NESTED
+        : sortableDisabled || !canOperateThread
+          ? SIDEBAR_SORTABLE_DRAG_DISABLED
+          : SIDEBAR_SORTABLE_DRAG_ENABLED,
     animateLayoutChanges: animateSidebarLayoutChanges,
   });
   // dnd-kit memoizes each field but not the bag, so the memoized row would
@@ -536,6 +541,8 @@ type SidebarThreadRowProps = {
   // "folder" is a one-line row inside a boring sidebar project folder;
   // "folder-multiline" adds the card's branch and PR line under it.
   variant: "card" | "slim" | "folder" | "folder-multiline";
+  /** Levels under a parent row; child rows are slim or folder rows indented by it. */
+  nestDepth?: number | undefined;
   navigationParent?: string | undefined;
   variantAction: SidebarSweepAction;
   settlementSupported: boolean;
@@ -652,6 +659,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     variant,
     variantAction,
   } = props;
+  const nestDepth = props.nestDepth ?? 0;
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
   const threadKey = scopedThreadKey(threadRef);
   const canOperateThread = useEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope);
@@ -931,6 +939,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   // Closing here, not just masking, keeps the menu from reopening when the button returns.
   if (snoozeMenuOpenRaw && !showSnoozeButton) setSnoozeMenuOpen(false);
   const snoozeMenuOpen = snoozeMenuOpenRaw && showSnoozeButton;
+  const jumpHintLabel = snoozeMenuOpen ? null : props.jumpLabel;
   const handlePrClick = (event: ReactMouseEvent<HTMLElement>, targetUrl?: string) => {
     const url = targetUrl ?? pr?.url ?? currentLinkedPr?.url;
     if (!url) return;
@@ -1122,14 +1131,19 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     )
   ) : null;
 
+  const remoteMachineIcon =
+    isRemote && !showsScratchMachine ? (
+      <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
+        <EnvironmentMachineIcon aria-hidden kind={props.environmentMachine} className="size-3.5" />
+      </span>
+    ) : null;
   const diff = latestRunDiff(thread);
-  // Only the provider icon would remain, so the row drops the line instead of leaving it blank.
+  // Only the trailing icons would remain, so the row moves them to the title line instead.
   const metaLineEmpty =
     !thread.branch &&
     !showsScratchMachine &&
     prBadge === null &&
     diff === null &&
-    !isRemote &&
     runningTerminalIds.length === 0;
   const metaLine = metaLineEmpty ? null : (
     <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs">
@@ -1164,15 +1178,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         aria-hidden
         className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
       >
-        {isRemote && !showsScratchMachine ? (
-          <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
-            <EnvironmentMachineIcon
-              aria-hidden
-              kind={props.environmentMachine}
-              className="size-3.5"
-            />
-          </span>
-        ) : null}
+        {remoteMachineIcon}
         <SidebarProviderStack
           thread={thread}
           providerEntryByInstanceId={props.providerEntryByInstanceId}
@@ -1180,8 +1186,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       </span>
     </div>
   );
-  const titleLineProviderStack = metaLineEmpty ? (
-    <span aria-hidden className="inline-flex shrink-0">
+  const titleLineIcons = metaLineEmpty ? (
+    <span aria-hidden className="inline-flex shrink-0 items-center gap-1">
+      {remoteMachineIcon}
       <SidebarProviderStack
         thread={thread}
         providerEntryByInstanceId={props.providerEntryByInstanceId}
@@ -1224,6 +1231,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   // Lines titles up with the folder name, past its chevron and icon.
                   inFolder && "ps-9",
                 )}
+                style={
+                  nestDepth > 0
+                    ? {
+                        paddingInlineStart: `calc(${inFolder ? "2.25rem" : "0.625rem"} + ${nestDepth}rem)`,
+                      }
+                    : undefined
+                }
                 onClick={handleClick}
                 onDoubleClick={handleDoubleClick}
                 onKeyDown={handleKeyDown}
@@ -1249,7 +1263,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               )}
               {draftIndicator}
               {title}
-              {multiline ? titleLineProviderStack : null}
+              {multiline ? titleLineIcons : null}
               {pinIndicator}
               {multiline ? null : terminalStatusIcon}
               {isRegeneratingTitle ? (
@@ -1264,6 +1278,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   className={cn(
                     "relative ml-auto flex h-6 min-w-8 shrink-0 items-center justify-end",
                     props.sweepAction !== null && "hidden",
+                    jumpHintLabel && JUMP_HINT_SLOT_CLASS_NAME,
                   )}
                 >
                   <span
@@ -1354,25 +1369,32 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       <TooltipPopup side="top">Un-settle thread</TooltipPopup>
                     </Tooltip>
                   ) : (
-                    <button
-                      type="button"
-                      aria-label="Settle thread"
-                      onClick={handleSettleClick}
-                      onPointerDown={handleActionPointerDown}
-                      className={cn(
-                        "pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
-                        isWoke && "group-any-hover/sidebar-row:static",
-                      )}
-                    >
-                      <CheckIcon className="size-3" />
-                    </button>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <button
+                            type="button"
+                            aria-label="Settle thread"
+                            onClick={handleSettleClick}
+                            onPointerDown={handleActionPointerDown}
+                            className={cn(
+                              "pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
+                              isWoke && "group-any-hover/sidebar-row:static",
+                            )}
+                          />
+                        }
+                      >
+                        <CheckIcon className="size-3" />
+                      </TooltipTrigger>
+                      <TooltipPopup side="top">Settle thread</TooltipPopup>
+                    </Tooltip>
                   )}
+                  {jumpHintLabel ? <JumpHintBadge label={jumpHintLabel} /> : null}
                 </span>
               )}
               {props.sweepAction !== null ? dragDestination : null}
             </div>
             {multiline ? metaLine : null}
-            {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
           </TooltipTrigger>
           {detailsTooltip}
         </Tooltip>
@@ -1443,6 +1465,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   className={cn(
                     "group/sidebar-status-slot relative ml-auto flex h-5 min-w-8 shrink-0 items-stretch justify-end text-xs",
                     props.sweepAction !== null && "hidden",
+                    jumpHintLabel && JUMP_HINT_SLOT_CLASS_NAME,
                   )}
                 >
                   <span
@@ -1558,6 +1581,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       ) : null}
                     </span>
                   ) : null}
+                  {jumpHintLabel ? <JumpHintBadge label={jumpHintLabel} /> : null}
                 </span>
               )}
               {props.sweepAction !== null ? dragDestination : null}
@@ -1569,11 +1593,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   Regenerating title
                 </span>
               ) : null}
-              {titleLineProviderStack}
+              {titleLineIcons}
             </div>
             {metaLine}
           </div>
-          {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
         </TooltipTrigger>
         {detailsTooltip}
       </Tooltip>

@@ -1,11 +1,15 @@
 import {
+  AuthAccessReadScope,
+  AuthStandardClientScopes,
   AuthEnvironmentMaintainScope,
   AuthDiagnosticsReadScope,
   AuthFilesystemReadScope,
   AuthProvidersManageScope,
   AuthSettingsWriteScope,
   DEFAULT_SERVER_SETTINGS,
+  ProviderDriverKind,
   ProviderInstanceId,
+  SecretProviderId,
   ThreadId,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
@@ -90,7 +94,11 @@ it("requires operate permission for tool updates even alongside a read-only chec
 });
 
 describe("RPC scope middleware", () => {
-  const tested = [WS_METHODS.serverProbe, WS_METHODS.serverRetryResourceTelemetry] as const;
+  const tested = [
+    WS_METHODS.serverProbe,
+    WS_METHODS.serverRetryResourceTelemetry,
+    WS_METHODS.peerLinksList,
+  ] as const;
   const group = WsRpcGroup.omit(
     ...[...WsRpcGroup.requests.keys()].filter(
       (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, (typeof tested)[number]> =>
@@ -99,35 +107,56 @@ describe("RPC scope middleware", () => {
   );
 
   it.effect.each([
-    { scopes: [AuthOrchestrationReadScope], missing: AuthEnvironmentMaintainScope },
+    {
+      scopes: [AuthOrchestrationReadScope],
+      missing: AuthEnvironmentMaintainScope,
+      method: WS_METHODS.serverRetryResourceTelemetry,
+    },
     {
       scopes: [AuthOrchestrationReadScope, AuthEnvironmentMaintainScope],
       missing: AuthDiagnosticsReadScope,
+      method: WS_METHODS.serverRetryResourceTelemetry,
     },
-  ])("rejects telemetry retry without $missing before its handler runs", ({ scopes, missing }) =>
-    Effect.gen(function* () {
-      const handled: Array<string> = [];
-      const client = yield* RpcTest.makeClient(group).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            group.toLayerHandler(WS_METHODS.serverProbe, () => Effect.succeed({})),
-            group.toLayerHandler(WS_METHODS.serverRetryResourceTelemetry, () =>
-              Effect.sync(() => handled.push("retry")).pipe(Effect.andThen(Effect.never)),
+    {
+      scopes: AuthStandardClientScopes.filter((scope) => scope !== AuthAccessReadScope),
+      missing: AuthAccessReadScope,
+      method: WS_METHODS.peerLinksList,
+    },
+  ])(
+    "isolates a rejected $method without $missing from later probes",
+    ({ scopes, missing, method }) =>
+      Effect.gen(function* () {
+        const handled: Array<string> = [];
+        const client = yield* RpcTest.makeClient(group).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              group.toLayerHandler(WS_METHODS.serverProbe, () => Effect.succeed({})),
+              group.toLayerHandler(WS_METHODS.serverRetryResourceTelemetry, () =>
+                Effect.sync(() => handled.push("retry")).pipe(Effect.andThen(Effect.never)),
+              ),
+              group.toLayerHandler(WS_METHODS.peerLinksList, () =>
+                Effect.sync(() => {
+                  handled.push("links");
+                  return { links: [] };
+                }),
+              ),
+              RpcAuthorization.layer(scopes),
             ),
-            RpcAuthorization.layer(scopes),
           ),
-        ),
-      );
+        );
 
-      expect(yield* client[WS_METHODS.serverProbe]({})).toEqual({});
-      expect(
-        yield* client[WS_METHODS.serverRetryResourceTelemetry]({}).pipe(Effect.flip),
-      ).toMatchObject({
-        _tag: "EnvironmentAuthorizationError",
-        requiredPermission: missing,
-      });
-      expect(handled).toEqual([]);
-    }).pipe(Effect.scoped),
+        expect(yield* client[WS_METHODS.serverProbe]({})).toEqual({});
+        const denied =
+          method === WS_METHODS.peerLinksList
+            ? yield* client[method]({}).pipe(Effect.flip)
+            : yield* client[method]({}).pipe(Effect.flip);
+        expect(denied).toMatchObject({
+          _tag: "EnvironmentAuthorizationError",
+          requiredPermission: missing,
+        });
+        expect(handled).toEqual([]);
+        expect(yield* client[WS_METHODS.serverProbe]({})).toEqual({});
+      }).pipe(Effect.scoped),
   );
 });
 
@@ -163,17 +192,38 @@ describe("settings mutation authorization", () => {
       );
       yield* client[WS_METHODS.serverUpdateSettings]({ patch: {}, providerInstanceMutation });
       expect(handled).toBe(1);
+      yield* client[WS_METHODS.serverUpdateSettings]({
+        patch: {},
+        providerInstanceMutation: {
+          operation: "upsert",
+          instanceId: ProviderInstanceId.make("codex_work"),
+          instance: {
+            driver: ProviderDriverKind.make("codex"),
+            environment: [
+              {
+                name: "OPENAI_API_KEY",
+                sensitive: true,
+                value: {
+                  provider: SecretProviderId.make("personal"),
+                  reference: "op://Private/OpenAI/credential",
+                },
+              },
+            ],
+          },
+        },
+      });
+      expect(handled).toBe(2);
       expect(
         yield* client[WS_METHODS.serverUpdateSettings]({
           patch: { defaultRuntimeMode: "full-access" },
           providerInstanceMutation,
         }).pipe(Effect.flip),
       ).toMatchObject({ requiredPermission: AuthSettingsWriteScope });
-      expect(handled).toBe(1);
+      expect(handled).toBe(2);
     }).pipe(Effect.scoped),
   );
 
-  it.effect("does not let a settings grant create or remove providers", () =>
+  it.effect("does not let a settings grant create or remove providers or secret providers", () =>
     Effect.gen(function* () {
       let handled = false;
       const client = yield* RpcTest.makeClient(group).pipe(
@@ -193,6 +243,11 @@ describe("settings mutation authorization", () => {
         yield* client[WS_METHODS.serverUpdateSettings]({
           patch: {},
           providerInstanceMutation,
+        }).pipe(Effect.flip),
+      ).toMatchObject({ requiredPermission: AuthProvidersManageScope });
+      expect(
+        yield* client[WS_METHODS.serverUpdateSettings]({
+          patch: { secretProviders: { [SecretProviderId.make("personal")]: null } },
         }).pipe(Effect.flip),
       ).toMatchObject({ requiredPermission: AuthProvidersManageScope });
       expect(handled).toBe(false);

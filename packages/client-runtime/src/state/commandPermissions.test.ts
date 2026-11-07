@@ -161,6 +161,35 @@ describe("command permissions", () => {
         }),
       ),
   );
+  it.effect.each([
+    WS_METHODS.tailnetDevicesSetAccess,
+    WS_METHODS.tailnetDevicesUpdateSettings,
+    WS_METHODS.tailnetDevicesOpenDevice,
+  ])("requires the destination access grant for %s", (method) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const permissions = createCommandPermissions(runtime, method);
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(permissions.permissionAtom(env))).toBe(false);
+        expect(yield* permissions.authorize(registry, env).pipe(Effect.flip)).toMatchObject({
+          requiredPermission: AuthAccessWriteScope,
+        });
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthAccessWriteScope],
+            permissions: [AuthAccessWriteScope],
+          }),
+        );
+        expect(registry.get(permissions.permissionAtom(env))).toBe(true);
+        yield* permissions.authorize(registry, env);
+        registry.set(sessions(other), AsyncResult.success(grant(true)));
+        expect(registry.get(permissions.permissionAtom(other))).toBe(false);
+      }),
+    ),
+  );
   it.effect("waits for an initial grant", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -333,6 +362,7 @@ it.effect(
           label: "Box",
           urls: ["https://box.example.test"],
           access: "auto",
+          origin: "paired",
           linkedAt: DateTime.makeUnsafe("2026-10-01T12:00:00Z"),
           expiresAt: DateTime.makeUnsafe("2026-10-31T12:00:00Z"),
           lastReachedAt: null,

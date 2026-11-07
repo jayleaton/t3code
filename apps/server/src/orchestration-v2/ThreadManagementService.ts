@@ -15,10 +15,15 @@ import type {
 import {
   type ChatAttachment,
   CommandId,
+  isListedThread,
   MessageId,
   OrchestrationV2StopWorkflowError,
   type OrchestrationV2StopWorkflowInput,
+  OrchestrationV2ForceStopThreadError,
+  type OrchestrationV2ForceStopThreadInput,
+  type OrchestrationV2ForceStopThreadResult,
   type ModelSelection,
+  ProviderRequestKind,
   type OrchestrationV2Actor,
   type OrchestrationV2Command,
   type OrchestrationV2GetTurnItemResult,
@@ -34,20 +39,23 @@ import {
   ProjectId,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   ProviderInstanceId,
+  type ProviderSessionId,
   resolveProjectProviderInstanceEnabled,
   RunId,
   type ScheduledTaskId,
   ThreadId,
   type WorktreeSetupSnapshot,
-  isSubagentThread,
   type TurnItemId,
 } from "@t3tools/contracts";
 import { delegatedTaskProgress } from "@t3tools/provider-core/server/subagentProjection";
 import { threadTranscriptHeader } from "@t3tools/shared/threadTranscript";
+import { AgentScope } from "@t3tools/shared/AgentScope";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
@@ -176,7 +184,10 @@ export interface ThreadManagementWaitInput {
    * completion delivery will wake it again, as a delegated task's result does.
    */
   readonly untilDelegatedWorkSettled?: boolean;
-  /** Also return while the thread is blocked on a live question, which no run end will follow. */
+  /**
+   * Also return while the thread is blocked on a live question or approval,
+   * which no run end will follow.
+   */
   readonly untilQuestion?: boolean;
 }
 
@@ -186,8 +197,19 @@ export interface ThreadManagementWaitResult {
   readonly timedOut: boolean;
   /** With `untilDelegatedWorkSettled`, once settled: the run with the thread's final answer. */
   readonly resultRun?: OrchestrationV2Run;
+  /**
+   * With `untilDelegatedWorkSettled`, once the selected run ended: `working` while
+   * another run continues the thread, `waiting_for_children` while its tasks or
+   * awaited background work remain, `result_available` once settled.
+   */
+  readonly workState?: ReturnType<typeof delegatedTaskProgress>["state"];
   /** With `untilQuestion`: the live question the thread is blocked on. */
   readonly pendingQuestion?: RuntimeRequestId;
+  /** With `untilQuestion`: the oldest live approval the thread is blocked on. */
+  readonly pendingApproval?: {
+    readonly requestId: RuntimeRequestId;
+    readonly kind: ProviderRequestKind;
+  };
 }
 
 export interface ThreadManagementInterruptInput {
@@ -409,10 +431,15 @@ export interface ThreadManagementServiceShape {
     ProjectionRecords<K>,
     ThreadManagementProjectionLoadError | ThreadManagementThreadNotFoundError
   >;
-  readonly getShellSnapshot: (options?: {
-    readonly location?: "active" | "archive";
-  }) => Effect.Effect<OrchestrationV2ThreadShellSnapshot, Orchestrator.OrchestratorV2Error>;
+  readonly getShellSnapshot: (
+    options?: Pick<
+      ShellSnapshotOptions,
+      "location" | "projectId" | "unsettledOnly" | "worktreePath" | "threadIds"
+    >,
+  ) => Effect.Effect<OrchestrationV2ThreadShellSnapshot, Orchestrator.OrchestratorV2Error>;
   readonly listActiveSubagentThreadIds: Orchestrator.OrchestratorV2["Service"]["listActiveSubagentThreadIds"];
+  readonly countThreads: Orchestrator.OrchestratorV2["Service"]["countThreads"];
+  readonly listActiveShellIndex: Orchestrator.OrchestratorV2["Service"]["listActiveShellIndex"];
   readonly listOlderSettledThreads: Orchestrator.OrchestratorV2["Service"]["listOlderSettledThreads"];
   readonly readShellSnapshot: (
     options?: Pick<ShellSnapshotOptions, "location" | "familyOf" | "worktreePath" | "threadIds">,
@@ -421,7 +448,7 @@ export interface ThreadManagementServiceShape {
     Orchestrator.OrchestratorV2Error
   >;
   readonly getThreadShell: Orchestrator.OrchestratorV2["Service"]["getThreadShell"];
-  /** Omit `projectId` to list every project's threads. */
+  /** Omit `projectId` to list every project's threads. Side chats are never listed. */
   readonly listProjectThreads: (input: {
     readonly projectId?: ProjectId | undefined;
     readonly includeSubagents: boolean;
@@ -464,6 +491,13 @@ export interface ThreadManagementServiceShape {
   readonly stopWorkflow: (
     input: OrchestrationV2StopWorkflowInput,
   ) => Effect.Effect<void, OrchestrationV2StopWorkflowError>;
+  /**
+   * Kills the thread's agent for a provider that no longer responds, then ends
+   * its turn as interrupted. Never kills a process other working threads share.
+   */
+  readonly forceStopThread: (
+    input: OrchestrationV2ForceStopThreadInput,
+  ) => Effect.Effect<OrchestrationV2ForceStopThreadResult, OrchestrationV2ForceStopThreadError>;
   readonly awaitBackgroundTasks: (input: {
     readonly threadId: ThreadId;
     readonly taskIds: ReadonlyArray<string>;
@@ -557,12 +591,17 @@ function latestSteerableRun(
 }
 
 const SETTLE_AFTER_RUN_WAIT_MS = 24 * 60 * 60 * 1_000;
+const isApprovalRequestKind = Schema.is(ProviderRequestKind);
+const FORCE_STOP_REASON = "Force stopped by user";
+const FORCE_STOP_RELEASE_WAIT = "10 seconds";
+const isForceStopThreadError = Schema.is(OrchestrationV2ForceStopThreadError);
 
 const make = Effect.gen(function* () {
   const threadDispatch = yield* ThreadCommandExecutor.ThreadCommandExecutor;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
   const layerScope = yield* Effect.scope;
+  const agentScope = yield* AgentScope;
   const legacyImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
@@ -806,6 +845,22 @@ const make = Effect.gen(function* () {
             }),
           ),
         );
+      case "prepared-run.release":
+      case "prepared-run.retry":
+        return orchestrator
+          .getThreadRecords(command.threadId, ["runs"], { runIds: [command.runId] })
+          .pipe(
+            Effect.flatMap((projection) => {
+              const run = projection.runs.find((candidate) => candidate.id === command.runId);
+              return run === undefined
+                ? Effect.void
+                : assertProviderInstanceEnabled({
+                    projectId: projection.thread.projectId,
+                    commandId: command.commandId,
+                    instanceId: run.providerInstanceId,
+                  });
+            }),
+          );
       default:
         return Effect.void;
     }
@@ -820,6 +875,7 @@ const make = Effect.gen(function* () {
       return yield* dispatchMessage(command);
     }
     if (command.type !== "thread.create" && command.type !== "delegated_task.request") {
+      yield* assertDispatchTargetEnabled(command);
       return yield* orchestrator.dispatch(command);
     }
     // Only the server resolves profile snapshots; a caller-supplied one is dropped.
@@ -915,7 +971,9 @@ const make = Effect.gen(function* () {
         ),
         Effect.map((snapshot) =>
           snapshot.threads
-            .filter((thread) => input.includeSubagents || !isSubagentThread(thread))
+            .filter((thread) =>
+              input.includeSubagents ? thread.lineage.sideChat !== true : isListedThread(thread),
+            )
             .toSorted(
               (left, right) =>
                 DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt) ||
@@ -1057,7 +1115,7 @@ const make = Effect.gen(function* () {
       const records = yield* getProjectThreadRecords(
         input,
         ["runs", "messages", "subagents", "providerThreads"],
-        { messageRoles: ["user"] },
+        { messageRoles: ["user"], monitorNotificationsOnly: true },
       );
       const progress = delegatedTaskProgress(records);
       // A thread rolled back past all its work, with nothing left running, has no answer to wait for.
@@ -1065,25 +1123,39 @@ const make = Effect.gen(function* () {
         progress.resultRun === undefined &&
         records.runs.every((run) => isTerminalRunStatus(run.status))
       ) {
-        return latestRun(records);
+        return { workState: "result_available" as const, resultRun: latestRun(records) };
       }
-      if (progress.state !== "result_available") return undefined;
+      if (progress.state !== "result_available") {
+        return { workState: progress.state, resultRun: undefined };
+      }
+      // A pending result is a restart continuation or delivery about to run.
       const pending = yield* orchestrator
         .delegatedTaskResultPending(input.threadId)
         .pipe(Effect.mapError(loadError));
-      return pending ? undefined : progress.resultRun;
+      return pending
+        ? { workState: "working" as const, resultRun: undefined }
+        : { workState: progress.state, resultRun: progress.resultRun };
     });
     const untilQuestion = input.untilQuestion === true;
-    const blockingQuestion = getProjectThreadRecords(input, ["runtimeRequests"]).pipe(
-      Effect.map(
-        ({ runtimeRequests }) =>
-          runtimeRequests.find(
-            (request) =>
-              request.kind === "user_input" &&
-              request.status === "pending" &&
-              request.responseCapability.type === "live",
-          )?.id,
-      ),
+    const blockingRequests = getProjectThreadRecords(input, ["runtimeRequests"]).pipe(
+      Effect.map(({ runtimeRequests }) => {
+        const live = runtimeRequests.filter(
+          (request) => request.status === "pending" && request.responseCapability.type === "live",
+        );
+        let pendingApproval: ThreadManagementWaitResult["pendingApproval"];
+        let oldestCreatedAt = Infinity;
+        for (const request of live) {
+          if (!isApprovalRequestKind(request.kind)) continue;
+          const createdAt = DateTime.toEpochMillis(request.createdAt);
+          if (createdAt >= oldestCreatedAt) continue;
+          oldestCreatedAt = createdAt;
+          pendingApproval = { requestId: request.id, kind: request.kind };
+        }
+        return {
+          pendingQuestion: live.find((request) => request.kind === "user_input")?.id,
+          pendingApproval,
+        };
+      }),
     );
     const evaluate = Effect.fn("orchestrationV2.threadManagement.evaluate")(function* (
       runs: ReadonlyArray<OrchestrationV2Run>,
@@ -1092,19 +1164,24 @@ const make = Effect.gen(function* () {
       const current =
         outcomeNow.settled && untilDelegatedWorkSettled
           ? yield* delegatedWorkResult.pipe(
-              Effect.map((resultRun) => ({
+              Effect.map((delegated) => ({
                 ...outcomeNow,
-                settled: resultRun !== undefined,
-                resultRun,
+                ...delegated,
+                settled: delegated.resultRun !== undefined,
               })),
             )
-          : { ...outcomeNow, resultRun: undefined };
-      const pendingQuestion =
-        current.settled || !untilQuestion ? undefined : yield* blockingQuestion;
+          : { ...outcomeNow, resultRun: undefined, workState: undefined };
+      const blocked =
+        current.settled || !untilQuestion
+          ? { pendingQuestion: undefined, pendingApproval: undefined }
+          : yield* blockingRequests;
       return {
         ...current,
-        pendingQuestion,
-        done: current.settled || pendingQuestion !== undefined,
+        ...blocked,
+        done:
+          current.settled ||
+          blocked.pendingQuestion !== undefined ||
+          blocked.pendingApproval !== undefined,
       };
     });
     const settledResult = (current: Effect.Success<ReturnType<typeof evaluate>>) => ({
@@ -1112,9 +1189,13 @@ const make = Effect.gen(function* () {
       run: current.run,
       timedOut: !current.done,
       ...(current.resultRun === undefined ? {} : { resultRun: current.resultRun }),
+      ...(current.workState === undefined ? {} : { workState: current.workState }),
       ...(current.pendingQuestion === undefined
         ? {}
         : { pendingQuestion: current.pendingQuestion }),
+      ...(current.pendingApproval === undefined
+        ? {}
+        : { pendingApproval: current.pendingApproval }),
     });
     const initial = yield* evaluate(target.runs);
     if (initial.done) return settledResult(initial);
@@ -1252,6 +1333,153 @@ const make = Effect.gen(function* () {
     });
     return { type: "interrupt_requested", run: interruptibleRun, dispatch } as const;
   });
+
+  const forceStopThread: ThreadManagementServiceShape["forceStopThread"] = Effect.fn(
+    "ThreadManagementService.forceStopThread",
+  )(
+    function* (input) {
+      // Under the thread lock no new run can be created between the check and the kill. The
+      // settlement below dispatches, which takes that lock itself, so it runs after release.
+      const { records, target, killed } = yield* threadDispatch.withLock(
+        input.threadId,
+        Effect.gen(function* () {
+          const records = yield* orchestrator.getThreadRecords(input.threadId, [
+            "runs",
+            "providerThreads",
+            "providerTurns",
+          ]);
+          // The run Force stop acts on: the active one, else the latest that started. Queued
+          // follow-ups never ran, so they neither count as targets nor supersede the request.
+          const target =
+            latestActiveRun(records) ??
+            records.runs
+              .filter((run) => run.status !== "queued")
+              .reduce<OrchestrationV2Run | undefined>(
+                (current, run) =>
+                  current === undefined || run.ordinal > current.ordinal ? run : current,
+                undefined,
+              );
+          if (input.runId !== undefined && input.runId !== target?.id) {
+            return yield* new OrchestrationV2ForceStopThreadError({
+              threadId: input.threadId,
+              reason: "superseded",
+            });
+          }
+          // Shared scopes are never tracked per thread, so this only kills the thread's own agent.
+          const killed = yield* agentScope.kill(input.threadId);
+          return { records, target, killed };
+        }),
+      );
+      const sessionIds = new Set(
+        records.providerThreads.flatMap((providerThread) =>
+          providerThread.appThreadId === input.threadId && providerThread.providerSessionId !== null
+            ? [providerThread.providerSessionId]
+            : [],
+        ),
+      );
+      // A run that already ended may still hold background work; settling it is a no-op otherwise.
+      const run = target;
+      if (run !== undefined) {
+        const active = isActiveRun(run);
+        const providerTurn = records.providerTurns.findLast(
+          (turn) =>
+            turn.runAttemptId === run.activeAttemptId && (!active || turn.status === "running"),
+        );
+        const commandId = CommandId.make(
+          `server:force-stop:${run.id}:${yield* Clock.currentTimeMillis}`,
+        );
+        yield* providerTurn === undefined && !active
+          ? Effect.void
+          : providerTurn === undefined
+            ? orchestrator.dispatch({
+                type: "run.interrupt",
+                commandId,
+                threadId: input.threadId,
+                runId: run.id,
+                reason: FORCE_STOP_REASON,
+              })
+            : orchestrator.dispatch({
+                type: "thread.background-work.settle",
+                commandId,
+                threadId: input.threadId,
+                providerThreadId: providerTurn.providerThreadId,
+                providerTurnId: providerTurn.id,
+                reason: FORCE_STOP_REASON,
+              });
+      }
+      const ownProviderThreadIds = records.providerThreads.flatMap((providerThread) =>
+        providerThread.appThreadId === input.threadId ? [providerThread.id] : [],
+      );
+      const detach = (providerSessionId: ProviderSessionId) =>
+        sessions
+          .detach({ providerSessionId, threadId: input.threadId, detail: FORCE_STOP_REASON })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("orchestration-v2.force-stop-detach-failed", {
+                threadId: input.threadId,
+                cause,
+              }),
+            ),
+            Effect.forkIn(layerScope),
+          );
+      let shared = false;
+      const sharedWith = new Set<ThreadId>();
+      const releases: Array<{
+        readonly providerSessionId: ProviderSessionId;
+        readonly fiber: Fiber.Fiber<boolean, ProviderSessionManager.ProviderSessionManagerV2Error>;
+      }> = [];
+      for (const providerSessionId of sessionIds) {
+        if (!(yield* sessions.isLive(providerSessionId))) continue;
+        // Decided just before teardown, so the reply matches what happens to the process.
+        const others = yield* sessions.otherWorkingThreads({
+          providerSessionId,
+          threadId: input.threadId,
+        });
+        for (const threadId of others) sharedWith.add(threadId);
+        if (others.length > 0) {
+          shared = true;
+          yield* detach(providerSessionId);
+          continue;
+        }
+        // The session manager re-checks atomically with turn starts and keeps a session a
+        // sibling began using in the meantime.
+        const fiber = yield* sessions
+          .releaseUnlessBusy({
+            providerSessionId,
+            ownProviderThreadIds,
+            reason: "manual_shutdown",
+            detail: FORCE_STOP_REASON,
+          })
+          .pipe(Effect.forkIn(layerScope));
+        releases.push({ providerSessionId, fiber });
+      }
+      // Teardown waits on the provider's own exit paths; past this bound it keeps going on its own.
+      let releasing = false;
+      for (const release of releases) {
+        const released = yield* Fiber.join(release.fiber).pipe(
+          Effect.timeoutOption(FORCE_STOP_RELEASE_WAIT),
+        );
+        if (Option.isNone(released)) {
+          releasing = true;
+        } else if (!released.value) {
+          shared = true;
+          yield* detach(release.providerSessionId);
+        }
+      }
+      return {
+        outcome: killed ? "killed" : shared ? "shared" : releasing ? "releasing" : "released",
+        sharedWithThreadIds: [...sharedWith],
+      } as const;
+    },
+    (effect, input) =>
+      effect.pipe(
+        Effect.mapError((cause) =>
+          isForceStopThreadError(cause)
+            ? cause
+            : new OrchestrationV2ForceStopThreadError({ threadId: input.threadId, cause }),
+        ),
+      ),
+  );
 
   const stopWorkflow: ThreadManagementServiceShape["stopWorkflow"] = Effect.fn(
     "ThreadManagementService.stopWorkflow",
@@ -1519,6 +1747,8 @@ const make = Effect.gen(function* () {
     getProjectThreadRecords,
     getShellSnapshot: orchestrator.getShellSnapshot,
     listActiveSubagentThreadIds: orchestrator.listActiveSubagentThreadIds,
+    countThreads: orchestrator.countThreads,
+    listActiveShellIndex: orchestrator.listActiveShellIndex,
     listOlderSettledThreads: orchestrator.listOlderSettledThreads,
     readShellSnapshot: orchestrator.readShellSnapshot,
     getThreadShell: orchestrator.getThreadShell,
@@ -1533,6 +1763,7 @@ const make = Effect.gen(function* () {
     interruptThread,
     stopDelegatedTasks,
     stopWorkflow,
+    forceStopThread,
     awaitBackgroundTasks,
     getThreadEventSequence: orchestrator.getThreadEventSequence,
     recoverDelegatedTask: orchestrator.recoverDelegatedTask,

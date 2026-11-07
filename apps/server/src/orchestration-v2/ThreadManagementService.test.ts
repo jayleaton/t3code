@@ -28,6 +28,8 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
+import { AgentScope } from "@t3tools/shared/AgentScope";
+
 import * as ServerSettings from "../serverSettings.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
@@ -276,7 +278,7 @@ it.effect("waitForThread returns early once the thread blocks on a live question
     const projectId = ProjectId.make("project:thread-management:wait-question");
     const threadId = ThreadId.make("thread:thread-management:wait-question");
     const runId = RunId.make("run:thread-management:wait-question");
-    const subscribed = yield* Deferred.make<void>();
+    let subscribed = yield* Deferred.make<void>();
     const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
     const question = (id: string, type: "live" | "message") => ({
       id: RuntimeRequestId.make(id),
@@ -361,6 +363,40 @@ it.effect("waitForThread returns early once the thread blocks on a live question
       run: { id: runId, status: "running" },
       pendingQuestion: "request:wait-question:later",
     });
+
+    // An approval blocks the run on a person too, so it also ends the wait.
+    const approval = (id: string, createdAt: number) => ({
+      id: RuntimeRequestId.make(id),
+      kind: "command",
+      status: "pending",
+      responseCapability: { type: "live" },
+      createdAt: DateTime.makeUnsafe(createdAt),
+    });
+    runtimeRequests = [];
+    subscribed = yield* Deferred.make<void>();
+    const approvalFiber = yield* service
+      .waitForThread({
+        projectId,
+        threadId,
+        runId,
+        timeoutMs: 60 * 60 * 1_000,
+        untilQuestion: true,
+      })
+      .pipe(Effect.forkChild);
+    yield* Effect.raceFirst(Deferred.await(subscribed), Fiber.await(approvalFiber));
+    runtimeRequests = [
+      approval("request:wait-approval:newer", 2_000),
+      approval("request:wait-approval:older", 1_000),
+    ] as unknown as typeof runtimeRequests;
+    yield* Queue.offer(events, stored(3));
+
+    const approvalResult = yield* Fiber.join(approvalFiber);
+    expect(approvalResult).toMatchObject({
+      timedOut: false,
+      run: { id: runId, status: "running" },
+      pendingApproval: { requestId: "request:wait-approval:older", kind: "command" },
+    });
+    expect(approvalResult).not.toHaveProperty("pendingQuestion");
   }),
 );
 
@@ -370,7 +406,7 @@ it.effect("waitForThread can wait past an ended run for the thread's delegated w
     const threadId = ThreadId.make("thread:thread-management:wait-delegated");
     const runId = RunId.make("run:thread-management:wait-delegated");
     const wakeRunId = RunId.make("run:thread-management:wait-delegated:wake");
-    const subscribed = yield* Deferred.make<void>();
+    let subscribed = yield* Deferred.make<void>();
     const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
     const at = (seconds: number) => DateTime.makeUnsafe(seconds * 1_000);
     const run = (id: RunId, ordinal: number, status: OrchestrationV2Run["status"], end: number) =>
@@ -428,6 +464,31 @@ it.effect("waitForThread can wait past an ended run for the thread's delegated w
       yield* service.waitForThread({ projectId, threadId, runId, timeoutMs: 60 * 60 * 1_000 }),
     ).not.toHaveProperty("resultRun");
 
+    // A wait that runs out says why the ended run is not the answer yet.
+    const timedOut = Effect.fnUntraced(function* () {
+      const waiting = yield* service
+        .waitForThread({
+          projectId,
+          threadId,
+          runId,
+          timeoutMs: 1_000,
+          untilDelegatedWorkSettled: true,
+        })
+        .pipe(Effect.forkChild);
+      yield* TestClock.adjust(Duration.millis(1_000));
+      return yield* Fiber.join(waiting);
+    });
+    expect(yield* timedOut()).toMatchObject({
+      timedOut: true,
+      run: { id: runId, status: "completed" },
+      workState: "waiting_for_children",
+    });
+    // The task finishes; its delivery wakes the thread, whose next run answers.
+    subagents = [{ status: "completed" }];
+    runs = [...runs, run(wakeRunId, 2, "running", 3)];
+    expect(yield* timedOut()).toMatchObject({ timedOut: true, workState: "working" });
+
+    subscribed = yield* Deferred.make<void>();
     const fiber = yield* service
       .waitForThread({
         projectId,
@@ -439,9 +500,7 @@ it.effect("waitForThread can wait past an ended run for the thread's delegated w
       .pipe(Effect.forkChild);
     // A wait that returns early fails below instead of hanging here.
     yield* Effect.raceFirst(Deferred.await(subscribed), Fiber.await(fiber));
-    // The task finishes; its delivery wakes the thread, whose next run answers.
-    subagents = [{ status: "completed" }];
-    runs = [...runs, run(wakeRunId, 2, "completed", 3)];
+    runs = [runs[0]!, run(wakeRunId, 2, "completed", 3)];
     yield* Queue.offer(events, stored(1, { type: "subagent.updated", payload: {} }));
     const result = yield* Fiber.join(fiber);
 
@@ -449,6 +508,7 @@ it.effect("waitForThread can wait past an ended run for the thread's delegated w
       timedOut: false,
       run: { id: runId, status: "completed" },
       resultRun: { id: wakeRunId, status: "completed" },
+      workState: "result_available",
     });
   }),
 );
@@ -698,5 +758,178 @@ it.effect.each([
     yield* service.settleAfterRun({ projectId, threadId, runId });
 
     expect(dispatched).toEqual(settles ? ["thread.settle"] : []);
+  }),
+);
+
+it.effect.each([
+  {
+    name: "kills the thread's own agent and ends its turn",
+    others: [] as ReadonlyArray<string>,
+    killed: true,
+    expected: { outcome: "killed", sharedWithThreadIds: [] },
+    teardown: ["release"],
+  },
+  {
+    name: "keeps a process another working thread shares and only ends this turn",
+    others: ["thread:thread-management:force-stop:other"],
+    killed: false,
+    expected: {
+      outcome: "shared",
+      sharedWithThreadIds: ["thread:thread-management:force-stop:other"],
+    },
+    teardown: ["detach"],
+  },
+  {
+    name: "still settles a finished run's background work in a shared process",
+    others: ["thread:thread-management:force-stop:other"],
+    killed: false,
+    settledRun: true,
+    expected: {
+      outcome: "shared",
+      sharedWithThreadIds: ["thread:thread-management:force-stop:other"],
+    },
+    teardown: ["detach"],
+  },
+  {
+    name: "detaches when a sibling starts a turn just before the session is released",
+    others: [] as ReadonlyArray<string>,
+    killed: false,
+    siblingBusy: true,
+    expected: { outcome: "shared", sharedWithThreadIds: [] },
+    teardown: ["release", "detach"],
+  },
+  {
+    name: "reports a teardown that has not finished in time as still releasing",
+    others: [] as ReadonlyArray<string>,
+    killed: false,
+    releaseHangs: true,
+    expected: { outcome: "releasing", sharedWithThreadIds: [] },
+    teardown: ["release"],
+  },
+])("Force stop $name", ({ others, killed, expected, teardown, ...row }) =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("thread:thread-management:force-stop");
+    const providerSessionId = ProviderSessionId.make("provider-session:force-stop");
+    const providerThreadId = ProviderThreadId.make("provider-thread:force-stop");
+    const runId = RunId.make("run:thread-management:force-stop");
+    const dispatched: Array<OrchestrationV2Command | { readonly type: string }> = [];
+    const teardowns: Array<string> = [];
+    const tornDown = yield* Deferred.make<void>();
+    const layerTest = ThreadManagementService.layer.pipe(
+      Layer.provide(
+        Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+          isLive: () => Effect.succeed(true),
+          otherWorkingThreads: () => Effect.succeed(others.map((id) => ThreadId.make(id))),
+          releaseUnlessBusy: () =>
+            Effect.sync(() => teardowns.push("release")).pipe(
+              Effect.andThen(
+                "releaseHangs" in row ? Effect.never : Effect.succeed(!("siblingBusy" in row)),
+              ),
+            ),
+          detach: () =>
+            Effect.sync(() => teardowns.push("detach")).pipe(
+              Effect.andThen(Deferred.succeed(tornDown, undefined)),
+              Effect.asVoid,
+            ),
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          getThreadRecords: () =>
+            Effect.succeed({
+              thread: { id: threadId, deletedAt: null },
+              runs: [
+                {
+                  id: runId,
+                  ordinal: 1,
+                  status: "settledRun" in row ? "completed" : "running",
+                  activeAttemptId: "attempt",
+                },
+                // A queued follow-up neither supersedes the request nor becomes the target.
+                { id: RunId.make("run:queued-follow-up"), ordinal: 2, status: "queued" },
+              ],
+              providerThreads: [{ id: providerThreadId, appThreadId: threadId, providerSessionId }],
+              providerTurns: [
+                {
+                  id: "provider-turn:force-stop",
+                  providerThreadId,
+                  runAttemptId: "attempt",
+                  status: "settledRun" in row ? "completed" : "running",
+                },
+              ],
+            } as unknown as OrchestrationV2ThreadProjection),
+          dispatch: (command) =>
+            Effect.sync(() => {
+              dispatched.push(command);
+              return { sequence: 1, storedEvents: [] } as never;
+            }),
+        }),
+      ),
+      Layer.provide(
+        Layer.succeed(AgentScope, {
+          ...AgentScope.defaultValue(),
+          kill: () => Effect.succeed(killed),
+        }),
+      ),
+      Layer.provide(ServerSettings.layerTest()),
+      Layer.provide(layerReceiptsTest),
+      Layer.provide(Layer.mock(ProjectionStore.ProjectionStoreV2)({})),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* ThreadManagementService.ThreadManagementService;
+      const stopping = yield* service.forceStopThread({ threadId, runId }).pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 seconds");
+      expect(yield* Fiber.join(stopping)).toEqual(expected);
+      expect(dispatched).toMatchObject([
+        {
+          type: "thread.background-work.settle",
+          providerThreadId,
+          reason: "Force stopped by user",
+        },
+      ]);
+      if (teardown.at(-1) === "detach") yield* Deferred.await(tornDown);
+      expect(teardowns).toEqual(teardown);
+    }).pipe(Effect.provide(layerTest));
+  }),
+);
+
+it.effect("Force stop refuses once a newer run has started, before killing anything", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("thread:thread-management:force-stop-superseded");
+    let killed = false;
+    const layerTest = ThreadManagementService.layer.pipe(
+      Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+      Layer.provide(
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          getThreadRecords: () =>
+            Effect.succeed({
+              thread: { id: threadId, deletedAt: null },
+              runs: [
+                { id: RunId.make("run:stopped"), ordinal: 1, status: "running" },
+                { id: RunId.make("run:newer"), ordinal: 2, status: "running" },
+              ],
+              providerThreads: [],
+              providerTurns: [],
+            } as unknown as OrchestrationV2ThreadProjection),
+        }),
+      ),
+      Layer.provide(
+        Layer.succeed(AgentScope, {
+          ...AgentScope.defaultValue(),
+          kill: () => Effect.sync(() => (killed = true)),
+        }),
+      ),
+      Layer.provide(ServerSettings.layerTest()),
+      Layer.provide(layerReceiptsTest),
+      Layer.provide(Layer.mock(ProjectionStore.ProjectionStoreV2)({})),
+    );
+    const error = yield* Effect.gen(function* () {
+      const service = yield* ThreadManagementService.ThreadManagementService;
+      return yield* Effect.flip(
+        service.forceStopThread({ threadId, runId: RunId.make("run:stopped") }),
+      );
+    }).pipe(Effect.provide(layerTest));
+    expect(error.reason).toBe("superseded");
+    expect(killed).toBe(false);
   }),
 );

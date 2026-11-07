@@ -217,6 +217,12 @@ export const ThreadTaskReadInput = Schema.Struct({
         "A child chat whose task you own, or your own chat. Omit to list every task you own.",
     }),
   ),
+  afterCursor: Schema.optional(
+    NonNegativeInt.annotate({
+      description:
+        "Without threadId: only tasks changed after this cursor from an earlier read, plus `removed`. Omit for every task.",
+    }),
+  ),
 });
 export type ThreadTaskReadInput = typeof ThreadTaskReadInput.Type;
 
@@ -271,6 +277,8 @@ export type ThreadTaskWatchInput = typeof ThreadTaskWatchInput.Type;
 
 export const ThreadTaskListResult = Schema.Struct({
   tasks: Schema.Array(ThreadTaskView),
+  /** Delta reads: worker chats whose tasks moved to another owner; drop them. */
+  removed: Schema.optional(Schema.Array(ThreadId)),
   cursor: NonNegativeInt,
   timedOut: Schema.Boolean,
 });

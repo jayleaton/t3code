@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
+  EnvironmentId,
   MessageId,
   EventId,
   NodeId,
@@ -257,6 +258,120 @@ it.effect("marks a never-visited thread's first completion unread", () =>
       (yield* projections.getThreadShell(threadId))?.lastVisitedAt,
       ended.lastVisitedAt,
     );
+  }).pipe(Effect.provide(layerTest)),
+);
+
+const completeAndSnoozeThread = Effect.fn("test.completeAndSnoozeThread")(function* (
+  name: string,
+  snoozeMinutes: number,
+) {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const projections = yield* ProjectionStore.ProjectionStoreV2;
+  const threadId = ThreadId.make(`thread:${name}`);
+  yield* orchestrator.dispatch({
+    type: "thread.create",
+    commandId: CommandId.make(`create-${name}`),
+    threadId,
+    projectId: ProjectId.make(`project:${name}`),
+    title: "Snoozed completion",
+    modelSelection,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    createdBy: "user",
+    creationSource: "web",
+  });
+  yield* orchestrator.dispatch({
+    type: "message.dispatch",
+    commandId: CommandId.make(`dispatch-${name}`),
+    threadId,
+    messageId: MessageId.make(`dispatch-${name}`),
+    text: "Run in the background",
+    attachments: [],
+    dispatchMode: { type: "defer_start" },
+    createdBy: "agent",
+    creationSource: "mcp",
+  });
+  yield* orchestrator.dispatch({
+    type: "run.interrupt",
+    commandId: CommandId.make(`interrupt-${name}`),
+    threadId,
+    runId: (yield* projections.getThreadProjection(threadId)).runs[0]!.id,
+  });
+  const completedAt = (yield* projections.getThreadProjection(threadId)).runs.at(-1)?.completedAt;
+  assert.ok(completedAt);
+  yield* TestClock.adjust("1 second");
+  const snoozedUntil = DateTime.add(yield* DateTime.now, { minutes: snoozeMinutes });
+  yield* orchestrator.dispatch({
+    type: "thread.snooze",
+    commandId: CommandId.make(`snooze-${name}`),
+    threadId,
+    snoozedUntil: DateTime.formatIso(snoozedUntil),
+  });
+  return { threadId, completedAt, snoozedUntil };
+});
+
+it.effect("mark unread retires an expired snooze so a dismissed wake stays dismissed", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const { threadId, completedAt, snoozedUntil } = yield* completeAndSnoozeThread(
+      "mark-unread-expired-snooze",
+      1,
+    );
+    yield* TestClock.adjust("2 minutes");
+    yield* orchestrator.dispatch({
+      type: "thread.visit",
+      commandId: CommandId.make("dismiss-woke"),
+      threadId,
+      visitedAt: DateTime.formatIso(snoozedUntil),
+    });
+    const dismissed = yield* projections.getThread(threadId);
+    assert.deepEqual(dismissed.lastVisitedAt, snoozedUntil);
+
+    yield* orchestrator.dispatch({
+      type: "thread.mark-unread",
+      commandId: CommandId.make("mark-unread-expired-snooze"),
+      threadId,
+    });
+    assert.deepEqual(yield* projections.getThread(threadId), {
+      ...dismissed,
+      lastVisitedAt: DateTime.subtract(completedAt, { milliseconds: 1 }),
+      snoozedUntil: null,
+      snoozedAt: null,
+      lastSnoozeWakeAt: snoozedUntil,
+    });
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("mark unread leaves a future snooze untouched", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const { threadId, completedAt } = yield* completeAndSnoozeThread(
+      "mark-unread-future-snooze",
+      60,
+    );
+    yield* TestClock.adjust("1 minute");
+    yield* orchestrator.dispatch({
+      type: "thread.visit",
+      commandId: CommandId.make("visit-snoozed"),
+      threadId,
+      visitedAt: DateTime.formatIso(yield* DateTime.now),
+    });
+    const visited = yield* projections.getThread(threadId);
+    assert.isNotNull(visited.snoozedUntil);
+
+    yield* orchestrator.dispatch({
+      type: "thread.mark-unread",
+      commandId: CommandId.make("mark-unread-future-snooze"),
+      threadId,
+    });
+    assert.deepEqual(yield* projections.getThread(threadId), {
+      ...visited,
+      lastVisitedAt: DateTime.subtract(completedAt, { milliseconds: 1 }),
+    });
   }).pipe(Effect.provide(layerTest)),
 );
 
@@ -880,7 +995,7 @@ it.effect("keeps delegated child pull-request links independent of the parent", 
   }).pipe(Effect.provide(layerTest)),
 );
 
-it.effect("a named child's or child chat's question wakes its parent", () =>
+it.effect("a named child's or child chat's question or approval wakes its parent", () =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -1044,6 +1159,81 @@ it.effect("a named child's or child chat's question wakes its parent", () =>
       (yield* projections.getRuntimeRequest(task.childThreadId!, named.payload.id))?.status,
       "pending",
     );
+
+    const approvalOn = (threadId: ThreadId, run: typeof namedRun, requestId: string) =>
+      ({
+        ...question(threadId, run, requestId),
+        payload: {
+          ...question(threadId, run, requestId).payload,
+          kind: "command",
+          responseCapability: {
+            type: "live",
+            providerSessionId: ProviderSessionId.make(`session:${requestId}`),
+          },
+        },
+      }) satisfies OrchestrationV2DomainEvent;
+    // A parent on another environment is out of reach, even when a local thread shares its id.
+    const remoteThreadId = ThreadId.make("thread:remote-approval-child");
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make(`create-${remoteThreadId}`),
+      threadId: remoteThreadId,
+      projectId: ProjectId.make("project:question"),
+      title: "Remote",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "agent",
+      creationSource: "mcp",
+      parentThreadId,
+      parentEnvironmentId: EnvironmentId.make("environment:remote"),
+    });
+    const approval = approvalOn(launchedThreadId, launchedRun, "request:launched-approval");
+    const remoteApproval = approvalOn(
+      remoteThreadId,
+      yield* startRun(remoteThreadId),
+      "request:remote-approval",
+    );
+    yield* eventSink.write({ events: [approval, remoteApproval] });
+    yield* reactor.handle(approval);
+    yield* reactor.handle(approval);
+    yield* reactor.handle(remoteApproval);
+    const approvalWakes = (yield* projections.getThreadRecords(parentThreadId, [
+      "messages",
+    ])).messages.filter((message) => message.notification?.summary.includes("approval"));
+    assert.deepEqual(
+      approvalWakes.map((wake) => wake.notification),
+      [
+        {
+          source: { kind: "subagent", childThreadId: launchedThreadId },
+          outcome: "updated",
+          summary: 'Child thread "Reviewer" is waiting for approval',
+        },
+      ],
+    );
+    assert.include(
+      approvalWakes[0]?.text,
+      `Child thread ${launchedThreadId} is blocked on an approval and cannot continue. Read it with t3_thread_read view activity on threadId ${launchedThreadId} (the approval_request item), or t3_get_pending_questions. Answer with t3_respond_to_approval threadId ${launchedThreadId}, approvalRequestId ${approval.payload.id}`,
+    );
+    const approvalWakeRun = (yield* projections.getThreadRecords(parentThreadId, [
+      "runs",
+    ])).runs.find((run) => run.userMessageId === approvalWakes[0]!.id)!;
+    assert.equal(approvalWakeRun.status, "queued");
+    const approved = {
+      ...approval,
+      id: EventId.make("event:launched-approval-resolved"),
+      payload: { ...approval.payload, status: "resolved" as const, resolvedAt: now },
+    };
+    yield* eventSink.write({ events: [approved] });
+    yield* reactor.handle(approved);
+    assert.equal(
+      (yield* projections.getThreadRecords(parentThreadId, ["runs"])).runs.find(
+        (run) => run.id === approvalWakeRun.id,
+      )?.status,
+      "cancelled",
+    );
   }).pipe(Effect.provide(DelegatedTaskQuestionReactor.layer.pipe(Layer.provideMerge(layerTest)))),
 );
 
@@ -1100,7 +1290,6 @@ it.effect("wakes the parent once when its delegated task asks a question", () =>
       eventId: string,
       requestId: string,
       responseCapability: "live" | "message" = "message",
-      kind: "user_input" | "command" = "user_input",
       run = childRun,
     ) =>
       ({
@@ -1114,7 +1303,7 @@ it.effect("wakes the parent once when its delegated task asks a question", () =>
           nodeId: run.rootNodeId!,
           providerTurnId: null,
           nativeRequestRef: null,
-          kind,
+          kind: "user_input",
           status: "pending",
           responseCapability:
             responseCapability === "live"
@@ -1127,10 +1316,9 @@ it.effect("wakes the parent once when its delegated task asks a question", () =>
     const question = requestEvent("event:question", "request:question", "live");
     const asyncQuestion = requestEvent("event:async-question", "request:async-question");
     const answered = requestEvent("event:answered", "request:answered", "live");
-    const approval = requestEvent("event:approval", "request:approval", "message", "command");
     const eventSink = yield* EventSink.EventSinkV2;
     yield* eventSink.write({
-      events: [question, asyncQuestion, answered, approval],
+      events: [question, asyncQuestion, answered],
     });
 
     yield* reactor.handle(question);
@@ -1158,7 +1346,6 @@ it.effect("wakes the parent once when its delegated task asks a question", () =>
       ],
     });
     yield* reactor.handle(answered);
-    yield* reactor.handle(approval);
 
     const wakes = (yield* projections.getThreadProjection(parentThreadId)).messages.filter(
       (message) => message.notification !== undefined,
@@ -1362,7 +1549,6 @@ it.effect("wakes the parent once when its delegated task asks a question", () =>
       "event:followup-question",
       "request:followup-question",
       "live",
-      "user_input",
       followup,
     );
     yield* eventSink.write({ events: [followupQuestion] });

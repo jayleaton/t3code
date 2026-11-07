@@ -3,6 +3,7 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { useMemo, useSyncExternalStore } from "react";
 
 import { scopedProjectKey } from "../../lib/scopedEntities";
+import { useExpandedParents } from "../../state/expanded-parents";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../../state/olderSettledShelf";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import {
@@ -26,6 +27,17 @@ function useKeySet(newlineSeparatedKeys: string): ReadonlySet<string> {
 }
 
 type LayoutInput = Parameters<typeof buildThreadListV2Items>[0];
+
+/**
+ * The React Compiler memoizes on the values a callback reads and drops unread entries from a
+ * dependency list, so the version that marks an expired grace must be read to rebuild the list.
+ */
+function observeInbox(
+  threads: Parameters<typeof threadListInboxReturns.observe>[0],
+  _expiredGraceVersion: number,
+) {
+  return threadListInboxReturns.observe(threads);
+}
 
 /**
  * Home's and the thread sidebar's thread list. Its result is one value a screen only reads:
@@ -56,14 +68,14 @@ export function useThreadListV2(input: {
   readonly selectedThreadKey: string | null;
 }) {
   const { threads, workingShelfEnabled } = input;
+  const expandedParents = useExpandedParents();
   // A thread can stop working when the threads change, or when its exit grace expires.
   const inboxVersion = useSyncExternalStore(
     threadListInboxReturns.subscribe,
     threadListInboxReturns.getSnapshot,
   );
   const inbox = useMemo(
-    () => threadListInboxReturns.observe(workingShelfEnabled ? threads : null),
-    // oxlint-disable-next-line react/memo-dependencies -- the version signals an expired grace
+    () => observeInbox(workingShelfEnabled ? threads : null, inboxVersion),
     [threads, workingShelfEnabled, inboxVersion],
   );
   // Up/down menu availability for every card, computed once per section per
@@ -117,6 +129,7 @@ export function useThreadListV2(input: {
     snoozedShelfExpanded: input.snoozedShelfExpanded,
     settledShelfExpanded: input.settledShelfExpanded,
     selectedThreadKey: input.selectedThreadKey,
+    expandedParentKeys: expandedParents.expanded,
     isListedSettled: olderSettledShelf.isListed,
     unloadedSettledCount: olderSettledShelf.unloadedCount(
       threads.filter(
@@ -164,7 +177,13 @@ export function useThreadListV2(input: {
     moveAvailability,
     shelfPreferencesLoading: !input.shelfPreferencesLoaded,
   });
-  return { layout, items, contentOnlyThreadKeys, olderSettledShelf };
+  return {
+    layout,
+    items,
+    contentOnlyThreadKeys,
+    olderSettledShelf,
+    toggleExpandedParent: expandedParents.toggle,
+  };
 }
 
 /** The list's scope per environment: its projects there, or every project. */

@@ -53,7 +53,7 @@ function shouldUseSidebarUpdateReleaseNotesPopover(
   showUpdateDetails: boolean,
   state: DesktopUpdateState | null,
 ): boolean {
-  return showUpdateDetails && state?.channel === "nightly" && state.releaseNotes.length > 0;
+  return showUpdateDetails && (state?.releaseNotes.length ?? 0) > 0;
 }
 
 function handleSidebarUpdateReleaseNotesPopoverOpenChange(
@@ -78,15 +78,19 @@ function resolveSidebarUpdatePresentation({
   showsEverything,
   run,
   isDownloading,
-  showCheckIcon,
+  isChecking,
+  isCheckIconLatched,
 }: {
   readonly action: ReturnType<typeof resolveDesktopUpdateButtonAction>;
   readonly showsEverything: boolean;
   readonly run: UpdateEverythingRun | null;
   readonly isDownloading: boolean;
-  readonly showCheckIcon: boolean;
+  readonly isChecking: boolean;
+  readonly isCheckIconLatched: boolean;
 }) {
   const showUpdateDetails = action !== "none" || showsEverything || run !== null || isDownloading;
+  // The latch only finishes a spin; it must not hide an update the check just found.
+  const showCheckIcon = isChecking || (isCheckIconLatched && !showUpdateDetails);
   const iconStatus: DesktopUpdateStatusIconState = showCheckIcon
     ? "checking"
     : isDownloading
@@ -105,6 +109,7 @@ function resolveSidebarUpdatePresentation({
 
   return {
     iconStatus,
+    showCheckIcon,
     showUpdateDetails,
     showUpdateIconState: showUpdateDetails && !showCheckIcon,
   } as const;
@@ -134,7 +139,7 @@ const toastUpdateError: ReportLocalUpdateError = (title, description) => {
   toastManager.add(stackedThreadToast({ type: "error", title, description }));
 };
 
-async function downloadLocalUpdate(
+export async function downloadLocalUpdate(
   bridge: DesktopBridge,
   {
     notifyDownloaded,
@@ -160,12 +165,13 @@ async function downloadLocalUpdate(
   }
 }
 
-async function installLocalUpdate(
+export async function installLocalUpdate(
   bridge: DesktopBridge,
   reportError: ReportLocalUpdateError = toastUpdateError,
+  expectedVersion?: string,
 ): Promise<boolean> {
   try {
-    const result = await bridge.installUpdate();
+    const result = await bridge.installUpdate(expectedVersion);
     if (!result.accepted) {
       showDesktopUpdateDownloadedToast(bridge, result.state);
       return false;
@@ -240,30 +246,33 @@ function DesktopUpdateControl({
   const runsEverything = everything.hasUpdates && !isDownloading;
   const run = useUpdateEverythingRun();
   const isRunningEverything = run !== null;
-  const showCheckIcon = shouldShowDesktopUpdateCheckIcon({
-    isAnimationLatched: isCheckAnimationLatched,
-    isChecking: state?.status === "checking",
-    prefersReducedMotion,
-  });
-  const { iconStatus, showUpdateDetails, showUpdateIconState } = resolveSidebarUpdatePresentation({
-    action,
-    showsEverything: runsEverything,
-    run,
-    isDownloading,
-    showCheckIcon,
-  });
-  const idleTooltip =
-    !showUpdateDetails && !showCheckIcon ? getDesktopUpdateIdleTooltip(state) : null;
+  const isChecking = state?.status === "checking";
+  const { iconStatus, showCheckIcon, showUpdateDetails, showUpdateIconState } =
+    resolveSidebarUpdatePresentation({
+      action,
+      showsEverything: runsEverything,
+      run,
+      isDownloading,
+      isChecking,
+      isCheckIconLatched: shouldShowDesktopUpdateCheckIcon({
+        isAnimationLatched: isCheckAnimationLatched,
+        isChecking,
+        prefersReducedMotion,
+      }),
+    });
+  const idleTooltip = !showUpdateDetails && !isChecking ? getDesktopUpdateIdleTooltip(state) : null;
   const tooltip = runsEverything
     ? everything.summary
     : showUpdateDetails
       ? state
         ? getDesktopUpdateButtonTooltip(state)
         : "Update available"
-      : showCheckIcon
+      : isChecking
         ? "Checking for updates…"
         : (idleTooltip?.title ?? "Check for updates");
-  const disabled = showCheckIcon
+  // Only the real status disables; the spin latch releases on an animation event that a
+  // paused (hidden or off-screen) animation never fires.
+  const disabled = isChecking
     ? true
     : runsEverything
       ? false
@@ -562,7 +571,7 @@ function DesktopUpdateControl({
         {showReleaseNotesPopover && state ? (
           <PopoverPopup
             align="center"
-            aria-label="Nightly update release notes"
+            aria-label="Update release notes"
             initialFocus={false}
             onKeyDownCapture={(event) => {
               if (

@@ -13,6 +13,7 @@ import {
   type AuthEnvironmentScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  EnvironmentId,
   MCP_PEER_LINK_SOFTWARE_ID,
   mcpClientScopes,
 } from "@t3tools/contracts";
@@ -23,6 +24,7 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import { HttpServerRequest } from "effect/http";
@@ -137,6 +139,8 @@ const ClientIdPayload = Schema.Struct({
   r: Schema.Array(Schema.String),
   /** Registered as another T3 Code environment's peer link. */
   p: Schema.optionalKey(Schema.Literal(1)),
+  /** The linking environment's id, as it said when registering. */
+  e: Schema.optionalKey(EnvironmentId),
 });
 const decodeClientIdPayload = Schema.decodeUnknownOption(Schema.fromJsonString(ClientIdPayload));
 
@@ -145,6 +149,7 @@ export interface McpOAuthClient {
   readonly name: string;
   readonly redirectUris: ReadonlyArray<string>;
   readonly peerLink: boolean;
+  readonly peerEnvironmentId: EnvironmentId | undefined;
 }
 
 export class McpOAuthPageError extends Schema.TaggedError<McpOAuthPageError>()(
@@ -162,7 +167,7 @@ export class McpOAuthRedirectError extends Schema.TaggedError<McpOAuthRedirectEr
     error: Schema.Literals(["invalid_request", "unsupported_response_type", "invalid_target"]),
     description: Schema.String,
     redirectUri: Schema.String,
-    state: Schema.optional(Schema.String),
+    state: Schema.optional(Schema.RedactedFromValue(Schema.String)),
   },
 ) {}
 
@@ -170,7 +175,7 @@ export interface AuthorizationRequest {
   readonly client: McpOAuthClient;
   readonly redirectUri: string;
   readonly codeChallenge: string;
-  readonly state: string | undefined;
+  readonly state: Redacted.Redacted<string> | undefined;
   readonly resource: string;
   readonly issuer: string;
 }
@@ -179,6 +184,7 @@ interface PendingCode {
   readonly clientId: string;
   readonly clientName: string;
   readonly peerLink: boolean;
+  readonly peerEnvironmentId: EnvironmentId | undefined;
   readonly redirectUri: string;
   readonly codeChallenge: string;
   readonly resource: string;
@@ -220,10 +226,15 @@ export class McpOAuth extends Context.Service<
   }
 >()("t3/auth/McpOAuth") {}
 
-const redirectWith = (redirectUri: string, params: Record<string, string | undefined>) => {
+const redirectWith = (
+  redirectUri: string,
+  params: Record<string, string | Redacted.Redacted<string> | undefined>,
+) => {
   const url = new URL(redirectUri);
   for (const [name, value] of Object.entries(params)) {
-    if (value !== undefined) url.searchParams.set(name, value);
+    if (value !== undefined) {
+      url.searchParams.set(name, Redacted.isRedacted(value) ? Redacted.value(value) : value);
+    }
   }
   return url.toString();
 };
@@ -252,9 +263,20 @@ const make = Effect.gen(function* () {
 
   const sign = (domain: string, payload: string) => signPayload(`${domain}.${payload}`, signingKey);
 
-  const signClientId = (name: string, redirectUris: ReadonlyArray<string>, peerLink: boolean) => {
+  const signClientId = (
+    name: string,
+    redirectUris: ReadonlyArray<string>,
+    peerLink: boolean,
+    peerEnvironmentId: EnvironmentId | undefined,
+  ) => {
     const body = base64UrlEncode(
-      JSON.stringify({ v: 1, n: name, r: redirectUris, ...(peerLink ? { p: 1 } : {}) }),
+      JSON.stringify({
+        v: 1,
+        n: name,
+        r: redirectUris,
+        ...(peerLink ? { p: 1 } : {}),
+        ...(peerLink && peerEnvironmentId !== undefined ? { e: peerEnvironmentId } : {}),
+      }),
     );
     return `${body}.${sign("mcp-client-id", body)}`;
   };
@@ -276,6 +298,7 @@ const make = Effect.gen(function* () {
           name: payload.n,
           redirectUris: payload.r,
           peerLink: payload.p === 1,
+          peerEnvironmentId: payload.e,
         })),
       ),
     );
@@ -330,11 +353,13 @@ const make = Effect.gen(function* () {
             "Linked environments is off on that machine. Turn it on in its Settings → Labs.",
         });
       }
+      const peerEnvironmentId = peerLink ? metadata.t3_environment_id : undefined;
       return {
-        clientId: signClientId(name, redirectUris, peerLink),
+        clientId: signClientId(name, redirectUris, peerLink, peerEnvironmentId),
         name,
         redirectUris,
         peerLink,
+        peerEnvironmentId,
       };
     },
   );
@@ -418,6 +443,7 @@ const make = Effect.gen(function* () {
         clientId: authorization.client.clientId,
         clientName: authorization.client.name,
         peerLink: authorization.client.peerLink,
+        peerEnvironmentId: authorization.client.peerEnvironmentId,
         redirectUri: authorization.redirectUri,
         codeChallenge: authorization.codeChallenge,
         resource: authorization.resource,
@@ -484,8 +510,9 @@ const make = Effect.gen(function* () {
       if (token.grant_type !== "authorization_code") {
         return yield* fail("unsupported_grant_type", "Only authorization_code is supported.");
       }
-      const { code, redirect_uri: redirectUri, client_id: clientId } = token;
-      const verifier = token.code_verifier;
+      const { redirect_uri: redirectUri, client_id: clientId } = token;
+      const code = token.code && Redacted.value(token.code);
+      const verifier = token.code_verifier && Redacted.value(token.code_verifier);
       if (!code || !redirectUri || !clientId || !verifier) {
         return yield* fail(
           "invalid_request",
@@ -520,6 +547,9 @@ const make = Effect.gen(function* () {
           label: pending.clientName,
           access: pending.access,
           peerLink: pending.peerLink,
+          ...(pending.peerEnvironmentId === undefined
+            ? {}
+            : { peerEnvironmentId: pending.peerEnvironmentId }),
           client: deriveAuthClientMetadata({ request }),
         })
         .pipe(

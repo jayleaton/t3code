@@ -91,6 +91,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     const result = ipcRenderer.sendSync(IpcChannels.GET_MCP_GATEWAY_BRIDGE_TOKEN_CHANNEL);
     return typeof result === "string" ? result : null;
   },
+  ensureMcpGatewayBridgeToken: () => {
+    const result = ipcRenderer.sendSync(IpcChannels.ENSURE_MCP_GATEWAY_BRIDGE_TOKEN_CHANNEL);
+    return typeof result === "string" ? result : null;
+  },
   getRelayTelemetryEnabled: () =>
     ipcRenderer.sendSync(IpcChannels.GET_RELAY_TELEMETRY_ENABLED_CHANNEL) === true,
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
@@ -105,6 +109,11 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     const handler = () => listener();
     ipcRenderer.on(IpcChannels.SET_NOTIFICATION_BADGE_CHANNEL, handler);
     return () => ipcRenderer.removeListener(IpcChannels.SET_NOTIFICATION_BADGE_CHANNEL, handler);
+  },
+  onTrackpadScrollBegin: (listener) => {
+    const handler = () => listener();
+    ipcRenderer.on(IpcChannels.TRACKPAD_SCROLL_BEGIN_CHANNEL, handler);
+    return () => ipcRenderer.removeListener(IpcChannels.TRACKPAD_SCROLL_BEGIN_CHANNEL, handler);
   },
   onTrackpadScrollEnd: (listener) => {
     const handler = () => listener();
@@ -276,11 +285,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     };
   },
   getUpdateState: () => ipcRenderer.invoke(IpcChannels.UPDATE_GET_STATE_CHANNEL),
-  setUpdateChannel: (channel) =>
-    ipcRenderer.invoke(IpcChannels.UPDATE_SET_CHANNEL_CHANNEL, channel),
+  setUpdateChannel: (channel, minimumVersion) =>
+    ipcRenderer.invoke(IpcChannels.UPDATE_SET_CHANNEL_CHANNEL, { channel, minimumVersion }),
   checkForUpdate: () => ipcRenderer.invoke(IpcChannels.UPDATE_CHECK_CHANNEL),
   downloadUpdate: () => ipcRenderer.invoke(IpcChannels.UPDATE_DOWNLOAD_CHANNEL),
-  installUpdate: () => ipcRenderer.invoke(IpcChannels.UPDATE_INSTALL_CHANNEL),
+  installUpdate: (expectedVersion) =>
+    ipcRenderer.invoke(IpcChannels.UPDATE_INSTALL_CHANNEL, expectedVersion),
   cliCommand: {
     getState: () => ipcRenderer.invoke(IpcChannels.CLI_COMMAND_GET_STATE_CHANNEL),
     install: () => ipcRenderer.invoke(IpcChannels.CLI_COMMAND_INSTALL_CHANNEL),

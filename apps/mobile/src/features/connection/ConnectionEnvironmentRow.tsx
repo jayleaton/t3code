@@ -1,10 +1,15 @@
 import * as Dialog from "../../components/ui/Dialog";
 import { ConnectionTraceId } from "./ConnectionTraceId";
 import { SymbolView } from "../../components/ui/AppSymbol";
-import { hasSavedBearerRoute, hostFreezeNotice } from "@t3tools/client-runtime/connection";
+import {
+  type EnvironmentConnectionPresentation,
+  hasSavedBearerRoute,
+  hostFreezeNotice,
+} from "@t3tools/client-runtime/connection";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import { type EnvironmentId, resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
+import { useNavigation } from "@react-navigation/native";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { useState } from "react";
@@ -20,20 +25,26 @@ import { cn } from "../../lib/cn";
 import type { ConnectedEnvironmentSummary } from "../../state/remote-runtime-types";
 import { serverEnvironment } from "../../state/server";
 import { environmentPresentations } from "../../state/presentation";
+import { openSettings } from "../settings/settings-navigation";
 import { ConnectionDiagnosisDetails, useConnectionDiagnosis } from "./ConnectionDiagnosisDetails";
 import { ConnectionFormField } from "./ConnectionFormField";
 import { ConnectionStatusDot } from "./ConnectionStatusDot";
 import { environmentStatusText } from "./environmentStatusText";
 
-function connectionStatusLabel(environment: ConnectedEnvironmentSummary): string | null {
+function connectionStatusLabel(
+  environment: ConnectedEnvironmentSummary,
+  connection: EnvironmentConnectionPresentation | undefined,
+): string | null {
   if (!environment.isEnabled && environment.connectionState !== "unsupported") {
     return "Off";
   }
-  return environmentStatusText({
-    phase: environment.connectionState,
-    error: environment.connectionError,
-    traceId: environment.connectionErrorTraceId,
-  });
+  return environmentStatusText(
+    connection ?? {
+      phase: environment.connectionState,
+      error: environment.connectionError,
+      traceId: environment.connectionErrorTraceId,
+    },
+  );
 }
 
 export function ConnectionEnvironmentRow(props: {
@@ -49,6 +60,7 @@ export function ConnectionEnvironmentRow(props: {
     updates: { readonly label: string; readonly displayUrl: string },
   ) => Promise<AtomCommandResult<unknown, unknown>>;
 }) {
+  const navigation = useNavigation();
   const [label, setLabel] = useState(props.environment.environmentLabel);
   const [url, setUrl] = useState(props.environment.displayUrl);
   const serverConfig = useAtomValue(
@@ -64,7 +76,7 @@ export function ConnectionEnvironmentRow(props: {
     presentation,
   );
   const enabled = props.environment.isEnabled && !unsupported;
-  const statusLabel = connectionStatusLabel(props.environment);
+  const statusLabel = connectionStatusLabel(props.environment, presentation?.connection);
   const statusTraceId = enabled ? props.environment.connectionErrorTraceId : null;
   const hasConnectionFailure = enabled && props.environment.connectionError !== null;
   const freeze = enabled
@@ -206,6 +218,11 @@ export function ConnectionEnvironmentRow(props: {
             <ConnectionDiagnosisDetails
               hostLabel={props.environment.environmentLabel}
               diagnosis={diagnosis}
+              onPairAgain={() =>
+                openSettings(navigation, "SettingsEnvironmentNew", {
+                  routeFor: props.environment.environmentId,
+                })
+              }
             />
           ) : null}
           {props.environment.isRelayManaged ? (
@@ -283,6 +300,9 @@ export function ConnectionEnvironmentRow(props: {
               )}
 
               <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Reconnect environment"
+                accessibilityState={{ disabled: !enabled }}
                 className="h-[42px] w-[42px] items-center justify-center rounded-[14px] border border-input-border bg-input active:opacity-70 disabled:opacity-40"
                 disabled={!enabled}
                 onPress={() => props.onReconnect(props.environment.environmentId)}
@@ -296,6 +316,8 @@ export function ConnectionEnvironmentRow(props: {
               </Pressable>
 
               <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Remove environment"
                 className="h-[42px] w-[42px] items-center justify-center rounded-[14px] border border-danger-border bg-danger active:opacity-70"
                 onPress={() => props.onRemove(props.environment.environmentId)}
               >

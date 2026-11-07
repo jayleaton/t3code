@@ -44,7 +44,7 @@ import { traceRelayRequest } from "./cloud/traceRelayRequest.ts";
 import {
   annotateEnvironmentRequest,
   failEnvironmentScopeRequired,
-  failEnvironmentAuthInvalid,
+  failEnvironmentAuthCredential,
   failEnvironmentInternal,
 } from "./auth/http.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -297,10 +297,7 @@ const authenticateRawRouteWithScope =
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
     const session = yield* serverAuth.authenticateHttpRequest(request).pipe(
       Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
-        failEnvironmentAuthInvalid(
-          EnvironmentAuth.serverAuthCredentialReason(error),
-          EnvironmentAuth.serverAuthDpopFailureReason(error),
-        ),
+        failEnvironmentAuthCredential(error),
       ),
       Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
         failEnvironmentInternal("internal_error", error),
@@ -391,8 +388,13 @@ const UNTRACED_REQUEST_PATHS: ReadonlySet<string> = new Set([OTLP_TRACES_PROXY_P
 const layerUntracedRequests = Layer.succeed(HttpMiddleware.TracerDisabledWhen)((request) => {
   const queryIndex = request.url.indexOf("?");
   const path = queryIndex === -1 ? request.url : request.url.slice(0, queryIndex);
-  // Webhook URLs carry their secret token in the path, so they never reach a trace.
-  return UNTRACED_REQUEST_PATHS.has(path) || path.startsWith(`${WEBHOOK_ROUTE_PREFIX}/`);
+  // Signed URLs carry bearer tokens in the path, so they never reach a trace.
+  return (
+    UNTRACED_REQUEST_PATHS.has(path) ||
+    path.startsWith(`${WEBHOOK_ROUTE_PREFIX}/`) ||
+    path.startsWith(`${ASSET_ROUTE_PREFIX}/`) ||
+    path.startsWith(`${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/`)
+  );
 });
 
 export const withUntracedRequests = Layer.provide(layerUntracedRequests);

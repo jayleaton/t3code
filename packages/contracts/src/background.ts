@@ -64,6 +64,45 @@ export type ClientKind = typeof ClientKind.Type;
 export const ClientActivityClientId = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
 export type ClientActivityClientId = typeof ClientActivityClientId.Type;
 
+export const ConnectionDiagnosticsSnapshot = Schema.Struct({
+  milestones: Schema.Array(
+    Schema.Literals([
+      "config-decoded",
+      "shell-headers",
+      "shell-body",
+      "shell-decoded",
+      "shell-applied",
+      "shell-synchronized",
+    ]),
+  ).check(Schema.isMaxLength(6)),
+  rx: Schema.Number,
+  tx: Schema.Number,
+  closes: Schema.Number,
+  errors: Schema.Number,
+  binary: Schema.Number,
+  firstFailure: Schema.optionalKey(
+    Schema.Literals(["inflate", "json", "socket", "shell-body", "shell-schema"]),
+  ),
+  closeCode: Schema.optionalKey(Schema.Number),
+});
+export type ConnectionDiagnosticsSnapshot = typeof ConnectionDiagnosticsSnapshot.Type;
+
+/** A failed or lost connection the client saw, reported once it reconnects so server logs show both sides. */
+export const ConnectionTroubleEvent = Schema.Struct({
+  at: Schema.Number,
+  kind: Schema.Literals(["failed", "lost"]),
+  attempt: Schema.Number,
+  route: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(200))),
+  reason: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(64))),
+  detail: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(200))),
+  network: Schema.String.check(Schema.isMaxLength(16)),
+  foreground: Schema.optionalKey(Schema.Boolean),
+  stage: Schema.optionalKey(Schema.Literals(["preparing", "opening", "synchronizing"])),
+  diagnostics: Schema.optionalKey(ConnectionDiagnosticsSnapshot),
+  appState: Schema.optionalKey(Schema.Literals(["active", "inactive", "background", "unknown"])),
+});
+export type ConnectionTroubleEvent = typeof ConnectionTroubleEvent.Type;
+
 export const ClientActivityReportInput = Schema.Struct({
   environmentId: Schema.optionalKey(EnvironmentId),
   clientId: ClientActivityClientId,
@@ -76,6 +115,9 @@ export const ClientActivityReportInput = Schema.Struct({
   scopes: Schema.Array(BackgroundScope),
   ttlMs: Schema.optionalKey(Schema.Number),
   observedAt: Schema.DateTimeUtc,
+  connectionTrouble: Schema.optionalKey(
+    Schema.Array(ConnectionTroubleEvent).check(Schema.isMaxLength(10)),
+  ),
 });
 export type ClientActivityReportInput = typeof ClientActivityReportInput.Type;
 

@@ -107,7 +107,8 @@ export class ServerConfig extends Context.Service<
     readonly autoBootstrapProjectFromCwd: boolean;
     readonly logWebSocketEvents: boolean;
     readonly tailscaleServeEnabled: boolean;
-    readonly tailscaleServePort: number;
+    /** A pinned Serve port; unset, the server picks one (`selectTailscaleServePort`). */
+    readonly tailscaleServePort: number | undefined;
   }
 >()("t3/config/ServerConfig") {
   static readonly layerTest = (
@@ -194,6 +195,14 @@ export const ensureServerDirectories = Effect.fn(function* (derivedPaths: Server
     ],
     { concurrency: "unbounded" },
   );
+  // Logs, traces and the database are written with the process umask; keep them owner-only.
+  yield* fs
+    .chmod(derivedPaths.stateDir, 0o700)
+    .pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not restrict state directory permissions.", { cause }),
+      ),
+    );
 
   const swept = sweepStalePendingAttachments({
     attachmentsDir: derivedPaths.attachmentsDir,

@@ -34,6 +34,7 @@ import {
 } from "./threadPullRequest.ts";
 import { hasOnlyPairedSurrogates } from "./threadMetadataMcp.ts";
 import { ThreadTitleRegeneration } from "./threadTitle.ts";
+import { PeerLinkOrigin, TailnetDeviceAccess, TailnetDeviceStatus } from "./tailnetDevices.ts";
 import {
   OrchestrationV2Actor,
   OrchestrationV2CreationSource,
@@ -67,7 +68,7 @@ const OrchestratorMcpSchedule = Schema.Union([
   OrchestratorMcpScheduleFromJsonString,
 ]).annotate({
   description:
-    "Trigger: {type:'interval',everyMs}, {type:'fixed_time',timeOfDay,weekdays?}, or {type:'webhook'}.",
+    "Trigger: {type:'interval',everyMs}, {type:'fixed_time',timeOfDay,weekdays?}, {type:'once',runAt}, or {type:'webhook'}.",
 });
 
 const OrchestratorMcpTargetOptionsFromRecord = Schema.Record(
@@ -209,6 +210,12 @@ export const ORCHESTRATOR_MCP_RUNNING_TASK_NEXT =
   "Completion wakes this thread, so end your turn. Do not wait on it or poll it.";
 const OrchestratorMcpRunningTaskNext = Schema.Literal(ORCHESTRATOR_MCP_RUNNING_TASK_NEXT);
 
+export const OrchestratorMcpWorkState = Schema.Literals([
+  "working",
+  "waiting_for_children",
+  "result_available",
+]);
+
 export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   taskId: NodeId,
   /** Null for a task that runs in a linked environment; see `remoteChild`. */
@@ -221,7 +228,7 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   childRunId: Schema.NullOr(RunId),
   childNodeId: NodeId,
   status: OrchestratorMcpDelegatedTaskStatus,
-  workState: Schema.Literals(["working", "waiting_for_children", "result_available"]),
+  workState: OrchestratorMcpWorkState,
   hasPendingChildRuns: Schema.Boolean,
   latestTerminalRunId: Schema.NullOr(RunId),
   latestTerminalStatus: Schema.NullOr(OrchestratorMcpTerminalDelegatedTaskStatus),
@@ -435,6 +442,9 @@ export const OrchestratorMcpThreadReadInput = Schema.Struct({
   textOffset: Schema.optional(NonNegativeInt),
   view: Schema.optional(Schema.Literals(["messages", "activity"])),
   afterPosition: Schema.optional(NonNegativeInt),
+  tail: Schema.optional(
+    Schema.Boolean.annotate({ description: "Latest `limit` items; hasMore means older ones." }),
+  ),
   limit: Schema.optional(clampedPositiveInt(100)).annotate({
     description: "Max items, 1 to 100.",
   }),
@@ -632,7 +642,9 @@ export const OrchestratorMcpThreadWaitInput = Schema.Struct({
     }),
   ),
   returnOnQuestion: Schema.optional(
-    Schema.Boolean.annotate({ description: "Default true: return when it blocks on a question." }),
+    Schema.Boolean.annotate({
+      description: "Default true: return on a question or approval.",
+    }),
   ),
 });
 export type OrchestratorMcpThreadWaitInput = typeof OrchestratorMcpThreadWaitInput.Type;
@@ -646,8 +658,23 @@ export const OrchestratorMcpThreadWaitResult = Schema.Struct({
   next: Schema.optional(OrchestratorMcpRunningTaskNext),
   /** With untilDelegatedWorkSettled, once settled: the run whose reply is the thread's result. */
   resultRun: Schema.optional(Schema.Struct({ runId: RunId, status: OrchestrationV2RunStatus })),
+  workState: Schema.optional(
+    OrchestratorMcpWorkState.annotate({
+      description:
+        "With untilDelegatedWorkSettled, once the run ended. working: another run continues the thread; waiting_for_children: its tasks or awaited background work remain.",
+    }),
+  ),
+  unreachable: Schema.optional(
+    Schema.String.annotate({
+      description:
+        "The thread's environment did not answer; work there continues, so call again. status and runId are the last seen.",
+    }),
+  ),
   hasPendingQuestion: Schema.optional(Schema.Boolean),
   pendingRequestId: Schema.optional(RuntimeRequestId),
+  pendingApproval: Schema.optional(
+    Schema.Struct({ requestId: RuntimeRequestId, kind: ProviderRequestKind }),
+  ).annotate({ description: "Oldest pending approval. Grants no approval rights." }),
 });
 export type OrchestratorMcpThreadWaitResult = typeof OrchestratorMcpThreadWaitResult.Type;
 
@@ -722,14 +749,31 @@ export const OrchestratorMcpEnvironmentLink = Schema.Struct({
   status: Schema.Literals(["reachable", "unreachable", "expired"]),
   /** The most the linked environment lets this one's agents do there. */
   access: AuthMcpClientAccess,
+  /** tailnet: linked automatically as one of the user's tailnet devices. paired: with a pairing code. */
+  origin: PeerLinkOrigin,
   expiresAt: IsoDateTime,
   lastError: Schema.NullOr(Schema.String),
 });
 export type OrchestratorMcpEnvironmentLink = typeof OrchestratorMcpEnvironmentLink.Type;
 
+/** One of the user's own machines on their tailnet, linked or not. */
+export const OrchestratorMcpTailnetDevice = Schema.Struct({
+  environmentId: EnvironmentId,
+  label: Schema.String,
+  status: TailnetDeviceStatus,
+  /** What it may do on the user's machines; revoked: cut off everywhere. */
+  access: TailnetDeviceAccess,
+  /** This environment links to it, and how; null: not linked from here. */
+  outgoing: Schema.NullOr(PeerLinkOrigin),
+  /** It holds a live session here. */
+  incoming: Schema.Boolean,
+});
+export type OrchestratorMcpTailnetDevice = typeof OrchestratorMcpTailnetDevice.Type;
+
 export const OrchestratorMcpEnvironmentLinksResult = Schema.Struct({
   environmentId: EnvironmentId,
   links: Schema.Array(OrchestratorMcpEnvironmentLink),
+  devices: Schema.Array(OrchestratorMcpTailnetDevice),
   /** What to do when the machine the user means is not among `links`. */
   notListed: Schema.String,
 });
@@ -963,6 +1007,22 @@ export const OrchestratorMcpEnvironmentUnlinkResult = Schema.Struct({
 });
 export type OrchestratorMcpEnvironmentUnlinkResult =
   typeof OrchestratorMcpEnvironmentUnlinkResult.Type;
+
+export const OrchestratorMcpEnvironmentDeviceAccessInput = Schema.Struct({
+  environmentId: EnvironmentId.annotate({
+    description: "One of the user's machines, from `devices` in t3_environment_links.",
+  }),
+  access: TailnetDeviceAccess,
+});
+export type OrchestratorMcpEnvironmentDeviceAccessInput =
+  typeof OrchestratorMcpEnvironmentDeviceAccessInput.Type;
+
+export const OrchestratorMcpEnvironmentDeviceAccessResult = Schema.Struct({
+  environmentId: EnvironmentId,
+  access: TailnetDeviceAccess,
+});
+export type OrchestratorMcpEnvironmentDeviceAccessResult =
+  typeof OrchestratorMcpEnvironmentDeviceAccessResult.Type;
 
 export const OrchestratorMcpDeleteScheduledTaskInput = Schema.Struct({
   environmentId: OrchestratorMcpEnvironmentTarget,

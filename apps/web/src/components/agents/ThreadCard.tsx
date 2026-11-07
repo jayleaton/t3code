@@ -1,4 +1,11 @@
+import {
+  agentChildStatusBucket,
+  countChildStatusBuckets,
+  selectChildAvatars,
+} from "@t3tools/client-runtime/state/child-status-counts";
+import { toggleExpandedParent, useExpandedParentKeys } from "../../hooks/useExpandedParents";
 import { useNowMinute } from "../../hooks/useNowMinute";
+import { cn } from "../../lib/utils";
 import { formatRelativeTime } from "../../timestampFormat";
 import { ProviderPackageIcon } from "../chat/ProviderPackageIcon";
 import { PROVIDER_ICON_BY_PROVIDER } from "../chat/providerIconUtils";
@@ -34,6 +41,12 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import { useProject } from "../../state/entities";
 import { resolveEnvironmentMachineKind, type McpGatewayProfile } from "@t3tools/contracts";
 import { AgentIcon } from "./AgentIcon";
+import {
+  AgentChildAvatarStack,
+  AgentChildSummaryText,
+  agentChildSummaryText,
+  type AgentChildAvatarEntry,
+} from "./AgentChildSummary";
 import { useEnvironment, useEnvironmentProviders } from "../../state/environments";
 import { AgentChatPreview } from "./AgentChatPreview";
 import { isInsideComposerFloatingLayer } from "../chat/composerEventScope";
@@ -41,6 +54,7 @@ import {
   agentThreadStatus,
   agentThreadStatusLabel,
   arrangeAgentChildRuns,
+  runAgentName,
   type AgentChildOrder,
   type AgentCardChildren,
   type AgentChildRun,
@@ -54,19 +68,6 @@ import {
 } from "../ThreadStatusIndicators";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import { useOpenPrLink } from "../../lib/openPullRequestLink";
-
-function runAgentName(
-  run: EnvironmentThreadShell,
-  profiles: readonly McpGatewayProfile[] | undefined,
-) {
-  const profile = profiles?.find(
-    (candidate) => candidate.profileId === run.profileSnapshot?.profileId,
-  );
-  return {
-    profile,
-    name: profile?.name ?? run.profileSnapshot?.profileName ?? "Chat",
-  };
-}
 
 interface ChildRunRowProps {
   child: AgentChildRun<EnvironmentThreadShell>;
@@ -150,12 +151,72 @@ function DraggableAgentChildRun(props: ChildRunRowProps & { anchorKey: string })
 const expandedChildLists = new Set<string>();
 
 /**
- * This card's child chats, each linking to its own chat with its own live
+ * This card's child chats, collapsed by default to one line counting them by
+ * the status each row shows; the line opens the list. The open state is shared
+ * with the sidebar's parent rows and saved per device.
+ */
+function AgentChildRuns(props: {
+  runs: AgentCardChildren<EnvironmentThreadShell>;
+  anchorKey: string;
+  profiles: readonly McpGatewayProfile[] | undefined;
+  childPendingWork: ReadonlyMap<string, AgentRunPendingWork> | undefined;
+  onContextMenu: AgentRunContextMenu;
+}) {
+  const { runs, anchorKey, childPendingWork, profiles } = props;
+  const open = useExpandedParentKeys().includes(anchorKey);
+  const entries = [...runs.live, ...runs.settled].map(({ thread }): AgentChildAvatarEntry => {
+    const status = agentThreadStatus(
+      thread,
+      childPendingWork?.get(`${thread.environmentId}:${thread.id}`) ?? null,
+    );
+    return { thread, status, bucket: agentChildStatusBucket(status), updatedAt: thread.updatedAt };
+  });
+  const counts = countChildStatusBuckets(entries, (entry) => entry.bucket);
+  const avatars = selectChildAvatars(entries);
+  const label = `${entries.length} child ${entries.length === 1 ? "chat" : "chats"}: ${agentChildSummaryText(counts)}`;
+  return (
+    <ul className="agent-thread-children" aria-label="Child chats">
+      {/* The toggle covers the line; the avatar links sit above it, so no control nests in another. */}
+      <li className="agent-child-summary">
+        <AgentChildAvatarStack
+          avatars={avatars.shown}
+          overflow={avatars.overflow}
+          profiles={profiles}
+        />
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                className="agent-child-summary-toggle"
+                aria-expanded={open}
+                aria-label={label}
+                data-testid="agent-child-runs-toggle"
+                onClick={() => toggleExpandedParent(anchorKey)}
+              />
+            }
+          >
+            <AgentChildSummaryText counts={counts} />
+            <ChevronRightIcon
+              aria-hidden
+              className={cn("size-3.5 shrink-0", open && "rotate-90")}
+            />
+          </TooltipTrigger>
+          <TooltipPopup side="top">{label}</TooltipPopup>
+        </Tooltip>
+      </li>
+      {open && <AgentChildRunList {...props} />}
+    </ul>
+  );
+}
+
+/**
+ * The open child list: each row links to its own chat with its own live
  * status and the same menu as a card, ordered by arrangeAgentChildRuns.
  * Settled children collapse at the bottom.
  * Subagents never appear here; they live in their owner's Lineage panel.
  */
-function AgentChildRuns({
+function AgentChildRunList({
   runs,
   anchorKey,
   profiles,
@@ -217,7 +278,7 @@ function AgentChildRuns({
   };
   const settledCount = runs.settled.filter((child) => child.depth === 0).length;
   return (
-    <ul className="agent-thread-children" aria-label="Child chats">
+    <>
       {arranged.rows.map(row)}
       {arranged.overflow > 0 && (
         <li>
@@ -244,7 +305,7 @@ function AgentChildRuns({
         </li>
       )}
       {settledOpen && runs.settled.map(row)}
-    </ul>
+    </>
   );
 }
 

@@ -22,7 +22,7 @@ import {
   normalizeLinuxPasswordStorePreference,
   type LinuxPasswordStorePreference,
 } from "../linuxSecretStorage.ts";
-import { resolveDefaultDesktopUpdateChannel } from "../updates/updateChannels.ts";
+import { desktopUpdateChannelOf } from "@t3tools/shared/cliRelease";
 import { isValidDistroName } from "../wsl/wslPathParsing.ts";
 
 export interface DesktopSettings {
@@ -69,7 +69,8 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   mainWindowBounds: null,
   mainWindowMaximized: false,
   serverExposureMode: "local-only",
-  tailscaleServeEnabled: false,
+  // Tailnet devices dial each other back over Serve; it never publishes beyond the tailnet.
+  tailscaleServeEnabled: true,
   tailscaleServePort: DEFAULT_TAILSCALE_SERVE_PORT,
   updateChannel: "latest",
   updateChannelConfiguredByUser: false,
@@ -180,7 +181,7 @@ export class DesktopAppSettings extends Context.Service<
 export function resolveDefaultDesktopSettings(appVersion: string): DesktopSettings {
   return {
     ...DEFAULT_DESKTOP_SETTINGS,
-    updateChannel: resolveDefaultDesktopUpdateChannel(appVersion),
+    updateChannel: desktopUpdateChannelOf(appVersion),
   };
 }
 
@@ -221,7 +222,7 @@ function normalizeDesktopSettingsDocument(
     mainWindowMaximized: mainWindowBounds !== null && parsed.mainWindowMaximized === true,
     serverExposureMode:
       parsed.serverExposureMode === "network-accessible" ? "network-accessible" : "local-only",
-    tailscaleServeEnabled: parsed.tailscaleServeEnabled === true,
+    tailscaleServeEnabled: parsed.tailscaleServeEnabled !== false,
     tailscaleServePort: normalizeTailscaleServePort(parsed.tailscaleServePort),
     updateChannel: updateChannelConfiguredByUser
       ? Option.getOrElse(parsedUpdateChannel, () => defaultSettings.updateChannel)

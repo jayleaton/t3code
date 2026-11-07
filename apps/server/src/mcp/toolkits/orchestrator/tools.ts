@@ -2,6 +2,8 @@ import {
   OrchestratorMcpCapabilitiesInput,
   OrchestratorMcpCapabilitiesResult,
   OrchestrationV2StopWorkflowInput,
+  OrchestratorMcpEnvironmentDeviceAccessInput,
+  OrchestratorMcpEnvironmentDeviceAccessResult,
   OrchestratorMcpEnvironmentLinkInput,
   OrchestratorMcpEnvironmentLinkResult,
   OrchestratorMcpEnvironmentLinksResult,
@@ -47,6 +49,7 @@ import * as ThreadManagementService from "../../../orchestration-v2/ThreadManage
 import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
 import * as PeerLinkRequests from "../../../peer/PeerLinkRequests.ts";
 import * as PeerLinks from "../../../peer/PeerLinks.ts";
+import * as TailnetDevices from "../../../peer/TailnetDevices.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
@@ -66,6 +69,8 @@ const linkingDependencies = [
   PeerLinkRequests.PeerLinkRequests,
   PeerLinks.PeerLinks,
 ];
+/** Setting what one of the user's tailnet devices may do. */
+const deviceDependencies = [...dependencies, TailnetDevices.TailnetDevices];
 const threadMetadataDependencies = [
   McpInvocationContext.McpInvocationContext,
   ThreadManagementService.ThreadManagementService,
@@ -169,7 +174,7 @@ const ScheduleTaskTool = Tool.make("schedule_task", {
   failureMode: "return",
   dependencies,
 })
-  .annotate(Tool.Title, "Schedule a recurring task")
+  .annotate(Tool.Title, "Schedule a task")
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
@@ -241,7 +246,7 @@ const ThreadListTool = Tool.make("t3_thread_list", {
 
 const ThreadReadTool = Tool.make("t3_thread_read", {
   description:
-    "Read durable state and a paginated timeline from any T3 thread in this environment, or pass environmentId for a thread on another environment (gateway connections support messages view over the latest 500 messages; linked environments support the full read; the result carries environmentId). The default messages view returns user messages, assistant messages, and proposed plans; activity returns all summarized timeline items. Reading an untruncated terminal assistant result from this thread's direct app-owned helper acknowledges its automatic completion delivery. Continue with afterPosition=nextPosition. Recover long item text with itemId and textOffset=nextTextOffset until nextTextOffset is null; offsets count UTF-16 code units. The thread also reports its snooze state and, in pullRequests, every linked pull request; linkedPullRequest is a legacy single link and can be null while pullRequests still has entries. To link a thread for the user, write `[title](t3-thread://v1/<threadId>)` with the threadId exactly as returned, not URL-encoded; T3 Code shows the thread's current title.",
+    "Read durable state and a paginated timeline from any T3 thread in this environment, or pass environmentId for a thread on another environment (gateway connections support messages view over the latest 500 messages; linked environments support the full read; the result carries environmentId). The default messages view returns user messages, assistant messages, and proposed plans; activity returns all summarized timeline items. Reading an untruncated terminal assistant result from this thread's direct app-owned helper acknowledges its automatic completion delivery. Continue with afterPosition=nextPosition, or pass tail=true for the latest items. Recover long item text with itemId and textOffset=nextTextOffset until nextTextOffset is null; offsets count UTF-16 code units. The thread also reports its snooze state and, in pullRequests, every linked pull request; linkedPullRequest is a legacy single link and can be null while pullRequests still has entries. To link a thread for the user, write `[title](t3-thread://v1/<threadId>)` with the threadId exactly as returned, not URL-encoded; T3 Code shows the thread's current title.",
   parameters: OrchestratorMcpThreadReadInput,
   success: OrchestratorMcpThreadReadResult,
   failure: OrchestratorMcpFailure,
@@ -288,7 +293,7 @@ const ThreadSendTool = Tool.make("t3_thread_send", {
 
 const ThreadWaitTool = Tool.make("t3_thread_wait", {
   description:
-    "Wait for a T3 thread run to reach a terminal durable state. Pass environmentId for a thread on another environment. Without runId, the latest run at call time is selected; an idle thread returns immediately. A thread blocked on a question returns early with hasPendingQuestion and pendingRequestId for t3_pending_request. Timeout does not interrupt work, so call again or use t3_thread_read/list after timedOut=true. Waiting reports status only and does not acknowledge a delegated result.",
+    "Wait for a T3 thread run to reach a terminal durable state. Pass environmentId for a thread on another environment. Without runId, the latest run at call time is selected; an idle thread returns immediately. A thread blocked on a question returns early with hasPendingQuestion and pendingRequestId for t3_pending_request, or on an approval with pendingApproval. Timeout does not interrupt work, so call again or use t3_thread_read/list after timedOut=true. With untilDelegatedWorkSettled, a terminal status with timedOut=true means the run ended but the thread is not done; workState says why. Waiting reports status only and does not acknowledge a delegated result.",
   parameters: OrchestratorMcpThreadWaitInput,
   success: OrchestratorMcpThreadWaitResult,
   failure: OrchestratorMcpFailure,
@@ -316,7 +321,7 @@ const ThreadInterruptTool = Tool.make("t3_thread_interrupt", {
 
 const EnvironmentLinksTool = Tool.make("t3_environment_links", {
   description:
-    "List linked environments (the user's other machines) and whether each answers now. Pass one's `environmentId` to a tool to act there; `delegate_task` takes `target.environmentId`. Expired: link it again with `t3_environment_link`.",
+    "List linked environments (the user's other machines) and whether each answers now. Pass one's `environmentId` to a tool to act there; `delegate_task` takes `target.environmentId`. Expired: link it again with `t3_environment_link`. `devices` lists the user's own machines on their tailnet, linked or not, with what each may do (`revoked`: cut off everywhere).",
   success: OrchestratorMcpEnvironmentLinksResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
@@ -356,6 +361,20 @@ const EnvironmentUnlinkTool = Tool.make("t3_environment_unlink", {
   .annotate(Tool.Idempotent, true)
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileLinksOff);
 
+const EnvironmentDeviceAccessTool = Tool.make("t3_environment_device_access", {
+  description:
+    "Set what one of the user's own machines may do on all of their machines. `revoked` cuts it off everywhere: ends its sessions and refuses its handshakes. Any other level restores it.",
+  parameters: OrchestratorMcpEnvironmentDeviceAccessInput,
+  success: OrchestratorMcpEnvironmentDeviceAccessResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: deviceDependencies,
+})
+  .annotate(Tool.Title, "Set a device's access")
+  .annotate(Tool.Destructive, true)
+  .annotate(Tool.Idempotent, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileLinksOff);
+
 export const OrchestratorToolkit = Toolkit.make(
   OrchestratorCapabilitiesTool,
   DelegateTaskTool,
@@ -377,4 +396,5 @@ export const OrchestratorToolkit = Toolkit.make(
   EnvironmentLinksTool,
   EnvironmentLinkTool,
   EnvironmentUnlinkTool,
+  EnvironmentDeviceAccessTool,
 );

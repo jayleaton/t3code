@@ -19,6 +19,7 @@ import type {
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
+import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -67,6 +68,7 @@ export function makeSubagentChildThread(input: {
     creationSource: input.creationSource,
     id: input.childThreadId,
     title: input.title,
+    titleRegeneration: null,
     historyOrigin: undefined,
     providerInstanceId: input.providerInstanceId,
     modelSelection: input.modelSelection,
@@ -274,7 +276,9 @@ export function delegatedTaskProgress(projection: {
           (task.completionDelivery?.state === "pending" ||
             task.completionDelivery?.state === "claimed")),
     ) ||
-    projection.providerThreads.some((thread) => (thread.pendingBackgroundTasks?.length ?? 0) > 0);
+    projection.providerThreads.some((thread) =>
+      backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? []),
+    );
   const resultRun = workRuns
     .filter((run) => terminal(run.status) && (run.startedAt !== null || run.ordinal === 1))
     .toSorted((a, b) => (runRanAfter(a, b) ? -1 : runRanAfter(b, a) ? 1 : 0))[0];

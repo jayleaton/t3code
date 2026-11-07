@@ -66,6 +66,8 @@ export const McpGatewayRelayThread = Schema.Struct({
   ),
   settledAt: RelaySettledAt,
   settlementSource: Schema.optional(Schema.NullOr(Schema.Literals(["manual", "inactivity"]))),
+  archivedAt: RelayIso,
+  deletedAt: RelayIso,
   runs: Schema.Array(
     Schema.Struct({
       id: RunId,

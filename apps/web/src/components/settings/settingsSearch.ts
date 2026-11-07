@@ -1,5 +1,5 @@
 import { HOSTED_APP_CHANNEL } from "~/branding";
-import { isElectron } from "~/env";
+import { isElectron, isSecretsFeatureEnabled } from "~/env";
 import { isMacPlatform, isWindowsPlatform, normalizeSearchText } from "~/lib/utils";
 import { STATIC_KEYBINDING_COMMANDS, type KeybindingCommand } from "@t3tools/contracts";
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -32,8 +32,7 @@ export type SettingsPath =
   | "/settings/source-control"
   | "/settings/worktrees"
   | "/settings/connections"
-  | "/settings/mcp-gateway"
-  | "/settings/access"
+  | "/settings/secrets"
   | "/settings/maintenance"
   | "/settings/labs"
   | "/settings/about"
@@ -58,6 +57,7 @@ export interface SettingsSearchItem {
   readonly macOnly?: boolean;
   readonly windowsOnly?: boolean;
   readonly releaseChannelOnly?: boolean;
+  readonly secretsFeatureOnly?: boolean;
   readonly cloudOnly?: boolean;
   readonly environmentOnly?: boolean;
   readonly providerSettingsOnly?: boolean;
@@ -71,7 +71,10 @@ export interface SettingsSearchItem {
   readonly requiresCapability?: AutoSettlementCapability;
 }
 
-type AutoSettlementCapability = "threadAutoSettlement" | "threadAutoSettleFinishedChildren";
+type AutoSettlementCapability =
+  | "threadAutoSettlement"
+  | "threadAutoSettleFinishedChildren"
+  | "threadAutoArchive";
 
 export interface SettingsSearchAvailability {
   readonly localEnvironmentDisabled?: boolean;
@@ -83,6 +86,7 @@ export interface SettingsSearchAvailability {
   readonly isWslSettingsRowVisible: boolean;
   readonly hasThreadAutoSettlement: boolean;
   readonly hasThreadAutoSettleFinishedChildren?: boolean;
+  readonly hasThreadAutoArchive?: boolean;
   readonly managedTunnelActive?: boolean;
   readonly hasPeerLinkHost?: boolean;
 }
@@ -97,7 +101,6 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/keybindings": "Keybindings",
   "/settings/snap-shot": "SnapShots",
   "/settings/providers": "Providers",
-  "/settings/mcp-gateway": "MCP Gateway",
   "/settings/threads": "Threads",
   "/settings/browser": "Browser",
   "/settings/devices": "Devices",
@@ -105,7 +108,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/source-control": "Source control",
   "/settings/worktrees": "Worktrees",
   "/settings/connections": "Environments",
-  "/settings/access": "Sharing & access",
+  "/settings/secrets": "Secrets",
   "/settings/maintenance": "Maintenance",
   "/settings/labs": "Labs",
   "/settings/about": "About",
@@ -144,7 +147,10 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   },
   {
     heading: "Connections",
-    paths: ["/settings/connections", "/settings/access", "/settings/mcp-gateway"],
+    paths: [
+      "/settings/connections",
+      ...(isSecretsFeatureEnabled ? (["/settings/secrets"] as const) : []),
+    ],
   },
   {
     heading: null,
@@ -275,6 +281,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["new thread project provider reasoning effort"],
   },
   {
+    id: "fallback-model",
+    title: "Fallback model",
+    to: "/settings/threads",
+    scope: "environment-defaults",
+    searchTerms: ["fallback agent provider out of usage new threads"],
+    environmentOnly: true,
+  },
+  {
     id: "default-permissions",
     title: "Permissions",
     to: "/settings/threads",
@@ -322,6 +336,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Chat width",
     to: "/settings/appearance",
     searchTerms: ["wide full width column layout messages composer monitor"],
+  },
+  {
+    id: "thread-details-items",
+    title: "Thread details",
+    to: "/settings/appearance",
+    searchTerms: [
+      "customize show hide panel card environment editor scripts branch pull request git changes servers automations lineage usage limits 5 hour weekly quota tokens context window",
+    ],
   },
   {
     id: "effort-display",
@@ -531,6 +553,23 @@ export const SETTINGS_SEARCH_ITEMS = [
     scope: "environment-defaults",
   },
   {
+    id: "auto-archive-settled-threads",
+    title: "Auto-archive settled threads",
+    to: "/settings/threads",
+    searchTerms: ["archive settled cleanup old threads days automatically"],
+    requiresCapability: "threadAutoArchive",
+    scope: "environment-defaults",
+  },
+  {
+    id: "days-before-auto-archive",
+    title: "Days settled before auto-archive",
+    to: "/settings/threads",
+    targetId: "auto-archive-settled-threads",
+    searchTerms: ["archive settled timeout"],
+    requiresCapability: "threadAutoArchive",
+    scope: "environment-defaults",
+  },
+  {
     id: "thread-notifications",
     title: "Thread notifications",
     to: "/settings/general",
@@ -584,9 +623,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "proactive-panels",
-    title: "Proactive panels",
+    title: "Open pull requests and changes panels proactively",
     to: "/settings/diffs",
-    searchTerms: ["automatically open diff pull request pr right panel agent completion"],
+    searchTerms: ["proactive automatically open diff pull request pr right panel agent completion"],
   },
   {
     id: "skills-in-slash-menu",
@@ -945,7 +984,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Open pull requests in T3 Code",
     to: "/settings/diffs",
     searchTerms: [
-      `pr links ${SOURCE_CONTROL_HOST_LABELS} browser external click default pull request view panel`,
+      `pr commit links ${SOURCE_CONTROL_HOST_LABELS} browser external click default pull request view panel`,
     ],
   },
   {
@@ -1067,7 +1106,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "environment-icon",
     title: "Environment icon",
-    to: "/settings/access",
+    to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: [
       "machine name rename icon glyph sidebar mac mini studio laptop desktop server cloud vm",
@@ -1083,7 +1122,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "network-access",
     title: "Network access",
-    to: "/settings/access",
+    to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: ["expose backend remote pairing local machine interfaces host restart"],
     localBackendManagementOnly: true,
@@ -1091,7 +1130,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "tailscale-https",
     title: "Tailscale HTTPS",
-    to: "/settings/access",
+    to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: ["serve magicdns endpoint remote secure network"],
     desktopOnly: true,
@@ -1100,7 +1139,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "wsl-backend",
     title: "WSL backend",
-    to: "/settings/access",
+    to: "/settings/connections",
     searchTerms: [
       "windows subsystem linux distro second server projects stop windows backend restart",
     ],
@@ -1113,7 +1152,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "t3-connect",
     localEnvironmentOnly: true,
     title: "T3 Connect",
-    to: "/settings/access",
+    to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: ["managed tunnel cloud other devices remote tunnels limit t3 chat"],
     desktopOnly: true,
@@ -1123,7 +1162,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "hold-webhooks-while-offline",
     localEnvironmentOnly: true,
     title: "Hold webhooks while offline",
-    to: "/settings/access",
+    to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: ["webhook automations offline queue mailbox t3 connect"],
     cloudOnly: true,
@@ -1133,7 +1172,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "publish-agent-activity",
     localEnvironmentOnly: true,
     title: "Publish agent activity",
-    to: "/settings/access",
+    to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: ["mobile push notifications live activities cloud tunnel"],
     cloudOnly: true,
@@ -1141,9 +1180,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "connections-environment",
     title: "This machine",
-    to: "/settings/access",
+    to: "/settings/connections",
     searchTerms: [
-      "connections server backend local remote access administrative permissions scope pairing links qr code authorized clients sessions revoke endpoint",
+      "connections sharing server backend local remote access administrative permissions scope pairing links qr code authorized clients sessions revoke endpoint",
     ],
   },
   {
@@ -1163,7 +1202,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "mcp-gateway",
     title: "MCP Gateway",
-    to: "/settings/mcp-gateway",
+    to: "/settings/connections",
     searchTerms: ["model context protocol voice agent bridge companion"],
   },
   {
@@ -1183,6 +1222,21 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "secret-providers",
+    title: "Secret providers",
+    to: "/settings/secrets",
+    searchTerms: ["1password vault credentials api key"],
+    secretsFeatureOnly: true,
+  },
+  {
+    id: "secret-providers-add",
+    title: "Add secret provider",
+    to: "/settings/secrets",
+    targetId: "secret-providers",
+    searchTerms: ["new 1password vault op cli account"],
+    secretsFeatureOnly: true,
+  },
+  {
     id: "archive",
     title: "Archived threads",
     to: "/settings/archived",
@@ -1195,7 +1249,6 @@ export type SettingsSearchItemId = (typeof SETTINGS_SEARCH_ITEMS)[number]["id"];
 const SEARCH_ITEMS_BY_ID = new Map(SETTINGS_SEARCH_ITEMS.map((item) => [item.id, item] as const));
 
 const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScope | null>> = {
-  "/settings/mcp-gateway": null,
   "/settings/diagnostics": "environment",
   "/settings/projects": "project",
   "/settings/general": null,
@@ -1211,7 +1264,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/source-control": "environment-defaults",
   "/settings/worktrees": "project-defaults",
   "/settings/connections": "connections",
-  "/settings/access": "connections",
+  "/settings/secrets": null,
   "/settings/scheduled-tasks": null,
   "/settings/maintenance": null,
   "/settings/labs": null,
@@ -1223,6 +1276,8 @@ const RENAMED_SETTINGS_PATHS: Readonly<Record<string, SettingsPath>> = {
   "/settings/integrations": "/settings/browser",
   "/settings/storage": "/settings/maintenance",
   "/settings/beta": "/settings/labs",
+  "/settings/access": "/settings/connections",
+  "/settings/mcp-gateway": "/settings/connections",
 };
 const SPLIT_SETTINGS_PATHS: ReadonlySet<string> = new Set([
   "/settings/general",
@@ -1233,7 +1288,6 @@ const SPLIT_SETTINGS_PATHS: ReadonlySet<string> = new Set([
 ]);
 // Section anchors that moved but are not search results themselves.
 const MOVED_SECTION_ANCHORS: Readonly<Record<string, SettingsPath>> = {
-  "authorized-clients": "/settings/access",
   "legacy-features": "/settings/labs",
   "text-generation": "/settings/threads",
   about: "/settings/about",
@@ -1354,6 +1408,8 @@ export function filterAvailableSettingsSearchItems(
         availability.hasThreadAutoSettlement) &&
       (item.requiresCapability !== "threadAutoSettleFinishedChildren" ||
         availability.hasThreadAutoSettleFinishedChildren === true) &&
+      (item.requiresCapability !== "threadAutoArchive" ||
+        availability.hasThreadAutoArchive === true) &&
       (!item.managedTunnelOnly || availability.managedTunnelActive === true) &&
       (!item.peerLinksOnly || availability.hasPeerLinkHost === true),
   );
@@ -1368,6 +1424,7 @@ export function settingsForThisPlatform(
     (item) =>
       (isElectron || item.desktopOnly !== true) &&
       (!item.releaseChannelOnly || isElectron || HOSTED_APP_CHANNEL !== null) &&
+      (!item.secretsFeatureOnly || isSecretsFeatureEnabled) &&
       (!item.macOnly || isMacPlatform(platform)) &&
       (!item.windowsOnly || isWindowsPlatform(platform)),
   );

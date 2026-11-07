@@ -6,6 +6,7 @@ import {
   ForwardCompatibleArray,
   ClientSurface,
   ClientWebDeployment,
+  EnvironmentId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 
@@ -238,7 +239,7 @@ export const AuthAccessTokenResult = Schema.Struct({
 export type AuthAccessTokenResult = typeof AuthAccessTokenResult.Type;
 
 export const AuthWebSocketTicketResult = Schema.Struct({
-  ticket: TrimmedNonEmptyString,
+  ticket: Schema.RedactedFromValue(TrimmedNonEmptyString),
   expiresAt: Schema.DateTimeUtc,
 });
 export type AuthWebSocketTicketResult = typeof AuthWebSocketTicketResult.Type;
@@ -288,6 +289,8 @@ export const AuthClientSession = Schema.Struct({
   ...authScopeResponseFields,
   method: ServerAuthSessionMethod,
   client: AuthClientMetadata,
+  /** The T3 environment holding the session, when another server holds it. */
+  peerEnvironmentId: Schema.optionalKey(EnvironmentId),
   issuedAt: Schema.DateTimeUtc,
   expiresAt: Schema.DateTimeUtc,
   lastConnectedAt: Schema.NullOr(Schema.DateTimeUtc),
@@ -454,6 +457,8 @@ export const MCP_PEER_LINK_SOFTWARE_ID = "t3code-peer-link";
 export const AuthMcpClientRegistration = Schema.Struct({
   client_name: Schema.optionalKey(Schema.String),
   software_id: Schema.optionalKey(Schema.String),
+  /** A T3 Code environment linking itself names itself, so the peer can list it by machine. */
+  t3_environment_id: Schema.optionalKey(EnvironmentId),
   redirect_uris: Schema.optionalKey(Schema.Array(Schema.String)),
   token_endpoint_auth_method: Schema.optionalKey(Schema.String),
 });
@@ -490,7 +495,7 @@ export const AuthMcpAuthorizationRequest = Schema.Struct({
   redirect_uri: Schema.optionalKey(Schema.String),
   code_challenge: Schema.optionalKey(Schema.String),
   code_challenge_method: Schema.optionalKey(Schema.String),
-  state: Schema.optionalKey(Schema.String),
+  state: Schema.optionalKey(Schema.RedactedFromValue(Schema.String)),
   resource: Schema.optionalKey(Schema.String),
 });
 export type AuthMcpAuthorizationRequest = typeof AuthMcpAuthorizationRequest.Type;
@@ -539,10 +544,10 @@ export class AuthMcpApprovalError extends Schema.TaggedError<AuthMcpApprovalErro
 
 export const AuthMcpTokenRequest = Schema.Struct({
   grant_type: Schema.optionalKey(Schema.String),
-  code: Schema.optionalKey(Schema.String),
+  code: Schema.optionalKey(Schema.RedactedFromValue(Schema.String)),
   redirect_uri: Schema.optionalKey(Schema.String),
   client_id: Schema.optionalKey(Schema.String),
-  code_verifier: Schema.optionalKey(Schema.String),
+  code_verifier: Schema.optionalKey(Schema.RedactedFromValue(Schema.String)),
   resource: Schema.optionalKey(Schema.String),
 }).pipe(HttpApiSchema.asFormUrlEncoded());
 export type AuthMcpTokenRequest = typeof AuthMcpTokenRequest.Type;

@@ -11,6 +11,7 @@ import {
   AuthClientMetadataDeviceType,
   AuthEnvironmentScopes,
   AuthSessionId,
+  EnvironmentId,
   ServerAuthSessionMethod,
 } from "@t3tools/contracts";
 
@@ -37,6 +38,8 @@ export const AuthSessionRecord = Schema.Struct({
   scopes: AuthEnvironmentScopes,
   method: ServerAuthSessionMethod,
   client: AuthSessionClientMetadataRecord,
+  /** The T3 environment holding the session, when another server holds it. */
+  peerEnvironmentId: Schema.NullOr(EnvironmentId),
   issuedAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
   lastConnectedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
@@ -50,6 +53,7 @@ export const CreateAuthSessionInput = Schema.Struct({
   scopes: AuthEnvironmentScopes,
   method: ServerAuthSessionMethod,
   client: AuthSessionClientMetadataRecord,
+  peerEnvironmentId: Schema.optionalKey(EnvironmentId),
   issuedAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
 });
@@ -86,6 +90,12 @@ export const RevokeOtherAuthSessionsInput = Schema.Struct({
 });
 export type RevokeOtherAuthSessionsInput = typeof RevokeOtherAuthSessionsInput.Type;
 
+export const RevokePeerEnvironmentSessionsInput = Schema.Struct({
+  peerEnvironmentId: EnvironmentId,
+  revokedAt: Schema.DateTimeUtcFromString,
+});
+export type RevokePeerEnvironmentSessionsInput = typeof RevokePeerEnvironmentSessionsInput.Type;
+
 export const SetAuthSessionLastConnectedAtInput = Schema.Struct({
   sessionId: AuthSessionId,
   lastConnectedAt: Schema.DateTimeUtcFromString,
@@ -116,6 +126,9 @@ export class AuthSessionRepository extends Context.Service<
     readonly revokeAllExcept: (
       input: RevokeOtherAuthSessionsInput,
     ) => Effect.Effect<ReadonlyArray<AuthSessionId>, AuthSessionRepositoryError>;
+    readonly revokeByPeerEnvironment: (
+      input: RevokePeerEnvironmentSessionsInput,
+    ) => Effect.Effect<ReadonlyArray<AuthSessionId>, AuthSessionRepositoryError>;
     readonly setLastConnectedAt: (
       input: SetAuthSessionLastConnectedAtInput,
     ) => Effect.Effect<void, AuthSessionRepositoryError>;
@@ -133,6 +146,7 @@ const AuthSessionDbRow = Schema.Struct({
   clientDeviceType: Schema.Literals(["desktop", "mobile", "tablet", "bot", "unknown"]),
   clientOs: Schema.NullOr(Schema.String),
   clientBrowser: Schema.NullOr(Schema.String),
+  peerEnvironmentId: Schema.NullOr(EnvironmentId),
   issuedAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
   lastConnectedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
@@ -150,6 +164,7 @@ const AuthSessionRawDbRow = Schema.Struct({
   clientDeviceType: Schema.Unknown,
   clientOs: Schema.Unknown,
   clientBrowser: Schema.Unknown,
+  peerEnvironmentId: Schema.Unknown,
   issuedAt: Schema.Unknown,
   expiresAt: Schema.Unknown,
   lastConnectedAt: Schema.Unknown,
@@ -172,6 +187,7 @@ function toAuthSessionRecord(row: typeof AuthSessionDbRow.Type): AuthSessionReco
       os: row.clientOs,
       browser: row.clientBrowser,
     },
+    peerEnvironmentId: row.peerEnvironmentId,
     issuedAt: row.issuedAt,
     expiresAt: row.expiresAt,
     lastConnectedAt: row.lastConnectedAt,
@@ -214,6 +230,7 @@ export const make = Effect.gen(function* () {
           client_device_type,
           client_os,
           client_browser,
+          peer_environment_id,
           issued_at,
           expires_at,
           revoked_at
@@ -229,6 +246,7 @@ export const make = Effect.gen(function* () {
           ${input.client.deviceType},
           ${input.client.os},
           ${input.client.browser},
+          ${input.peerEnvironmentId ?? null},
           ${input.issuedAt},
           ${input.expiresAt},
           NULL
@@ -255,6 +273,7 @@ export const make = Effect.gen(function* () {
           client_device_type AS "clientDeviceType",
           client_os AS "clientOs",
           client_browser AS "clientBrowser",
+          peer_environment_id AS "peerEnvironmentId",
           issued_at AS "issuedAt",
           expires_at AS "expiresAt",
           last_connected_at AS "lastConnectedAt",
@@ -299,6 +318,7 @@ export const make = Effect.gen(function* () {
           client_device_type AS "clientDeviceType",
           client_os AS "clientOs",
           client_browser AS "clientBrowser",
+          peer_environment_id AS "peerEnvironmentId",
           issued_at AS "issuedAt",
           expires_at AS "expiresAt",
           last_connected_at AS "lastConnectedAt",
@@ -346,6 +366,32 @@ export const make = Effect.gen(function* () {
         RETURNING session_id AS "sessionId"
       `,
   });
+
+  const revokePeerEnvironmentRows = SqlSchema.findAll({
+    Request: RevokePeerEnvironmentSessionsInput,
+    Result: Schema.Struct({ sessionId: AuthSessionId }),
+    execute: ({ peerEnvironmentId, revokedAt }) =>
+      sql`
+        UPDATE auth_sessions
+        SET revoked_at = ${revokedAt}
+        WHERE peer_environment_id = ${peerEnvironmentId}
+          AND revoked_at IS NULL
+        RETURNING session_id AS "sessionId"
+      `,
+  });
+
+  const revokeByPeerEnvironment: AuthSessionRepository["Service"]["revokeByPeerEnvironment"] = (
+    input,
+  ) =>
+    revokePeerEnvironmentRows(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "AuthSessionRepository.revokeByPeerEnvironment:query",
+          "AuthSessionRepository.revokeByPeerEnvironment:decodeRows",
+        ),
+      ),
+      Effect.map((rows) => rows.map((row) => row.sessionId)),
+    );
 
   const create: AuthSessionRepository["Service"]["create"] = (input) =>
     createSessionRow(input).pipe(
@@ -488,6 +534,7 @@ export const make = Effect.gen(function* () {
     listActive,
     revoke,
     revokeAllExcept,
+    revokeByPeerEnvironment,
     setLastConnectedAt,
   } satisfies AuthSessionRepository["Service"];
 });

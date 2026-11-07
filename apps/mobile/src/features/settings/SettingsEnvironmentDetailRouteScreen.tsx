@@ -8,6 +8,7 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { sessionPermissionsUnavailableMessage } from "@t3tools/shared/authScopeOptions";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import { AsyncResult } from "effect/reactivity";
@@ -25,6 +26,7 @@ import { environmentSession, useEnvironmentScope, readEnvironmentScope } from ".
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
 import { ConnectionEnvironmentRow } from "../connection/ConnectionEnvironmentRow";
+import { ConnectionLogSection } from "./ConnectionLogSection";
 import { EnvironmentRoutesSection } from "./EnvironmentRoutesSection";
 import { OutdatedServerUpdateSection } from "./OutdatedServerUpdateSection";
 import { ListActionRow as SettingsActionRow } from "../../components/ui/ListActionRow";
@@ -190,6 +192,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                 onUpdate={connections.onUpdateEnvironment}
               />
             </SettingsSection>
+            <ConnectionLogSection environmentId={environmentId} />
             <EnvironmentRoutesSection
               environmentId={environmentId}
               connected={connected}
@@ -208,11 +211,14 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
               </Text>
             ) : !allowed ? (
               <Text className="px-2 text-sm text-foreground-muted">
-                {AsyncResult.isFailure(sessionResult)
-                  ? "Could not verify your permissions. Reconnect to try again."
-                  : session === null
-                    ? "Checking permissions…"
-                    : "This connection does not have permission to manage the environment."}
+                {AsyncResult.isFailure(sessionResult) || session === null || !session.authenticated
+                  ? sessionPermissionsUnavailableMessage({
+                      connected,
+                      failed: AsyncResult.isFailure(sessionResult),
+                      rejected:
+                        !AsyncResult.isFailure(sessionResult) && session?.authenticated === false,
+                    })
+                  : "This connection does not have permission to manage the environment."}
               </Text>
             ) : null}
             {error ? (
@@ -290,7 +296,10 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                       void run("refresh", async () => {
                         if (!readEnvironmentScope(environmentId, AuthOrchestrationReadScope))
                           return;
-                        const result = await refreshProviders({ environmentId, input: {} });
+                        const result = await refreshProviders({
+                          environmentId,
+                          input: { reloadSecrets: true },
+                        });
                         if (AsyncResult.isFailure(result)) throw squashAtomCommandFailure(result);
                         setNotice("Provider status refreshed.");
                       });

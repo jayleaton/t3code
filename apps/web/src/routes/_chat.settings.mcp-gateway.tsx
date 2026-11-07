@@ -1,7 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { McpGatewaySettings } from "../components/settings/McpGatewaySettings";
-
-export const Route = createFileRoute("/_chat/settings/mcp-gateway")({
-  component: McpGatewaySettings,
-});
+// Merged into /settings/connections; the settings route redirects old links.
+export const Route = createFileRoute("/_chat/settings/mcp-gateway")({});

@@ -24,6 +24,7 @@ import { readCaller, unavailable } from "../mcp/threadAccess.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as PeerLinks from "./PeerLinks.ts";
 import * as PeerMcpClient from "./PeerMcpClient.ts";
+import * as TailnetDevices from "./TailnetDevices.ts";
 
 /**
  * A peer's `/mcp` holds a wait open for its whole timeout without sending
@@ -87,6 +88,12 @@ export const linkedEnvironmentsOff = new OrchestratorMcpFailure({
     "Linked environments is off on this machine, so no tool can act on another machine. Leave out environmentId to work here; the user can turn it on in Settings → Labs.",
 });
 
+/**
+ * A failure that calling again may not repeat: the route or the peer, not a
+ * refusal. Refusals carry their own codes, as PeerMcpClient maps them.
+ */
+const isTransient = (error: OrchestratorMcpFailure) => error.code === "orchestration_error";
+
 /** The linked environment a call names, or nothing when it names this one. */
 export const remoteTarget = (scope: Scope, environmentId: EnvironmentId | undefined) =>
   environmentId === scope.environmentId ? undefined : environmentId;
@@ -94,6 +101,7 @@ export const remoteTarget = (scope: Scope, environmentId: EnvironmentId | undefi
 const make = Effect.gen(function* () {
   const peers = yield* PeerMcpClient.PeerMcpClient;
   const links = yield* PeerLinks.PeerLinks;
+  const tailnetDevices = yield* TailnetDevices.TailnetDevices;
   const crypto = yield* Crypto.Crypto;
   const threads = yield* ThreadManagement.ThreadManagementService;
 
@@ -146,6 +154,16 @@ const make = Effect.gen(function* () {
     if (typeof args.clientRequestId === "string") {
       args.clientRequestId = yield* scopedRequestId(scope.requestNamespace, args.clientRequestId);
     }
+    // The peer sees only the link session, so a launch names its calling thread to nest under.
+    if (toolName === "t3_thread_launch" && scope.thread !== undefined && !args.delegatedFrom) {
+      const threadId = scope.thread.threadId;
+      const shell = yield* threads.getThreadShell(threadId).pipe(Effect.orElseSucceed(() => null));
+      args.delegatedFrom = {
+        environmentId: scope.environmentId,
+        threadId,
+        title: shell?.title ?? threadId,
+      };
+    }
     return yield* peers.call({
       environmentId,
       tool: toolName,
@@ -179,9 +197,18 @@ const make = Effect.gen(function* () {
       input,
     );
 
-  const waitForThread: PeerForwarding["Service"]["waitForThread"] = Effect.fn(
-    "PeerForwarding.waitForThread",
-  )(function* (scope, environmentId, input) {
+  /**
+   * With `reportUnreachable`, a peer that stops answering ends the wait with
+   * `unreachable` and the last result seen instead of failing it, so an
+   * agent's wait loop survives a dropped route.
+   */
+  const waitInPieces = Effect.fn("PeerForwarding.waitForThread")(function* (
+    scope: Scope,
+    environmentId: EnvironmentId,
+    input: OrchestratorMcpThreadWaitInput,
+    reportUnreachable: boolean,
+  ) {
+    let last: OrchestratorMcpThreadWaitResult | undefined;
     let remaining = Math.min(
       MAX_WAIT_TIMEOUT_MS,
       Math.max(1, input.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS),
@@ -189,7 +216,7 @@ const make = Effect.gen(function* () {
     let runId = input.runId;
     while (true) {
       const chunk = Math.min(remaining, FORWARDED_WAIT_CHUNK_MS);
-      const result = yield* forward<OrchestratorMcpThreadWaitResult>(
+      const piece = forward<OrchestratorMcpThreadWaitResult>(
         scope,
         "t3_thread_wait",
         OrchestratorMcpThreadWaitInput,
@@ -207,12 +234,33 @@ const make = Effect.gen(function* () {
             : { returnOnQuestion: input.returnOnQuestion }),
         },
       );
+      const result = reportUnreachable
+        ? yield* piece.pipe(
+            Effect.catchIf(isTransient, (error) =>
+              Effect.succeed({
+                ...(last ?? {
+                  environmentId,
+                  threadId: input.threadId,
+                  runId: runId ?? null,
+                  status: "idle" as const,
+                }),
+                timedOut: true,
+                unreachable: error.message,
+              }),
+            ),
+          )
+        : yield* piece;
+      if (result.unreachable !== undefined) return result;
+      last = result;
       remaining -= chunk;
       if (!result.timedOut || remaining <= 0) return result;
       // Later pieces wait for the run the first one picked, not a newer one.
       runId = result.runId ?? undefined;
     }
   });
+
+  const waitForThread: PeerForwarding["Service"]["waitForThread"] = (scope, environmentId, input) =>
+    waitInPieces(scope, environmentId, input, false);
 
   // While the beta is off, agents start nothing over links. Tasks already running there keep
   // following through readThread, waitForThread and interruptThread, so they still finish.
@@ -225,10 +273,11 @@ const make = Effect.gen(function* () {
       Tool.Success<typeof tool>,
       OrchestratorMcpFailure
     > = tool.name === "t3_thread_wait"
-      ? (waitForThread(
+      ? (waitInPieces(
           scope,
           environmentId,
           params as OrchestratorMcpThreadWaitInput,
+          true,
         ) as Effect.Effect<Tool.Success<typeof tool>, OrchestratorMcpFailure>)
       : forward(scope, tool.name, tool.parametersSchema, tool.successSchema, environmentId, params);
     return Effect.andThen(requireEnabled, forwarded);
@@ -239,7 +288,7 @@ const make = Effect.gen(function* () {
    * empty list reads as a dead end and agents go looking elsewhere.
    */
   const NOT_LISTED =
-    "Not listed: not linked yet. Call t3_environment_link with a hint from the user's words.";
+    "Not in links: not linked yet. Call t3_environment_link with its environmentId from devices, or a hint from the user's words.";
 
   const listLinks: PeerForwarding["Service"]["links"] = Effect.fn("PeerForwarding.listLinks")(
     function* (scope) {
@@ -251,6 +300,12 @@ const make = Effect.gen(function* () {
             new OrchestratorMcpFailure({ code: "orchestration_error", message: error.message }),
         ),
       );
+      // Devices only add to the links, so an unreadable tailnet still lists them.
+      const devices = yield* tailnetDevices.list.pipe(
+        Effect.map((snapshot) => snapshot.devices),
+        Effect.tapError((error) => Effect.logWarning("Tailnet devices unreadable", error)),
+        Effect.orElseSucceed(() => []),
+      );
       return {
         environmentId: scope.environmentId,
         links: listed.map((link) => ({
@@ -258,8 +313,17 @@ const make = Effect.gen(function* () {
           label: link.label,
           status: link.status,
           access: link.access,
+          origin: link.origin,
           expiresAt: DateTime.formatIso(link.expiresAt),
           lastError: link.lastError,
+        })),
+        devices: devices.map((device) => ({
+          environmentId: device.environmentId,
+          label: device.label,
+          status: device.status,
+          access: device.access,
+          outgoing: device.outgoing,
+          incoming: device.incoming,
         })),
         notListed: NOT_LISTED,
       };

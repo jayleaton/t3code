@@ -406,6 +406,8 @@ export function gatewayThreadProjection(projection: OrchestrationV2ThreadProject
       })),
     createdAt: iso(thread.createdAt),
     updatedAt: iso(thread.updatedAt),
+    archivedAt: iso(thread.archivedAt),
+    deletedAt: iso(thread.deletedAt),
   };
 }
 

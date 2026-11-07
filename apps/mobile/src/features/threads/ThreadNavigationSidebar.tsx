@@ -5,7 +5,10 @@ import { useNavigation } from "@react-navigation/native";
 import { useActiveNewTask } from "../../state/active-new-task";
 import { ThreadUndoNotice } from "../home/ThreadUndoNotice";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
-import { resolveScratchProjectScopeKey } from "@t3tools/client-runtime/state/project-grouping";
+import {
+  pickableProjectGroups,
+  resolveScratchProjectScopeKey,
+} from "@t3tools/client-runtime/state/project-grouping";
 import {
   useAppearancePreferences,
   useAndroidFloatingTabs,
@@ -41,7 +44,7 @@ import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2ShelfPreferences } from "./use-thread-list-v2-shelf-preferences";
 import { useThreadListNow } from "./use-thread-list-now";
 import { usePendingThreadOrder } from "../../state/thread-order";
-import { threadListEnvironmentsAtom } from "../../state/server";
+import { threadListEnvironmentsAtom } from "../../state/presentation";
 import { usePendingNewTasks, type PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
 import { useWorkspaceState } from "../../state/workspace";
@@ -70,6 +73,7 @@ import { createSidebarHeaderItems } from "./sidebar-native-header-items";
 import { SidebarNavigationShell } from "./sidebar-navigation-shell";
 import {
   ThreadListV2PendingRow,
+  ThreadListV2ChildrenToggle,
   ThreadListV2Row,
   ThreadListV2SettledShelfHeader,
   ThreadListV2ShowMoreRow,
@@ -78,6 +82,7 @@ import {
 } from "./thread-list-v2-items";
 import { useThreadRowProviderInstanceResolver } from "./thread-provider-instance";
 import type { ThreadPrPresentation } from "../../state/thread-pr-presentation";
+import { ThreadPrDemandProvider } from "../../state/thread-pr-demand";
 import {
   isThreadListV2ListItem,
   threadListV2ListItemsAreEqual,
@@ -132,16 +137,19 @@ export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
       profileId,
       environmentId: environmentId ?? undefined,
     });
-  if (Platform.OS !== "ios") {
-    return (
-      <ThreadNavigationSidebarPane
-        {...props}
-        onStartAgentChat={onStartAgentChat}
-        nativeChrome={false}
-      />
-    );
-  }
-  return <NativeSidebarContainer {...props} onStartAgentChat={onStartAgentChat} />;
+  return (
+    <ThreadPrDemandProvider visible={props.visible}>
+      {Platform.OS !== "ios" ? (
+        <ThreadNavigationSidebarPane
+          {...props}
+          onStartAgentChat={onStartAgentChat}
+          nativeChrome={false}
+        />
+      ) : (
+        <NativeSidebarContainer {...props} onStartAgentChat={onStartAgentChat} />
+      )}
+    </ThreadPrDemandProvider>
+  );
 }
 
 function NativeSidebarContainer(props: ThreadNavigationSidebarProps & SidebarAgentsNavigation) {
@@ -240,7 +248,7 @@ function ThreadNavigationSidebarPane(
       }),
     [projects, options.selectedEnvironmentId, options.projectGroupingMode],
   );
-  const projectFilterOptions = projectScopes.map((scope) => ({
+  const projectFilterOptions = pickableProjectGroups(projectScopes).map((scope) => ({
     key: scope.key,
     label: scope.title,
   }));
@@ -259,8 +267,9 @@ function ThreadNavigationSidebarPane(
       ),
     [projectScopes],
   );
+  // An archived project's filter reads as all projects, matching the filter menu.
   const selectedProjectScope =
-    projectScopes.find((scope) => scope.key === resolvedProjectKey) ?? null;
+    pickableProjectGroups(projectScopes).find((scope) => scope.key === resolvedProjectKey) ?? null;
   const threadSearch = useThreadSearch(
     searchEnvironmentIds,
     props.searchQuery,
@@ -322,6 +331,7 @@ function ThreadNavigationSidebarPane(
     items: threadListV2Items,
     contentOnlyThreadKeys,
     olderSettledShelf,
+    toggleExpandedParent,
   } = useThreadListV2({
     threads,
     pendingTasks,
@@ -570,6 +580,7 @@ function ThreadNavigationSidebarPane(
             onNewThreadOnBranch={props.onNewThreadOnBranch}
             thread={thread}
             variant={item.item.variant}
+            depth={item.item.depth}
             hasQueuedMessages={item.hasQueuedMessages}
             snoozed={item.item.snoozed}
             pinned={item.item.pinned}
@@ -621,9 +632,11 @@ function ThreadNavigationSidebarPane(
             pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
             autoSettleOptOutSupported={autoSettleOptOutEnvironmentIds.has(thread.environmentId)}
             reorderSupported={
-              item.item.pinned
+              // A child chat's place follows its parent's.
+              item.item.depth === 0 &&
+              (item.item.pinned
                 ? pinReorderEnvironmentIds.has(thread.environmentId)
-                : !workingShelfEnabled && activeReorderEnvironmentIds.has(thread.environmentId)
+                : !workingShelfEnabled && activeReorderEnvironmentIds.has(thread.environmentId))
             }
             canMoveUp={item.canMoveUp}
             canMoveDown={item.canMoveDown}
@@ -640,6 +653,17 @@ function ThreadNavigationSidebarPane(
           />
         );
       }
+      case "v2-children":
+        return (
+          <ThreadListV2ChildrenToggle
+            parentKey={item.parentKey}
+            counts={item.counts}
+            expanded={item.expanded}
+            depth={item.depth}
+            onToggle={toggleExpandedParent}
+            pane="sidebar"
+          />
+        );
       case "v2-working-shelf":
         return (
           <ThreadListV2WorkingShelfHeader
