@@ -48,6 +48,8 @@ import {
 import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
 import { feedbackBannerItem } from "./chat/ComposerFeedback";
 import { useUsageLimitsPanel } from "./chat/useUsageLimitsPanel";
+import { usePromptCacheBanner } from "./chat/usePromptCacheBanner";
+import { promptCacheTtlMs } from "../lib/promptCache";
 import { useWorktreeSetup } from "./chat/useWorktreeSetup";
 import { useChatShortcuts } from "./chat/useChatShortcuts";
 import { ChatBannerLane } from "./chat/ChatBannerLane";
@@ -2828,6 +2830,18 @@ export default function ChatView(props: ChatViewProps) {
   const sendPreviewAnnotationStable = useStableCallback(sendPreviewAnnotation);
   const onComposerResumeStable = useStableCallback(onResume);
   const onComposerCompactContextStable = useStableCallback(onCompactContext);
+  const activePromptCacheTtlMs = promptCacheTtlMs(
+    selectedProviderEntry?.driverKind,
+    selectedProviderEntry?.snapshot.auth.type,
+  );
+  const promptCacheBanner = usePromptCacheBanner({
+    threadKey: routeThreadKey,
+    ttlMs: activePromptCacheTtlMs,
+    contextWindow: activeContextWindow,
+    isWorking,
+    compactDisabled,
+    onCompact: onComposerCompactContextStable,
+  });
   // Read from the projection the footer renders, so the scroll below sees the new message.
   const pendingGuestMessageIds =
     serverProjection?.thread.guestShare?.messages.flatMap((message) =>
@@ -3199,7 +3213,12 @@ export default function ChatView(props: ChatViewProps) {
                             : projectCloneSendBlockReason
               }
               isPreparingWorktree={isPreparingWorktree && !sendQueuesBehindSetup}
-              bannerItems={composerBannerItems}
+              bannerItems={
+                promptCacheBanner
+                  ? [...composerBannerItems, promptCacheBanner]
+                  : composerBannerItems
+              }
+              promptCacheTtlMs={activePromptCacheTtlMs}
               onUsageLimitsCommand={
                 usageLimitsOffered && usageLimitsKey !== null && !composerHasNonPromptContent
                   ? openUsageLimits
