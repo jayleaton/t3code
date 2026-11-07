@@ -1155,6 +1155,10 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverRunStorageCleanup,
       concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
+    rewriteDraft: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:rewrite-draft",
+      tag: WS_METHODS.serverRewriteDraft,
+    }),
     prepareTriage: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:prepare-triage",
       tag: WS_METHODS.serverPrepareTriage,

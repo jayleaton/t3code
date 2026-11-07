@@ -11,6 +11,7 @@ import { ChildProcessSpawner } from "effect/process";
 import * as TextGeneration from "./TextGeneration.ts";
 import {
   buildBranchNamePrompt,
+  buildDraftRewritePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
@@ -185,6 +186,20 @@ export const makeCommandCodeTextGeneration = Effect.fn("makeCommandCodeTextGener
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 
+  const rewriteDraft: TextGeneration.TextGeneration["Service"]["rewriteDraft"] = Effect.fn(
+    "CommandCodeTextGeneration.rewriteDraft",
+  )(function* (input) {
+    const { prompt, outputSchema } = buildDraftRewritePrompt(input);
+    const generated = yield* runCommandCodeJson({
+      operation: "rewriteDraft",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson: outputSchema,
+      modelSelection: input.modelSelection,
+    });
+    return { text: generated.text.trim() };
+  });
+
   // Text generation runs Command Code for a single planning turn, which cannot investigate a checkout.
   const generateReviewGuide: TextGeneration.TextGeneration["Service"]["generateReviewGuide"] = () =>
     Effect.fail(investigationUnsupported("generateReviewGuide", "Command Code"));
@@ -195,5 +210,6 @@ export const makeCommandCodeTextGeneration = Effect.fn("makeCommandCodeTextGener
     generateBranchName,
     generateThreadTitle,
     generateReviewGuide,
+    rewriteDraft,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

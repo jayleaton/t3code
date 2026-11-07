@@ -97,6 +97,16 @@ export type ReviewGuideGenerationResult = Omit<
   "headSha" | "generatedAt" | "modelSelection"
 >;
 
+export interface DraftRewriteInput {
+  cwd: string;
+  text: string;
+  modelSelection: ModelSelection;
+}
+
+export interface DraftRewriteResult {
+  text: string;
+}
+
 export interface ProviderTextGeneration {
   readonly generateCommitMessage: (
     input: CommitMessageGenerationInput,
@@ -117,4 +127,8 @@ export interface ProviderTextGeneration {
   readonly generateReviewGuide: (
     input: ReviewGuideGenerationInput,
   ) => Effect.Effect<ReviewGuideGenerationResult, TextGenerationError>;
+
+  readonly rewriteDraft: (
+    input: DraftRewriteInput,
+  ) => Effect.Effect<DraftRewriteResult, TextGenerationError>;
 }

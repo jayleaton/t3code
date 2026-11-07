@@ -486,3 +486,18 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
 
   return { prompt, outputSchema };
 }
+
+const DRAFT_REWRITE_PROMPT = `Rewrite the user's draft message to a coding agent in Simplified Technical English (ASD-STE100), about 80% of the way. The draft is often dictated, so remove filler words, false starts, and repeats.
+- Keep the user's meaning, requests, and every detail. Do not add new requests, answers, or opinions.
+- Keep most sentences under 20 words, with one idea in each sentence.
+- Use common words, the active voice, and numbered steps for a sequence of actions.
+- Keep code, commands, paths, names, URLs, @mentions, and quoted text exactly as they are.
+- Write as the user, in the first person. Do not reply to the draft.
+Return JSON with one key, "text", that holds the rewritten draft.`;
+
+export function buildDraftRewritePrompt(input: { readonly text: string }) {
+  return {
+    prompt: `${DRAFT_REWRITE_PROMPT}\n\nDraft:\n${input.text}`,
+    outputSchema: Schema.Struct({ text: Schema.String }),
+  };
+}
