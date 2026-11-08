@@ -1695,6 +1695,81 @@ describe("EnvironmentSupervisor routes", () => {
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
+  it.effect("does not hold a late-answering direct route behind a stalled T3 Connect", () =>
+    Effect.gen(function* () {
+      const checkingDirect = yield* Deferred.make<void>();
+      const attempted: string[] = [];
+      const harness = yield* makeHarness({
+        checkRoute: (route) =>
+          route.target._tag === "BearerConnectionTarget"
+            ? Deferred.succeed(checkingDirect, undefined).pipe(
+                Effect.andThen(Effect.sleep("700 millis")),
+                Effect.as("answered" as const),
+              )
+            : Effect.succeed("unchecked"),
+        // Signed in, but T3 Connect never finishes authorizing (expired or unlinked account).
+        prepare: (_attempt, target) => {
+          attempted.push(target._tag);
+          return target._tag === "RelayConnectionTarget"
+            ? Effect.never
+            : Effect.succeed(preparedFor(target));
+        },
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(LAN_THEN_RELAY_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      yield* Deferred.await(checkingDirect);
+      yield* TestClock.adjust("31 seconds");
+      const state = yield* awaitState(
+        supervisor.state,
+        (state) => state.phase === "connected" || state.phase === "backoff",
+      );
+      expect(state.phase).toBe("connected");
+      expect(Option.getOrThrow(yield* SubscriptionRef.get(supervisor.prepared)).target._tag).toBe(
+        "BearerConnectionTarget",
+      );
+      expect(attempted).toEqual(["RelayConnectionTarget", "BearerConnectionTarget"]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("returns to T3 Connect when the late direct route refuses this device", () =>
+    Effect.gen(function* () {
+      const checkingDirect = yield* Deferred.make<void>();
+      const attempted: string[] = [];
+      const harness = yield* makeHarness({
+        checkRoute: (route) =>
+          route.target._tag === "BearerConnectionTarget"
+            ? Deferred.succeed(checkingDirect, undefined).pipe(
+                Effect.andThen(Effect.sleep("700 millis")),
+                Effect.as("answered" as const),
+              )
+            : Effect.succeed("unchecked"),
+        prepare: (_attempt, target) => {
+          attempted.push(target._tag);
+          return target._tag === "RelayConnectionTarget"
+            ? Effect.sleep("2 seconds").pipe(Effect.as(preparedFor(target)))
+            : Effect.fail(blocked("This device's pairing was revoked."));
+        },
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(LAN_THEN_RELAY_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      yield* Deferred.await(checkingDirect);
+      yield* TestClock.adjust("5 seconds");
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      expect(Option.getOrThrow(yield* SubscriptionRef.get(supervisor.prepared)).target._tag).toBe(
+        "RelayConnectionTarget",
+      );
+      expect(attempted).toEqual([
+        "RelayConnectionTarget",
+        "BearerConnectionTarget",
+        "RelayConnectionTarget",
+      ]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
   it.effect("skips a silent LAN route and connects over T3 Connect", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({

@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
@@ -104,6 +105,20 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     return result;
   });
   const silent: Array<{ readonly route: ConnectionRoute; readonly index: number }> = [];
+  const preempted: Array<{ readonly route: ConnectionRoute; readonly check: RouteCheck }> = [];
+  // Resolves once a route that missed the head start answers after all.
+  const lateAnswer = Effect.suspend(() =>
+    Effect.raceAll(
+      silent.map(({ index }) =>
+        Fiber.join(checks[index]!).pipe(
+          Effect.filterOrElse(
+            (check) => check === "answered",
+            () => Effect.never,
+          ),
+        ),
+      ),
+    ),
+  );
   for (const [index, route] of routes.entries()) {
     const check =
       checks.length === 0
@@ -116,10 +131,22 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
       silent.push({ route, index });
       continue;
     }
-    const result = yield* attempt(route, check);
-    if (result._tag === "Success") return result.success;
+    // An unchecked route such as T3 Connect can stall on its own sign-in for far longer than
+    // the setup budget, so a direct route that answers late takes its turn instead of waiting.
+    const result =
+      check === "unchecked" && silent.length > 0
+        ? yield* Effect.raceFirst(
+            attempt(route, check).pipe(Effect.asSome),
+            lateAnswer.pipe(Effect.as(Option.none())),
+          )
+        : Option.some(yield* attempt(route, check));
+    if (Option.isNone(result)) {
+      preempted.push({ route, check });
+      continue;
+    }
+    if (result.value._tag === "Success") return result.value.success;
     // An incompatible server is the same server on every route.
-    if (result.failure.reason === "unsupported") return yield* result.failure;
+    if (result.value.failure.reason === "unsupported") return yield* result.value.failure;
   }
   // A slow route that answered after the head start goes before one that is
   // still dead, which can hold an attempt open far longer than its probe.
@@ -130,6 +157,7 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     ...silent.flatMap((entry, position) =>
       late[position] === "silent" ? [] : [{ ...entry, check: late[position]! }],
     ),
+    ...preempted,
     ...silent.flatMap((entry, position) =>
       late[position] === "silent" ? [{ ...entry, check: "silent" as const }] : [],
     ),
