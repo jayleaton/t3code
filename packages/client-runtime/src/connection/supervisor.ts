@@ -472,9 +472,14 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         : {}),
       ...(lastConnected === null ? {} : { lastConnectedAt: lastConnected }),
     });
-    const kind = connectionLogKind(previous, next);
-    if (kind === null) return;
+    // Read on every transition so an ending error never outlives the one that follows it.
     const endedBy = yield* Ref.getAndSet(sessionEndedBy, null);
+    // Reconnecting at once after an unanswered probe leaves "connected" for "connecting".
+    const kind =
+      endedBy !== null && previous.phase === "connected" && next.phase !== "connected"
+        ? "lost"
+        : connectionLogKind(previous, next);
+    if (kind === null) return;
     const failure =
       kind === "failed" ? next.lastFailure : kind === "lost" ? (endedBy ?? next.lastFailure) : null;
     const event: ConnectionLogEvent = {

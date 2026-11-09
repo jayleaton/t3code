@@ -25,7 +25,7 @@ export type ClientUnresponsiveReason = "client-silent" | "send-stalled";
 export interface ClientUnresponsive {
   readonly reason: ClientUnresponsiveReason;
   readonly silentForMs: number;
-  /** Nonzero means the client's bytes arrived but no message was handled, so the server stalled. */
+  /** Raw bytes received since the last handled message; framing and buffering also count. */
   readonly bytesReadWhileSilent: number;
   readonly pendingBytes: number;
 }

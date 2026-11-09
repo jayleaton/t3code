@@ -50,8 +50,6 @@ it.effect("treats a client that stops sending as gone after the silence limit", 
   }),
 );
 
-// Bytes that reach the socket without a message being handled mean the server, not the
-// client or the network, stopped processing what the client sent.
 it.effect("reports bytes that arrived while no message was handled", () =>
   Effect.gen(function* () {
     const progress = { pendingBytes: 0, bytesWritten: 0, bytesRead: 100 };
