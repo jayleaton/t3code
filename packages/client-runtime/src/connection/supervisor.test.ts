@@ -581,11 +581,22 @@ describe("EnvironmentSupervisor", () => {
 
       yield* awaitState(supervisor.state, (state) => state.phase === "connected");
       yield* harness.closeLatestSession();
-      yield* awaitState(
+      const lost = yield* awaitState(
         supervisor.state,
         (state) => state.phase === "backoff" && state.attempt === 1,
       );
       expect(Option.isNone(yield* SubscriptionRef.get(supervisor.prepared))).toBe(true);
+      // The screen shows no failure for a lost session, but the log says what ended it.
+      expect(lost.lastFailure).toBeNull();
+      const logged = yield* SubscriptionRef.changes(supervisor.log!).pipe(
+        Stream.map((log) => connectionTroubleSince(log, -1)),
+        Stream.filter((trouble) => trouble.length > 0),
+        Stream.runHead,
+        Effect.map(Option.getOrThrow),
+      );
+      expect(logged).toEqual([
+        expect.objectContaining({ kind: "lost", reason: "transport", detail: "Session closed." }),
+      ]);
 
       yield* TestClock.adjust("3 seconds");
       yield* awaitState(
