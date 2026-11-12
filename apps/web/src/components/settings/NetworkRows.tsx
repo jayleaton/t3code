@@ -71,7 +71,17 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import {
+  Menu,
+  MenuItem,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSub,
+  MenuSubPopup,
+  MenuSubTrigger,
+  MenuTrigger,
+} from "../ui/menu";
 import { QRCodeSvg } from "../ui/qr-code";
 import { Radio, RadioGroup } from "../ui/radio-group";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -142,45 +152,6 @@ const keptInApp = (until: DateTime.Utc | null, now: DateTime.Utc) =>
 const hostLabel = (group: DeviceNetworkGroup, environmentId: EnvironmentId) =>
   group.hosts.find((host) => host.environmentId === environmentId)?.label ?? environmentId;
 
-/** A level picker; once revoked, picking a level restores at it. */
-function AccessSelect<A extends string>({
-  label,
-  value,
-  options,
-  optionLabel,
-  disabled,
-  onChange,
-}: {
-  readonly label: string;
-  readonly value: A | "revoked";
-  readonly options: ReadonlyArray<A>;
-  readonly optionLabel: (option: A) => string;
-  readonly disabled: boolean;
-  readonly onChange: (access: A) => void;
-}) {
-  const revoked = value === "revoked";
-  return (
-    <Select
-      value={revoked ? null : value}
-      disabled={disabled}
-      onValueChange={(next) => {
-        if (next !== null) onChange(next as A);
-      }}
-    >
-      <SelectTrigger size="sm" aria-label={revoked ? `Restore ${label}` : `${label} access`}>
-        <SelectValue>{revoked ? "Restore as…" : optionLabel(value as A)}</SelectValue>
-      </SelectTrigger>
-      <SelectPopup align="end" alignItemWithTrigger={false}>
-        {options.map((option) => (
-          <SelectItem key={option} value={option} hideIndicator>
-            {optionLabel(option)}
-          </SelectItem>
-        ))}
-      </SelectPopup>
-    </Select>
-  );
-}
-
 function RowLayout({
   title,
   status,
@@ -241,7 +212,6 @@ const ALLOW_JOINING_PATH = "Settings → Environments → Machines";
 function machineDetails(
   group: DeviceNetworkGroup,
   machine: DeviceNetworkMachine,
-  showAccess: boolean,
   now: DateTime.Utc,
   readd: "unbound" | "left" | null,
   openHint: ReturnType<typeof openAccessHint>,
@@ -279,7 +249,9 @@ function machineDetails(
   return [
     reconnecting ? RECONNECTING : null,
     machine.kind === "found" ? "Not in your network" : null,
-    showAccess && access !== null && access !== "revoked" ? accessLabel(access) : null,
+    access !== null && access !== "revoked" && access !== "full-access"
+      ? `Limited to ${accessLabel(access)}`
+      : null,
     ...limits,
     ...localOnly,
     ...links,
@@ -389,7 +361,6 @@ export function useMachineParts({
     details: machineDetails(
       group,
       machine,
-      !controls.changeAccess,
       now,
       readdReason,
       openAccessHint(machine, group),
@@ -398,15 +369,28 @@ export function useMachineParts({
     ),
     actions: (
       <>
-        {controls.changeAccess || controls.restore ? (
-          <AccessSelect
-            label={entry.label}
-            value={access}
-            options={AuthMcpClientAccess.literals}
-            optionLabel={(option) => accessConfig[option].label}
-            disabled={busy}
-            onChange={(next) => void changeAccess(next)}
-          />
+        {controls.restore ? (
+          <Menu>
+            <MenuTrigger
+              render={
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={busy}
+                  aria-label={`Restore ${entry.label}`}
+                />
+              }
+            >
+              Restore
+            </MenuTrigger>
+            <MenuPopup align="end">
+              {AuthMcpClientAccess.literals.map((option) => (
+                <MenuItem key={option} onClick={() => void changeAccess(option)}>
+                  As {accessConfig[option].label}
+                </MenuItem>
+              ))}
+            </MenuPopup>
+          </Menu>
         ) : null}
         {controls.add || controls.promote ? (
           <Button
@@ -435,8 +419,27 @@ export function useMachineParts({
       </>
     ),
     menuItems:
-      controls.limitHosts.length + controls.forgetHosts.length === 0 && !controls.revoke ? null : (
+      controls.limitHosts.length + controls.forgetHosts.length === 0 &&
+      !controls.revoke &&
+      !controls.changeAccess ? null : (
         <>
+          {controls.changeAccess ? (
+            <MenuSub>
+              <MenuSubTrigger disabled={busy}>Access</MenuSubTrigger>
+              <MenuSubPopup>
+                <MenuRadioGroup
+                  value={access}
+                  onValueChange={(next) => void changeAccess(next as TailnetDeviceAccess)}
+                >
+                  {AuthMcpClientAccess.literals.map((option) => (
+                    <MenuRadioItem key={option} value={option}>
+                      {accessConfig[option].label}
+                    </MenuRadioItem>
+                  ))}
+                </MenuRadioGroup>
+              </MenuSubPopup>
+            </MenuSub>
+          ) : null}
           {controls.limitHosts.map((host) => (
             <MenuItem key={host} disabled={busy} onClick={() => setLimitHost(host)}>
               Only on {hostLabel(group, host)}: limit…
@@ -559,12 +562,20 @@ export function DeviceMachineRow({
   const surface = isElectron ? "app" : "browser";
   const isThisMachine = usePrimaryEnvironmentId() === entry.environmentId;
   const hostParts = useHostParts(host ?? null, onChanged);
+  const statusLine = entry.isHost
+    ? "Connected"
+    : unsavedStatus(entry, record?.status, surface, nowMs);
+  // Green only for a machine this app is connected to; amber while it opens.
   const status =
     parts.readd !== null
       ? { label: parts.readd === "left" ? LEFT : NEEDS_READD, dot: "bg-warning" }
-      : record?.status === "off" || record?.status === "unreachable"
-        ? { label: unsavedStatus(entry, record.status, surface, nowMs), dot: STATUS_DOT.offline }
-        : { label: STATUS_LABEL[entry.status], dot: STATUS_DOT[entry.status] };
+      : entry.status === "revoked"
+        ? { label: STATUS_LABEL.revoked, dot: STATUS_DOT.revoked }
+        : entry.isHost && entry.status === "online"
+          ? { label: statusLine, dot: STATUS_DOT.online }
+          : statusLine === "Connecting…"
+            ? { label: statusLine, dot: "bg-warning" }
+            : { label: statusLine, dot: STATUS_DOT.offline };
   const showSwitch = record !== undefined && record.status !== "left" && parts.readd === null;
   const menu = (
     <>
@@ -579,9 +590,7 @@ export function DeviceMachineRow({
       status={status}
       details={[
         isThisMachine ? "This machine" : null,
-        parts.readd === null && !entry.isHost
-          ? unsavedStatus(entry, record?.status, surface, nowMs)
-          : null,
+        parts.readd === null && !entry.isHost ? statusLine : null,
         ...hostParts.details,
         ...parts.details,
       ]}
