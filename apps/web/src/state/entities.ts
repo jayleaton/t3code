@@ -26,14 +26,19 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
-import { Atom } from "effect/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
+import * as Option from "effect/Option";
+import { AVAILABLE_CONNECTION_STATE } from "@t3tools/client-runtime/connection";
+import { environmentCatalog } from "../connection/catalog";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentProjects } from "./projects";
 import { environmentPresentations } from "./presentation";
 import { environmentServerConfigsAtom } from "./server";
+import { networkMembers } from "./networkMembers";
 import {
   allEnvironmentProjectSnapshotsReadyAtom,
-  allEnvironmentShellsBootstrappedAtom,
+  createAllEnvironmentShellsBootstrappedAtom,
+  environmentShell,
 } from "./shell";
 import { environmentThreadDetails, environmentThreadShells } from "./threads";
 import { waitForAtomValue } from "./waitForAtomValue";
@@ -123,6 +128,35 @@ export function useVisibleThreadShells(enabled = true): ReadonlyArray<Environmen
     enabled ? environmentThreadShells.visibleThreadShellsAtom : EMPTY_THREAD_SHELLS_ATOM,
   );
 }
+
+let previousNetworkMemberIds: ReadonlySet<EnvironmentId> = new Set();
+const networkMemberIdsAtom = Atom.make((get): ReadonlySet<EnvironmentId> => {
+  const next = new Set(get(networkMembers.recordsAtom).map((record) => record.environmentId));
+  if (
+    next.size === previousNetworkMemberIds.size &&
+    [...next].every((environmentId) => previousNetworkMemberIds.has(environmentId))
+  ) {
+    return previousNetworkMemberIds;
+  }
+  previousNetworkMemberIds = next;
+  return next;
+}).pipe(Atom.withLabel("web-network-member-ids"));
+
+export const allEnvironmentShellsBootstrappedAtom = createAllEnvironmentShellsBootstrappedAtom({
+  catalogAtom: Atom.make((get) => AsyncResult.value(get(environmentCatalog.catalogAtom))),
+  hasSnapshotAtom: Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => Option.isSome(get(environmentShell.stateValueAtom(environmentId)).snapshot)),
+  ),
+  connectionAtom: Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) =>
+      AsyncResult.getOrElse(
+        get(environmentCatalog.stateAtom(environmentId)),
+        () => AVAILABLE_CONNECTION_STATE,
+      ),
+    ),
+  ),
+  networkMemberIdsAtom,
+});
 
 export function useAllEnvironmentShellsBootstrapped(): boolean {
   return useAtomValue(allEnvironmentShellsBootstrappedAtom);
