@@ -217,9 +217,11 @@ function groupFooter(group: DeviceNetworkGroup): string {
     return "Not in your network. Allow joining here, then add it from a full-access machine.";
   }
   if (!group.inNetwork) return "Not in a network yet: you add each machine.";
-  return group.authority === null
-    ? "Only a full-access machine can change the network; none is connected here."
-    : "Changes go to every machine in the network.";
+  if (group.authority !== null) return "Changes go to every machine in the network.";
+  // A paused machine is no authority, though it may be the full-access one.
+  return group.hosts.some((host) => !host.enabled)
+    ? "Resume agent links on a full-access machine to change the network."
+    : "Only a full-access machine can change the network; none is connected here.";
 }
 
 function GroupSection(props: {
@@ -230,17 +232,15 @@ function GroupSection(props: {
   readonly onChanged: () => void;
 }) {
   const { group } = props;
-  const takingPart = props.hostStates.some((host) => host.enabled);
   const hostById = new Map(props.hostStates.map((host) => [host.environmentId, host] as const));
-  // A connected machine the list already shows carries its switch on that row instead.
+  // A connected machine the list already shows carries its choices on that row instead.
+  // Paused agent links stop agents only; the machines stay listed.
   const listedHosts = new Set(
-    takingPart
-      ? group.machines.flatMap((machine) =>
-          machine.entry.isHost && hostById.has(machine.entry.environmentId)
-            ? [machine.entry.environmentId]
-            : [],
-        )
-      : [],
+    group.machines.flatMap((machine) =>
+      machine.entry.isHost && hostById.has(machine.entry.environmentId)
+        ? [machine.entry.environmentId]
+        : [],
+    ),
   );
   return (
     <>
@@ -255,28 +255,26 @@ function GroupSection(props: {
               onChanged={props.onChanged}
             />
           ))}
-        {takingPart
-          ? group.machines.map((machine) => {
-              const host = listedHosts.has(machine.entry.environmentId)
-                ? hostById.get(machine.entry.environmentId)
-                : undefined;
-              return (
-                <MachineRow
-                  key={machine.key}
-                  group={group}
-                  machine={machine}
-                  host={
-                    host === undefined
-                      ? null
-                      : { state: host, managedBy: props.managedBy(host.environmentId) }
-                  }
-                  onChanged={props.onChanged}
-                />
-              );
-            })
-          : null}
+        {group.machines.map((machine) => {
+          const host = listedHosts.has(machine.entry.environmentId)
+            ? hostById.get(machine.entry.environmentId)
+            : undefined;
+          return (
+            <MachineRow
+              key={machine.key}
+              group={group}
+              machine={machine}
+              host={
+                host === undefined
+                  ? null
+                  : { state: host, managedBy: props.managedBy(host.environmentId) }
+              }
+              onChanged={props.onChanged}
+            />
+          );
+        })}
       </SettingsSection>
-      {takingPart && group.apps.length > 0 ? (
+      {group.apps.length > 0 ? (
         <SettingsSection title="Phones and browsers">
           {group.apps.map((app) => (
             <AppRow key={app.appId} group={group} app={app} onChanged={props.onChanged} />
@@ -742,7 +740,8 @@ function MachineRow(props: {
             value={memberStatus !== "off"}
             onValueChange={(shown) => void setShown({ environmentId: entry.environmentId, shown })}
           />
-        ) : machine.kind === "member" ? (
+        ) : machine.kind === "member" && host === null ? (
+          // A connected machine's access is already in its summary line.
           <RowValue text={accessLabel(access)} />
         ) : machine.kind === "linked" ? (
           <RowValue text="Linked" />
