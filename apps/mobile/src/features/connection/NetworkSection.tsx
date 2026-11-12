@@ -25,7 +25,11 @@ import {
   type AtomCommandResult,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { NetworkMemberStatus } from "@t3tools/client-runtime/connection";
+import {
+  type NetworkMemberState,
+  networkMemberActivityLabel,
+  offlineSinceLabel,
+} from "@t3tools/client-runtime/connection";
 import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
@@ -85,16 +89,20 @@ const STATUS_DOT: Record<TailnetDeviceStatus, ConnectionStatusDotState> = {
 const NEEDS_READD = "Needs re-adding after the update";
 const LEFT = "Left the network";
 const RECONNECTING = "Reconnecting after the update";
-const CONNECTING = "Connecting…";
-/** A member's line for this app, which the network opens without a click while `opening`. */
-const inAppCopy = (status: NetworkMemberStatus | undefined, opening: boolean) =>
-  status === "off"
+/** A member's line for this app: what the network is doing to open it, unless it is offline. */
+const inAppCopy = (held: NetworkMemberState | undefined, offline: boolean) =>
+  held?.status === "off"
     ? "Off in this app"
-    : status === "unreachable" && opening
-      ? "Can't reach from this phone"
-      : (status === "unopened" || status === "reopen") && opening
-        ? CONNECTING
-        : null;
+    : offline
+      ? null
+      : networkMemberActivityLabel(held, "phone");
+const rosterStatusLabel = (entry: DeviceNetworkMachine["entry"], now: DateTime.Utc) =>
+  entry.status === "offline"
+    ? offlineSinceLabel(
+        entry.lastSeenAt === null ? null : DateTime.toEpochMillis(entry.lastSeenAt),
+        DateTime.toEpochMillis(now),
+      )
+    : STATUS_LABEL[entry.status];
 const timeFormat = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
 const formatTime = (time: DateTime.Utc) => timeFormat.format(DateTime.toDate(time));
 
@@ -517,11 +525,13 @@ function machineDetail(
   machine: DeviceNetworkMachine,
   now: DateTime.Utc,
   readOnlyHere: boolean,
+  /** What the network is doing to open it here (`inAppCopy`). */
+  activity: string | null,
 ) {
   const { entry } = machine;
   const live = entry.member !== null && entry.member.access !== "revoked";
   return joinParts([
-    STATUS_LABEL[entry.status],
+    rosterStatusLabel(entry, now),
     machine.kind === "found" ? "Not in your network" : null,
     ...entry.views.flatMap(({ host, device }) =>
       device.localLimit !== null && live
@@ -538,8 +548,8 @@ function machineDetail(
       ? readOnlyHere
         ? "Read-only in this app"
         : "In this app"
-      : entry.inApp?.kind === "reopen"
-        ? CONNECTING
+      : entry.inApp?.kind === "reopen" || entry.inApp?.kind === "paused"
+        ? activity
         : entry.inApp?.kind === "refused"
           ? refusedInApp(entry.inApp.left)
           : null,
@@ -576,7 +586,8 @@ function MachineRow(props: {
   const setLimit = useAtomCommand(deviceNetwork.setLimit, { reportFailure: false });
   const forget = useAtomCommand(deviceNetwork.forget, { reportFailure: false });
   const setShown = useAtomCommand(networkMembers.setShown);
-  const memberStatus = useAtomValue(networkMembers.statusAtom).get(entry.environmentId)?.status;
+  const held = useAtomValue(networkMembers.statusAtom).get(entry.environmentId);
+  const memberStatus = held?.status;
   const now = DateTime.makeUnsafe(useNowMinuteMs());
   const operatesHere = useEnvironmentScope(entry.environmentId, AuthOrchestrationOperateScope);
   const navigation = useNavigation();
@@ -690,7 +701,7 @@ function MachineRow(props: {
   // An unsaved member's switch; a saved one carries it on its row in the list above.
   const showsSwitch =
     inline === null && host === null && entry.inApp === null && memberStatus !== undefined;
-  const inAppLine = inAppCopy(memberStatus, controls.open && entry.status === "online");
+  const inAppLine = inAppCopy(held, entry.status === "offline");
   const fullDetail =
     readdState !== null
       ? controls.left && entry.inApp?.kind === "left"
@@ -700,7 +711,13 @@ function MachineRow(props: {
           : `${readdState}: allow joining on it, then add it again`
       : joinParts([
           controls.reconnecting ? RECONNECTING : null,
-          machineDetail(group, machine, now, entry.inApp?.kind === "open" && !operatesHere),
+          machineDetail(
+            group,
+            machine,
+            now,
+            entry.inApp?.kind === "open" && !operatesHere,
+            inAppLine,
+          ),
         ]);
   const detail =
     host !== null && hostState !== null
@@ -710,7 +727,7 @@ function MachineRow(props: {
           hostSummary(host.state, hostState, host.managedBy),
         ])
       : joinParts([
-          readdState ?? inAppLine ?? STATUS_LABEL[entry.status],
+          readdState ?? inAppLine ?? rosterStatusLabel(entry, now),
           controls.reconnecting ? RECONNECTING : null,
           machine.kind === "found" ? "Not in your network" : null,
           entry.inApp?.kind === "open"
@@ -724,7 +741,18 @@ function MachineRow(props: {
     <NetworkRow
       label={entry.label}
       detail={detail}
-      dot={readdState !== null ? "reconnecting" : STATUS_DOT[entry.status]}
+      // Green only for a machine this app is connected to; amber only while an open runs.
+      dot={
+        readdState !== null
+          ? "reconnecting"
+          : entry.status !== "online"
+            ? STATUS_DOT[entry.status]
+            : entry.isHost || entry.inApp?.kind === "open"
+              ? "connected"
+              : memberStatus === "connecting"
+                ? "connecting"
+                : "available"
+      }
       danger={entry.status === "revoked" || readdState !== null}
       trailing={
         inline !== null ? (

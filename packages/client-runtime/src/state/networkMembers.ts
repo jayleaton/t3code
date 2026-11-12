@@ -4,7 +4,9 @@ import type {
   TailnetDeviceOpenInput,
   TailnetDevicesSnapshot,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -12,6 +14,7 @@ import type { HttpClient } from "effect/http";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
 
 import {
+  type NetworkMemberAttempt,
   type NetworkMemberRecord,
   type NetworkMemberRenewal,
   type NetworkRosterReport,
@@ -43,6 +46,12 @@ type OpenDeviceTarget = {
   readonly environmentId: EnvironmentId;
   readonly input: TailnetDeviceOpenInput;
 };
+
+/** What a failed open says about why, when it says anything. */
+function failureReason(cause: Cause.Cause<unknown>): string | null {
+  const error = Cause.squash(cause);
+  return error instanceof Error && error.message.trim() !== "" ? error.message : null;
+}
 
 /** Keeps the previous array while its items are the same, so readers see no change. */
 function reuseSame<A>(
@@ -126,6 +135,23 @@ export function createNetworkMemberAtoms<R, E, EO>(
     ids: new Set<EnvironmentId>(),
   }).pipe(Atom.keepAlive, Atom.withLabel("network-members:unreachable"));
 
+  /** The last open of each member, until one succeeds. */
+  const attemptsAtom = Atom.make<{
+    readonly byId: ReadonlyMap<EnvironmentId, NetworkMemberAttempt>;
+  }>({ byId: new Map() }).pipe(Atom.keepAlive, Atom.withLabel("network-members:attempts"));
+
+  /** A connected host has agent links paused, so it takes no part in opening members. */
+  const pausedAtom = Atom.make((get) => {
+    for (const presentation of get(options.presentationsAtom).values()) {
+      const config = presentation.serverConfig;
+      if (presentation.connection.phase !== "connected" || config === null) continue;
+      if (config.environment.capabilities.peerLinks === true && !offersLinkedEnvironments(config)) {
+        return true;
+      }
+    }
+    return false;
+  }).pipe(Atom.withLabel("network-members:paused"));
+
   /** Members of the network this client has not opened yet and some machine can open. */
   const unopenedAtom = Atom.make((get) => {
     const presentations = get(options.presentationsAtom);
@@ -160,33 +186,6 @@ export function createNetworkMemberAtoms<R, E, EO>(
     ),
   ).pipe(Atom.withLabel("network-members:opening-hosts"));
 
-  /** Each record and the one status the UI shows for it (`networkMemberStatus`). */
-  const statusAtom = Atom.make((get) => {
-    const presentations = get(options.presentationsAtom);
-    const openers = get(openingHostsAtom);
-    const unreachable = get(unreachableAtom).ids;
-    return new Map(
-      get(recordsAtom).map((record) => {
-        const saved = presentations.get(record.environmentId);
-        const canOpen = openers.some((opener) => opener.host !== record.environmentId);
-        return [
-          record.environmentId,
-          {
-            record,
-            status: networkMemberStatus(
-              record,
-              saved === undefined
-                ? undefined
-                : { needsPairing: saved.connection.needsPairing === true },
-              canOpen,
-              unreachable.has(record.environmentId),
-            ),
-          },
-        ] as const;
-      }),
-    );
-  }).pipe(Atom.withLabel("network-members:status"));
-
   /** Members to open now: not saved here yet, or refused (`dueNetworkMemberOpens`). */
   const dueOpensAtom = Atom.make((get): ReadonlyArray<NetworkMemberRenewal> => {
     const saved = new Map<EnvironmentId, SavedEnvironmentState>();
@@ -211,6 +210,39 @@ export function createNetworkMemberAtoms<R, E, EO>(
         left.environmentId === right.environmentId && left.attemptKey === right.attemptKey,
     );
   }).pipe(Atom.withLabel("network-members:due-opens"));
+
+  /** Each record and the one status the UI shows for it (`networkMemberStatus`). */
+  const statusAtom = Atom.make((get) => {
+    const presentations = get(options.presentationsAtom);
+    const openers = get(openingHostsAtom);
+    const unreachable = get(unreachableAtom).ids;
+    const attempts = get(attemptsAtom).byId;
+    const due = new Set(get(dueOpensAtom).map((renewal) => renewal.environmentId));
+    const paused = get(pausedAtom);
+    return new Map(
+      get(recordsAtom).map((record) => {
+        const saved = presentations.get(record.environmentId);
+        return [
+          record.environmentId,
+          {
+            record,
+            ...networkMemberStatus({
+              record,
+              saved:
+                saved === undefined
+                  ? undefined
+                  : { needsPairing: saved.connection.needsPairing === true },
+              canOpen: openers.some((opener) => opener.host !== record.environmentId),
+              unreachable: unreachable.has(record.environmentId),
+              due: due.has(record.environmentId),
+              attempt: attempts.get(record.environmentId),
+              paused,
+            }),
+          },
+        ] as const;
+      }),
+    );
+  }).pipe(Atom.withLabel("network-members:status"));
 
   const follow = createRuntimeCommand(runtime, {
     label: "network-members:follow",
@@ -337,14 +369,34 @@ export function createNetworkMemberAtoms<R, E, EO>(
       mode: "singleFlight",
       key: (renewal: NetworkMemberRenewal) => renewal.environmentId,
     },
-    execute: (renewal: NetworkMemberRenewal, atomRegistry: AtomRegistry.AtomRegistry) =>
-      renewals.renew(renewal, openMember(renewal.environmentId, atomRegistry)),
+    execute: (renewal: NetworkMemberRenewal, atomRegistry: AtomRegistry.AtomRegistry) => {
+      const setAttempt = (attempt: NetworkMemberAttempt | null) =>
+        Effect.sync(() => {
+          const next = new Map(atomRegistry.get(attemptsAtom).byId);
+          if (attempt === null) next.delete(renewal.environmentId);
+          else next.set(renewal.environmentId, attempt);
+          atomRegistry.set(attemptsAtom, { byId: next });
+        });
+      return renewals.renew(
+        renewal,
+        openMember(renewal.environmentId, atomRegistry).pipe(
+          Effect.onExit((exit) =>
+            Exit.isSuccess(exit) || Cause.hasInterruptsOnly(exit.cause)
+              ? setAttempt(null)
+              : setAttempt({ phase: "failed", reason: failureReason(exit.cause) }),
+          ),
+        ),
+        setAttempt({ phase: "connecting" }),
+      );
+    },
   });
 
   return {
     recordsAtom,
     unopenedAtom,
     unreachableAtom,
+    attemptsAtom,
+    pausedAtom,
     statusAtom,
     reportsAtom,
     followedHostsAtom,

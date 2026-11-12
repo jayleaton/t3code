@@ -47,6 +47,8 @@ import {
 export interface SavedMachineNetwork {
   /** In the network: switched off rather than removed, since the network would open it again. */
   readonly member: boolean;
+  /** What the network is doing to open it again after its session was refused, if anything. */
+  readonly activity: string | null;
   readonly details: ReadonlyArray<string | null>;
   readonly actions: ReactNode;
   readonly menuItems: ReactNode;
@@ -164,12 +166,17 @@ export function SavedBackendListRow({
   const serverUpdateState = useAtomValue(serverEnvironment.updateStateAtom(environmentId));
   const resumingServerUpdate =
     serverUpdateState.status === "running" && serverUpdateState.stage === "resuming";
-  const status = savedBackendStatus(environment);
+  // The network re-opens a refused member, so its progress replaces "Needs pairing again".
+  const activity = enabled ? (network?.activity ?? null) : null;
+  const status =
+    activity === null
+      ? savedBackendStatus(environment)
+      : { text: activity, tone: "muted" as const };
   const serverVersion = environment.serverConfig?.environment.serverVersion ?? null;
   const retryNow = useAtomCommand(environmentCatalog.retryNow);
   const { diagnosis: currentDiagnosis, state: connectionState } =
     useConnectionDiagnosis(environment);
-  const diagnosis = resumingServerUpdate ? null : currentDiagnosis;
+  const diagnosis = resumingServerUpdate || activity !== null ? null : currentDiagnosis;
   const prepared = usePreparedConnection(environmentId);
   const connectedTarget = isConnected && prepared._tag === "Some" ? prepared.value.target : null;
   const mcpUrl = environmentMcpUrl({

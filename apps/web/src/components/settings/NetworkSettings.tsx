@@ -23,6 +23,9 @@ import * as Result from "effect/Result";
 import { EllipsisIcon } from "lucide-react";
 import { type ReactNode, useContext, useId, useRef, useState } from "react";
 
+import { networkMemberActivityLabel } from "@t3tools/client-runtime/connection";
+import { isElectron } from "~/env";
+import { networkMembers } from "~/state/networkMembers";
 import { mintPairingCodeOn } from "~/state/peerPairingCode";
 import { peerLinkEnvironment, useLinkableMachines, useNetworkHosts } from "~/state/peerLinks";
 import type { EnvironmentPresentation } from "~/state/environments";
@@ -192,8 +195,10 @@ function SavedMachineRow({
 }) {
   const parts = useMachineParts({ group, machine, onChanged });
   const hostParts = useHostParts(host, onChanged);
+  const held = useAtomValue(networkMembers.statusAtom).get(machine.entry.environmentId);
   return renderSaved(environment, {
     member: parts.member,
+    activity: networkMemberActivityLabel(held, isElectron ? "app" : "browser"),
     details: [...hostParts.details, ...parts.details],
     actions: parts.actions,
     menuItems: (

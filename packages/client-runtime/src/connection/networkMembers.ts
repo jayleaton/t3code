@@ -583,12 +583,18 @@ export const openNetworkMember = Effect.fn("NetworkMembers.open")(function* <
 
 /** What the client can show and do for a member it holds a record of. */
 export type NetworkMemberStatus =
-  /** Not saved here yet; opened without a click once an address answers. */
-  | "unopened"
   /** Switched off in this app before it was saved here. */
   | "off"
+  /** An open is running now, or is due and has not been tried yet. */
+  | "connecting"
+  /** The last open failed; the next waits out the backoff or a change in the roster. */
+  | "retrying"
   /** Not saved here, and none of its addresses answered from this device. */
   | "unreachable"
+  /** Not open, and nothing here can open it while agent links are paused. */
+  | "paused"
+  /** Not saved here, and no connected machine can open it. */
+  | "idle"
   /** Saved with a session the host accepts. */
   | "open"
   /** Its session was refused (expired, or cut with its relay); a connected host can open it again. */
@@ -598,19 +604,79 @@ export type NetworkMemberStatus =
   /** It left the network; the session the server kept lasts until `sessionExpiresAt`. */
   | "left";
 
-/** The one precedence: a refused session outranks everything the roster says. */
-export function networkMemberStatus(
-  record: NetworkMemberRecord,
-  saved: { readonly needsPairing: boolean } | undefined,
-  canOpen: boolean,
-  unreachable = false,
-): NetworkMemberStatus {
+/** The last open this app tried for a member, while it has not been saved and accepted. */
+export type NetworkMemberAttempt =
+  | { readonly phase: "connecting" }
+  | { readonly phase: "failed"; readonly reason: string | null };
+
+export interface NetworkMemberState {
+  readonly status: NetworkMemberStatus;
+  /** Why the last open failed, when `status` is "retrying" and it is known. */
+  readonly reason: string | null;
+}
+
+/**
+ * The one precedence. A refused session outranks everything the roster says, and "connecting"
+ * means an open is running or about to, never a member waiting out its backoff.
+ */
+export function networkMemberStatus(input: {
+  readonly record: NetworkMemberRecord;
+  readonly saved: { readonly needsPairing: boolean } | undefined;
+  /** A connected host other than the member can open it. */
+  readonly canOpen: boolean;
+  readonly unreachable?: boolean;
+  /** Listed by `dueNetworkMemberOpens`. */
+  readonly due?: boolean;
+  readonly attempt?: NetworkMemberAttempt | undefined;
+  /** A connected host has agent links paused, so it does not open members. */
+  readonly paused?: boolean;
+}): NetworkMemberState {
+  const { record, saved, attempt } = input;
+  const state = (status: NetworkMemberStatus): NetworkMemberState => ({ status, reason: null });
+  const connecting =
+    attempt?.phase === "connecting" || (input.due === true && attempt === undefined);
+  const retrying =
+    attempt?.phase === "failed" ? { status: "retrying" as const, reason: attempt.reason } : null;
   if (saved === undefined) {
-    if (record.off === true) return "off";
-    return unreachable ? "unreachable" : "unopened";
+    if (record.off === true) return state("off");
+    if (connecting) return state("connecting");
+    if (!input.canOpen) return state(input.paused === true ? "paused" : "idle");
+    if (input.unreachable === true) return state("unreachable");
+    return retrying ?? state("idle");
   }
-  if (saved.needsPairing) return record.left !== true && canOpen ? "reopen" : "refused";
-  return record.left === true ? "left" : "open";
+  if (!saved.needsPairing) return state(record.left === true ? "left" : "open");
+  if (record.left === true) return state("refused");
+  if (connecting) return state("connecting");
+  if (!input.canOpen) return state(input.paused === true ? "paused" : "refused");
+  return retrying ?? state("reopen");
+}
+
+/**
+ * The line a member's row shows for what this app is doing with it, or null when its own status
+ * (open, offline, refused) says it. `surface` names this client: "browser", "app" or "phone".
+ */
+export function networkMemberActivityLabel(
+  state: NetworkMemberState | undefined,
+  surface: string,
+): string | null {
+  switch (state?.status) {
+    case "off":
+      return "Off in this app";
+    case "connecting":
+      return "Connecting…";
+    case "retrying":
+      return state.reason === null || state.reason.trim() === ""
+        ? "Can't connect · retrying"
+        : `Can't connect · retrying · ${state.reason.trim().replace(/\.$/, "")}`;
+    case "unreachable":
+      return `Can't reach from this ${surface}`;
+    case "paused":
+      return "Agent links paused";
+    case "idle":
+      return "Not connected";
+    default:
+      return null;
+  }
 }
 
 /**
@@ -734,6 +800,8 @@ export function makeNetworkMemberRenewals(options?: {
     renew: Effect.fn("NetworkMembers.renew")(function* <A, E, R>(
       renewal: NetworkMemberRenewal,
       open: Effect.Effect<A, E, R>,
+      /** Runs once the backoff is waited out, as the attempt starts. */
+      started: Effect.Effect<void> = Effect.void,
     ) {
       const previous = attempts.get(renewal.environmentId);
       if (previous?.key === renewal.attemptKey) return false;
@@ -751,6 +819,7 @@ export function makeNetworkMemberRenewals(options?: {
         failures: failures + 1,
         at: now,
       });
+      yield* started;
       yield* permits.withPermits(1)(open);
       return true;
     }),

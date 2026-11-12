@@ -6,6 +6,7 @@ import {
   hasSavedBearerRoute,
   hostFreezeNotice,
 } from "@t3tools/client-runtime/connection";
+import { networkMemberActivityLabel } from "@t3tools/client-runtime/connection";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import { type EnvironmentId, resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
@@ -83,14 +84,19 @@ export function ConnectionEnvironmentRow(props: {
     ),
   );
   const removable = member === undefined ? !listed : member.record.left === true;
-  const { diagnosis, state: connectionState } = useConnectionDiagnosis(
+  const { diagnosis: connectionDiagnosis, state: connectionState } = useConnectionDiagnosis(
     props.environment.environmentId,
     presentation,
   );
   const enabled = props.environment.isEnabled && !unsupported;
-  const statusLabel = connectionStatusLabel(props.environment, presentation?.connection);
+  // The network re-opens a refused member, so its progress replaces "Needs pairing again".
+  const activity = enabled ? networkMemberActivityLabel(member, "phone") : null;
+  const diagnosis = activity === null ? connectionDiagnosis : null;
+  const statusLabel =
+    activity ?? connectionStatusLabel(props.environment, presentation?.connection);
   const statusTraceId = enabled ? props.environment.connectionErrorTraceId : null;
-  const hasConnectionFailure = enabled && props.environment.connectionError !== null;
+  const hasConnectionFailure =
+    activity === null && enabled && props.environment.connectionError !== null;
   const freeze = enabled
     ? hostFreezeNotice(props.environment.environmentLabel, serverConfig?.lastEventLoopStall)
     : null;

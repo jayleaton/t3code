@@ -307,12 +307,15 @@ rows in the same list.
 Each row has a switch, **Show in this app**. It only affects this app: switch it
 off to disconnect the machine here, on to bring it back. Other apps are not
 affected. A row reads **Connected**, **Connecting…**, **Offline**, or **Off in
-this app**.
+this app**. **Can't connect · retrying** means the last try failed and the app
+tries again on its own, waiting longer each time.
 
 To stop agents using a link, open the row's **…** menu and choose **Pause agent
 links**. While it is paused on either machine, agents start nothing over a link
 between them. A task already running on the other machine still finishes, and
 if that machine has agent links paused, its result arrives once they are back.
+While this app's machines have agent links paused, rows it is not connected to
+read **Agent links paused**, because nothing opens them until you resume.
 
 **+ Add machine** offers a Tailscale machine, a pairing code, or SSH. **Remove**
 is for machines outside the network. A machine in the network is switched off

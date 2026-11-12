@@ -23,6 +23,7 @@ import {
   followedNetworks,
   makeNetworkMemberRenewals,
   makeNetworkMembers,
+  networkMemberActivityLabel,
   networkMemberStatus,
   openNetworkMember,
   openingHosts,
@@ -557,13 +558,60 @@ describe("round 5", () => {
   it("a refused session outranks what the roster says", () => {
     const opened = record(laptop, studio);
     const left = { ...opened, left: true as const };
-    expect(networkMemberStatus(opened, undefined, true)).toBe("unopened");
-    expect(networkMemberStatus(opened, { needsPairing: false }, true)).toBe("open");
-    expect(networkMemberStatus(left, { needsPairing: false }, true)).toBe("left");
-    expect(networkMemberStatus(opened, { needsPairing: true }, true)).toBe("reopen");
+    const status = (
+      member: NetworkMemberRecord,
+      saved: { readonly needsPairing: boolean } | undefined,
+      canOpen: boolean,
+    ) => networkMemberStatus({ record: member, saved, canOpen }).status;
+    expect(status(opened, { needsPairing: false }, true)).toBe("open");
+    expect(status(left, { needsPairing: false }, true)).toBe("left");
+    expect(status(opened, { needsPairing: true }, true)).toBe("reopen");
     // Cut by another client's Leave, or with no host here to open it: nothing is kept for it.
-    expect(networkMemberStatus(left, { needsPairing: true }, true)).toBe("refused");
-    expect(networkMemberStatus(opened, { needsPairing: true }, false)).toBe("refused");
+    expect(status(left, { needsPairing: true }, true)).toBe("refused");
+    expect(status(opened, { needsPairing: true }, false)).toBe("refused");
+  });
+
+  it("says connecting only while an open runs or is about to", () => {
+    const member = record(laptop, studio);
+    const refused = { needsPairing: true };
+    const failed = { phase: "failed", reason: "Laptop does not answer from this device." } as const;
+    const state = (input: Partial<Parameters<typeof networkMemberStatus>[0]>) =>
+      networkMemberStatus({ record: member, saved: undefined, canOpen: true, ...input });
+
+    for (const saved of [undefined, refused]) {
+      // Due and not tried yet, or running now.
+      expect(state({ saved, due: true }).status).toBe("connecting");
+      expect(state({ saved, attempt: { phase: "connecting" } }).status).toBe("connecting");
+      // Failed and waiting out the backoff, though still due: retrying, with the reason.
+      expect(state({ saved, due: true, attempt: failed })).toEqual({
+        status: "retrying",
+        reason: failed.reason,
+      });
+      // Agent links paused on the hosts: nothing opens it, whatever the last attempt did.
+      expect(state({ saved, canOpen: false, paused: true, attempt: failed }).status).toBe("paused");
+    }
+    expect(state({}).status).toBe("idle");
+    expect(state({ canOpen: false, attempt: failed }).status).toBe("idle");
+    expect(state({ attempt: failed, unreachable: true }).status).toBe("unreachable");
+    expect(state({ record: { ...member, off: true }, due: true }).status).toBe("off");
+
+    expect(
+      [
+        state({ due: true }),
+        state({ attempt: failed }),
+        state({ attempt: { phase: "failed", reason: null } }),
+        state({ canOpen: false, paused: true }),
+        state({ unreachable: true }),
+        state({ saved: { needsPairing: false } }),
+      ].map((value) => networkMemberActivityLabel(value, "phone")),
+    ).toEqual([
+      "Connecting…",
+      "Can't connect · retrying · Laptop does not answer from this device",
+      "Can't connect · retrying",
+      "Agent links paused",
+      "Can't reach from this phone",
+      null,
+    ]);
   });
 
   it.effect("an app-less open follows the roster of the host that opened it", () =>
@@ -644,9 +692,15 @@ describe("makeNetworkMemberRenewals", () => {
     Effect.gen(function* () {
       const renewals = makeNetworkMemberRenewals({ baseMs: 1_000, capMs: 4_000 });
       let opened = 0;
+      let started = 0;
       const open = Effect.sync(() => void opened++);
+      // "Connecting…" starts with the attempt, not while the backoff is waited out.
       const renew = (attemptKey: string) =>
-        renewals.renew({ environmentId: laptop, attemptKey }, open);
+        renewals.renew(
+          { environmentId: laptop, attemptKey },
+          open,
+          Effect.sync(() => void started++),
+        );
 
       expect(yield* renew("hosts|0")).toBe(true);
       expect(yield* renew("hosts|0")).toBe(false);
@@ -656,10 +710,10 @@ describe("makeNetworkMemberRenewals", () => {
       for (const [index, wait] of [1_000, 2_000, 4_000, 4_000].entries()) {
         const next = yield* renew(`hosts|${index + 1}`).pipe(Effect.forkChild);
         yield* TestClock.adjust(wait - 1);
-        expect(opened).toBe(index + 1);
+        expect([opened, started]).toEqual([index + 1, index + 1]);
         yield* TestClock.adjust(1);
         yield* Fiber.join(next);
-        expect(opened).toBe(index + 2);
+        expect([opened, started]).toEqual([index + 2, index + 2]);
       }
     }),
   );

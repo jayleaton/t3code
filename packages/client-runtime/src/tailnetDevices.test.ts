@@ -128,7 +128,7 @@ const view = (
     hosts,
     savedEnvironmentIds: new Set(
       [...memberStatuses]
-        .filter(([, { status }]) => status !== "unopened")
+        .filter(([, { status }]) => status !== "idle")
         .map(([environmentId]) => environmentId),
     ),
     memberStatuses,
@@ -594,6 +594,21 @@ describe("machineControls", () => {
     // Saved with a session that still works: nothing to open. Expired or cut: open again.
     expect(opened({}, new Map([memberStatus(laptop, "open")]))[0]).toBe(false);
     expect(opened({}, new Map([memberStatus(laptop, "reopen")]))[0]).toBe(true);
+    expect(opened({}, new Map([memberStatus(laptop, "retrying")]))[0]).toBe(true);
+    // Agent links paused: nothing opens it until they resume, and pairing by code is not the fix.
+    const [paused] = view(
+      [host(studio, { devices: [target] })],
+      studio,
+      new Map([memberStatus(laptop, "paused")]),
+    );
+    const pausedRow = paused?.machines.find(
+      (candidate) => candidate.entry.environmentId === laptop,
+    );
+    if (paused === undefined || pausedRow === undefined) throw new Error("missing row");
+    expect([pausedRow.entry.inApp, machineControls(pausedRow, paused).open]).toEqual([
+      { kind: "paused" },
+      false,
+    ]);
     // Refused with nothing here to reopen it, whether or not it left: no Open, pair by code.
     for (const left of [false, true]) {
       const [refused] = view(

@@ -1,5 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
-import { lastSeenLabel, type NetworkMemberStatus } from "@t3tools/client-runtime/connection";
+import {
+  type NetworkMemberState,
+  networkMemberActivityLabel,
+  offlineSinceLabel,
+} from "@t3tools/client-runtime/connection";
 import {
   type DeviceNetworkHostState,
   deviceNetworkHostsKey,
@@ -523,19 +527,18 @@ export function useMachineParts({
 
 const unsavedStatus = (
   entry: MachineEntry,
-  status: NetworkMemberStatus | undefined,
+  held: NetworkMemberState | undefined,
   surface: string,
   nowMs: number,
 ): string => {
-  if (status === "off") return "Off in this app";
+  if (held?.status === "off") return "Off in this app";
   if (entry.status === "offline") {
-    return entry.lastSeenAt === null
-      ? "Offline"
-      : `Offline · ${lastSeenLabel(DateTime.toEpochMillis(entry.lastSeenAt), nowMs)}`;
+    return offlineSinceLabel(
+      entry.lastSeenAt === null ? null : DateTime.toEpochMillis(entry.lastSeenAt),
+      nowMs,
+    );
   }
-  if (status === "unreachable") return `Can't reach from this ${surface}`;
-  if (status === "unopened" || status === "reopen") return "Connecting…";
-  return STATUS_LABEL[entry.status];
+  return networkMemberActivityLabel(held, surface) ?? STATUS_LABEL[entry.status];
 };
 
 /**
@@ -562,9 +565,7 @@ export function DeviceMachineRow({
   const surface = isElectron ? "app" : "browser";
   const isThisMachine = usePrimaryEnvironmentId() === entry.environmentId;
   const hostParts = useHostParts(host ?? null, onChanged);
-  const statusLine = entry.isHost
-    ? "Connected"
-    : unsavedStatus(entry, record?.status, surface, nowMs);
+  const statusLine = entry.isHost ? "Connected" : unsavedStatus(entry, record, surface, nowMs);
   // Green only for a machine this app is connected to; amber while it opens.
   const status =
     parts.readd !== null
