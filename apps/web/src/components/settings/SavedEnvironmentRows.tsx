@@ -1,7 +1,7 @@
 import { SessionPermissions } from "./SessionPermissions";
 import { ChevronRightIcon, ChevronsLeftRightEllipsisIcon, RouteIcon } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { type EnvironmentId, resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import {
   connectionRoutes,
@@ -43,8 +43,20 @@ import {
   ServerUpdateProgress,
 } from "../ServerUpdateAction";
 
+/** What the network adds to a saved machine's row (`useMachineParts`, `useHostParts`). */
+export interface SavedMachineNetwork {
+  /** In the network: switched off rather than removed, since the network would open it again. */
+  readonly member: boolean;
+  readonly details: ReadonlyArray<string | null>;
+  readonly actions: ReactNode;
+  readonly menuItems: ReactNode;
+  readonly dialogs: ReactNode;
+  readonly others: ReactNode;
+}
+
 type SavedBackendListRowProps = {
   environment: EnvironmentPresentation;
+  network?: SavedMachineNetwork | null;
   removingEnvironmentId: EnvironmentId | null;
   onSetEnabled: (environmentId: EnvironmentId, enabled: boolean) => void;
   onRemove: (environment: EnvironmentPresentation) => void;
@@ -56,13 +68,13 @@ function savedBackendStatus(environment: EnvironmentPresentation): {
   readonly tone: "muted" | "error";
 } {
   if (!environment.entry.enabled && environment.connection.phase !== "unsupported")
-    return { text: "Off", tone: "muted" };
+    return { text: "Off in this app", tone: "muted" };
   const { connection } = environment;
   switch (connection.phase) {
     case "connected":
       return { text: "Connected", tone: "muted" };
     case "connecting":
-      return { text: "Connecting", tone: "muted" };
+      return { text: "Connecting…", tone: "muted" };
     case "reconnecting":
       return {
         text: connection.error ? `Reconnecting: ${connection.error}` : "Reconnecting",
@@ -91,6 +103,7 @@ function savedBackendStatus(environment: EnvironmentPresentation): {
 
 export function SavedBackendListRow({
   environment,
+  network = null,
   removingEnvironmentId,
   onSetEnabled,
   onRemove,
@@ -165,10 +178,13 @@ export function SavedBackendListRow({
   });
   const machineKind = resolveEnvironmentMachineKind(environment.serverConfig);
   const routeCount = connectionRoutes(environment.entry).length;
+  const networkDetails = (network?.details ?? []).filter(
+    (detail): detail is string => detail !== null,
+  );
   const subtitleText = [
-    environmentTransportLabel(environment, connectedTarget),
     // The headline below names the failure in full.
     diagnosis ? null : resumingServerUpdate ? "Restarting" : status.text,
+    environmentTransportLabel(environment, connectedTarget),
     enabled && versionMismatch ? serverVersion : null,
   ]
     .filter((value): value is string => value !== null)
@@ -185,7 +201,7 @@ export function SavedBackendListRow({
       ? (environment.connection.error ?? connectionStatusText(environment.connection))
       : enabled
         ? connectionStatusText(environment.connection)
-        : "Switched off"
+        : "Off in this app"
   }${
     versionMismatch
       ? `\nUpdate available: ${versionMismatch.serverVersion} → ${versionMismatch.clientVersion}`
@@ -264,6 +280,10 @@ export function SavedBackendListRow({
       }
       below={
         <>
+          {networkDetails.length > 0 ? (
+            <p className="text-xs text-muted-foreground">{networkDetails.join(" · ")}</p>
+          ) : null}
+          {network?.others}
           {diagnosis ? (
             <ConnectionDiagnosisSummary
               diagnosis={diagnosis}
@@ -324,6 +344,7 @@ export function SavedBackendListRow({
           label={serverUpdateState.status === "failed" ? "Retry update" : "Update"}
         />
       ) : null}
+      {network?.actions}
       {showUpdateAction ? (
         <ServerUpdateAction
           environmentId={environmentId}
@@ -343,13 +364,13 @@ export function SavedBackendListRow({
               size="sm"
               checked={enabled}
               disabled={isRemoving || blocked}
-              aria-label={`${enabled ? "Switch off" : "Switch on"} ${environment.label}`}
+              aria-label={`Show ${environment.label} in this app`}
               onCheckedChange={(checked) => onSetEnabled(environmentId, checked)}
             />
           }
         />
         <TooltipPopup side="top">
-          {blocked ? "Client not supported" : enabled ? "Switch off" : "Switch on"}
+          {blocked ? "Client not supported" : "Show in this app"}
         </TooltipPopup>
       </Tooltip>
       <EnvironmentActionsMenu
@@ -368,11 +389,17 @@ export function SavedBackendListRow({
         {errorTraceId ? (
           <MenuItem onClick={() => copyTraceId(errorTraceId)}>Copy trace ID</MenuItem>
         ) : null}
-        <MenuSeparator />
-        <MenuItem variant="destructive" onClick={() => onRemove(environment)}>
-          {isRemoving ? "Removing…" : "Remove from this device…"}
-        </MenuItem>
+        {network?.menuItems}
+        {network?.member === true ? null : (
+          <>
+            <MenuSeparator />
+            <MenuItem variant="destructive" onClick={() => onRemove(environment)}>
+              {isRemoving ? "Removing…" : "Remove from this device…"}
+            </MenuItem>
+          </>
+        )}
       </EnvironmentActionsMenu>
+      {network?.dialogs}
     </EnvironmentRow>
   );
 }
@@ -384,8 +411,10 @@ function EmptyRemoteEnvironments() {
         <ChevronsLeftRightEllipsisIcon />
       </EmptyMedia>
       <EmptyHeader>
-        <EmptyTitle>No saved remote environments</EmptyTitle>
-        <EmptyDescription>Click “Add environment” to pair another environment.</EmptyDescription>
+        <EmptyTitle>No other machines yet</EmptyTitle>
+        <EmptyDescription>
+          Machines in your network show up here by themselves. Click “Add machine” to pair one.
+        </EmptyDescription>
       </EmptyHeader>
     </Empty>
   );

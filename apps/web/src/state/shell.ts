@@ -1,6 +1,7 @@
 import {
   AVAILABLE_CONNECTION_STATE,
   connectionProjectionPhase,
+  type SupervisorConnectionState,
 } from "@t3tools/client-runtime/connection";
 import {
   createEnvironmentShellAtoms,
@@ -22,6 +23,7 @@ import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { isHostedStaticApp } from "../hostedPairing";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
+import { networkMembers } from "./networkMembers";
 
 export const shellEnvironment = createShellEnvironmentAtoms(connectionAtomRuntime);
 export const environmentShell = createEnvironmentShellAtoms(connectionAtomRuntime);
@@ -67,28 +69,66 @@ export const liveShellEnvironmentIdsAtom = Atom.make((get) => {
   return next;
 }).pipe(Atom.withLabel("web-live-shell-environment-ids"));
 
-export const allEnvironmentShellsBootstrappedAtom = Atom.make((get) => {
-  const catalog = AsyncResult.value(get(environmentCatalog.catalogAtom));
-  if (Option.isNone(catalog)) {
-    return false;
-  }
-  for (const environmentId of enabledEnvironmentIds(catalog.value)) {
-    if (Option.isSome(get(environmentShell.stateValueAtom(environmentId)).snapshot)) {
-      continue;
-    }
-    const connection = AsyncResult.getOrElse(
-      get(environmentCatalog.stateAtom(environmentId)),
-      () => AVAILABLE_CONNECTION_STATE,
-    );
-    if (connectionProjectionPhase(connection) !== "disconnected") {
+/**
+ * False while an enabled environment with no cached snapshot is still connecting. A network
+ * member opened without a click never holds the sidebar before its first snapshot.
+ */
+export function createAllEnvironmentShellsBootstrappedAtom(input: {
+  readonly catalogAtom: Atom.Atom<Option.Option<EnvironmentCatalogState>>;
+  readonly hasSnapshotAtom: (environmentId: EnvironmentId) => Atom.Atom<boolean>;
+  readonly connectionAtom: (environmentId: EnvironmentId) => Atom.Atom<SupervisorConnectionState>;
+  readonly networkMemberIdsAtom: Atom.Atom<ReadonlySet<EnvironmentId>>;
+}) {
+  return Atom.make((get) => {
+    const catalog = get(input.catalogAtom);
+    if (Option.isNone(catalog)) {
       return false;
     }
-    if (connection.phase === "backoff" && connection.desired && connection.attempt <= 2) {
-      return false;
+    const networkMembers = get(input.networkMemberIdsAtom);
+    for (const environmentId of enabledEnvironmentIds(catalog.value)) {
+      if (get(input.hasSnapshotAtom(environmentId)) || networkMembers.has(environmentId)) {
+        continue;
+      }
+      const connection = get(input.connectionAtom(environmentId));
+      if (connectionProjectionPhase(connection) !== "disconnected") {
+        return false;
+      }
+      if (connection.phase === "backoff" && connection.desired && connection.attempt <= 2) {
+        return false;
+      }
     }
+    return true;
+  }).pipe(Atom.withLabel("web-all-environment-shells-bootstrapped"));
+}
+
+let previousNetworkMemberIds: ReadonlySet<EnvironmentId> = new Set();
+const networkMemberIdsAtom = Atom.make((get): ReadonlySet<EnvironmentId> => {
+  const next = new Set(get(networkMembers.recordsAtom).map((record) => record.environmentId));
+  if (
+    next.size === previousNetworkMemberIds.size &&
+    [...next].every((environmentId) => previousNetworkMemberIds.has(environmentId))
+  ) {
+    return previousNetworkMemberIds;
   }
-  return true;
-}).pipe(Atom.withLabel("web-all-environment-shells-bootstrapped"));
+  previousNetworkMemberIds = next;
+  return next;
+}).pipe(Atom.withLabel("web-network-member-ids"));
+
+export const allEnvironmentShellsBootstrappedAtom = createAllEnvironmentShellsBootstrappedAtom({
+  catalogAtom: Atom.make((get) => AsyncResult.value(get(environmentCatalog.catalogAtom))),
+  hasSnapshotAtom: Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => Option.isSome(get(environmentShell.stateValueAtom(environmentId)).snapshot)),
+  ),
+  connectionAtom: Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) =>
+      AsyncResult.getOrElse(
+        get(environmentCatalog.stateAtom(environmentId)),
+        () => AVAILABLE_CONNECTION_STATE,
+      ),
+    ),
+  ),
+  networkMemberIdsAtom,
+});
 
 // Catalog can precede primary discovery; an empty or incomplete catalog cannot prove absence.
 function catalogIsComplete(

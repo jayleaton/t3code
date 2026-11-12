@@ -40,8 +40,7 @@ import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
 import { searchableSetting } from "./settingsSearch";
 import { EnvironmentActionsMenu } from "./EnvironmentActionsMenu";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
-import { UnopenedNetworkMemberRows } from "./NetworkRows";
-import { DeviceNetworkSettings } from "./NetworkSettings";
+import { MachinesSettings } from "./NetworkSettings";
 import { LoadBalancingSettings } from "./LoadBalancingSettings";
 import { McpGatewaySettings } from "./McpGatewaySettings";
 import { PullRequestRoutingSettings } from "./PullRequestRoutingSettings";
@@ -1537,11 +1536,10 @@ function ConnectionsSettingsContent({
           <LocalEnvironmentSetting />
         </SettingsSection>
       ) : null}
-      <SettingsSection
-        {...searchableSetting("remote-environments")}
-        title="Environments"
+      <MachinesSettings
+        savedEnvironments={listedEnvironments}
         headerAction={
-          <div className="flex items-center gap-1">
+          <>
             {savedServerUpdateTargets.length > 0 ? (
               <ServerUpdatesAction targets={savedServerUpdateTargets} variant="ghost-muted" />
             ) : null}
@@ -1553,13 +1551,13 @@ function ConnectionsSettingsContent({
               onOpenChange={handleAddBackendDialogOpenChange}
               onErrorChange={setSavedBackendError}
             />
-          </div>
+          </>
         }
-      >
-        {listedEnvironments.map((environment) => (
+        renderSaved={(environment, network) => (
           <SavedBackendListRow
             key={environment.environmentId}
             environment={environment}
+            network={network}
             removingEnvironmentId={removingSavedEnvironmentId}
             onSetEnabled={handleSetSavedBackendEnabled}
             onRemove={handleRemoveSavedBackend}
@@ -1569,11 +1567,9 @@ function ConnectionsSettingsContent({
               setAddBackendDialogOpen(true);
             }}
           />
-        ))}
-        <UnopenedNetworkMemberRows />
-        <RemoteEnvironmentsEmptyRow savedEnvironments={savedEnvironments} />
-      </SettingsSection>
-      <DeviceNetworkSettings />
+        )}
+        empty={<RemoteEnvironmentsEmptyRow savedEnvironments={savedEnvironments} />}
+      />
       <FoldedSettingsSection {...searchableSetting("mcp-gateway")}>
         <McpGatewaySettings />
       </FoldedSettingsSection>

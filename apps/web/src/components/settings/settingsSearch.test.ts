@@ -136,35 +136,26 @@ describe("searchSettings", () => {
       "auto-settle-inactive-threads",
       "auto-settle-merged-threads",
       "days-before-auto-settle",
-      "device-network",
     ]);
     expect(available.map((item) => item.id).filter((id) => gatedIds.has(id))).toEqual([]);
   });
 
-  it("finds the device network on a remote host without local maintenance access", () => {
-    const availability = {
-      hasEnvironment: true,
-      hasProviderSettingsEnvironment: true,
-      canManageLocalBackend: false,
-      localEnvironmentDisabled: true,
-      isWslSettingsRowVisible: false,
-      hasThreadAutoSettlement: false,
-    };
-    const results = (query: string, hasPeerLinkHost: boolean) =>
+  it("finds Machines on a remote host without local maintenance access", () => {
+    const results = (query: string) =>
       searchSettings(
         query,
-        filterAvailableSettingsSearchItems({ ...availability, hasPeerLinkHost }),
-      );
-    expect(results("linked environments", false).map((item) => item.id)).not.toContain(
-      "device-network",
-    );
-    for (const query of ["linked environments", "tailscale network"]) {
-      expect(results(query, true)).toContainEqual(
-        expect.objectContaining({
-          id: "device-network",
-          to: "/settings/connections",
-          targetId: "device-network",
+        filterAvailableSettingsSearchItems({
+          hasEnvironment: true,
+          hasProviderSettingsEnvironment: true,
+          canManageLocalBackend: false,
+          localEnvironmentDisabled: true,
+          isWslSettingsRowVisible: false,
+          hasThreadAutoSettlement: false,
         }),
+      );
+    for (const query of ["linked environments", "tailscale network", "pause agent links"]) {
+      expect(results(query)).toContainEqual(
+        expect.objectContaining({ id: "machines", to: "/settings/connections" }),
       );
     }
   });
@@ -415,7 +406,7 @@ describe("movedSettingsPath", () => {
   it("leaves current pages alone", () => {
     expect(movedSettingsPath("/settings/general", "time-format")).toBeNull();
     expect(movedSettingsPath("/settings/projects", "project-defaults")).toBeNull();
-    expect(movedSettingsPath("/settings/connections", "remote-environments")).toBeNull();
+    expect(movedSettingsPath("/settings/connections", "machines")).toBeNull();
     expect(movedSettingsPath("/settings/connections", "network-access")).toBeNull();
     expect(movedSettingsPath("/settings/appearance", "theme")).toBeNull();
   });

@@ -17,7 +17,11 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
-import { ConnectionBlockedError, type ConnectionAttemptError } from "./model.ts";
+import {
+  ConnectionBlockedError,
+  ConnectionTransientError,
+  type ConnectionAttemptError,
+} from "./model.ts";
 
 /** Who this client opened a member as: an app of a network, or a session without an app id. */
 const NetworkMemberOpener = Schema.Union([
@@ -38,6 +42,8 @@ const networkMemberFields = {
    * never renewed or forgotten, and is managed again once its roster lists it live.
    */
   left: Schema.optionalKey(Schema.Literal(true)),
+  /** Switched off in this app before it was saved here: never opened until switched on. */
+  off: Schema.optionalKey(Schema.Literal(true)),
 };
 
 const NetworkMemberRecordType = Schema.Struct({
@@ -54,7 +60,7 @@ const StoredNetworkMemberRecord = Schema.Struct({
 
 /**
  * A machine of the user's network this client keeps because a host listed or opened it, not
- * because the user saved it by hand. It is opened only on demand and follows its opener's roster.
+ * because the user saved it by hand. It is opened without a click and follows its opener's roster.
  */
 export const NetworkMemberRecord = StoredNetworkMemberRecord.pipe(
   Schema.decodeTo(
@@ -327,6 +333,7 @@ function followRoster(
     readonly networks: ReadonlyArray<FollowedNetwork>;
     readonly saved: ReadonlySet<EnvironmentId>;
     readonly userSaved: ReadonlySet<EnvironmentId>;
+    readonly mayWrite: (host: EnvironmentId) => boolean;
   },
 ): ReadonlyArray<NetworkMemberRecord> {
   const appViews = new Map(
@@ -349,13 +356,21 @@ function followRoster(
     if (followed !== "drop") next.push(followed);
   }
   const taken = new Set(records.map((record) => record.environmentId));
-  for (const [appId, view] of appViews) {
+  const connected = new Set(input.reports.map((report) => report.host));
+  // An app-less session lists what its writable hosts list, as `openingHosts` asks them.
+  const writers = input.reports.flatMap(({ host, roster }) => {
+    const view = hostViews.get(host);
+    return view !== undefined && roster.callerAppId === null && input.mayWrite(host)
+      ? [[null, view] as const]
+      : [];
+  });
+  for (const [appId, view] of [...appViews, ...writers]) {
     for (const [environmentId, entry] of view.listed) {
       if (
         taken.has(environmentId) ||
         view.newest.get(environmentId)?.access === "revoked" ||
         view.newest.get(environmentId)?.nodeId === null ||
-        view.hosts.has(environmentId) ||
+        connected.has(environmentId) ||
         input.userSaved.has(environmentId)
       ) {
         continue;
@@ -366,7 +381,7 @@ function followRoster(
         environmentId,
         label: entry.label,
         via: entry.hosts[0]!,
-        opener: { kind: "app", appId },
+        opener: appId === null ? { kind: "host" } : { kind: "app", appId },
       });
     }
   }
@@ -440,12 +455,14 @@ export const makeNetworkMembers = Effect.fn("makeNetworkMembers")(function* (sto
 /**
  * Applies what the followed hosts report and forgets the saved connection of every member it
  * drops. The saved environments are read under the catalog's lock, so a member the user saves
- * meanwhile never becomes a record. Nothing is minted here: see `openNetworkMember`.
+ * meanwhile never becomes a record. Nothing is minted here: see `dueNetworkMemberOpens`.
  */
 export const followNetworkRoster = Effect.fn("NetworkMembers.follow")(function* <ES, EF>(input: {
   readonly reports: ReadonlyArray<NetworkRosterReport>;
   readonly savedEnvironmentIds: Effect.Effect<ReadonlySet<EnvironmentId>, ES>;
   readonly forget: (environmentId: EnvironmentId) => Effect.Effect<void, EF>;
+  /** Hosts an app-less session may write the network on (`access:write`). */
+  readonly mayWrite: (host: EnvironmentId) => boolean;
 }) {
   const members = yield* NetworkMembers;
   yield* members.update((current) =>
@@ -461,6 +478,7 @@ export const followNetworkRoster = Effect.fn("NetworkMembers.follow")(function* 
         networks,
         saved,
         userSaved: new Set([...saved].filter((id) => !managed.has(id))),
+        mayWrite: input.mayWrite,
       });
       if (next === current) return current;
       const remaining = new Set(next.map((record) => record.environmentId));
@@ -485,12 +503,18 @@ export const followNetworkRoster = Effect.fn("NetworkMembers.follow")(function* 
  * The one it came `via` is asked first, then the other `hosts`. Every open becomes a record
  * keyed by the host that answered, so it is renewed and its state shown however it was opened.
  */
-export const openNetworkMember = Effect.fn("NetworkMembers.open")(function* <EM, ER>(input: {
+export const openNetworkMember = Effect.fn("NetworkMembers.open")(function* <
+  EM,
+  ER,
+  RR = never,
+>(input: {
   readonly environmentId: EnvironmentId;
   /** Shown until a roster names it. */
   readonly label?: string;
   /** Connected hosts that may open it (`openingHosts`). */
   readonly hosts: ReadonlyArray<OpeningHost>;
+  /** Whether one of its addresses answers from here; checked before any credential is minted. */
+  readonly reachable?: Effect.Effect<boolean, never, RR>;
   readonly mint: (
     via: EnvironmentId,
     environmentId: EnvironmentId,
@@ -515,6 +539,13 @@ export const openNetworkMember = Effect.fn("NetworkMembers.open")(function* <EM,
       all.findIndex((other) => other.host === candidate.host) === index,
   );
   const label = record?.label ?? input.label ?? "this machine";
+  if (hosts.length > 0 && input.reachable !== undefined && !(yield* input.reachable)) {
+    return yield* new ConnectionTransientError({
+      reason: "network",
+      hop: "device",
+      detail: `${label} does not answer from this device.`,
+    });
+  }
   // A client with no reachable member cannot reach the network: only a new pairing code helps.
   let failure: EM | ConnectionBlockedError = new ConnectionBlockedError({
     reason: "authentication",
@@ -552,8 +583,12 @@ export const openNetworkMember = Effect.fn("NetworkMembers.open")(function* <EM,
 
 /** What the client can show and do for a member it holds a record of. */
 export type NetworkMemberStatus =
-  /** Not saved here yet: Open. */
+  /** Not saved here yet; opened without a click once an address answers. */
   | "unopened"
+  /** Switched off in this app before it was saved here. */
+  | "off"
+  /** Not saved here, and none of its addresses answered from this device. */
+  | "unreachable"
   /** Saved with a session the host accepts. */
   | "open"
   /** Its session was refused (expired, or cut with its relay); a connected host can open it again. */
@@ -568,8 +603,12 @@ export function networkMemberStatus(
   record: NetworkMemberRecord,
   saved: { readonly needsPairing: boolean } | undefined,
   canOpen: boolean,
+  unreachable = false,
 ): NetworkMemberStatus {
-  if (saved === undefined) return "unopened";
+  if (saved === undefined) {
+    if (record.off === true) return "off";
+    return unreachable ? "unreachable" : "unopened";
+  }
   if (saved.needsPairing) return record.left !== true && canOpen ? "reopen" : "refused";
   return record.left === true ? "left" : "open";
 }
@@ -597,23 +636,95 @@ export const releaseNetworkMember = Effect.fn("NetworkMembers.release")(function
   return claimed;
 });
 
-/** A managed member to open again because its host refused the saved credential. */
+/** A member to open: not saved here yet, or its host refused the saved credential. */
 export interface NetworkMemberRenewal {
   readonly environmentId: EnvironmentId;
-  /** Changes when the followed hosts change or the member connects; one attempt per value. */
+  /**
+   * Changes when the opening hosts change, the member comes online, or it connects; one
+   * attempt per value.
+   */
   readonly attemptKey: string;
 }
 
+/** What this app holds of a saved environment. */
+export interface SavedEnvironmentState {
+  readonly needsPairing: boolean;
+  readonly enabled: boolean;
+}
+
 /**
- * Bounds renewal: one attempt per member and `attemptKey`, and successive attempts spaced by an
- * exponential backoff from `baseMs` up to `capMs`. A member left alone for `capMs` starts over.
+ * Members to open without a click: records not saved here, and saved members whose session was
+ * refused, including ones the user paired by hand while some host still lists them live. A member
+ * switched off here, one that left, one offline, one no machine can open yet, and one with no
+ * other host to ask are skipped.
+ */
+export function dueNetworkMemberOpens(input: {
+  readonly records: ReadonlyArray<NetworkMemberRecord>;
+  readonly reports: ReadonlyArray<NetworkRosterReport>;
+  readonly hosts: ReadonlyArray<OpeningHost>;
+  readonly saved: ReadonlyMap<EnvironmentId, SavedEnvironmentState>;
+  /** Bumped when a member connects with a new session (`environmentSessionGenerationAtom`). */
+  readonly generation?: (environmentId: EnvironmentId) => number;
+}): ReadonlyArray<NetworkMemberRenewal> {
+  if (input.hosts.length === 0) return [];
+  const hostsKey = input.hosts
+    .map((candidate) => candidate.host)
+    .sort()
+    .join(",");
+  const listed = new Map<EnvironmentId, { status: string; nodeBound: boolean }>();
+  const asked = new Set(input.hosts.map((candidate) => candidate.host));
+  for (const { host, roster } of input.reports) {
+    if (!asked.has(host) || !roster.enabled) continue;
+    for (const device of roster.devices) {
+      if (!isLive(device.member) || device.environmentId === host) continue;
+      const online = listed.get(device.environmentId)?.status === "online";
+      listed.set(device.environmentId, {
+        status: online ? "online" : device.status,
+        nodeBound: device.member.nodeId !== null,
+      });
+    }
+  }
+  const due = (environmentId: EnvironmentId): NetworkMemberRenewal | null => {
+    if (!input.hosts.some((candidate) => candidate.host !== environmentId)) return null;
+    const entry = listed.get(environmentId);
+    // Offline costs nothing: its coming online is a new attempt key.
+    if (entry?.nodeBound === false || entry?.status === "offline") return null;
+    const generation = input.generation?.(environmentId) ?? 0;
+    return {
+      environmentId,
+      attemptKey: `${hostsKey}|${generation}|${entry?.status ?? "unlisted"}`,
+    };
+  };
+  const records = new Set(input.records.map((record) => record.environmentId));
+  const opens = input.records.flatMap((record) => {
+    if (record.left === true) return [];
+    const saved = input.saved.get(record.environmentId);
+    if (saved === undefined ? record.off === true : !saved.enabled || !saved.needsPairing) {
+      return [];
+    }
+    return due(record.environmentId) ?? [];
+  });
+  const handPaired = [...input.saved].flatMap(([environmentId, saved]) =>
+    !records.has(environmentId) && saved.enabled && saved.needsPairing && listed.has(environmentId)
+      ? (due(environmentId) ?? [])
+      : [],
+  );
+  return [...opens, ...handPaired];
+}
+
+/**
+ * Bounds opens: one attempt per member and `attemptKey`, successive attempts spaced by an
+ * exponential backoff from `baseMs` up to `capMs`, and at most `concurrency` running at once
+ * across all members. A member left alone for `capMs` starts over.
  */
 export function makeNetworkMemberRenewals(options?: {
   readonly baseMs?: number;
   readonly capMs?: number;
+  readonly concurrency?: number;
 }) {
   const baseMs = options?.baseMs ?? 2_000;
   const capMs = options?.capMs ?? 5 * 60_000;
+  const permits = Semaphore.makeUnsafe(options?.concurrency ?? 2);
   const attempts = new Map<
     EnvironmentId,
     { readonly key: string; readonly failures: number; readonly at: number }
@@ -640,7 +751,7 @@ export function makeNetworkMemberRenewals(options?: {
         failures: failures + 1,
         at: now,
       });
-      yield* open;
+      yield* permits.withPermits(1)(open);
       return true;
     }),
   };

@@ -329,12 +329,14 @@ export function CommandPalette(props: {
         run: () => openSettings(navigation, "SettingsEnvironments"),
       },
       {
-        key: "deviceNetwork",
+        key: "machines",
         kind: "action",
-        title: "Device network",
+        title: "Machines",
         searchTerms: [
           "tailscale",
-          "machines",
+          "device network",
+          "show in this app",
+          "pause agent links",
           "add to network",
           "leave network",
           "allow joining",

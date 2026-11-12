@@ -192,8 +192,21 @@ older build reads (`tailnet_device_policy`, narrowed by the local limit; a
 forgotten link writes `revoked`), because that build lets a machine with no row
 there in at full access. Nothing reads it back.
 
-An app opens another member through the server it is connected to, which asks
-that member over its member session for a one-time pairing credential. The
+Apps open members without a click. A bounded loop, `dueNetworkMemberOpens` in
+[`networkMembers.ts`](../../packages/client-runtime/src/connection/networkMembers.ts),
+opens records not yet saved and re-opens refused sessions, including hand-paired
+members still listed live. At most two opens run at once across all members,
+with one attempt per change of opening hosts, online status or session
+generation, and a 2 s to 5 min backoff. The app fetches the member's
+public descriptor before asking any server to mint, so an offline member costs
+no server-to-server call. A member switched off in this app (a record's `off`,
+or a disabled saved entry) is never opened, which is why members offer that
+switch and no Remove: a removed member would just be opened again. Desktop and code-paired sessions
+that may write the network (`access:write`) get records for every listed member
+too.
+
+The server an app opens a member through asks that member over its member
+session for a one-time pairing credential. The
 credential is capped at the app's own grant. For an app of the network
 (session subject `network-app:<id>`), it is also capped at that app's roster
 access, not the access of the machine relaying for it. Narrowing or revoking a

@@ -23,6 +23,7 @@ import { IconButton } from "../../components/ui/IconButton";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { cn } from "../../lib/cn";
 import type { ConnectedEnvironmentSummary } from "../../state/remote-runtime-types";
+import { networkMembers } from "../../state/networkMembers";
 import { serverEnvironment } from "../../state/server";
 import { environmentPresentations } from "../../state/presentation";
 import { openSettings } from "../settings/settings-navigation";
@@ -71,6 +72,17 @@ export function ConnectionEnvironmentRow(props: {
     environmentPresentations.presentationAtom(props.environment.environmentId),
   );
   const canRetry = presentation !== null && hasSavedBearerRoute(presentation.entry);
+  // The network would open a removed member again; the switch is how to hide it here.
+  const member = useAtomValue(networkMembers.statusAtom).get(props.environment.environmentId);
+  const listed = useAtomValue(networkMembers.reportsAtom).some(({ roster }) =>
+    roster.devices.some(
+      (device) =>
+        device.environmentId === props.environment.environmentId &&
+        device.member !== null &&
+        device.member.access !== "revoked",
+    ),
+  );
+  const removable = member === undefined ? !listed : member.record.left === true;
   const { diagnosis, state: connectionState } = useConnectionDiagnosis(
     props.environment.environmentId,
     presentation,
@@ -177,7 +189,7 @@ export function ConnectionEnvironmentRow(props: {
         </Pressable>
 
         <ThemedSwitch
-          accessibilityLabel={`Enable ${props.environment.environmentLabel}`}
+          accessibilityLabel={`Show ${props.environment.environmentLabel} in this app`}
           style={{ alignSelf: "center" }}
           disabled={unsupported && !canRetry}
           onValueChange={(next) => props.onSetEnabled(props.environment.environmentId, next)}
@@ -263,12 +275,14 @@ export function ConnectionEnvironmentRow(props: {
                 disabled={!enabled}
                 onPress={() => props.onReconnect(props.environment.environmentId)}
               />
-              <IconButton
-                accessibilityLabel="Remove environment"
-                icon="trash"
-                variant="danger"
-                onPress={() => props.onRemove(props.environment.environmentId)}
-              />
+              {removable ? (
+                <IconButton
+                  accessibilityLabel="Remove environment"
+                  icon="trash"
+                  variant="danger"
+                  onPress={() => props.onRemove(props.environment.environmentId)}
+                />
+              ) : null}
             </View>
           ) : (
             <View className="flex-row justify-end gap-2">
@@ -303,19 +317,21 @@ export function ConnectionEnvironmentRow(props: {
                 />
               </Pressable>
 
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Remove environment"
-                className="h-[42px] w-[42px] items-center justify-center rounded-[14px] border border-danger-border bg-danger active:opacity-70"
-                onPress={() => props.onRemove(props.environment.environmentId)}
-              >
-                <SymbolView
-                  name="trash"
-                  size={14}
-                  tintColorClassName="accent-danger-foreground"
-                  type="monochrome"
-                />
-              </Pressable>
+              {removable ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Remove environment"
+                  className="h-[42px] w-[42px] items-center justify-center rounded-[14px] border border-danger-border bg-danger active:opacity-70"
+                  onPress={() => props.onRemove(props.environment.environmentId)}
+                >
+                  <SymbolView
+                    name="trash"
+                    size={14}
+                    tintColorClassName="accent-danger-foreground"
+                    type="monochrome"
+                  />
+                </Pressable>
+              ) : null}
             </View>
           )}
         </Animated.View>

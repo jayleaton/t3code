@@ -18,6 +18,7 @@ import {
   type NetworkRoster,
   type NetworkRosterReport,
   NetworkMembers,
+  dueNetworkMemberOpens,
   followNetworkRoster,
   followedNetworks,
   makeNetworkMemberRenewals,
@@ -111,14 +112,32 @@ const makeCatalog = (initial: ReadonlyArray<NetworkMemberRecord> = []) =>
     });
     const forgotten: Array<EnvironmentId> = [];
     const saved = new Set<EnvironmentId>();
-    const follow = (reports: ReadonlyArray<NetworkRosterReport>, catalog = members) =>
+    const follow = (
+      reports: ReadonlyArray<NetworkRosterReport>,
+      catalog = members,
+      mayWrite: (host: EnvironmentId) => boolean = () => false,
+    ) =>
       followNetworkRoster({
         reports,
         savedEnvironmentIds: Effect.sync(() => new Set(saved)),
         forget: (environmentId) => Effect.sync(() => void forgotten.push(environmentId)),
+        mayWrite,
       }).pipe(Effect.provideService(NetworkMembers, catalog));
     return { members, forgotten, saved, follow, records: () => stored };
   });
+/** Saved environments, all enabled with an accepted session unless named otherwise. */
+const savedState = (
+  environmentIds: ReadonlyArray<EnvironmentId>,
+  overrides: ReadonlyArray<
+    readonly [EnvironmentId, { needsPairing?: boolean; enabled?: boolean }]
+  > = [],
+) => {
+  const state = new Map<EnvironmentId, { needsPairing: boolean; enabled: boolean }>(
+    environmentIds.map((id) => [id, { needsPairing: false, enabled: true }]),
+  );
+  for (const [id, value] of overrides) state.set(id, { ...state.get(id)!, ...value });
+  return state;
+};
 const ids = (records: ReadonlyArray<NetworkMemberRecord>) =>
   records.map((candidate) => candidate.environmentId);
 
@@ -149,13 +168,22 @@ describe("makeNetworkMembers", () => {
 });
 
 describe("followNetworkRoster", () => {
-  it.effect("keeps members it lacks as records without opening any, and skips the user's own", () =>
+  it.effect("keeps members it lacks as records due to open, and skips the user's own", () =>
     Effect.gen(function* () {
       const catalog = yield* makeCatalog();
       catalog.saved.add(studio).add(box);
-      yield* catalog.follow([report(studio, [device(box), device(laptop)])]);
+      const reports = [report(studio, [device(box), device(laptop)])];
+      yield* catalog.follow(reports);
 
       expect(catalog.records()).toEqual([record(laptop, studio)]);
+      expect(
+        dueNetworkMemberOpens({
+          records: catalog.records(),
+          reports,
+          hosts: [{ host: studio, appId: app }],
+          saved: savedState([studio, box]),
+        }).map((due) => due.environmentId),
+      ).toEqual([laptop]);
 
       // Revoking or dropping the user's own saved box never forgets it.
       yield* catalog.follow([report(studio, [device(box, "revoked")])]);
@@ -633,6 +661,144 @@ describe("makeNetworkMemberRenewals", () => {
         yield* Fiber.join(next);
         expect(opened).toBe(index + 2);
       }
+    }),
+  );
+});
+
+describe("opening members without a click", () => {
+  const desktop = (devices: ReadonlyArray<TailnetDevice>) =>
+    report(studio, devices, { callerAppId: null, apps: [] });
+  const hostRecord = (environmentId: EnvironmentId): NetworkMemberRecord => ({
+    environmentId,
+    label: environmentId,
+    via: studio,
+    opener: { kind: "host" },
+  });
+  const due = (
+    records: ReadonlyArray<NetworkMemberRecord>,
+    reports: ReadonlyArray<NetworkRosterReport>,
+    saved: ReturnType<typeof savedState>,
+  ) =>
+    dueNetworkMemberOpens({
+      records,
+      reports,
+      hosts: openingHosts(reports, (host) => host === studio),
+      saved,
+    });
+
+  it.effect("a desktop session following a roster gets a record per member", () =>
+    Effect.gen(function* () {
+      const catalog = yield* makeCatalog();
+      catalog.saved.add(studio);
+      const reports = [desktop([device(laptop), device(vps)])];
+
+      // Only where it may write the network, as the server requires of an app-less open.
+      yield* catalog.follow(reports);
+      expect(catalog.records()).toEqual([]);
+      yield* catalog.follow(reports, catalog.members, (host) => host === studio);
+      expect(catalog.records()).toEqual([hostRecord(laptop), hostRecord(vps)]);
+    }),
+  );
+
+  it.effect("an unopened reachable member is opened once without a click", () =>
+    Effect.gen(function* () {
+      const reports = [desktop([device(laptop)])];
+      const [renewal, ...rest] = due([hostRecord(laptop)], reports, savedState([studio]));
+      expect(rest).toEqual([]);
+      const renewals = makeNetworkMemberRenewals();
+      let opens = 0;
+      const open = Effect.sync(() => void opens++);
+      expect(yield* renewals.renew(renewal!, open)).toBe(true);
+      // The same roster again is no new reason to try.
+      const [again] = due([hostRecord(laptop)], reports, savedState([studio]));
+      expect(yield* renewals.renew(again!, open)).toBe(false);
+      expect(opens).toBe(1);
+      // Offline, it is not even probed until it comes back.
+      const offline = [desktop([{ ...device(laptop), status: "offline" }])];
+      expect(due([hostRecord(laptop)], offline, savedState([studio]))).toEqual([]);
+    }),
+  );
+
+  it("a switched-off member is never opened", () => {
+    const reports = [desktop([device(laptop), device(vps)])];
+    const off = { ...hostRecord(laptop), off: true as const };
+    // Off with no saved entry, or saved and disabled here.
+    expect(due([off], reports, savedState([studio]))).toEqual([]);
+    expect(
+      due(
+        [hostRecord(vps)],
+        reports,
+        savedState([studio, vps], [[vps, { enabled: false, needsPairing: true }]]),
+      ),
+    ).toEqual([]);
+  });
+
+  it.effect("an unreachable member triggers no mint", () =>
+    Effect.gen(function* () {
+      const catalog = yield* makeCatalog([hostRecord(laptop)]);
+      let mints = 0;
+      const failure = yield* Effect.flip(
+        openNetworkMember({
+          environmentId: laptop,
+          hosts: [{ host: studio, appId: null }],
+          reachable: Effect.succeed(false),
+          mint: (_via, target) =>
+            Effect.sync(() => void mints++).pipe(Effect.as(credential(target))),
+          register: (value) => Effect.succeed(opened(value.environmentId)),
+        }).pipe(Effect.provideService(NetworkMembers, catalog.members)),
+      );
+      expect(mints).toBe(0);
+      expect(failure._tag).toBe("ConnectionTransientError");
+      expect(catalog.records()).toEqual([hostRecord(laptop)]);
+    }),
+  );
+
+  it.effect("five members never run more than two mints at once", () =>
+    Effect.gen(function* () {
+      const renewals = makeNetworkMemberRenewals();
+      const release = yield* Deferred.make<void>();
+      let active = 0;
+      let most = 0;
+      let done = 0;
+      const open = Effect.sync(() => {
+        active++;
+        most = Math.max(most, active);
+      }).pipe(
+        Effect.andThen(Deferred.await(release)),
+        Effect.ensuring(Effect.sync(() => void (active--, done++))),
+      );
+      const members = ["a", "b", "c", "d", "e"].map((id) => EnvironmentId.make(`env-${id}`));
+      const fibers = yield* Effect.forEach(members, (environmentId) =>
+        renewals.renew({ environmentId, attemptKey: "hosts|0" }, open).pipe(Effect.forkChild),
+      );
+      yield* Effect.yieldNow;
+      expect(active).toBe(2);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.joinAll(fibers);
+      expect(done).toBe(5);
+      expect(most).toBe(2);
+    }),
+  );
+
+  it.effect("a refused hand-paired member is re-opened and becomes managed", () =>
+    Effect.gen(function* () {
+      const catalog = yield* makeCatalog();
+      // Paired by hand, so it is no record; its session was refused.
+      const reports = [desktop([device(laptop)])];
+      const saved = savedState([studio, laptop], [[laptop, { needsPairing: true }]]);
+      catalog.saved.add(studio).add(laptop);
+      yield* catalog.follow(reports, catalog.members, (host) => host === studio);
+      expect(catalog.records()).toEqual([]);
+
+      expect(due([], reports, saved).map((entry) => entry.environmentId)).toEqual([laptop]);
+      yield* openNetworkMember({
+        environmentId: laptop,
+        label: laptop,
+        hosts: openingHosts(reports, (host) => host === studio),
+        mint: (_via, target) => Effect.succeed(credential(target)),
+        register: (value) => Effect.succeed(opened(value.environmentId)),
+      }).pipe(Effect.provideService(NetworkMembers, catalog.members));
+      expect(catalog.records()).toEqual([{ ...hostRecord(laptop), sessionExpiresAt: 30 }]);
     }),
   );
 });
