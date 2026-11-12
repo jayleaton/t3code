@@ -135,6 +135,17 @@ const browserTestProject = {
         resetPointer: async ({ page }) => {
           await page.mouse.move(-1, -1);
         },
+        // Finished files' iframes hold Chromium shared memory until V8 collects them; enough of it
+        // breaks the data pipes under the page's long-lived sockets and Vitest loses the browser
+        // (crbug.com/530892387). Vitest's own workaround only fires on low disk space.
+        collectGarbage: async ({ page }) => {
+          const cdp = await page.context().newCDPSession(page);
+          try {
+            await cdp.send("HeapProfiler.collectGarbage");
+          } finally {
+            await cdp.detach();
+          }
+        },
       },
     },
   },
