@@ -8,7 +8,10 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { DeviceNetworkGroup } from "@t3tools/client-runtime/tailnet-devices";
+import type {
+  DeviceNetworkGroup,
+  DeviceNetworkMachine,
+} from "@t3tools/client-runtime/tailnet-devices";
 import {
   AuthAccessWriteScope,
   type AuthMcpClientAccess,
@@ -17,9 +20,12 @@ import {
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
-import { PlusIcon } from "lucide-react";
-import { useContext, useId, useRef, useState } from "react";
+import { EllipsisIcon } from "lucide-react";
+import { type ReactNode, useContext, useId, useRef, useState } from "react";
 
+import { networkMemberActivityLabel } from "@t3tools/client-runtime/connection";
+import { isElectron } from "~/env";
+import { networkMembers } from "~/state/networkMembers";
 import { mintPairingCodeOn } from "~/state/peerPairingCode";
 import { peerLinkEnvironment, useLinkableMachines, useNetworkHosts } from "~/state/peerLinks";
 import type { EnvironmentPresentation } from "~/state/environments";
@@ -35,8 +41,8 @@ import {
   DialogPanel,
   DialogPopup,
   DialogTitle,
-  DialogTrigger,
 } from "../ui/dialog";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Input } from "../ui/input";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { LinkAccessPicker } from "./LinkAccessPicker";
@@ -44,23 +50,166 @@ import { LinkAddressWarning, LinkMachineSelect } from "./LinkMachineSelect";
 import {
   DeviceMachineRow,
   NetworkAppRow,
-  TakingPartRow,
   useDeviceNetworkView,
+  useHostParts,
+  useMachineParts,
 } from "./NetworkRows";
+import type { SavedMachineNetwork } from "./SavedEnvironmentRows";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 
 const failureToast = (title: string, description: string) =>
   toastManager.add(stackedThreadToast({ type: "error", title, description }));
 
+const MACHINES_HELP =
+  "Machines in your network show up here by themselves. Add a machine once and every app in your network can use it.";
+
 /**
- * The one Device network view: every connected host's roster merged, grouped by network, with
- * each machine's own switch in "Taking part". Hidden while no connected host offers it.
+ * One list of machines: every network member this app can reach, joined by environment id with
+ * the saved environments, then machines outside the network. "Phones and browsers" follow.
  */
-export function DeviceNetworkSettings() {
+export function MachinesSettings({
+  savedEnvironments,
+  renderSaved,
+  headerAction,
+  empty,
+}: {
+  /** Saved environments other than this machine's own. */
+  readonly savedEnvironments: ReadonlyArray<EnvironmentPresentation>;
+  readonly renderSaved: (
+    environment: EnvironmentPresentation,
+    network: SavedMachineNetwork | null,
+  ) => ReactNode;
+  readonly headerAction: ReactNode;
+  readonly empty: ReactNode;
+}) {
   const hosts = useNetworkHosts();
-  if (hosts.length === 0) return null;
-  return <DeviceNetworkSection hosts={hosts} />;
+  const { states, groups } = useDeviceNetworkView(hosts);
+  const registry = useContext(RegistryContext);
+  const onChanged = () => refreshDeviceNetwork(registry, peerLinkEnvironment.list, states);
+  const saved = new Map(
+    savedEnvironments.map((environment) => [environment.environmentId, environment]),
+  );
+  const stateById = new Map(states.map((state) => [state.environmentId, state] as const));
+  const presentationById = new Map(hosts.map((host) => [host.environmentId, host] as const));
+  const hostOf = (environmentId: EnvironmentId) => {
+    const state = stateById.get(environmentId);
+    const presentation = presentationById.get(environmentId);
+    return state === undefined
+      ? undefined
+      : { state, managedBy: presentation === undefined ? null : managedBy(presentation) };
+  };
+  // Agent links start from the host this app works through when it takes part.
+  const linkHost =
+    groups.flatMap((group) => group.hosts).find((host) => host.enabled)?.environmentId ?? null;
+  const shown = new Set<EnvironmentId>();
+  const machineRows = groups.flatMap((group) => [
+    groups.length > 1 ? (
+      <SettingsRow
+        key={`heading:${group.key}`}
+        title={
+          group.inNetwork
+            ? "Your network"
+            : `${group.hosts[0]?.label ?? "This machine"}: not in a network`
+        }
+        description={groupDescription(group)}
+      />
+    ) : null,
+    ...group.machines.map((machine) => {
+      const environmentId = machine.entry.environmentId;
+      shown.add(environmentId);
+      const environment = saved.get(environmentId);
+      const host = hostOf(environmentId);
+      return environment === undefined ? (
+        <DeviceMachineRow
+          key={machine.key}
+          group={group}
+          machine={machine}
+          {...(host === undefined ? {} : { host })}
+          onChanged={onChanged}
+        />
+      ) : (
+        <SavedMachineRow
+          key={machine.key}
+          group={group}
+          machine={machine}
+          host={host ?? null}
+          environment={environment}
+          renderSaved={renderSaved}
+          onChanged={onChanged}
+        />
+      );
+    }),
+  ]);
+  const outside = savedEnvironments.filter((environment) => !shown.has(environment.environmentId));
+  const apps = groups.flatMap((group) => group.apps.map((app) => ({ group, app })));
+  const search = searchableSetting("machines");
+  return (
+    <>
+      <SettingsSection
+        id={search.id}
+        title={search.title}
+        headerAction={
+          <div className="flex items-center gap-1">
+            {headerAction}
+            {linkHost === null ? null : <LinkHeaderAction environmentId={linkHost} />}
+          </div>
+        }
+      >
+        <SettingsRow title="Your machines" description={MACHINES_HELP} />
+        {machineRows}
+        {outside.map((environment) => renderSaved(environment, null))}
+        {machineRows.length + outside.length === 0 ? empty : null}
+      </SettingsSection>
+      {apps.length === 0 ? null : (
+        <SettingsSection title="Phones and browsers">
+          {apps.map(({ group, app }) => (
+            <NetworkAppRow key={app.appId} group={group} app={app} onChanged={onChanged} />
+          ))}
+        </SettingsSection>
+      )}
+    </>
+  );
+}
+
+function SavedMachineRow({
+  group,
+  machine,
+  host,
+  environment,
+  renderSaved,
+  onChanged,
+}: {
+  readonly group: DeviceNetworkGroup;
+  readonly machine: DeviceNetworkMachine;
+  readonly host: {
+    readonly state: DeviceNetworkHostState;
+    readonly managedBy: string | null;
+  } | null;
+  readonly environment: EnvironmentPresentation;
+  readonly renderSaved: (
+    environment: EnvironmentPresentation,
+    network: SavedMachineNetwork | null,
+  ) => ReactNode;
+  readonly onChanged: () => void;
+}) {
+  const parts = useMachineParts({ group, machine, onChanged });
+  const hostParts = useHostParts(host, onChanged);
+  const held = useAtomValue(networkMembers.statusAtom).get(machine.entry.environmentId);
+  return renderSaved(environment, {
+    member: parts.member,
+    activity: networkMemberActivityLabel(held, isElectron ? "app" : "browser"),
+    details: [...hostParts.details, ...parts.details],
+    actions: parts.actions,
+    menuItems: (
+      <>
+        {hostParts.menuItems}
+        {parts.menuItems}
+      </>
+    ),
+    dialogs: parts.dialogs,
+    others: parts.others,
+  });
 }
 
 const managedBy = (environment: EnvironmentPresentation) => {
@@ -70,116 +219,16 @@ const managedBy = (environment: EnvironmentPresentation) => {
     : null;
 };
 
-function DeviceNetworkSection({
-  hosts,
-}: {
-  readonly hosts: ReadonlyArray<EnvironmentPresentation>;
-}) {
-  const { states, groups } = useDeviceNetworkView(hosts);
-  const registry = useContext(RegistryContext);
-  const stateById = new Map(states.map((state) => [state.environmentId, state] as const));
-  const presentationById = new Map(hosts.map((host) => [host.environmentId, host] as const));
-  const onChanged = () => refreshDeviceNetwork(registry, peerLinkEnvironment.list, states);
-  // Pairing-code links start from the host this app works through when it takes part.
-  const linkHost =
-    groups.flatMap((group) => group.hosts).find((host) => host.enabled)?.environmentId ?? null;
-  const search = searchableSetting("device-network");
-  return (
-    <SettingsSection
-      id={search.id}
-      title={search.title}
-      headerAction={linkHost === null ? null : <LinkHeaderAction environmentId={linkHost} />}
-    >
-      {groups.map((group) => (
-        <NetworkGroupRows
-          key={group.key}
-          group={group}
-          showHeading={groups.length > 1}
-          hostStates={group.hosts.flatMap((host) => stateById.get(host.environmentId) ?? [])}
-          managedBy={(environmentId) => {
-            const presentation = presentationById.get(environmentId);
-            return presentation === undefined ? null : managedBy(presentation);
-          }}
-          onChanged={onChanged}
-        />
-      ))}
-    </SettingsSection>
-  );
-}
-
 function groupDescription(group: DeviceNetworkGroup): string {
   if (!group.inNetwork && !group.addsToNetwork) {
     return "Not in your network. To add it, choose Allow joining here, then add it from a full-access machine in your network.";
   }
   if (!group.inNetwork) {
-    return group.machines.some((machine) => machine.kind === "found")
-      ? "Not in a network yet. Machines join only when you add them; adding one starts your network with this machine at full access."
-      : "Not in a network yet. Your other machines on Tailscale show up here once they run T3 Code. Being on the same Tailscale account is not permission: you add each one.";
+    return "Not in a network yet. Machines join only when you add them; adding one starts your network with this machine at full access.";
   }
   return group.authority === null
     ? "Only a full-access machine can change the network, and none this app may change it through is connected."
     : "Changes go to every machine in the network.";
-}
-
-function NetworkGroupRows({
-  group,
-  showHeading,
-  hostStates,
-  managedBy: managedByHost,
-  onChanged,
-}: {
-  readonly group: DeviceNetworkGroup;
-  readonly showHeading: boolean;
-  readonly hostStates: ReadonlyArray<DeviceNetworkHostState>;
-  readonly managedBy: (environmentId: EnvironmentId) => string | null;
-  readonly onChanged: () => void;
-}) {
-  const takingPart = hostStates.some((host) => host.enabled);
-  const unavailable = hostStates.every((host) => host.list === "unavailable");
-  return (
-    <>
-      <SettingsRow
-        title={
-          showHeading
-            ? group.inNetwork
-              ? "Your network"
-              : `${group.hosts[0]?.label ?? "This machine"}: not in a network`
-            : "Taking part"
-        }
-        description={`${showHeading ? "" : "Each machine has its own switch. While it is off, its agents start nothing over a link; running tasks finish. "}${groupDescription(group)}`}
-      />
-      {hostStates.map((host) => (
-        <TakingPartRow
-          key={host.environmentId}
-          host={host}
-          managedBy={managedByHost(host.environmentId)}
-          onChanged={onChanged}
-        />
-      ))}
-      {!takingPart || unavailable ? null : (
-        <>
-          {group.machines.map((machine) => (
-            <DeviceMachineRow
-              key={machine.key}
-              group={group}
-              machine={machine}
-              onChanged={onChanged}
-            />
-          ))}
-          {group.apps.map((app) => (
-            <NetworkAppRow key={app.appId} group={group} app={app} onChanged={onChanged} />
-          ))}
-          {group.machines.length + group.apps.length === 0 &&
-          hostStates.some((host) => host.list === "ready") ? (
-            <SettingsRow
-              title="No other machines yet"
-              description="Machines on your Tailscale account that run T3 Code appear here to add. Link any other machine, such as a VPS, with a pairing code."
-            />
-          ) : null}
-        </>
-      )}
-    </>
-  );
 }
 
 function LinkHeaderAction({ environmentId }: { readonly environmentId: EnvironmentId }) {
@@ -275,113 +324,117 @@ function LinkEnvironmentAction({ environmentId }: { readonly environmentId: Envi
     }
   };
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (!next && busy) return;
-        handleOpenChange(next);
-      }}
-    >
-      <DialogTrigger
-        render={
-          <Button size="xs" variant="default">
-            <PlusIcon className="size-3" />
-            Link
-          </Button>
-        }
-      />
-      <DialogPopup className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>Link an environment</DialogTitle>
-          <DialogDescription>
-            Agents here can then launch, message and wait on threads there. It appears in that
-            environment's Connections, where it can be revoked.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogPanel>
-          <form
-            id={formId}
-            className="space-y-4"
-            autoComplete="off"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void submit();
-            }}
-          >
-            {machines.length > 0 ? (
-              <LinkMachineSelect
-                machines={machines}
-                value={selected}
-                disabled={busy}
-                onChange={setChoice}
-              />
-            ) : null}
-            {machine?.linked ? (
-              <p className="text-xs text-muted-foreground">
-                Already linked. Linking again renews it with the access you pick.
-              </p>
-            ) : null}
-            {needsAddress ? (
-              <label className="block space-y-1.5">
-                <span className="block text-xs font-medium text-foreground">Address</span>
-                <Input
-                  value={address}
-                  onChange={(event) => {
-                    setAddress(event.target.value);
-                    // Machines found after typing began must not hide the address being typed.
-                    if (choice === null) setChoice(ANOTHER_ADDRESS);
-                  }}
-                  placeholder="https://box.example.ts.net"
+    <>
+      <Menu>
+        <MenuTrigger
+          render={<Button size="icon-xs" variant="ghost-muted" aria-label="More machine actions" />}
+        >
+          <EllipsisIcon className="size-3.5" />
+        </MenuTrigger>
+        <MenuPopup align="end">
+          <MenuItem onClick={() => handleOpenChange(true)}>Link for agents…</MenuItem>
+        </MenuPopup>
+      </Menu>
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!next && busy) return;
+          handleOpenChange(next);
+        }}
+      >
+        <DialogPopup className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Link an environment</DialogTitle>
+            <DialogDescription>
+              Agents here can then launch, message and wait on threads there. It appears in that
+              environment's Connections, where it can be revoked.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel>
+            <form
+              id={formId}
+              className="space-y-4"
+              autoComplete="off"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void submit();
+              }}
+            >
+              {machines.length > 0 ? (
+                <LinkMachineSelect
+                  machines={machines}
+                  value={selected}
                   disabled={busy}
-                  autoFocus={machines.length === 0}
-                  nativeInput
-                  spellCheck={false}
+                  onChange={setChoice}
                 />
-                {machine !== null ? (
-                  <span className="block text-xs text-muted-foreground">
-                    This app has no address for {machine.label} that another machine can reach.
-                    Enter its https or Tailscale address.
-                  </span>
-                ) : null}
-              </label>
-            ) : null}
-            {needsAddress && address.trim() ? <LinkAddressWarning address={address} /> : null}
-            {selected === null || canMint ? null : (
-              <label className="block space-y-1.5">
-                <span className="block text-xs font-medium text-foreground">Pairing code</span>
-                <Input
-                  value={pairingCode}
-                  onChange={(event) => setPairingCode(event.target.value)}
-                  placeholder={
-                    machine === null
-                      ? "From that environment's Connections, or t3 pair there"
-                      : "Paste the code"
-                  }
-                  disabled={busy}
-                  autoComplete="one-time-code"
-                  nativeInput
-                  spellCheck={false}
-                />
-                {machine !== null ? (
-                  <span className="block text-xs text-muted-foreground">
-                    Create a link on {machine.label}: Settings → Connections → Create link, then
-                    paste its code here.
-                  </span>
-                ) : null}
-              </label>
-            )}
-            <LinkAccessPicker value={access} onChange={setAccess} disabled={busy} />
-          </form>
-        </DialogPanel>
-        <DialogFooter variant="bare">
-          <DialogClose disabled={busy} render={<Button variant="outline" type="button" />}>
-            Cancel
-          </DialogClose>
-          <Button form={formId} type="submit" disabled={busy || !ready}>
-            {busy ? "Linking…" : "Link"}
-          </Button>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
+              ) : null}
+              {machine?.linked ? (
+                <p className="text-xs text-muted-foreground">
+                  Already linked. Linking again renews it with the access you pick.
+                </p>
+              ) : null}
+              {needsAddress ? (
+                <label className="block space-y-1.5">
+                  <span className="block text-xs font-medium text-foreground">Address</span>
+                  <Input
+                    value={address}
+                    onChange={(event) => {
+                      setAddress(event.target.value);
+                      // Machines found after typing began must not hide the address being typed.
+                      if (choice === null) setChoice(ANOTHER_ADDRESS);
+                    }}
+                    placeholder="https://box.example.ts.net"
+                    disabled={busy}
+                    autoFocus={machines.length === 0}
+                    nativeInput
+                    spellCheck={false}
+                  />
+                  {machine !== null ? (
+                    <span className="block text-xs text-muted-foreground">
+                      This app has no address for {machine.label} that another machine can reach.
+                      Enter its https or Tailscale address.
+                    </span>
+                  ) : null}
+                </label>
+              ) : null}
+              {needsAddress && address.trim() ? <LinkAddressWarning address={address} /> : null}
+              {selected === null || canMint ? null : (
+                <label className="block space-y-1.5">
+                  <span className="block text-xs font-medium text-foreground">Pairing code</span>
+                  <Input
+                    value={pairingCode}
+                    onChange={(event) => setPairingCode(event.target.value)}
+                    placeholder={
+                      machine === null
+                        ? "From that environment's Connections, or t3 pair there"
+                        : "Paste the code"
+                    }
+                    disabled={busy}
+                    autoComplete="one-time-code"
+                    nativeInput
+                    spellCheck={false}
+                  />
+                  {machine !== null ? (
+                    <span className="block text-xs text-muted-foreground">
+                      Create a link on {machine.label}: Settings → Connections → Create link, then
+                      paste its code here.
+                    </span>
+                  ) : null}
+                </label>
+              )}
+              <LinkAccessPicker value={access} onChange={setAccess} disabled={busy} />
+            </form>
+          </DialogPanel>
+          <DialogFooter variant="bare">
+            <DialogClose disabled={busy} render={<Button variant="outline" type="button" />}>
+              Cancel
+            </DialogClose>
+            <Button form={formId} type="submit" disabled={busy || !ready}>
+              {busy ? "Linking…" : "Link"}
+            </Button>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
+    </>
   );
 }

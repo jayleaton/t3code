@@ -47,11 +47,13 @@ export type DeviceNetworkMemberStatuses = ReadonlyMap<
 
 /**
  * How this app holds a machine: open; its session refused, with a connected host that can open
- * it again or none; or left the network by its own act, kept until its session ends.
+ * it again, none while agent links are paused, or none; or left the network by its own act, kept
+ * until its session ends.
  */
 export type InApp =
   | { readonly kind: "open" }
   | { readonly kind: "reopen" }
+  | { readonly kind: "paused" }
   | { readonly kind: "refused"; readonly left: boolean }
   | { readonly kind: "left"; readonly until: DateTime.Utc | null };
 
@@ -132,9 +134,19 @@ const inAppOf = (
     const until = held.record.sessionExpiresAt;
     return { kind: "left", until: until === undefined ? null : DateTime.makeUnsafe(until) };
   }
-  if (held?.status === "reopen") return { kind: "reopen" };
-  if (held?.status === "refused") return { kind: "refused", left: held.record.left === true };
-  return saved.has(environmentId) ? { kind: "open" } : null;
+  if (!saved.has(environmentId)) return null;
+  switch (held?.status) {
+    case "connecting":
+    case "retrying":
+    case "reopen":
+      return { kind: "reopen" };
+    case "paused":
+      return { kind: "paused" };
+    case "refused":
+      return { kind: "refused", left: held.record.left === true };
+    default:
+      return { kind: "open" };
+  }
 };
 
 /** A member from before the update that this host has not bound to a Tailscale node. */

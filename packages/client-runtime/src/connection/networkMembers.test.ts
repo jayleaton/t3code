@@ -18,10 +18,12 @@ import {
   type NetworkRoster,
   type NetworkRosterReport,
   NetworkMembers,
+  dueNetworkMemberOpens,
   followNetworkRoster,
   followedNetworks,
   makeNetworkMemberRenewals,
   makeNetworkMembers,
+  networkMemberActivityLabel,
   networkMemberStatus,
   openNetworkMember,
   openingHosts,
@@ -111,14 +113,32 @@ const makeCatalog = (initial: ReadonlyArray<NetworkMemberRecord> = []) =>
     });
     const forgotten: Array<EnvironmentId> = [];
     const saved = new Set<EnvironmentId>();
-    const follow = (reports: ReadonlyArray<NetworkRosterReport>, catalog = members) =>
+    const follow = (
+      reports: ReadonlyArray<NetworkRosterReport>,
+      catalog = members,
+      mayWrite: (host: EnvironmentId) => boolean = () => false,
+    ) =>
       followNetworkRoster({
         reports,
         savedEnvironmentIds: Effect.sync(() => new Set(saved)),
         forget: (environmentId) => Effect.sync(() => void forgotten.push(environmentId)),
+        mayWrite,
       }).pipe(Effect.provideService(NetworkMembers, catalog));
     return { members, forgotten, saved, follow, records: () => stored };
   });
+/** Saved environments, all enabled with an accepted session unless named otherwise. */
+const savedState = (
+  environmentIds: ReadonlyArray<EnvironmentId>,
+  overrides: ReadonlyArray<
+    readonly [EnvironmentId, { needsPairing?: boolean; enabled?: boolean }]
+  > = [],
+) => {
+  const state = new Map<EnvironmentId, { needsPairing: boolean; enabled: boolean }>(
+    environmentIds.map((id) => [id, { needsPairing: false, enabled: true }]),
+  );
+  for (const [id, value] of overrides) state.set(id, { ...state.get(id)!, ...value });
+  return state;
+};
 const ids = (records: ReadonlyArray<NetworkMemberRecord>) =>
   records.map((candidate) => candidate.environmentId);
 
@@ -149,13 +169,22 @@ describe("makeNetworkMembers", () => {
 });
 
 describe("followNetworkRoster", () => {
-  it.effect("keeps members it lacks as records without opening any, and skips the user's own", () =>
+  it.effect("keeps members it lacks as records due to open, and skips the user's own", () =>
     Effect.gen(function* () {
       const catalog = yield* makeCatalog();
       catalog.saved.add(studio).add(box);
-      yield* catalog.follow([report(studio, [device(box), device(laptop)])]);
+      const reports = [report(studio, [device(box), device(laptop)])];
+      yield* catalog.follow(reports);
 
       expect(catalog.records()).toEqual([record(laptop, studio)]);
+      expect(
+        dueNetworkMemberOpens({
+          records: catalog.records(),
+          reports,
+          hosts: [{ host: studio, appId: app }],
+          saved: savedState([studio, box]),
+        }).map((due) => due.environmentId),
+      ).toEqual([laptop]);
 
       // Revoking or dropping the user's own saved box never forgets it.
       yield* catalog.follow([report(studio, [device(box, "revoked")])]);
@@ -529,13 +558,60 @@ describe("round 5", () => {
   it("a refused session outranks what the roster says", () => {
     const opened = record(laptop, studio);
     const left = { ...opened, left: true as const };
-    expect(networkMemberStatus(opened, undefined, true)).toBe("unopened");
-    expect(networkMemberStatus(opened, { needsPairing: false }, true)).toBe("open");
-    expect(networkMemberStatus(left, { needsPairing: false }, true)).toBe("left");
-    expect(networkMemberStatus(opened, { needsPairing: true }, true)).toBe("reopen");
+    const status = (
+      member: NetworkMemberRecord,
+      saved: { readonly needsPairing: boolean } | undefined,
+      canOpen: boolean,
+    ) => networkMemberStatus({ record: member, saved, canOpen }).status;
+    expect(status(opened, { needsPairing: false }, true)).toBe("open");
+    expect(status(left, { needsPairing: false }, true)).toBe("left");
+    expect(status(opened, { needsPairing: true }, true)).toBe("reopen");
     // Cut by another client's Leave, or with no host here to open it: nothing is kept for it.
-    expect(networkMemberStatus(left, { needsPairing: true }, true)).toBe("refused");
-    expect(networkMemberStatus(opened, { needsPairing: true }, false)).toBe("refused");
+    expect(status(left, { needsPairing: true }, true)).toBe("refused");
+    expect(status(opened, { needsPairing: true }, false)).toBe("refused");
+  });
+
+  it("says connecting only while an open runs or is about to", () => {
+    const member = record(laptop, studio);
+    const refused = { needsPairing: true };
+    const failed = { phase: "failed", reason: "Laptop does not answer from this device." } as const;
+    const state = (input: Partial<Parameters<typeof networkMemberStatus>[0]>) =>
+      networkMemberStatus({ record: member, saved: undefined, canOpen: true, ...input });
+
+    for (const saved of [undefined, refused]) {
+      // Due and not tried yet, or running now.
+      expect(state({ saved, due: true }).status).toBe("connecting");
+      expect(state({ saved, attempt: { phase: "connecting" } }).status).toBe("connecting");
+      // Failed and waiting out the backoff, though still due: retrying, with the reason.
+      expect(state({ saved, due: true, attempt: failed })).toEqual({
+        status: "retrying",
+        reason: failed.reason,
+      });
+      // Agent links paused on the hosts: nothing opens it, whatever the last attempt did.
+      expect(state({ saved, canOpen: false, paused: true, attempt: failed }).status).toBe("paused");
+    }
+    expect(state({}).status).toBe("idle");
+    expect(state({ canOpen: false, attempt: failed }).status).toBe("idle");
+    expect(state({ attempt: failed, unreachable: true }).status).toBe("unreachable");
+    expect(state({ record: { ...member, off: true }, due: true }).status).toBe("off");
+
+    expect(
+      [
+        state({ due: true }),
+        state({ attempt: failed }),
+        state({ attempt: { phase: "failed", reason: null } }),
+        state({ canOpen: false, paused: true }),
+        state({ unreachable: true }),
+        state({ saved: { needsPairing: false } }),
+      ].map((value) => networkMemberActivityLabel(value, "phone")),
+    ).toEqual([
+      "Connecting…",
+      "Can't connect · retrying · Laptop does not answer from this device",
+      "Can't connect · retrying",
+      "Agent links paused",
+      "Can't reach from this phone",
+      null,
+    ]);
   });
 
   it.effect("an app-less open follows the roster of the host that opened it", () =>
@@ -616,9 +692,15 @@ describe("makeNetworkMemberRenewals", () => {
     Effect.gen(function* () {
       const renewals = makeNetworkMemberRenewals({ baseMs: 1_000, capMs: 4_000 });
       let opened = 0;
+      let started = 0;
       const open = Effect.sync(() => void opened++);
+      // "Connecting…" starts with the attempt, not while the backoff is waited out.
       const renew = (attemptKey: string) =>
-        renewals.renew({ environmentId: laptop, attemptKey }, open);
+        renewals.renew(
+          { environmentId: laptop, attemptKey },
+          open,
+          Effect.sync(() => void started++),
+        );
 
       expect(yield* renew("hosts|0")).toBe(true);
       expect(yield* renew("hosts|0")).toBe(false);
@@ -628,11 +710,149 @@ describe("makeNetworkMemberRenewals", () => {
       for (const [index, wait] of [1_000, 2_000, 4_000, 4_000].entries()) {
         const next = yield* renew(`hosts|${index + 1}`).pipe(Effect.forkChild);
         yield* TestClock.adjust(wait - 1);
-        expect(opened).toBe(index + 1);
+        expect([opened, started]).toEqual([index + 1, index + 1]);
         yield* TestClock.adjust(1);
         yield* Fiber.join(next);
-        expect(opened).toBe(index + 2);
+        expect([opened, started]).toEqual([index + 2, index + 2]);
       }
+    }),
+  );
+});
+
+describe("opening members without a click", () => {
+  const desktop = (devices: ReadonlyArray<TailnetDevice>) =>
+    report(studio, devices, { callerAppId: null, apps: [] });
+  const hostRecord = (environmentId: EnvironmentId): NetworkMemberRecord => ({
+    environmentId,
+    label: environmentId,
+    via: studio,
+    opener: { kind: "host" },
+  });
+  const due = (
+    records: ReadonlyArray<NetworkMemberRecord>,
+    reports: ReadonlyArray<NetworkRosterReport>,
+    saved: ReturnType<typeof savedState>,
+  ) =>
+    dueNetworkMemberOpens({
+      records,
+      reports,
+      hosts: openingHosts(reports, (host) => host === studio),
+      saved,
+    });
+
+  it.effect("a desktop session following a roster gets a record per member", () =>
+    Effect.gen(function* () {
+      const catalog = yield* makeCatalog();
+      catalog.saved.add(studio);
+      const reports = [desktop([device(laptop), device(vps)])];
+
+      // Only where it may write the network, as the server requires of an app-less open.
+      yield* catalog.follow(reports);
+      expect(catalog.records()).toEqual([]);
+      yield* catalog.follow(reports, catalog.members, (host) => host === studio);
+      expect(catalog.records()).toEqual([hostRecord(laptop), hostRecord(vps)]);
+    }),
+  );
+
+  it.effect("an unopened reachable member is opened once without a click", () =>
+    Effect.gen(function* () {
+      const reports = [desktop([device(laptop)])];
+      const [renewal, ...rest] = due([hostRecord(laptop)], reports, savedState([studio]));
+      expect(rest).toEqual([]);
+      const renewals = makeNetworkMemberRenewals();
+      let opens = 0;
+      const open = Effect.sync(() => void opens++);
+      expect(yield* renewals.renew(renewal!, open)).toBe(true);
+      // The same roster again is no new reason to try.
+      const [again] = due([hostRecord(laptop)], reports, savedState([studio]));
+      expect(yield* renewals.renew(again!, open)).toBe(false);
+      expect(opens).toBe(1);
+      // Offline, it is not even probed until it comes back.
+      const offline = [desktop([{ ...device(laptop), status: "offline" }])];
+      expect(due([hostRecord(laptop)], offline, savedState([studio]))).toEqual([]);
+    }),
+  );
+
+  it("a switched-off member is never opened", () => {
+    const reports = [desktop([device(laptop), device(vps)])];
+    const off = { ...hostRecord(laptop), off: true as const };
+    // Off with no saved entry, or saved and disabled here.
+    expect(due([off], reports, savedState([studio]))).toEqual([]);
+    expect(
+      due(
+        [hostRecord(vps)],
+        reports,
+        savedState([studio, vps], [[vps, { enabled: false, needsPairing: true }]]),
+      ),
+    ).toEqual([]);
+  });
+
+  it.effect("an unreachable member triggers no mint", () =>
+    Effect.gen(function* () {
+      const catalog = yield* makeCatalog([hostRecord(laptop)]);
+      let mints = 0;
+      const failure = yield* Effect.flip(
+        openNetworkMember({
+          environmentId: laptop,
+          hosts: [{ host: studio, appId: null }],
+          reachable: Effect.succeed(false),
+          mint: (_via, target) =>
+            Effect.sync(() => void mints++).pipe(Effect.as(credential(target))),
+          register: (value) => Effect.succeed(opened(value.environmentId)),
+        }).pipe(Effect.provideService(NetworkMembers, catalog.members)),
+      );
+      expect(mints).toBe(0);
+      expect(failure._tag).toBe("ConnectionTransientError");
+      expect(catalog.records()).toEqual([hostRecord(laptop)]);
+    }),
+  );
+
+  it.effect("five members never run more than two mints at once", () =>
+    Effect.gen(function* () {
+      const renewals = makeNetworkMemberRenewals();
+      const release = yield* Deferred.make<void>();
+      let active = 0;
+      let most = 0;
+      let done = 0;
+      const open = Effect.sync(() => {
+        active++;
+        most = Math.max(most, active);
+      }).pipe(
+        Effect.andThen(Deferred.await(release)),
+        Effect.ensuring(Effect.sync(() => void (active--, done++))),
+      );
+      const members = ["a", "b", "c", "d", "e"].map((id) => EnvironmentId.make(`env-${id}`));
+      const fibers = yield* Effect.forEach(members, (environmentId) =>
+        renewals.renew({ environmentId, attemptKey: "hosts|0" }, open).pipe(Effect.forkChild),
+      );
+      yield* Effect.yieldNow;
+      expect(active).toBe(2);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.joinAll(fibers);
+      expect(done).toBe(5);
+      expect(most).toBe(2);
+    }),
+  );
+
+  it.effect("a refused hand-paired member is re-opened and becomes managed", () =>
+    Effect.gen(function* () {
+      const catalog = yield* makeCatalog();
+      // Paired by hand, so it is no record; its session was refused.
+      const reports = [desktop([device(laptop)])];
+      const saved = savedState([studio, laptop], [[laptop, { needsPairing: true }]]);
+      catalog.saved.add(studio).add(laptop);
+      yield* catalog.follow(reports, catalog.members, (host) => host === studio);
+      expect(catalog.records()).toEqual([]);
+
+      expect(due([], reports, saved).map((entry) => entry.environmentId)).toEqual([laptop]);
+      yield* openNetworkMember({
+        environmentId: laptop,
+        label: laptop,
+        hosts: openingHosts(reports, (host) => host === studio),
+        mint: (_via, target) => Effect.succeed(credential(target)),
+        register: (value) => Effect.succeed(opened(value.environmentId)),
+      }).pipe(Effect.provideService(NetworkMembers, catalog.members));
+      expect(catalog.records()).toEqual([{ ...hostRecord(laptop), sessionExpiresAt: 30 }]);
     }),
   );
 });

@@ -134,6 +134,21 @@ export function lastSeenLabel(lastConnectedAt: number, now: number): string {
   return `last seen ${format.format(lastConnectedAt)}`;
 }
 
+/** "Offline · last seen 2 h ago" from a roster's `lastSeenAt`, or "Offline" when it is unknown. */
+export function offlineSinceLabel(lastSeenAt: number | null, now: number): string {
+  if (lastSeenAt === null) return "Offline";
+  const minutes = Math.floor(Math.max(0, now - lastSeenAt) / 60_000);
+  const ago =
+    minutes < 1
+      ? "just now"
+      : minutes < 60
+        ? `${minutes} min ago`
+        : minutes < 24 * 60
+          ? `${Math.floor(minutes / 60)} h ago`
+          : `${Math.floor(minutes / (24 * 60))} d ago`;
+  return `Offline · last seen ${ago}`;
+}
+
 export function connectionStatusTitle(connection: EnvironmentConnectionPresentation): string {
   if (connection.phase === "reconnecting" && connection.error) {
     return "Failed to connect. Reconnecting...";

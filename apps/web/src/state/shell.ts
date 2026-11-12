@@ -1,6 +1,6 @@
 import {
-  AVAILABLE_CONNECTION_STATE,
   connectionProjectionPhase,
+  type SupervisorConnectionState,
 } from "@t3tools/client-runtime/connection";
 import {
   createEnvironmentShellAtoms,
@@ -67,28 +67,37 @@ export const liveShellEnvironmentIdsAtom = Atom.make((get) => {
   return next;
 }).pipe(Atom.withLabel("web-live-shell-environment-ids"));
 
-export const allEnvironmentShellsBootstrappedAtom = Atom.make((get) => {
-  const catalog = AsyncResult.value(get(environmentCatalog.catalogAtom));
-  if (Option.isNone(catalog)) {
-    return false;
-  }
-  for (const environmentId of enabledEnvironmentIds(catalog.value)) {
-    if (Option.isSome(get(environmentShell.stateValueAtom(environmentId)).snapshot)) {
-      continue;
-    }
-    const connection = AsyncResult.getOrElse(
-      get(environmentCatalog.stateAtom(environmentId)),
-      () => AVAILABLE_CONNECTION_STATE,
-    );
-    if (connectionProjectionPhase(connection) !== "disconnected") {
+/**
+ * False while an enabled environment with no cached snapshot is still connecting. A network
+ * member opened without a click never holds the sidebar before its first snapshot.
+ */
+export function createAllEnvironmentShellsBootstrappedAtom(input: {
+  readonly catalogAtom: Atom.Atom<Option.Option<EnvironmentCatalogState>>;
+  readonly hasSnapshotAtom: (environmentId: EnvironmentId) => Atom.Atom<boolean>;
+  readonly connectionAtom: (environmentId: EnvironmentId) => Atom.Atom<SupervisorConnectionState>;
+  readonly networkMemberIdsAtom: Atom.Atom<ReadonlySet<EnvironmentId>>;
+}) {
+  return Atom.make((get) => {
+    const catalog = get(input.catalogAtom);
+    if (Option.isNone(catalog)) {
       return false;
     }
-    if (connection.phase === "backoff" && connection.desired && connection.attempt <= 2) {
-      return false;
+    const networkMembers = get(input.networkMemberIdsAtom);
+    for (const environmentId of enabledEnvironmentIds(catalog.value)) {
+      if (get(input.hasSnapshotAtom(environmentId)) || networkMembers.has(environmentId)) {
+        continue;
+      }
+      const connection = get(input.connectionAtom(environmentId));
+      if (connectionProjectionPhase(connection) !== "disconnected") {
+        return false;
+      }
+      if (connection.phase === "backoff" && connection.desired && connection.attempt <= 2) {
+        return false;
+      }
     }
-  }
-  return true;
-}).pipe(Atom.withLabel("web-all-environment-shells-bootstrapped"));
+    return true;
+  }).pipe(Atom.withLabel("web-all-environment-shells-bootstrapped"));
+}
 
 // Catalog can precede primary discovery; an empty or incomplete catalog cannot prove absence.
 function catalogIsComplete(

@@ -3,7 +3,7 @@
 Connect a phone, browser, or another desktop app to T3 Code running on a different
 machine. That machine must stay running and reachable while you work.
 
-In **Settings → Connections**, open a machine’s **More actions** menu to rename it or
+In **Settings → Environments**, open a machine’s **More actions** menu to rename it or
 choose its icon (including desktop, laptop, and server). Names and icons are saved on
 that machine and shown on connected devices. **Reset name** restores the original name.
 
@@ -63,7 +63,7 @@ t3 pair
 
 Scan the QR code on your phone or paste the pairing URL into **Add environment**
 in the receiving app. Connection settings are under **Settings → Environments**
-on web and desktop and **Settings → Environments** on mobile. A loopback address
+on web, desktop and mobile. A loopback address
 such as `127.0.0.1` reaches only the device opening the link.
 
 On a computer with the desktop app, you can open the printed `t3code://pair`
@@ -181,7 +181,7 @@ scheme uses HTTP, so include `https://` when your server uses HTTPS.
 
 ## Desktop-managed SSH
 
-In the desktop app, open **Settings → Environments → Add environment**, choose
+In the desktop app, open **Settings → Environments → Add machine**, choose
 **SSH**, and enter a host or SSH alias such as `user@example.com`. T3 Code starts
 or reuses a server there and opens the port forward for you. Projects, provider
 credentials, and agent work stay on the remote machine.
@@ -298,24 +298,41 @@ Link two machines, such as your laptop and a VPS, and agents on one can work on
 the other: launch, message, wait on and stop its threads, answer their
 questions, and manage its queues, projects and scheduled tasks.
 
-Open **Settings → Environments → Device network** on web, desktop and mobile.
-It shows one list for your network, merged
-from every machine this app is connected to. Machines that are not in that
-network are shown in their own group.
+Open **Settings → Environments → Machines** on web, desktop and mobile. Machines
+in your network show up here by themselves and open by themselves in every app
+of the network. Add a machine once and every app in your network can use it.
+Machines outside the network, such as a VPS paired by code or an SSH host, are
+rows in the same list.
 
-Each machine has its own switch, under **Taking part** on web and desktop and
-on the machine's own row on mobile. It is on by default.
-While it is off on either machine, agents start nothing over a link between
-them. A task already running on the other machine still finishes, and if that
-machine has it off, its result arrives once it is back on.
+Each row has a switch, **Show in this app**. It only affects this app: switch it
+off to disconnect the machine here, on to bring it back. Other apps are not
+affected. A row reads **Connected**, **Connecting…**, **Offline**, or **Off in
+this app**. **Can't connect · retrying** means the last try failed and the app
+tries again on its own, waiting longer each time.
+
+To stop agents using a link, open the row's **…** menu and choose **Pause agent
+links**. While it is paused on either machine, agents start nothing over a link
+between them. A task already running on the other machine still finishes, and
+if that machine has agent links paused, its result arrives once they are back.
+While this app's machines have agent links paused, rows it is not connected to
+read **Agent links paused**, because nothing opens them until you resume.
+
+**+ Add machine** offers a Tailscale machine, a pairing code, or SSH. **Remove**
+is for machines outside the network. A machine in the network is switched off
+here or forgotten from the network instead.
+
+A phone that is not on your tailnet shows network machines as **Can't reach from
+this phone**. On app.t3.codes, a machine reachable only over plain HTTP shows
+**Can't reach from this browser**. Open the app from a machine on your network,
+or use Tailscale HTTPS.
 
 ### Your device network
 
-Machines running T3 Code on your Tailscale account show up in **Device
-network** on your other machines. Being on the same account is not permission:
-a machine joins only when you add it and pick what it may do. Adding the first
-one starts your network, with the machine you added from at full access. Tagged
-nodes and machines shared from someone else's tailnet never show up. A machine
+Machines running T3 Code on your Tailscale account show up in **Machines** on
+your other machines. Being on the same account is not permission: a machine
+joins only when you add it and pick what it may do. Adding the first one starts
+your network, with the machine you added from at full access. Tagged nodes and
+machines shared from someone else's tailnet never show up. A machine
 reinstalled on the same computer shows as one row, and you can **Forget** its
 old install from that row.
 
@@ -357,23 +374,22 @@ machine in the network picks them up.
   Adding it makes the two networks one, and every machine and app keeps the
   access it has. A machine you forgot shows **Restore** once it is found on
   your tailnet again.
-- **Open** adds a member to this app without a code. Below full access, it
-  opens read-only, and its row shows **Read-only in this app**. When its
-  session in this app expires or is cut, **Open** shows again.
+- Below full access, a member opens read-only, and its row shows **Connected ·
+  read-only in this app**.
 - When you create a pairing link on a full-access member, **Works on all your
   network's machines** pairs the phone or browser with the whole network at
-  once. It is listed in Device network once it pairs. Apps are full access or
-  read-only. **Make read-only** or **Revoke** signs it out everywhere. To give
-  it more access or bring it back, choose **Pair again** on web or desktop and
-  open the new link on that device; it replaces the old entry on every
-  machine. If the network no longer lists the old entry, choose **Pair as
-  new** instead, then forget the old entry.
+  once. It is listed under **Phones and browsers** once it pairs. Apps are full
+  access or read-only. **Make read-only** or **Revoke** signs it out
+  everywhere. To give it more access or bring it back, choose **Pair again** on
+  web or desktop and open the new link on that device; it replaces the old
+  entry on every machine. If the network no longer lists the old entry, choose
+  **Pair as new** instead, then forget the old entry.
 - Other people's machines, and anything off your tailnet, still link with a
   pairing code as described below.
 
 ### Link with a pairing code
 
-Open **Device network**, choose **Link**, and pick the other machine or enter its address. The list
+Open the **…** menu in the **Machines** header, choose **Link for agents**, and pick the other machine or enter its address. The list
 holds the machines this app knows. If this
 app has an address for that machine and is connected to it with a session that
 manages access there, it makes the pairing code itself; otherwise paste one

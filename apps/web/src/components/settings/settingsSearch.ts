@@ -65,7 +65,6 @@ export interface SettingsSearchItem {
   readonly localEnvironmentOnly?: boolean;
   readonly primaryEnvironmentOnly?: boolean;
   readonly wslAvailableOnly?: boolean;
-  readonly peerLinksOnly?: boolean;
   readonly fastWorktreeCheckoutOnly?: boolean;
   readonly textGeneratorsOnly?: boolean;
   readonly secondary?: boolean;
@@ -86,7 +85,6 @@ export interface SettingsSearchAvailability {
   readonly hasThreadAutoSettlement: boolean;
   readonly hasThreadAutoSettleFinishedChildren?: boolean;
   readonly hasThreadAutoArchive?: boolean;
-  readonly hasPeerLinkHost?: boolean;
   readonly hasFastWorktreeCheckoutEnvironment?: boolean;
   /** An environment without a provider allow-list, which hides text generators. */
   readonly hasTextGeneratorsEnvironment?: boolean;
@@ -1277,22 +1275,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
-    id: "device-network",
-    peerLinksOnly: true,
-    title: "Device network",
+    id: "machines",
+    title: "Machines",
     to: "/settings/connections",
-    targetId: "device-network",
     searchTerms: [
-      "tailscale tailnet machines members add to network access revoke restore apps forget leave network",
-      "taking part switch allow joining limit only on this machine promote link to this machine only add again left pair again pair as new app",
-      "linked environments link peer another machine vps agents work there handoff pairing code",
+      "environments add pair backend host code ssh config agent tailscale tailnet saved show in this app switch",
+      "device network members add to network access revoke restore forget leave network allow joining limit add again",
+      "pause agent links linked environments link peer another machine vps agents work there handoff pairing code",
+      "phones and browsers apps paired pair again pair as new",
     ],
-  },
-  {
-    id: "remote-environments",
-    title: "Environments",
-    to: "/settings/connections",
-    searchTerms: ["add pair backend host code ssh config agent tailscale tailnet saved"],
   },
   {
     id: "mcp-gateway",
@@ -1504,7 +1495,6 @@ export function filterAvailableSettingsSearchItems(
         availability.hasThreadAutoSettleFinishedChildren === true) &&
       (item.requiresCapability !== "threadAutoArchive" ||
         availability.hasThreadAutoArchive === true) &&
-      (!item.peerLinksOnly || availability.hasPeerLinkHost === true) &&
       (!item.fastWorktreeCheckoutOnly ||
         availability.hasFastWorktreeCheckoutEnvironment === true) &&
       (!item.textGeneratorsOnly || availability.hasTextGeneratorsEnvironment === true),
