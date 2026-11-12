@@ -90,6 +90,8 @@ const unitTestProject = {
 // Hash checkout paths to ports 61000-64999; Vitest's fixed port collides under inherited strictPort.
 const browserTestApiPort = 61_000 + ((Hash.string(import.meta.dirname) >>> 0) % 4_000);
 
+const lastGarbageCollection = new WeakMap<object, number>();
+
 const browserTestProject = {
   extends: true,
   // Pre-bundle lazy browser and worker dependencies to avoid mid-run reloads.
@@ -135,10 +137,14 @@ const browserTestProject = {
         resetPointer: async ({ page }) => {
           await page.mouse.move(-1, -1);
         },
-        // Finished files' iframes hold Chromium shared memory until V8 collects them; enough of it
-        // breaks the data pipes under the page's long-lived sockets and Vitest loses the browser
-        // (crbug.com/530892387). Vitest's own workaround only fires on low disk space.
+        // Finished files' iframes hold Chromium shared memory until V8 collects them; minutes of it
+        // break the data pipes under the page's long-lived sockets and Vitest loses the browser
+        // (crbug.com/530892387). Vitest's own workaround only fires on low disk space. A full GC
+        // costs up to ~0.5s on CI, so collect at most every 15s per page.
         collectGarbage: async ({ page }) => {
+          const now = Date.now();
+          if (now - (lastGarbageCollection.get(page) ?? 0) < 15_000) return;
+          lastGarbageCollection.set(page, now);
           const cdp = await page.context().newCDPSession(page);
           try {
             await cdp.send("HeapProfiler.collectGarbage");

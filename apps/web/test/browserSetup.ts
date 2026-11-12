@@ -5,7 +5,7 @@ declare module "vite-plus/test/browser" {
   interface BrowserCommands {
     /** Defined in vite.config.ts. Moves Playwright's mouse off the page. */
     resetPointer: () => Promise<void>;
-    /** Defined in vite.config.ts. Runs a full V8 garbage collection in the test page. */
+    /** Defined in vite.config.ts. Runs a full V8 garbage collection in the test page, throttled. */
     collectGarbage: () => Promise<void>;
   }
 }
@@ -18,7 +18,7 @@ beforeEach(async () => {
   await commands.resetPointer();
 });
 
-// Once per file, so earlier files' detached iframes release their shared memory before it
+// After each file, so earlier files' detached iframes release their shared memory before it
 // starves the page's own sockets. See collectGarbage in vite.config.ts.
 afterAll(async () => {
   await commands.collectGarbage();
