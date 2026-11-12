@@ -825,6 +825,30 @@ function threadParent(
   return { parentThreadId: null, relationshipToParent: null };
 }
 
+/**
+ * A linked environment's view of the parent: one on another machine, which may be the caller's
+ * own, is listed with its environment so the caller's settlement can find its children here.
+ */
+function linkedThreadParent(
+  thread: Parameters<typeof threadParent>[0],
+): Pick<
+  OrchestratorMcpThreadListItem,
+  "parentThreadId" | "parentEnvironmentId" | "relationshipToParent"
+> {
+  if (
+    threadParentRelationship(thread) === "child" &&
+    thread.parentThreadId != null &&
+    thread.parentEnvironmentId != null
+  ) {
+    return {
+      parentThreadId: thread.parentThreadId,
+      parentEnvironmentId: thread.parentEnvironmentId,
+      relationshipToParent: "child",
+    };
+  }
+  return { ...threadParent(thread), parentEnvironmentId: null };
+}
+
 function threadSnooze(
   thread: Parameters<typeof isSnoozed>[0],
   nowMs: number,
@@ -872,7 +896,7 @@ function listItemFromShell(
     pullRequests: threadPullRequests(shell.pullRequests),
     ...threadSettlement(shell),
     ...threadSnooze(shell, nowMs),
-    ...threadParent(shell),
+    ...(scope.client?.linked === true ? linkedThreadParent(shell) : threadParent(shell)),
     itemCount: shell.visibleItemCount,
     createdAt: DateTime.formatIso(shell.createdAt),
     updatedAt: DateTime.formatIso(shell.updatedAt),

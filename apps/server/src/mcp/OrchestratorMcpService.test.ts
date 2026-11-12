@@ -3838,6 +3838,12 @@ describe("OrchestratorMcpService thread list", () => {
     shell("thread:a-snoozed", "project:a", true),
     shell("thread:a-awake", "project:a", false),
     shell("thread:b-snoozed", "project:b", true),
+    {
+      ...shell("thread:a-under-remote", "project:a", false),
+      parentThreadId: ThreadId.make("thread:remote-card"),
+      parentEnvironmentId: EnvironmentId.make("environment:dev-box"),
+      parentRelationship: "child" as const,
+    },
   ];
   const service = layerOrchestratorService.pipe(
     Layer.provide(
@@ -3879,6 +3885,35 @@ describe("OrchestratorMcpService thread list", () => {
         [
           ["thread:a-snoozed", "project:a"],
           ["thread:b-snoozed", "project:b"],
+        ],
+      );
+    }).pipe(Effect.provide(service)),
+  );
+
+  it.effect("lists a parent on another machine only to a linked environment", () =>
+    Effect.gen(function* () {
+      const mcp = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const parents = (scope: McpInvocationScope) =>
+        mcp
+          .listThreads(scope, { allProjects: true, snoozed: false })
+          .pipe(
+            Effect.map((listed) =>
+              listed.threads.map((thread): ReadonlyArray<string | null | undefined> => [
+                thread.threadId,
+                thread.parentThreadId,
+                thread.parentEnvironmentId,
+              ]),
+            ),
+          );
+      assert.deepStrictEqual(yield* parents(client), [
+        ["thread:a-awake", null, undefined],
+        ["thread:a-under-remote", null, undefined],
+      ]);
+      assert.deepStrictEqual(
+        yield* parents({ ...client, client: { ...client.client!, linked: true } }),
+        [
+          ["thread:a-awake", null, null],
+          ["thread:a-under-remote", "thread:remote-card", "environment:dev-box"],
         ],
       );
     }).pipe(Effect.provide(service)),

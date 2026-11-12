@@ -509,12 +509,20 @@ const layerScheduledTaskWebhookOrigin = Layer.effect(
   }),
 );
 
+// Links to other environments: one instance for Settings, agents and remote settlement.
+const layerPeerLinks = PeerMcpClient.layer.pipe(
+  Layer.provideMerge(TailnetDevices.layer.pipe(Layer.provide(TailnetIdentity.layer))),
+  Layer.provideMerge(PeerLinks.layer),
+);
+
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   // Tasks split across machines reach the other environment through the same
   // broker the WebSocket routes serve (one memoized instance).
   Layer.provide(ThreadTaskTransport.layerFromBroker.pipe(Layer.provide(McpGatewayBroker.layer))),
   // RemoteParentSettlement asks other environments through the same broker.
   Layer.provide(McpGatewayBroker.layer),
+  // Remote settlement settles children over this server's own links first.
+  Layer.provide(layerPeerLinks),
   Layer.provide(layerScheduledTaskWebhookOrigin),
   Layer.provide(ProviderUsageAnalytics.layer),
   Layer.provide(layerCheckpointStore),
@@ -788,14 +796,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ),
   ),
   Layer.provide(PreviewBrowser.layer),
-  // Links to other environments, shared by Settings (WebSocket) and agents (/mcp).
-  Layer.provide(
-    PeerForwarding.layer.pipe(
-      Layer.provideMerge(PeerMcpClient.layer),
-      Layer.provideMerge(TailnetDevices.layer.pipe(Layer.provide(TailnetIdentity.layer))),
-      Layer.provideMerge(PeerLinks.layer),
-    ),
-  ),
+  Layer.provide(PeerForwarding.layer.pipe(Layer.provideMerge(layerPeerLinks))),
   Layer.provide(
     SpeechService.layer.pipe(
       Layer.provide(layerServerSettings),
