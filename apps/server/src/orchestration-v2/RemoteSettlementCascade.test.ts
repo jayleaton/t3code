@@ -1,8 +1,10 @@
 import { expect, it } from "@effect/vitest";
 import {
+  type AuthMcpClientAccess,
   CommandId,
   EnvironmentId,
   type GatewayScope,
+  OrchestratorMcpFailure,
   type OrchestrationV2AppThread,
   type TailnetDeviceAccess,
   ThreadId,
@@ -10,7 +12,9 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as McpGatewayBrokerModule from "../mcp/McpGatewayBroker.ts";
@@ -21,12 +25,14 @@ import {
   layerDependencies,
 } from "../mcp/McpGatewayBroker.testkit.ts";
 import * as Membership from "../peer/Membership.ts";
+import * as PeerLinks from "../peer/PeerLinks.ts";
+import * as PeerMcpClient from "../peer/PeerMcpClient.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import * as RemoteSettlementCascade from "./RemoteSettlementCascade.ts";
-import type { RemoteSettlementRequest } from "./SettlementCascade.ts";
+import { RemoteSettlementRelay, type RemoteSettlementRequest } from "./SettlementCascade.ts";
 
 const devBox = EnvironmentId.make("environment-dev-box");
 const macBook = EnvironmentId.make("environment-macbook");
@@ -53,12 +59,18 @@ const macBookThreads = [
   remote("other-parent", "card", null, EnvironmentId.make("environment-elsewhere")),
 ];
 
-type Call = { readonly method: string; readonly args: ReadonlyArray<unknown> };
+type Call = {
+  readonly method: string;
+  readonly args: ReadonlyArray<unknown>;
+  readonly via: "app" | "link";
+};
 
 interface World {
   readonly calls: Array<Call>;
   /** Whether the app reaches the MacBook. */
   reachable: boolean;
+  /** Whether this server's own link to the MacBook answers. */
+  linkReachable: boolean;
   /** The card as this machine's projections hold it now. */
   card: Partial<OrchestrationV2AppThread>;
 }
@@ -66,6 +78,7 @@ interface World {
 const world = (): World => ({
   calls: [],
   reachable: true,
+  linkReachable: true,
   card: { id: card, settledOverride: "settled", settledAt, deletedAt: null },
 });
 
@@ -76,8 +89,66 @@ const makeLayer = (
     readonly self?: TailnetDeviceAccess;
     /** Both machines are full-access members, relayed by dev-box's own desktop app. */
     readonly network?: boolean;
+    /** What the attached app relays, or no app at all. */
+    readonly app?: Readonly<Record<string, ReadonlyArray<GatewayScope>>> | false;
+    /** This server's own link to the MacBook, at this access. */
+    readonly link?: AuthMcpClientAccess;
+    /** The linked MacBook runs a version whose thread list has no parentEnvironmentId. */
+    readonly legacyPeer?: boolean;
   } = {},
 ) => {
+  const link = options.link;
+  const peerLinks = Layer.mock(PeerLinks.PeerLinks)({
+    enabled: Effect.succeed(true),
+    stored: Effect.succeed(
+      link === undefined ? [] : [{ environmentId: macBook, access: link } as never],
+    ),
+    get: (environmentId) =>
+      Effect.succeed(
+        link !== undefined && environmentId === macBook
+          ? Option.some({ environmentId: macBook, access: link } as never)
+          : Option.none(),
+      ),
+    subscribeChanges: Effect.succeed(Stream.never),
+  });
+  const peers = Layer.mock(PeerMcpClient.PeerMcpClient)({
+    call: (input) =>
+      Effect.suspend(() => {
+        if (!state.linkReachable) {
+          return Effect.fail(
+            new OrchestratorMcpFailure({
+              code: "orchestration_error",
+              message: "The linked environment stopped answering.",
+            }),
+          );
+        }
+        if (input.tool === "t3_thread_list") {
+          const threads = macBookThreads.map((thread) => ({
+            threadId: thread.id,
+            parentThreadId: options.legacyPeer === true ? null : thread.parentThreadId,
+            ...(options.legacyPeer === true
+              ? {}
+              : { parentEnvironmentId: thread.parentEnvironmentId }),
+            settled: thread.settledAt !== null,
+            settledAt: thread.settledAt,
+          }));
+          return Effect.succeed({
+            projectId: null,
+            currentThreadId: null,
+            threads,
+            nextCursor: null,
+            total: threads.length,
+          } as never);
+        }
+        const action = input.arguments.action === "settle" ? "settleThread" : "unsettleThread";
+        state.calls.push({
+          method: action,
+          args: [input.environmentId, input.arguments.threadId],
+          via: "link",
+        });
+        return Effect.succeed({ sequence: 1 } as never);
+      }),
+  });
   const broker = Layer.effect(
     McpGatewayBroker,
     Effect.gen(function* () {
@@ -90,15 +161,16 @@ const makeLayer = (
             .pipe(Effect.orDie);
         }
       }
+      if (options.app === false) return broker;
       yield* broker
         .connect(
           "desktop",
-          { [macBook]: options.scopes ?? ["read", "lifecycle"] },
+          options.app ?? { [macBook]: options.scopes ?? ["read", "lifecycle"] },
           options.network === true ? DESKTOP_APP_SUBJECT : CODE_PAIRED_SUBJECT,
         )
         .pipe(
           Stream.runForEach((event) => {
-            state.calls.push({ method: event.method, args: event.args });
+            state.calls.push({ method: event.method, args: event.args, via: "app" });
             return broker.respond("desktop", {
               connectionId: event.connectionId,
               invocationId: event.invocationId,
@@ -116,6 +188,8 @@ const makeLayer = (
   );
   return Layer.mergeAll(
     broker,
+    peerLinks,
+    peers,
     EffectOutbox.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
     Layer.mock(ServerEnvironment.ServerEnvironment)({
       getDescriptor: Effect.succeed({ environmentId: devBox } as never),
@@ -150,13 +224,16 @@ const queue = (action: "settle" | "unsettle") =>
     ]),
   );
 
-/** The real worker over an executor that runs only remote settlement, failing after one try. */
+/**
+ * The real worker over an executor that runs only remote settlement, failing after one try,
+ * through the relay layer the server runs, with its own retries.
+ */
 const layerWorker = (state: World, options?: Parameters<typeof makeLayer>[1]) =>
   EffectWorker.layerWithOptions({ maxAttempts: 1 }).pipe(
     Layer.provideMerge(
       Layer.effect(
         EffectWorker.OrchestrationEffectExecutorV2,
-        Effect.map(RemoteSettlementCascade.make, (cascade) =>
+        Effect.map(Effect.service(RemoteSettlementRelay), (cascade) =>
           EffectWorker.OrchestrationEffectExecutorV2.of({
             execute: (effect) =>
               effect.request.type !== "thread-settlement.remote"
@@ -182,12 +259,14 @@ const layerWorker = (state: World, options?: Parameters<typeof makeLayer>[1]) =>
         ),
       ),
     ),
+    Layer.provideMerge(RemoteSettlementCascade.layer),
     Layer.provideMerge(makeLayer(state, options)),
   );
 
-const targets = (calls: ReadonlyArray<Call>) =>
+const targets = (calls: ReadonlyArray<Call>, via?: Call["via"]) =>
   calls
     .filter((call) => call.method === "settleThread" || call.method === "unsettleThread")
+    .filter((call) => via === undefined || call.via === via)
     .map((call) => `${call.method}:${String(call.args[0])}:${String(call.args[1])}`)
     .toSorted();
 
@@ -282,4 +361,77 @@ it.effect("a machine the network lets only read asks no app to settle anything",
     yield* (yield* EffectWorker.OrchestrationEffectWorkerV2).drain();
     expect(state.calls).toEqual([]);
   }).pipe(Effect.provide(layerWorker(state, { self: "read-only" })));
+});
+
+const statusOf = (effectId: string) =>
+  EffectOutbox.EffectOutboxV2.pipe(
+    Effect.flatMap((outbox) => outbox.get(effectId)),
+    Effect.map((effect) => Option.getOrUndefined(effect)?.status),
+  );
+
+it.effect("a card settles its children on a linked machine the app is not connected to", () => {
+  const state = world();
+  state.reachable = false;
+  return Effect.gen(function* () {
+    yield* queue("settle");
+    yield* (yield* EffectWorker.OrchestrationEffectWorkerV2).drain();
+    expect(targets(state.calls, "link")).toEqual(settledChildren);
+  }).pipe(Effect.provide(layerWorker(state, { link: "full-access" })));
+});
+
+it.effect("a parent on a machine with no app settles its children on a linked machine", () => {
+  const state = world();
+  return Effect.gen(function* () {
+    yield* queue("settle");
+    yield* (yield* EffectWorker.OrchestrationEffectWorkerV2).drain();
+    expect(targets(state.calls, "link")).toEqual(settledChildren);
+  }).pipe(Effect.provide(layerWorker(state, { app: false, link: "full-access" })));
+});
+
+it.effect("a settle waiting on an unreachable machine runs a minute after it answers", () => {
+  const state = world();
+  state.reachable = false;
+  state.linkReachable = false;
+  return Effect.gen(function* () {
+    const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+    yield* queue("settle");
+    yield* worker.drain();
+    expect(targets(state.calls)).toEqual([]);
+    // No app attaches and the roster stays the same: only time passes.
+    state.linkReachable = true;
+    yield* TestClock.adjust("1 minute");
+    yield* worker.drain();
+    expect(targets(state.calls, "link")).toEqual(settledChildren);
+  }).pipe(Effect.provide(layerWorker(state, { link: "full-access" })));
+});
+
+it.effect("a full-access member no app relays is still waiting, not done", () => {
+  const state = world();
+  return Effect.gen(function* () {
+    yield* queue("settle");
+    yield* (yield* EffectWorker.OrchestrationEffectWorkerV2).drain();
+    expect(state.calls).toEqual([]);
+    expect(yield* statusOf(`effect:settle-card:thread-settlement.remote:${macBook}`)).toBe(
+      "failed",
+    );
+  }).pipe(Effect.provide(layerWorker(state, { network: true, app: {} })));
+});
+
+it.effect("a link below full access settles nothing over it", () => {
+  const state = world();
+  return Effect.gen(function* () {
+    yield* queue("settle");
+    yield* (yield* EffectWorker.OrchestrationEffectWorkerV2).drain();
+    expect(state.calls).toEqual([]);
+  }).pipe(Effect.provide(layerWorker(state, { app: false, link: "auto-accept-edits" })));
+});
+
+it.effect("a linked machine on an older version settles through the app instead", () => {
+  const state = world();
+  return Effect.gen(function* () {
+    yield* queue("settle");
+    yield* (yield* EffectWorker.OrchestrationEffectWorkerV2).drain();
+    expect(targets(state.calls, "app")).toEqual(settledChildren);
+    expect(targets(state.calls, "link")).toEqual([]);
+  }).pipe(Effect.provide(layerWorker(state, { link: "full-access", legacyPeer: true })));
 });

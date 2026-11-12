@@ -402,6 +402,11 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
    * parent's own run, and `"fork"` is a copy of another thread's conversation.
    */
   parentThreadId: Schema.NullOr(ThreadId),
+  /**
+   * For a linked environment's calls only: where `parentThreadId` lives, null for this
+   * environment. A child whose parent is on the caller's environment lists that parent.
+   */
+  parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
   relationshipToParent: Schema.NullOr(Schema.Literals(["child", "subagent", "fork"])),
   itemCount: NonNegativeInt,
   createdAt: IsoDateTime,
