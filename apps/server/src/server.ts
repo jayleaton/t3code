@@ -919,7 +919,10 @@ const layerMakeServer = Layer.unwrap(
                     writeLastTailscaleServePort(config.stateDir, servePort).pipe(
                       Effect.ignore({ log: true }),
                     ),
-                    Effect.logInfo("Tailscale Serve configured", { localPort, servePort }),
+                    Effect.logInfo(
+                      `Published on your tailnet with Tailscale Serve (HTTPS port ${servePort}). Turn this off with --no-tailscale-serve or T3CODE_TAILSCALE_SERVE=false.`,
+                      { localPort, servePort },
+                    ),
                   ]),
                 ),
                 Effect.catch((cause) =>

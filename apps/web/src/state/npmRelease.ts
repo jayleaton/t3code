@@ -18,7 +18,7 @@ function unsupportedLookup(config: ServerConfig | null): ServerNpmReleaseError |
   return config.environment.capabilities.npmReleaseLookup === true
     ? null
     : new ServerNpmReleaseError({
-        reason: "This server does not support registry lookups. Update it before switching tracks.",
+        reason: "This server does not support release lookups. Update it before switching tracks.",
       });
 }
 
@@ -26,7 +26,7 @@ export function npmReleaseFailureMessage(cause: Cause.Cause<unknown>): string {
   const error = Option.getOrUndefined(Cause.findErrorOption(cause));
   return isServerNpmReleaseError(error)
     ? error.message
-    : "Could not check this environment's npm registry. Check the connection and registry settings.";
+    : "Could not check T3 releases from this environment. Check its connection.";
 }
 
 export const npmReleaseAtom = Atom.family((spec: string) =>

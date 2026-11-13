@@ -306,6 +306,14 @@ jobs:
           pattern: cli-*
           merge-multiple: true
           path: release-assets
+      # install.sh/install.ps1 pin a version from its release; t3-release.json carries the
+      # database migration a track switch checks (CLI_RELEASE_MANIFEST_FILE in cliRelease.ts).
+      - name: Add the installers and release manifest
+        run: |
+          set -euo pipefail
+          cp scripts/install.sh scripts/install.ps1 release-assets/
+          node scripts/build-npm-launcher.ts --version "$VERSION" --output-dir "$RUNNER_TEMP/release-manifest"
+          cp "$RUNNER_TEMP/release-manifest/t3/package.json" release-assets/t3-release.json
       - name: Write CLI archive checksums
         run: |
           set -euo pipefail
@@ -316,7 +324,7 @@ jobs:
             echo "No CLI archives were produced." >&2
             exit 1
           fi
-          sha256sum "${archives[@]}" > SHA256SUMS
+          sha256sum "${archives[@]}" t3-release.json install.sh install.ps1 > SHA256SUMS
       - name: Merge architecture update manifests
         run: |
           set -euo pipefail

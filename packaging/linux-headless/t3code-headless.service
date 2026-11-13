@@ -16,6 +16,8 @@ Environment=T3CODE_PORT=3773
 Environment=T3CODE_HOST=0.0.0.0
 Environment=T3CODE_CLI_PATH=%h/.local/opt/t3code-headless/bin/t3
 Environment=ELECTRON_RUN_AS_NODE=1
+# The app's manual update command names t3-headless-update instead of `t3 update`.
+Environment=T3CODE_INSTALLATION=linux-headless
 # A user unit gets no login-shell PATH; provider CLIs must be on this one.
 Environment=PATH=%h/.local/bin:%h/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
 # Resolve `current` once, so an update that swaps it under a running server

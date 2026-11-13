@@ -216,7 +216,7 @@ The limit decides which modes T3 Code asks the provider for. It is not a sandbox
 `clients` lists how the server may run:
 
 - `desktop`: as the desktop app's own server.
-- `local-browser`: as a server only browsers on this machine reach, such as `npx t3`.
+- `local-browser`: as a server only browsers on this machine reach, such as a plain `t3`.
 - `remote`: reachable from phones, other computers, and app.t3.codes over the network.
 
 `remote` is the line that matters. A server reachable from the network also accepts browsers on

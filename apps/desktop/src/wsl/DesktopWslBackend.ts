@@ -1,3 +1,4 @@
+import { cliInstallCommand } from "@t3tools/shared/cliRelease";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -128,7 +129,7 @@ export const layer = Layer.effect(
             Ref.set(preflightErrorRef, Option.some(failure.reason)).pipe(Effect.as(false)),
           onStateDirOwned: () =>
             refuse(
-              "Another T3 Code server is using this distro's T3 home, or an older background service is set up for it. Stop that server or pair with it, or try `t3 update` in the distro. If the older launcher cannot update, run `t3 service uninstall` and optionally reinstall with `t3 service install` from a current CLI in the distro. Use `npx t3@latest` if `t3` is missing or outdated, and pass `--base-dir` with the service's T3 home to each command.",
+              `Another T3 Code server is using this distro's T3 home, or an older background service is set up for it. Stop that server or pair with it, or try \`t3 update\` in the distro. If the older launcher cannot update, run \`t3 service uninstall\` and optionally reinstall with \`t3 service install\` from a current CLI in the distro. If \`t3\` is missing or outdated, install it in the distro with \`${cliInstallCommand("posix")}\`, and pass \`--base-dir\` with the service's T3 home to each command.`,
             ),
           onDatabaseRefused: () =>
             refuse(

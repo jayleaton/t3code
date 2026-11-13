@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - Drives the real shell installer against a local GitHub fixture.
+import { CLI_RELEASE_REPOSITORY } from "@t3tools/shared/cliRelease";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
@@ -11,6 +12,18 @@ import { describe, expect, it } from "vite-plus/test";
 const nightlies = Array.from({ length: 100 }, (_, index) => ({
   tag_name: `v1.2.4-nightly.20261020.${200 - index}`,
 }));
+
+describe("installer source", () => {
+  it.each([
+    ["install.sh", /^repo="([^"]+)"$/m, /^channel="\$\{T3CODE_CHANNEL:-([a-z]+)\}"$/m],
+    ["install.ps1", /^\$repo = "([^"]+)"$/m, /^\$channel = .* else \{ "([a-z]+)" \}$/m],
+  ])("%s installs the fork's nightly releases", async (script, repo, channel) => {
+    const source = await NodeFSP.readFile(NodePath.resolve(import.meta.dirname, script), "utf8");
+    expect(repo.exec(source)?.[1]).toBe(CLI_RELEASE_REPOSITORY);
+    // The fork publishes no stable release, so a stable default would find nothing.
+    expect(channel.exec(source)?.[1]).toBe("nightly");
+  });
+});
 
 describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer home", () => {
   it("installs a relative home from a directory ending in a newline", async () => {
@@ -66,17 +79,19 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer chan
     // regression: #32897
     ["stable", "1.2.3", 1],
     ["preview", "1.2.4-preview.20261019.50", 0],
-  ])("finds %s %s behind nightlies and %i HTTP 504s", async (channel, version, failures) => {
+    // An unset channel follows nightly.
+    ["", "1.2.4-nightly.20261020.200", 1],
+  ])("finds '%s' %s behind nightlies and %i HTTP 504s", async (channel, version, failures) => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-install-index-"));
     const target = NodePath.join(root, "home/runtime/versions", version);
     const server = NodeHttp.createServer((request, response) => {
       if (failures-- > 0) return response.writeHead(504).end();
       const url = new URL(request.url ?? "/", "http://fixture");
       const body =
-        url.pathname === "/pingdotgg/t3code/releases/latest" &&
+        url.pathname === `/${CLI_RELEASE_REPOSITORY}/releases/latest` &&
         request.headers.accept === "application/json"
           ? { tag_name: "v1.2.3" }
-          : url.pathname === "/repos/pingdotgg/t3code/releases"
+          : url.pathname === `/repos/${CLI_RELEASE_REPOSITORY}/releases`
             ? { "1": nightlies, "2": [{ tag_name: `v${version}` }, { tag_name: "v1.2.3" }] }[
                 url.searchParams.get("page") ?? ""
               ]

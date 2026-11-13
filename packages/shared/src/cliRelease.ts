@@ -1,12 +1,16 @@
+import type { ServerInstallation } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { compareSemverVersions } from "./semver.ts";
 
 // The fork publishes its own `t3` builds; installing upstream's would replace the fork server.
-const CLI_RELEASE_REPOSITORY = "jayleaton/t3code";
+// scripts/install.sh and install.ps1 repeat it; scripts/install.test.ts keeps them in step.
+export const CLI_RELEASE_REPOSITORY = "jayleaton/t3code";
 export const CLI_RELEASES_PAGE_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/releases`;
 export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";
+/** The release's `t3` package manifest, listed in its checksums; read by npmReleaseDatabaseMigration. */
+export const CLI_RELEASE_MANIFEST_FILE = "t3-release.json";
 export const CLI_RELEASE_BASE_URL_ENV = "T3CODE_RELEASE_BASE_URL";
 
 // Keep archive keys aligned with the Linux matrix, Windows ARM64 build, and cli_archive rows in release.yml,
@@ -158,6 +162,29 @@ const NpmReleaseMigrationManifest = Schema.Struct({
   t3code: Schema.Struct({ databaseMigration: Schema.Int }),
 });
 const decodeNpmReleaseMigrationManifest = Schema.decodeUnknownOption(NpmReleaseMigrationManifest);
+
+// Every fork release is a prerelease, so GitHub's /releases/latest/download never resolves.
+const CLI_INSTALL_SCRIPT_BASE_URL = `https://raw.githubusercontent.com/${CLI_RELEASE_REPOSITORY}/main/scripts`;
+
+/** The one-line install of the `t3` CLI, optionally pinned to `version`. */
+export function cliInstallCommand(platform: "win32" | "posix", version?: string): string {
+  if (platform === "win32") {
+    const pin = version === undefined ? "" : `$env:T3CODE_VERSION="${version}"; `;
+    return `${pin}irm ${CLI_INSTALL_SCRIPT_BASE_URL}/install.ps1 | iex`;
+  }
+  const pin = version === undefined ? "" : `T3CODE_VERSION=${version} `;
+  return `curl -fsSL ${CLI_INSTALL_SCRIPT_BASE_URL}/install.sh | ${pin}sh`;
+}
+
+/** What to run on a server machine that cannot update itself; npm and npx install upstream's server. */
+export function manualServerUpdateCommand(
+  targetVersion: string,
+  installation?: ServerInstallation,
+): string {
+  return installation?.kind === "linux-headless"
+    ? `t3-headless-update install ${targetVersion}`
+    : `t3 update ${targetVersion}`;
+}
 
 /** Highest database migration a release's server knows, from its npm `t3` manifest. */
 export function npmReleaseDatabaseMigration(manifest: unknown): number | undefined {

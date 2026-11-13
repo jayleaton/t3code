@@ -208,7 +208,7 @@ const runUninstall = Effect.fn("cli.uninstall.run")(function* (input: {
     yield* Console.log(`Nothing to remove: t3 is not installed for ${input.baseDir}.`);
     if (!(yield* HostProcess.IsExecutable)) {
       yield* Console.log(
-        "  This t3 runs from a Node script, so it was installed by npm or built from source. Remove it the same way (`npm uninstall -g t3`, or delete the checkout).",
+        "  This t3 runs from a Node script, so it was built from source or is upstream's npm package. Delete the checkout, or run `npm uninstall -g t3` for the npm package.",
       );
     }
     return;
