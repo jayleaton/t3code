@@ -491,7 +491,8 @@ returned unchanged, and a thread with no active provider turn returns
 recurring work in the app scheduler; `schedule_task` with a `scheduledTaskId`
 updates an existing task. A schedule
 runs its prompt on an interval, at a fixed time in the server's local time
-zone, or on each qualifying webhook request, even when no turn is active.
+zone, on a cron expression in an IANA zone, once, or on each qualifying webhook
+request, even when no turn is active. `profileId` runs it as an agent.
 Without a signature, anyone with the webhook URL can trigger a run.
 Signature checks, filters, and dedupe can skip a webhook request.
 `bindToCurrentThread` defaults to `true` only when the caller has a thread in
@@ -499,7 +500,14 @@ the task's project; otherwise it defaults to `false`. Bound runs post into
 that thread; unbound runs each launch a fresh thread in the task's project.
 Explicit `bindToCurrentThread: true` without a caller thread in that project
 is rejected. Pausing uses `schedule_task` with `scheduledTaskId` and `enabled: false`;
-deletion is permanent.
+deletion is permanent. The server archives stale tasks and deletes them 30
+days later; `list_scheduled_tasks` leaves them out unless `includeArchived`,
+and `schedule_task` with `enabled: true` restores one.
+
+These four tools are the one scheduling set for in-process agents. The T3
+Agents `t3_*_scheduled_task` tools stay on the standalone gateway for outside
+clients; in-process they are deprecated one-line aliases for one release
+([`AgentsMcpTools.ts`](../../apps/server/src/mcp/agents/AgentsMcpTools.ts)).
 
 ## Delegated Task Lifecycle
 

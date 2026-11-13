@@ -299,7 +299,8 @@ threads on an environment through its MCP server. See
 
 Link two machines, such as your laptop and a VPS, and agents on one can work on
 the other: launch, message, wait on and stop its threads, answer their
-questions, and manage its queues, projects and scheduled tasks.
+questions, and manage their queues. Linked agents cannot change the other
+machine's projects, settings or scheduled tasks.
 
 Open **Settings → Environments → Machines** on web, desktop and mobile. Machines
 in your network show up here by themselves and open by themselves in every app
@@ -699,10 +700,12 @@ T3 does not wake a sleeping machine or keep it awake. A run missed while it was 
 happens once when it is back. For unattended runs, set the machine not to sleep and keep T3 running
 with the desktop app open or as a [background service](./background-service.md). Runs use the agent's permission mode, so an agent that
 asks for approvals waits for you. Changing a task's agent or project starts a new thread on the next
-run. MCP assistants can manage tasks with `t3_list_scheduled_tasks`, `t3_create_scheduled_task`,
+run. Agents in T3 chats schedule work for an agent with `schedule_task` and its `profileId`.
+MCP assistants outside T3 can manage tasks with `t3_list_scheduled_tasks`, `t3_create_scheduled_task`,
 `t3_update_scheduled_task`, and `t3_delete_scheduled_task` (create or admin access), and run one
 immediately with `t3_run_scheduled_task` (send access). Pass `runAt` for a single run, or `cron`
-with an optional IANA `timezone` for a repeating one.
+with an optional IANA `timezone` for a repeating one, and an `idempotencyKey` to make a retried
+create return the same task.
 
 MCP assistants can keep a project's [TODO list](./thread-sidebar.md#keep-a-todo-list) with
 `t3_list_todos` (read access) and `t3_add_todo`, `t3_update_todo`, `t3_settle_todo`,

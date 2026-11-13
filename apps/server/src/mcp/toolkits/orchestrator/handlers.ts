@@ -137,7 +137,16 @@ export const layer = McpToolAccess.toLayer(
           { refused: "schedule tasks in this environment" },
         ),
         McpToolAccess.writes(
-          ({ scheduledTaskId, prompt, title, schedule, enabled, bindToCurrentThread, profileId }) =>
+          ({
+            scheduledTaskId,
+            prompt,
+            title,
+            schedule,
+            enabled,
+            bindToCurrentThread,
+            profileId,
+            freshSession,
+          }) =>
             Effect.gen(function* () {
               if (scheduledTaskId === undefined) return yield* Effect.die("unreachable");
               const scope = yield* McpInvocationContext.McpInvocationContext;
@@ -150,6 +159,7 @@ export const layer = McpToolAccess.toLayer(
                 enabled,
                 bindToCurrentThread,
                 profileId,
+                freshSession,
               });
             }),
         ),

@@ -718,6 +718,11 @@ it.effect("a caller cannot rewrite a scheduled task that runs above its own mode
       enabled: false,
     });
     expect(allowed.isError).toBe(false);
+    const fresh = yield* call("schedule_task", {
+      scheduledTaskId: "task-auto",
+      freshSession: true,
+    });
+    expect(fresh.structuredContent).toMatchObject({ freshSession: true });
     const incomplete = yield* call("schedule_task", { prompt: "Run nightly" });
     expect(declaredFailure(incomplete)).toMatchObject({ code: "invalid_request" });
   }).pipe(
@@ -779,11 +784,29 @@ it.effect.each([
     code: "invalid_request",
     message: "The scheduled task was not found.",
   },
-])("run_scheduled_task_now $scenario", ({ tasks, error, code, message }) =>
+  {
+    scenario: "takes scheduledTaskId like the other schedule tools",
+    arguments: { scheduledTaskId: "task-webhook" },
+    tasks: [
+      {
+        ...Schema.decodeSync(ScheduledTask)(scheduledTask("task-webhook", "full-access")),
+        schedule: { type: "webhook" as const, signature: null },
+      },
+    ],
+    error: new ScheduledTaskError({
+      message: "Webhook tasks run when their URL receives a request.",
+    }),
+    code: "orchestration_error",
+    message: "Webhook tasks run when their URL receives a request.",
+  },
+])("run_scheduled_task_now $scenario", ({ tasks, error, code, message, ...row }) =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     const result = yield* server
-      .callTool({ name: "run_scheduled_task_now", arguments: { taskId: "task-webhook" } })
+      .callTool({
+        name: "run_scheduled_task_now",
+        arguments: "arguments" in row ? row.arguments : { taskId: "task-webhook" },
+      })
       .pipe(
         Effect.provideService(
           McpInvocationContext.McpInvocationContext,

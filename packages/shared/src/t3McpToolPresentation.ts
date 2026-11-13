@@ -159,10 +159,6 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   ),
   schedule_task: tool(["Schedule", "Scheduling", "Scheduled", "a task"], "schedule-create"),
   list_scheduled_tasks: tool(["List", "Listing", "Listed", "scheduled tasks"], "schedule-list"),
-  update_scheduled_task: tool(
-    ["Update", "Updating", "Updated", "a scheduled task"],
-    "schedule-update",
-  ),
   delete_scheduled_task: tool(
     ["Delete", "Deleting", "Requested deletion of", "a scheduled task"],
     "schedule-delete",
@@ -293,6 +289,23 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   ),
   device_close: tool(["Close", "Closing", "Closed", "a device"], "device", "device"),
   run_scheduled_task_now: tool(
+    ["Run", "Running", "Requested a run of", "a scheduled task"],
+    "schedule-run",
+  ),
+  t3_list_scheduled_tasks: tool(["List", "Listing", "Listed", "scheduled tasks"], "schedule-list"),
+  t3_create_scheduled_task: tool(
+    ["Schedule", "Scheduling", "Scheduled", "a task"],
+    "schedule-create",
+  ),
+  t3_update_scheduled_task: tool(
+    ["Update", "Updating", "Updated", "a scheduled task"],
+    "schedule-update",
+  ),
+  t3_delete_scheduled_task: tool(
+    ["Delete", "Deleting", "Requested deletion of", "a scheduled task"],
+    "schedule-delete",
+  ),
+  t3_run_scheduled_task: tool(
     ["Run", "Running", "Requested a run of", "a scheduled task"],
     "schedule-run",
   ),
