@@ -34,7 +34,7 @@ if (
   );
 }
 
-// Every variant uses Pip (scripts/export-android-icons.ts), told apart by name only. iOS
+// Every variant uses Pip (scripts/export-android-icons.ts). iOS
 // gets a full-bleed square because it applies its own mask; Android gets the
 // mark alone over a navy adaptive background so the launcher mask never crops it.
 const AGENTS_NAVY = "#111925";
@@ -49,6 +49,14 @@ const AGENTS_ASSETS = {
   androidSplashIcon: "./assets/agents/android-splash-icon.png",
   androidMonochromeIcon: "./assets/agents/android-icon-monochrome.png",
 } as const;
+// Dev builds match their in-app mark (src/components/brandAssets.ts): white Pip on the blueprint.
+const DEV_ASSETS = {
+  ...AGENTS_ASSETS,
+  appIcon: "./assets/agents/dev-ios-icon-1024.png",
+  iosIcon: "./assets/agents/dev-ios-icon-1024.png",
+  androidAdaptiveForeground: "./assets/agents/android-icon-monochrome.png",
+  androidAdaptiveBackgroundImage: "./assets/agents/android-dev-icon-background.png",
+} as const;
 
 const VARIANT_CONFIG = {
   development: {
@@ -56,7 +64,7 @@ const VARIANT_CONFIG = {
     scheme: "t3code-personal-dev",
     iosBundleIdentifier: "com.jayleaton.t3code.dev",
     androidPackage: "com.jayleaton.t3code.dev",
-    assets: AGENTS_ASSETS,
+    assets: DEV_ASSETS,
   },
   preview: {
     appName: `${APP_NAME} Preview`,

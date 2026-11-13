@@ -74,8 +74,12 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
   const [connectionExpanded, setConnectionExpanded] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
   const pendingRef = useRef(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  // Shown in the section of the action that produced it, beside its button.
+  const [feedback, setFeedback] = useState<{
+    readonly section: "app" | "providers";
+    readonly message: string;
+    readonly failed: boolean;
+  } | null>(null);
   const [releaseCheck, checkRelease] = useAtom(environmentReleaseCheckAtom(environmentId), {
     mode: "promiseExit",
   });
@@ -102,20 +106,25 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
   // The server refuses checks and installs; say so instead of offering them.
   const updatesDenial = managedUpdatesDenial(managedPolicy);
 
-  async function run(label: string, action: () => Promise<void>) {
+  async function run(label: string, action: () => Promise<string | void>) {
     if (pendingRef.current) return;
     pendingRef.current = true;
     setPending(label);
-    setError(null);
-    setNotice(null);
+    setFeedback(null);
+    const section = label === "check" || label === "server" ? "app" : "providers";
     const result = await settlePromise(action);
     pendingRef.current = false;
     setPending(null);
     if (AsyncResult.isFailure(result)) {
       const cause = squashAtomCommandFailure(result);
-      setError(
-        cause instanceof Error ? cause.message : "The action could not be completed. Try again.",
-      );
+      setFeedback({
+        section,
+        message:
+          cause instanceof Error ? cause.message : "The action could not be completed. Try again.",
+        failed: true,
+      });
+    } else if (AsyncResult.isSuccess(result) && result.value !== undefined) {
+      setFeedback({ section, message: result.value, failed: false });
     }
   }
 
@@ -147,7 +156,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                 input: { targetVersion },
               });
               if (AsyncResult.isFailure(result)) throw squashAtomCommandFailure(result);
-              setNotice(`Updated to ${result.value.targetVersion}.`);
+              return `Updated to ${result.value.targetVersion}.`;
             }),
         },
       ],
@@ -227,12 +236,6 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                   : "This connection does not have permission to manage the environment."}
               </Text>
             ) : null}
-            {error ? (
-              <Text selectable className="px-2 text-sm text-danger-foreground">
-                {error}
-              </Text>
-            ) : null}
-            {notice ? <Text className="px-2 text-sm text-foreground-muted">{notice}</Text> : null}
             {config && !outdated ? (
               <>
                 <SettingsSection title={MOBILE_APP_NAME}>
@@ -273,6 +276,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                           : `Update and restart ${MOBILE_APP_NAME} on this machine.`}
                       </Text>
                     ) : null}
+                    {feedback?.section === "app" ? <FeedbackText {...feedback} /> : null}
                   </View>
                   {supportUrl ? (
                     <SettingsActionRow
@@ -326,10 +330,15 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                           input: { reloadSecrets: true },
                         });
                         if (AsyncResult.isFailure(result)) throw squashAtomCommandFailure(result);
-                        setNotice("Provider status refreshed.");
+                        return "Provider status refreshed.";
                       });
                     }}
                   />
+                  {feedback?.section === "providers" ? (
+                    <View className="px-4 pb-4">
+                      <FeedbackText {...feedback} />
+                    </View>
+                  ) : null}
                   {config.providers
                     .filter((provider) => provider.enabled)
                     .map((provider) => (
@@ -401,5 +410,16 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
         )}
       </ScreenScrollView>
     </SettingsScreen>
+  );
+}
+
+function FeedbackText(props: { readonly message: string; readonly failed: boolean }) {
+  return (
+    <Text
+      selectable={props.failed}
+      className={props.failed ? "text-sm text-danger-foreground" : "text-sm text-foreground-muted"}
+    >
+      {props.message}
+    </Text>
   );
 }
