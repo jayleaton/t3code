@@ -1,4 +1,5 @@
-import { isWebhookDedupeTemplate } from "@t3tools/contracts";
+import { isWebhookDedupeTemplate, scheduledTaskDeletesAt } from "@t3tools/contracts";
+import { isScheduledTaskArchived } from "@t3tools/client-runtime/scheduled-task-archive";
 import {
   EnvironmentId,
   type ProjectId,
@@ -37,6 +38,8 @@ const ONCE_FORMATTER = new Intl.DateTimeFormat(undefined, {
   timeStyle: "short",
 });
 
+const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
+
 export function scheduleLabel(
   schedule: ScheduledTaskSchedule,
   timeZone?: string,
@@ -60,6 +63,11 @@ export function scheduleLabel(
         : weekdays.map((day) => WEEKDAY_LABELS[day]).join(", ");
   const zone = scheduleTimeZoneLabel(timeZone, runAt);
   return `${days} at ${schedule.timeOfDay}${zone === undefined ? "" : ` ${zone}`}`;
+}
+
+export function scheduledTaskDeletesLabel(task: Pick<ScheduledTask, "archivedAt">): string | null {
+  const deletesAt = scheduledTaskDeletesAt(task);
+  return deletesAt === null ? null : `Deletes on ${DATE_FORMATTER.format(new Date(deletesAt))}`;
 }
 
 export function matchesScheduledTaskScope(
@@ -290,7 +298,8 @@ export function taskToDraft(task: ScheduledTask): DraftState {
     editingId: task.id,
     title: task.title,
     prompt: task.prompt,
-    enabled: task.enabled,
+    // Saving restores an archived task, so it opens ready to run again.
+    enabled: task.enabled || isScheduledTaskArchived(task),
     scheduleMode:
       schedule.type === "fixed_time" ? "fixed" : schedule.type === "cron" ? "kept" : schedule.type,
     intervalMinutes:

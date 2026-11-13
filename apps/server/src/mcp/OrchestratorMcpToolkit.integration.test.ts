@@ -193,6 +193,7 @@ const layerUnusedScheduledTaskStub = Layer.succeed(
     getWebhookDelivery: () => Effect.die("unused in this test"),
     triggerWebhook: () => Effect.die("unused in this test"),
     awaitWebhookDeliveries: Effect.void,
+    cleanupStale: () => Effect.die("unused in this test"),
   }),
 );
 

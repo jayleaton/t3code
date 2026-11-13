@@ -235,6 +235,19 @@ describe("one-time scheduled tasks", () => {
   });
 });
 
+describe("archived scheduled tasks", () => {
+  it("opens an archived task enabled, since saving restores it", () => {
+    const archived: ScheduledTask = {
+      ...legacyTask,
+      enabled: false,
+      archivedAt: "2026-11-01T00:00:00.000Z",
+      archiveReason: "paused",
+    };
+    expect(taskToDraft(archived).enabled).toBe(true);
+    expect(taskToDraft({ ...legacyTask, enabled: false }).enabled).toBe(false);
+  });
+});
+
 describe("webhook scheduled tasks", () => {
   const signature = { header: "x-signature", encoding: "base64", prefix: "" } as const;
   const webhookTask: ScheduledTask = {

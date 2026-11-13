@@ -1,3 +1,6 @@
+import { scheduledTaskArchiveLabel } from "@t3tools/client-runtime/scheduled-task-archive";
+import { scheduledTaskDeletesAt, type ScheduledTask } from "@t3tools/contracts";
+
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
@@ -54,4 +57,14 @@ export function formatNextScheduledTaskRun(nextRunAt: string, now: number): stri
     ...(next.getFullYear() !== current.getFullYear() ? { year: "numeric" as const } : {}),
   });
   return `Next run ${date} at ${time}`;
+}
+
+export function formatScheduledTaskArchive(
+  task: Pick<ScheduledTask, "archivedAt" | "archiveReason">,
+): string {
+  const label = scheduledTaskArchiveLabel(task);
+  const deletesAt = scheduledTaskDeletesAt(task);
+  if (deletesAt === null) return label;
+  const date = new Date(deletesAt).toLocaleDateString([], { dateStyle: "medium" });
+  return `${label} · Deletes on ${date}`;
 }

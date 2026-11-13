@@ -18,6 +18,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -531,12 +532,40 @@ it.effect("sql: lists threads settled before the cutoff for auto-archive, oldest
       lineage: { rootThreadId: parent, parentThreadId: parent, relationshipToParent: "subagent" },
     });
     yield* createRun(subagent, "completed");
+    // A schedule that still runs into the thread keeps it; a paused one does not.
+    const sql = yield* SqlClient.SqlClient;
+    const schedule = (taskId: string, threadId: string, enabled: number) =>
+      sql`INSERT INTO scheduled_tasks ${sql.insert({
+        task_id: taskId,
+        title: taskId,
+        prompt: "Check in",
+        enabled,
+        schedule_json: '{"type":"cron","expression":"0 9 1 * *","timezone":"UTC"}',
+        project_id: "project-1",
+        thread_id: threadId,
+        workspace_strategy_json: '{"type":"root"}',
+        model_selection_json: '{"instanceId":"codex","model":"gpt-5"}',
+        runtime_mode: "full-access",
+        interaction_mode: "default",
+        created_by: "agent",
+        creation_source: "mcp",
+        created_at: DateTime.formatIso(old),
+        updated_at: DateTime.formatIso(old),
+        next_run_at: null,
+        last_run_at: null,
+        last_run_status: "never",
+        last_run_error: null,
+        run_count: 0,
+      })}`;
+    yield* schedule("monthly", yield* createThread("archive-scheduled", settled(30)), 1);
+    const pausedSchedule = yield* createThread("archive-paused-schedule", settled(25));
+    yield* schedule("paused", pausedSchedule, 0);
 
     const settledBefore = DateTime.subtract(now, { days: 10 });
     const candidates = yield* store.getAutoArchiveCandidates({ settledBefore, limit: 10 });
     assert.deepEqual(
       candidates.map((thread) => thread.id),
-      [oldest, parent, child, due],
+      [oldest, pausedSchedule, parent, child, due],
     );
     assert.deepEqual(
       (yield* store.getAutoArchiveCandidates({ settledBefore, limit: 1 })).map(

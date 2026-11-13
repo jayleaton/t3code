@@ -195,6 +195,7 @@ it.effect("imports fork V1 scheduled tasks into the V2 table and drops the legac
     });
     assert.equal(task?.profileId, "reviewer");
     assert.equal(task?.threadId, "thread-v1");
+    assert.equal(task?.threadMode, "continue");
     assert.equal(task?.lastRunStatus, "succeeded");
     assert.equal(task?.runCount, 4);
     assert.equal(task?.nextRunAt, "2026-09-26T00:00:00.000Z");

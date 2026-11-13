@@ -89,8 +89,10 @@ import {
 import { appAtomRegistry } from "../../state/atom-registry";
 import {
   formatNextScheduledTaskRun,
+  formatScheduledTaskArchive,
   formatScheduledTaskInterval,
 } from "./scheduledTaskPresentation";
+import { scheduledTaskRestoreNeedsEditor } from "@t3tools/client-runtime/scheduled-task-archive";
 
 type ScheduledTaskRoutes = {
   SettingsScheduledTaskNew: undefined;
@@ -414,6 +416,7 @@ export function SettingsScheduledTasksRouteScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<ScheduledTaskRoutes>>();
   const insets = useSafeAreaInsets();
   const environmentMenu = useSettingsEnvironmentMenu();
+  const [view, setView] = useState<"active" | "archived">("active");
   const newTask = () => {
     if (visibleEnvironments.length === 0) return;
     resetEditor();
@@ -442,10 +445,19 @@ export function SettingsScheduledTasksRouteScreen() {
         contentContainerClassName="gap-5 px-5 pt-4"
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
+        <SegmentedControl
+          options={[
+            { value: "active" as const, label: "Active" },
+            { value: "archived" as const, label: "Archived" },
+          ]}
+          selected={view}
+          onSelect={setView}
+        />
         {visibleEnvironments.length > 0 ? (
           visibleEnvironments.map((environment) => (
             <EnvironmentTasks
               key={environment.environmentId}
+              view={view}
               environment={environment}
               now={now}
               projectIds={
@@ -1397,11 +1409,13 @@ function WebhookScheduleDetails({
 }
 
 function EnvironmentTasks({
+  view,
   environment,
   now,
   projectIds,
   onEdit,
 }: {
+  readonly view: "active" | "archived";
   readonly environment: SettingsTarget;
   readonly now: number;
   readonly projectIds: readonly ProjectId[] | null;
@@ -1412,7 +1426,9 @@ function EnvironmentTasks({
     serverEnvironment.scheduledTasksLive({ environmentId, input: {} }),
   );
   const visibleTasks = tasks.data?.tasks.filter(
-    (task) => projectIds === null || projectIds.includes(task.projectId),
+    (task) =>
+      (projectIds === null || projectIds.includes(task.projectId)) &&
+      (task.archivedAt != null) === (view === "archived"),
   );
   const canOperate = useAtomValue(
     serverEnvironment.upsertScheduledTask.permissionAtom(environmentId),
@@ -1436,15 +1452,22 @@ function EnvironmentTasks({
     }
   };
 
-  const act = async (task: ScheduledTask, action: "run" | "toggle" | "delete") => {
+  const act = async (task: ScheduledTask, action: "run" | "toggle" | "restore" | "delete") => {
     if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return;
+    if (action === "restore" && scheduledTaskRestoreNeedsEditor(task, now)) {
+      onEdit(task);
+      return;
+    }
     const result =
       action === "run"
         ? await runNow({ environmentId, input: { id: task.id } })
-        : action === "toggle"
+        : action === "toggle" || action === "restore"
           ? await setEnabled({ environmentId, input: { id: task.id, enabled: !task.enabled } })
           : await remove({ environmentId, input: { id: task.id } });
-    failure(`Could not ${action === "toggle" ? "update" : action} task`, result);
+    failure(
+      `Could not ${action === "toggle" || action === "restore" ? "update" : action} task`,
+      result,
+    );
   };
 
   return (
@@ -1466,7 +1489,11 @@ function EnvironmentTasks({
         <Text className="p-4 text-base text-foreground-muted">Loading tasks…</Text>
       ) : visibleTasks?.length === 0 ? (
         <Text className="p-4 text-base text-foreground-muted">
-          {projectIds === null ? "No scheduled tasks yet." : "No tasks in this project."}
+          {view === "archived"
+            ? "No archived tasks."
+            : projectIds === null
+              ? "No scheduled tasks yet."
+              : "No tasks in this project."}
         </Text>
       ) : (
         visibleTasks?.map((task, index) => (
@@ -1491,11 +1518,13 @@ function EnvironmentTasks({
               </Text>
               <Text className="text-sm text-foreground-muted" numberOfLines={2}>
                 {describeSchedule(task, tasks.data?.timeZone)}
-                {!task.enabled
-                  ? " · Paused"
-                  : task.nextRunAt
-                    ? ` · ${formatNextScheduledTaskRun(task.nextRunAt, now)}`
-                    : ""}
+                {task.archivedAt != null
+                  ? ` · ${formatScheduledTaskArchive(task)}`
+                  : !task.enabled
+                    ? " · Paused"
+                    : task.nextRunAt
+                      ? ` · ${formatNextScheduledTaskRun(task.nextRunAt, now)}`
+                      : ""}
               </Text>
               {task.blockedByPolicy ? (
                 <Text className="text-sm text-foreground-muted" numberOfLines={2}>
@@ -1514,12 +1543,14 @@ function EnvironmentTasks({
                 ...(task.threadId !== null && scheduledTaskThreadMode(task) !== "new_thread"
                   ? [{ id: "thread", title: "Open thread" }]
                   : []),
-                {
-                  id: "toggle",
-                  title: task.enabled ? "Pause" : "Resume",
-                  attributes: { disabled: !canOperate },
-                },
-                ...(task.schedule.type === "webhook"
+                task.archivedAt != null
+                  ? { id: "restore", title: "Restore", attributes: { disabled: !canOperate } }
+                  : {
+                      id: "toggle",
+                      title: task.enabled ? "Pause" : "Resume",
+                      attributes: { disabled: !canOperate },
+                    },
+                ...(task.schedule.type === "webhook" || task.archivedAt != null
                   ? []
                   : [{ id: "run", title: "Run now", attributes: { disabled: !canOperate } }]),
                 {
@@ -1549,7 +1580,7 @@ function EnvironmentTasks({
                       onPress: () => void act(task, "delete"),
                     },
                   ]);
-                } else if (action === "toggle" || action === "run") {
+                } else if (action === "toggle" || action === "restore" || action === "run") {
                   void act(task, action);
                 }
               }}

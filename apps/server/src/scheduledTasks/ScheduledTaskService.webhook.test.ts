@@ -2230,3 +2230,108 @@ it.effect("filters run before replay and coalescing without claiming ignored del
     { workers },
   );
 });
+
+const CLEANUP_DAY_MS = 86_400_000;
+
+it.effect("an archived webhook keeps its URL and accepts deliveries again once restored", () =>
+  withService(
+    ({ service, launches }) =>
+      Effect.gen(function* () {
+        const { task } = yield* service.upsert(yield* webhookTaskInput());
+        yield* TestClock.adjust(29 * CLEANUP_DAY_MS);
+        yield* service.cleanupStale();
+        assert.isUndefined((yield* service.list()).tasks[0]?.archivedAt);
+        yield* TestClock.adjust(CLEANUP_DAY_MS);
+        yield* service.cleanupStale();
+        const [archived] = (yield* service.list()).tasks;
+        assert.equal(archived?.archiveReason, "webhook_unused");
+        assert.isFalse(archived?.enabled);
+        assert.equal(archived?.webhook?.path, task.webhook?.path);
+        assert.equal((yield* service.triggerWebhook(requestFor(task)))._tag, "disabled");
+
+        const restored = yield* service.setEnabled({ id: task.id, enabled: true });
+        assert.isUndefined(restored.task.archivedAt);
+        assert.equal(restored.task.webhook?.path, task.webhook?.path);
+        assert.equal((yield* service.triggerWebhook(requestFor(task)))._tag, "accepted");
+        yield* Queue.take(launches);
+      }),
+    { workers: new Map() },
+  ),
+);
+
+it.effect("deletes an archived task and its deliveries 30 days after archiving it", () =>
+  withService(
+    ({ service, sql }) =>
+      Effect.gen(function* () {
+        const { task } = yield* service.upsert(yield* webhookTaskInput({ enabled: false }));
+        // A rejected delivery restarts the unused-webhook clock.
+        yield* TestClock.adjust(20 * CLEANUP_DAY_MS);
+        assert.equal((yield* service.triggerWebhook(requestFor(task)))._tag, "disabled");
+        yield* TestClock.adjust(20 * CLEANUP_DAY_MS);
+        yield* service.cleanupStale();
+        assert.isUndefined((yield* service.list()).tasks[0]?.archivedAt);
+        yield* TestClock.adjust(10 * CLEANUP_DAY_MS);
+        yield* service.cleanupStale();
+        assert.equal((yield* service.list()).tasks[0]?.archiveReason, "webhook_unused");
+
+        yield* TestClock.adjust(30 * CLEANUP_DAY_MS - 1);
+        yield* service.cleanupStale();
+        assert.equal((yield* service.list()).tasks.length, 1);
+        yield* TestClock.adjust(1);
+        yield* service.cleanupStale();
+        assert.equal((yield* service.list()).tasks.length, 0);
+        const deliveries = yield* sql`
+        SELECT 1 FROM scheduled_task_webhook_deliveries WHERE task_id = ${task.id}
+      `;
+        assert.equal(deliveries.length, 0);
+      }),
+    { workers: new Map() },
+  ),
+);
+
+it.effect("a webhook restored while the sweep is about to delete it still runs its delivery", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const sweepPaused = yield* Deferred.make<void>();
+    const resumeSweep = yield* Deferred.make<void>();
+    let pauseNextTransaction = false;
+    // The delete is the sweep's only transaction, so this pauses it right before deleting.
+    const pausingSql = new Proxy(sql, {
+      get(target, key, receiver) {
+        if (key !== "withTransaction") return Reflect.get(target, key, receiver);
+        return <A, E, R>(work: Effect.Effect<A, E, R>) =>
+          Effect.gen(function* () {
+            if (pauseNextTransaction) {
+              pauseNextTransaction = false;
+              yield* Deferred.succeed(sweepPaused, undefined);
+              yield* Deferred.await(resumeSweep);
+            }
+            return yield* sql.withTransaction(work);
+          });
+      },
+    });
+    yield* withServiceOn(
+      pausingSql,
+      ({ service, launches }) =>
+        Effect.gen(function* () {
+          const { task } = yield* service.upsert(yield* webhookTaskInput({ enabled: false }));
+          yield* TestClock.adjust(30 * CLEANUP_DAY_MS);
+          yield* service.cleanupStale();
+          assert.equal((yield* service.list()).tasks[0]?.archiveReason, "webhook_unused");
+          yield* TestClock.adjust(30 * CLEANUP_DAY_MS);
+          pauseNextTransaction = true;
+          const sweep = yield* service.cleanupStale().pipe(Effect.forkChild);
+          yield* Deferred.await(sweepPaused);
+
+          yield* service.setEnabled({ id: task.id, enabled: true });
+          assert.equal((yield* service.triggerWebhook(requestFor(task)))._tag, "accepted");
+          yield* service.awaitWebhookDeliveries;
+          assert.equal(yield* Queue.size(launches), 1);
+          yield* Deferred.succeed(resumeSweep, undefined);
+          yield* Fiber.join(sweep);
+          assert.equal((yield* service.list()).tasks.length, 1);
+        }),
+      { workers: new Map() },
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);

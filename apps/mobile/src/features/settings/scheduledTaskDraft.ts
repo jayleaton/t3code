@@ -322,7 +322,8 @@ export function editDraft(task: ScheduledTask): ScheduledTaskDraft {
       task.workspaceStrategy.type === "existing_worktree"
         ? task.workspaceStrategy.worktreePath
         : "",
-    enabled: task.enabled,
+    // Saving restores an archived task, so it opens ready to run again.
+    enabled: task.enabled || task.archivedAt != null,
     startFromOrigin:
       task.workspaceStrategy.type === "worktree"
         ? (task.workspaceStrategy.startFromOrigin ?? false)

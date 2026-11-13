@@ -17,6 +17,7 @@ import {
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { cn } from "../../lib/utils";
 import { ScheduledRelativeLabel } from "../settings/ScheduledTasksSettings";
+import { isScheduledTaskArchived } from "@t3tools/client-runtime/scheduled-task-archive";
 import { scheduleLabel } from "../settings/scheduledTasksSettings.logic";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -78,7 +79,7 @@ export function ThreadAutomationsPanel(props: {
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
 
   const boundTasks = (tasksQuery.data?.tasks ?? []).filter(
-    (task) => task.threadId === props.threadId,
+    (task) => task.threadId === props.threadId && !isScheduledTaskArchived(task),
   );
 
   if (tasksQuery.error === null && boundTasks.length === 0) return null;

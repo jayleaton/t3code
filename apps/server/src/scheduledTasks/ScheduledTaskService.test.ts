@@ -926,3 +926,303 @@ it.effect("a run interrupted right after it reserves the task does not block the
     }).pipe(Effect.provide(layer));
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
+
+const DAY_MS = 86_400_000;
+const CLEANUP_T0 = Date.parse("2026-11-01T00:00:00.000Z");
+const cleanupProject = ProjectId.make("project:test");
+
+const cleanupLayer = (mocks: {
+  readonly launch?: ThreadLaunchService.ThreadLaunchService["Service"]["launch"];
+  readonly getThreadShell?: ThreadManagementService.ThreadManagementService["Service"]["getThreadShell"];
+}) =>
+  ScheduledTaskService.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        ScheduledTaskTestkit.layerLocalProjects(),
+        ManagedPolicy.layerTest(),
+        Layer.mock(ThreadLaunchService.ThreadLaunchService)(
+          mocks.launch === undefined ? {} : { launch: mocks.launch },
+        ),
+        Layer.mock(ThreadManagementService.ThreadManagementService)(
+          mocks.getThreadShell === undefined ? {} : { getThreadShell: mocks.getThreadShell },
+        ),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+          namedProjectsRoot: "/projects",
+          isScratchProject: () => Effect.succeed(false),
+        }),
+        NodeCrypto.layer,
+        Layer.succeed(Scheduler.Scheduler, { register: () => Effect.void }),
+      ),
+    ),
+  );
+
+const cleanupInput = (id: string, overrides: Partial<ScheduledTaskUpsertInput> = {}) =>
+  ({
+    id: ScheduledTaskId.make(id),
+    title: id,
+    prompt: "Check in",
+    enabled: true,
+    schedule: { type: "interval", everyMs: 3_600_000 },
+    projectId: cleanupProject,
+    workspaceStrategy: { type: "root" },
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    ...overrides,
+  }) satisfies ScheduledTaskUpsertInput;
+
+const cleanupColumns = (id: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const [row] = yield* sql<{
+      archived_at: string | null;
+      archive_reason: string | null;
+      failing_since: string | null;
+      consecutive_failures: number;
+    }>`SELECT archived_at, archive_reason, failing_since, consecutive_failures
+       FROM scheduled_tasks WHERE task_id = ${id}`;
+    return row;
+  });
+
+it.effect("the sweep archives stale tasks, and restoring or editing one clears the archive", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(CLEANUP_T0);
+    const boundThread = ThreadId.make("thread:bound");
+    const threadArchived = yield* Ref.make(false);
+    const layer = cleanupLayer({
+      getThreadShell: () =>
+        Ref.get(threadArchived).pipe(
+          Effect.map((archived) =>
+            threadShell(cleanupProject, {
+              archivedAt: archived ? (DateTime.makeUnsafe(CLEANUP_T0) as never) : null,
+            }),
+          ),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      yield* service.upsert(cleanupInput("task:paused", { enabled: false }));
+      yield* service.upsert(cleanupInput("task:active"));
+      yield* TestClock.setTime(CLEANUP_T0 + 5 * DAY_MS);
+      yield* service.upsert(cleanupInput("task:bound", { enabled: false, threadId: boundThread }));
+      yield* Ref.set(threadArchived, true);
+
+      yield* TestClock.setTime(CLEANUP_T0 + 10 * DAY_MS - 1);
+      yield* service.cleanupStale();
+      assert.isTrue((yield* service.list()).tasks.every((task) => task.archivedAt === undefined));
+
+      yield* TestClock.setTime(CLEANUP_T0 + 10 * DAY_MS);
+      yield* service.cleanupStale();
+      const archivedAt = DateTime.formatIso(DateTime.makeUnsafe(CLEANUP_T0 + 10 * DAY_MS));
+      const byId = new Map((yield* service.list()).tasks.map((task) => [task.id, task]));
+      assert.deepEqual(
+        [...byId.values()]
+          .map((task) => [task.id, task.enabled, task.archivedAt, task.archiveReason])
+          .sort(),
+        [
+          ["task:active", true, undefined, undefined],
+          ["task:bound", false, archivedAt, "thread_archived"],
+          ["task:paused", false, archivedAt, "paused"],
+        ],
+      );
+
+      const restored = yield* service.setEnabled({
+        id: ScheduledTaskId.make("task:paused"),
+        enabled: true,
+      });
+      assert.isTrue(restored.task.enabled);
+      assert.isUndefined(restored.task.archivedAt);
+      assert.isUndefined(restored.task.archiveReason);
+      const edited = yield* service.upsert(
+        cleanupInput("task:bound", { title: "Renamed", enabled: false, threadId: boundThread }),
+      );
+      assert.isUndefined(edited.task.archivedAt);
+      assert.isNull((yield* cleanupColumns("task:bound"))?.archived_at);
+    }).pipe(Effect.provide(layer));
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect(
+  "counts consecutive failed runs, resets them on success and archives a failing task",
+  () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(CLEANUP_T0);
+      const fail = yield* Ref.make(true);
+      const layer = cleanupLayer({
+        launch: () =>
+          Ref.get(fail).pipe(
+            Effect.flatMap((failing) =>
+              failing
+                ? Effect.die(new Error("launch failed"))
+                : Effect.succeed({ threadId: ThreadId.make("thread:ok"), resumed: false } as never),
+            ),
+          ),
+      });
+      yield* Effect.gen(function* () {
+        const service = yield* ScheduledTaskService.ScheduledTaskService;
+        const id = ScheduledTaskId.make("task:failing");
+        yield* service.upsert(cleanupInput(id));
+        const runAt = (days: number) =>
+          TestClock.setTime(CLEANUP_T0 + days * DAY_MS).pipe(
+            Effect.andThen(service.runNow({ id })),
+          );
+        yield* runAt(0);
+        yield* runAt(1);
+        assert.deepEqual(yield* cleanupColumns(id), {
+          archived_at: null,
+          archive_reason: null,
+          failing_since: DateTime.formatIso(DateTime.makeUnsafe(CLEANUP_T0)),
+          consecutive_failures: 2,
+        });
+        yield* Ref.set(fail, false);
+        yield* runAt(2);
+        assert.equal((yield* cleanupColumns(id))?.consecutive_failures, 0);
+        assert.isNull((yield* cleanupColumns(id))?.failing_since);
+
+        yield* Ref.set(fail, true);
+        yield* runAt(3);
+        yield* runAt(8);
+        yield* runAt(12);
+        yield* service.cleanupStale();
+        assert.isNull((yield* cleanupColumns(id))?.archived_at);
+        yield* TestClock.setTime(CLEANUP_T0 + 13 * DAY_MS);
+        yield* service.cleanupStale();
+        assert.equal((yield* cleanupColumns(id))?.archive_reason, "failing");
+
+        yield* service.setEnabled({ id, enabled: true });
+        assert.deepEqual(yield* cleanupColumns(id), {
+          archived_at: null,
+          archive_reason: null,
+          failing_since: null,
+          consecutive_failures: 0,
+        });
+      }).pipe(Effect.provide(layer));
+    }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("the sweep skips a task while it runs", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(CLEANUP_T0);
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const layer = cleanupLayer({
+      launch: () =>
+        Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as({ threadId: ThreadId.make("thread:slow"), resumed: false } as never),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      const id = ScheduledTaskId.make("task:running");
+      yield* service.upsert(cleanupInput(id, { enabled: false }));
+      yield* TestClock.setTime(CLEANUP_T0 + 11 * DAY_MS);
+      const run = yield* service.runNow({ id }).pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* service.cleanupStale();
+      assert.isNull((yield* cleanupColumns(id))?.archived_at);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(run);
+    }).pipe(Effect.provide(layer));
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("the sweep keeps an archived task whose run starts after the sweep read it", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(CLEANUP_T0);
+    const sweepPaused = yield* Deferred.make<void>();
+    const resumeSweep = yield* Deferred.make<void>();
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const pauseSweep = yield* Ref.make(false);
+    const layer = cleanupLayer({
+      getThreadShell: () =>
+        Effect.gen(function* () {
+          if (yield* Ref.get(pauseSweep)) {
+            yield* Deferred.succeed(sweepPaused, undefined);
+            yield* Deferred.await(resumeSweep);
+          }
+          return threadShell(cleanupProject);
+        }),
+      launch: () =>
+        Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as({ threadId: ThreadId.make("thread:manual"), resumed: false } as never),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      const id = ScheduledTaskId.make("task:archived");
+      yield* service.upsert(cleanupInput(id, { enabled: false }));
+      yield* TestClock.setTime(CLEANUP_T0 + 10 * DAY_MS);
+      yield* service.cleanupStale();
+      yield* TestClock.setTime(CLEANUP_T0 + 41 * DAY_MS);
+      // A bound task read after the archived one pauses the sweep on its thread lookup.
+      yield* service.upsert(
+        cleanupInput("task:bound", { threadId: ThreadId.make("thread:bound") }),
+      );
+      yield* Ref.set(pauseSweep, true);
+      const sweep = yield* service.cleanupStale().pipe(Effect.forkChild);
+      yield* Deferred.await(sweepPaused);
+      const run = yield* service.runNow({ id }).pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* Deferred.succeed(resumeSweep, undefined);
+      yield* Fiber.join(sweep);
+      assert.isDefined((yield* service.list()).tasks.find((task) => task.id === id));
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(run);
+    }).pipe(Effect.provide(layer));
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect(
+  "a run does not start on a task deleted and recreated under its id after it read it",
+  () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(CLEANUP_T0);
+      const sql = yield* SqlClient.SqlClient;
+      const startPaused = yield* Deferred.make<void>();
+      const resumeStart = yield* Deferred.make<void>();
+      let launches = 0;
+      // Pauses the run's start UPDATE, after it has read the task.
+      const pausingSql = new Proxy(sql, {
+        apply(target, thisArg, args: [TemplateStringsArray, ...Array<unknown>]) {
+          const statement: ReturnType<SqlClient.SqlClient["unsafe"]> = Reflect.apply(
+            target,
+            thisArg,
+            args,
+          );
+          return args[0].join("").includes("last_run_webhook_delivery_id = ")
+            ? Deferred.succeed(startPaused, undefined).pipe(
+                Effect.andThen(Deferred.await(resumeStart)),
+                Effect.andThen(statement),
+              )
+            : statement;
+        },
+      });
+      const layer = cleanupLayer({
+        launch: () =>
+          Effect.sync(() => {
+            launches += 1;
+            return { threadId: ThreadId.make("thread:old-run"), resumed: false } as never;
+          }),
+      });
+      yield* Effect.gen(function* () {
+        const service = yield* ScheduledTaskService.ScheduledTaskService;
+        const id = ScheduledTaskId.make("task:recreated");
+        yield* service.upsert(cleanupInput(id, { enabled: false }));
+        const run = yield* service.runNow({ id }).pipe(Effect.exit, Effect.forkChild);
+        yield* Deferred.await(startPaused);
+        yield* service.delete({ id });
+        yield* TestClock.adjust(1);
+        yield* service.upsert(cleanupInput(id, { enabled: false }));
+        yield* Deferred.succeed(resumeStart, undefined);
+        assert.isTrue(Exit.isFailure(yield* Fiber.join(run)));
+        assert.equal(launches, 0);
+        const [replacement] = (yield* service.list()).tasks;
+        assert.equal(replacement?.lastRunStatus, "never");
+        assert.equal(replacement?.runCount, 0);
+      }).pipe(Effect.provide(layer), Effect.provideService(SqlClient.SqlClient, pausingSql));
+    }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
