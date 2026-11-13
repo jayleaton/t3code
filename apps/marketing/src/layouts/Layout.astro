@@ -4,12 +4,7 @@ import appIcon from "../assets/icon.webp";
 import socialCard from "../assets/social-card.webp";
 import "@fontsource-variable/inter";
 import { APP_NAME } from "@t3tools/shared/branding";
-import {
-  ANDROID_PLAY_STORE_URL,
-  GITHUB_REPOSITORY_URL,
-  IOS_APP_STORE_URL,
-  MARKETING_STATS,
-} from "../lib/site";
+import { GITHUB_REPOSITORY_URL, MARKETING_STATS } from "../lib/site";
 import { type JsonLd, jsonLdGraph, organizationJsonLd, websiteJsonLd } from "../lib/seo";
 import { messagesFor } from "../i18n";
 import {
@@ -178,8 +173,6 @@ const canonicalUrl = new URL(Astro.url.pathname, Astro.site);
           <div class="footer-links">
             <a href={GITHUB_REPOSITORY_URL} target="_blank" rel="noopener noreferrer">GitHub</a>
             <a href={downloadHref}>{t.download}</a>
-            <a href={IOS_APP_STORE_URL} target="_blank" rel="noopener noreferrer">{t.iosApp}</a>
-            <a href={ANDROID_PLAY_STORE_URL} target="_blank" rel="noopener noreferrer">{t.androidApp}</a>
             <a href="/terms-of-service">{t.terms}</a>
             <a href="/privacy-policy">{t.privacy}</a>
             <a href="/security-policy">{t.security}</a>

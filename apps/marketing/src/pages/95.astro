@@ -1,7 +1,7 @@
 ---
 import RetroIcon from "../components/RetroIcon.astro";
 import RetroBox from "../components/RetroBox.astro";
-import { GITHUB_REPOSITORY_URL, MARKETING_STATS } from "../lib/site";
+import { GITHUB_REPOSITORY_URL } from "../lib/site";
 import "../styles/retro.css";
 
 const agents = [
@@ -42,7 +42,6 @@ const agents = [
     artwork: "Blue and violet software box with a floating chrome triangle and metallic spheres.",
   },
 ];
-const userDigits = MARKETING_STATS.users.replaceAll(",", "").padStart(7, "0").split("");
 ---
 
 <!doctype html>
@@ -175,14 +174,13 @@ const userDigits = MARKETING_STATS.users.replaceAll(",", "").padStart(7, "0").sp
 
           <section class="faq-section" aria-labelledby="faq-title">
             <h2 id="faq-title">Questions</h2>
-            <details><summary>Wait. Is this a real product?</summary><p>Yes. Ada is a real, free, open-source app used by {MARKETING_STATS.users} developers. The packaging is a joke. The app is not. <a href="/">Visit the regular website.</a></p></details>
+            <details><summary>Wait. Is this a real product?</summary><p>Yes. Ada is a real, free, open-source app. The packaging is a joke. The app is not. <a href="/">Visit the regular website.</a></p></details>
             <details><summary>Does this replace my Claude or Codex subscription?</summary><p>No. Ada connects to the coding agents you already use. Keep your provider accounts and subscriptions. Ada gives you one app to work with them.</p></details>
             <details><summary>Will it run on Windows 95?</summary><p>Absolutely not. We brought back the look, not the driver problems. <a href="/download">Get a build for a current version of Windows, macOS, or Linux.</a></p></details>
             <details><summary>Where do I mail my check?</summary><p>Please do not mail us a check for zero dollars. Just download the app. The entire accounts department is a download button.</p></details>
           </section>
 
           <footer class="site-footer">
-            <div class="visitor-counter"><div class="counter-digits" aria-label={`${MARKETING_STATS.users} users`}>{userDigits.map((digit) => <span aria-hidden="true">{digit}</span>)}</div><span>developers use Ada.</span></div>
             <p>© {new Date().getFullYear()} Ada.</p>
             <nav aria-label="Footer"><a href="/">Back to the present</a><a href={GITHUB_REPOSITORY_URL}>GitHub</a><a href="/privacy-policy">Privacy</a><a href="/terms-of-service">Terms</a></nav>
           </footer>

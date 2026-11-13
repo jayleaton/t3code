@@ -1,4 +1,4 @@
-import { APP_NAME } from "@t3tools/shared/branding";
+import { APP_NAME, APP_SLOGAN } from "@t3tools/shared/branding";
 import type { Messages } from "./en";
 
 export const zh: Messages = {
@@ -12,28 +12,21 @@ export const zh: Messages = {
     githubStars: "{stars} GitHub 星标",
     language: "语言",
     mitLicensed: "MIT 许可",
-    iosApp: "iOS 应用",
-    androidApp: "Android 应用",
     terms: "条款",
     privacy: "隐私",
     security: "安全",
   },
   home: {
-    title: `${APP_NAME} | 面向编程智能体的开源控制中心`,
+    title: `${APP_NAME} | ${APP_SLOGAN}`,
     description: `${APP_NAME}：面向编程智能体的开源控制中心。`,
-    heroTitle: ["开源的", "编程智能体", "控制中心。"],
+    heroTitle: [APP_SLOGAN],
     heroSub:
       "在同一个界面里调度 Claude Code、Codex、Antigravity、OpenCode、Cursor 和 Grok。用你自己的订阅。整个项目都可以 fork。",
     downloadForMac: "下载 macOS 版",
     downloadForWindows: "下载 Windows 版",
     downloadForLinux: "下载 Linux 版",
     sourceLink: "来偷我们的代码（合法的）",
-    alsoOnPhone: "手机上也能用：",
     screenshotAlt: `${APP_NAME} 在同一个线程中运行 Claude、Codex、Muse 和 Gemini 子智能体`,
-    endorsementsTitle: "超过 {users} 名开发者表示还能忍",
-    endorsementsSub: "有些人甚至发推夸了它。",
-    endorsementsLabel: "开发者评价",
-    readPost: "在 X 上阅读 {handle} 的帖子",
     harnessTitle: "自带订阅",
     harnessBody: `${APP_NAME} 不转售 token。用你现有的凭据接入 Claude Code、Codex、Antigravity、OpenCode、Cursor 或 Grok。我们负责调度，你的套餐还是你的。`,
     googleSignIn: "Google 登录",
@@ -72,7 +65,7 @@ export const zh: Messages = {
   },
   download: {
     title: `下载 ${APP_NAME}：macOS、Windows 和 Linux 版 | ${APP_NAME}`,
-    description: `下载 ${APP_NAME} 官方桌面应用（macOS、Windows 或 Linux），或获取 iOS 和 Android 应用。`,
+    description: `下载 ${APP_NAME} 官方桌面应用（macOS、Windows 或 Linux）。`,
     breadcrumb: "下载",
     heading: `下载 ${APP_NAME}`,
     channelLabel: "发布通道",
@@ -81,8 +74,6 @@ export const zh: Messages = {
     intelNote: "使用 Intel 芯片的 Mac？{link}。",
     intelLink: "下载 x64 版本",
     armNote: "ARM 架构？下载 arm64 版 {deb} 或 {appimage}。",
-    mobile: "移动端",
-    iphoneIpad: "iPhone 和 iPad",
     terminal: "终端",
     allBuilds: "所有版本都在 {link}上",
     releasesPage: "GitHub 发布页面",

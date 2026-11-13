@@ -8,6 +8,12 @@ export const APP_NAME = "Ada";
 export const APP_FULL_NAME = "Agentic Desktop Application";
 export const APP_SLOGAN = "Engineering is better with Agents.";
 
+// null hides the store buttons and QR codes until Ada has its own listing.
+export const MOBILE_APP_STORE_LINKS: {
+  readonly ios: string | null;
+  readonly android: string | null;
+} = { ios: null, android: null };
+
 /**
  * The upstream app this fork installs beside and protects (shared profile, installer guards).
  * Use it only where the copy names that other product, never for this app.

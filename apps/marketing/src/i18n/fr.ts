@@ -1,4 +1,4 @@
-import { APP_NAME } from "@t3tools/shared/branding";
+import { APP_NAME, APP_SLOGAN } from "@t3tools/shared/branding";
 import type { Messages } from "./en";
 
 export const fr: Messages = {
@@ -12,28 +12,21 @@ export const fr: Messages = {
     githubStars: "{stars} étoiles sur GitHub",
     language: "Langue",
     mitLicensed: "Licence MIT",
-    iosApp: "App iOS",
-    androidApp: "App Android",
     terms: "Conditions",
     privacy: "Confidentialité",
     security: "Sécurité",
   },
   home: {
-    title: `${APP_NAME} | Le poste de pilotage open source pour agents de codage`,
+    title: `${APP_NAME} | ${APP_SLOGAN}`,
     description: `${APP_NAME}. Le poste de pilotage open source pour agents de codage.`,
-    heroTitle: ["Le poste de pilotage", "open source", "pour agents de codage."],
+    heroTitle: [APP_SLOGAN],
     heroSub:
       "Orchestrez Claude Code, Codex, Antigravity, OpenCode, Cursor et Grok depuis une seule interface. Utilisez votre propre abonnement. Forkez tout le projet.",
     downloadForMac: "Télécharger pour macOS",
     downloadForWindows: "Télécharger pour Windows",
     downloadForLinux: "Télécharger pour Linux",
     sourceLink: "Volez notre code (légalement)",
-    alsoOnPhone: "Aussi sur votre téléphone :",
     screenshotAlt: `${APP_NAME} exécutant des sous-agents Claude, Codex, Muse et Gemini dans un même fil`,
-    endorsementsTitle: "Toléré par plus de {users} devs",
-    endorsementsSub: "Certains en ont même parlé sur X.",
-    endorsementsLabel: "Avis de développeurs",
-    readPost: "Lire le post de {handle} sur X",
     harnessTitle: "Apportez votre abonnement",
     harnessBody: `${APP_NAME} ne revend pas de tokens. Branchez Claude Code, Codex, Antigravity, OpenCode, Cursor ou Grok avec les identifiants que vous avez déjà. Nous les orchestrons, vous gardez votre abonnement.`,
     googleSignIn: "Connexion Google",
@@ -75,7 +68,7 @@ export const fr: Messages = {
   },
   download: {
     title: `Télécharger ${APP_NAME} pour macOS, Windows et Linux | ${APP_NAME}`,
-    description: `Téléchargez l'app de bureau officielle ${APP_NAME} pour macOS, Windows ou Linux, ou les apps iOS et Android.`,
+    description: `Téléchargez l'app de bureau officielle ${APP_NAME} pour macOS, Windows ou Linux.`,
     breadcrumb: "Télécharger",
     heading: `Télécharger ${APP_NAME}`,
     channelLabel: "Canal de publication",
@@ -84,8 +77,6 @@ export const fr: Messages = {
     intelNote: "Sur un Mac Intel ? {link}.",
     intelLink: "Téléchargez la version x64",
     armNote: "Sur ARM ? Téléchargez le {deb} ou l'{appimage} arm64.",
-    mobile: "Mobile",
-    iphoneIpad: "iPhone et iPad",
     terminal: "Terminal",
     allBuilds: "Toutes les versions sont sur la {link}",
     releasesPage: "page des releases GitHub",

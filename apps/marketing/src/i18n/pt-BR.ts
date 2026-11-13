@@ -1,4 +1,4 @@
-import { APP_NAME } from "@t3tools/shared/branding";
+import { APP_NAME, APP_SLOGAN } from "@t3tools/shared/branding";
 import type { Messages } from "./en";
 
 export const ptBR: Messages = {
@@ -12,28 +12,21 @@ export const ptBR: Messages = {
     githubStars: "{stars} estrelas no GitHub",
     language: "Idioma",
     mitLicensed: "Licença MIT",
-    iosApp: "App para iOS",
-    androidApp: "App para Android",
     terms: "Termos",
     privacy: "Privacidade",
     security: "Segurança",
   },
   home: {
-    title: `${APP_NAME} | O painel de controle open source para agentes de programação`,
+    title: `${APP_NAME} | ${APP_SLOGAN}`,
     description: `${APP_NAME}. O painel de controle open source para agentes de programação.`,
-    heroTitle: ["O painel de controle", "open source para", "agentes de código."],
+    heroTitle: [APP_SLOGAN],
     heroSub:
       "Orquestre Claude Code, Codex, Antigravity, OpenCode, Cursor e Grok em um só lugar. Use a sua própria assinatura. Faça um fork do projeto inteiro.",
     downloadForMac: "Baixar para macOS",
     downloadForWindows: "Baixar para Windows",
     downloadForLinux: "Baixar para Linux",
     sourceLink: "Roube nosso código (legalmente)",
-    alsoOnPhone: "Também no seu celular:",
     screenshotAlt: `${APP_NAME} executando subagentes do Claude, Codex, Muse e Gemini em uma mesma thread`,
-    endorsementsTitle: "Tolerado por mais de {users} devs",
-    endorsementsSub: "Alguns até tuitaram sobre isso.",
-    endorsementsLabel: "Depoimentos de desenvolvedores",
-    readPost: "Ler o post de {handle} no X",
     harnessTitle: "Traga sua própria assinatura",
     harnessBody: `O ${APP_NAME} não revende tokens. Conecte Claude Code, Codex, Antigravity, OpenCode, Cursor ou Grok com as credenciais que você já tem. Nós orquestramos, você mantém seu plano.`,
     googleSignIn: "Login com Google",
@@ -75,7 +68,7 @@ export const ptBR: Messages = {
   },
   download: {
     title: `Baixe o ${APP_NAME} para macOS, Windows e Linux | ${APP_NAME}`,
-    description: `Baixe o app oficial de desktop do ${APP_NAME} para macOS, Windows ou Linux, ou os apps para iOS e Android.`,
+    description: `Baixe o app oficial de desktop do ${APP_NAME} para macOS, Windows ou Linux.`,
     breadcrumb: "Baixar",
     heading: `Baixar o ${APP_NAME}`,
     channelLabel: "Canal de versões",
@@ -84,8 +77,6 @@ export const ptBR: Messages = {
     intelNote: "Tem um Mac com Intel? {link}.",
     intelLink: "Baixe a versão x64",
     armNote: "Usa ARM? Baixe o {deb} ou o {appimage} para arm64.",
-    mobile: "Mobile",
-    iphoneIpad: "iPhone e iPad",
     terminal: "Terminal",
     allBuilds: "Todas as versões estão na {link}",
     releasesPage: "página de releases do GitHub",

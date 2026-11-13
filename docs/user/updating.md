@@ -189,7 +189,8 @@ there before refreshing to find newer versions. The same setting controls whethe
 Ada downloads model catalog updates, so with it off new models may not appear
 until you enable it and refresh provider status.
 
-Install App Store or Google Play releases as usual. The mobile app can also
+Ada's mobile app is not in the App Store or Google Play yet, so install test
+builds as described in [Mobile app](./install.md#mobile-app). The mobile app can also
 download updates in the background and apply them when you next leave the app.
 It saves drafts and queued messages before restarting. If you keep the app open
 for a long time, it may ask to install immediately; choosing **Later** leaves the

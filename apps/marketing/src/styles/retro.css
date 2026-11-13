@@ -657,33 +657,6 @@ a.feature-tag {
   text-align: center;
   border-top: 1px solid #363636;
 }
-.visitor-counter {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 12px;
-  font:
-    9px "Courier New",
-    monospace;
-  color: #c0c0c0;
-}
-.counter-digits {
-  display: inline-flex;
-  gap: 2px;
-  padding: 3px;
-  border: 2px inset #666;
-  background: #141414;
-}
-.counter-digits > span {
-  display: block;
-  padding: 2px 4px;
-  background: #252b1a;
-  color: var(--yellow);
-  font:
-    700 15px "Courier New",
-    monospace;
-}
 .site-footer > p {
   color: #b0b0b0;
   font:
@@ -1138,9 +1111,6 @@ a.feature-tag {
   .site-footer {
     margin-left: 20px;
     margin-right: 20px;
-  }
-  .visitor-counter {
-    font-size: 8px;
   }
   .site-footer > p {
     font-size: 8px;

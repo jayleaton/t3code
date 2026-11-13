@@ -4,22 +4,15 @@ import desktopScreenshot from "../../assets/app-desktop.webp";
 import { APP_NAME } from "@t3tools/shared/branding";
 import Layout from "../../layouts/Layout.astro";
 import { RELEASES_URL } from "../../lib/releases";
-import {
-  ANDROID_PLAY_STORE_URL,
-  GITHUB_REPOSITORY_URL,
-  IOS_APP_STORE_URL,
-  MARKETING_STATS,
-} from "../../lib/site";
-import { tweets } from "../../lib/tweets";
+import { GITHUB_REPOSITORY_URL, MARKETING_STATS } from "../../lib/site";
 import { softwareJsonLd } from "../../lib/seo";
 import { messagesFor } from "../../i18n";
-import { fillTemplate, localeStaticPaths, localizedHref, templateParts } from "../../i18n/locales";
+import { fillTemplate, localeStaticPaths, localizedHref } from "../../i18n/locales";
 
 export const getStaticPaths = localeStaticPaths;
 
 const { locale } = Astro.props;
 const t = messagesFor(locale).home;
-const users = new Intl.NumberFormat(locale).format(Number(MARKETING_STATS.users.replaceAll(",", "")));
 
 const screenshot = await getImage({
   src: desktopScreenshot,
@@ -27,17 +20,6 @@ const screenshot = await getImage({
   format: "webp",
   quality: 90,
 });
-
-const desktopEndorsementRows = [
-  tweets.filter((_, index) => index % 2 === 0),
-  tweets.filter((_, index) => index % 2 === 1),
-];
-
-const mobileEndorsementRows = [
-  tweets.filter((_, index) => index % 3 === 0),
-  tweets.filter((_, index) => index % 3 === 1),
-  tweets.filter((_, index) => index % 3 === 2),
-];
 ---
 
 <Layout
@@ -98,12 +80,6 @@ const mobileEndorsementRows = [
           <span>{t.sourceLink}</span>
           <svg class="hero-source-arrow" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17L17 7M8 7h9v9"/></svg>
         </a>
-        <p class="hero-mobile-line">
-          {t.alsoOnPhone}
-          <a href={IOS_APP_STORE_URL} target="_blank" rel="noopener noreferrer">iOS</a>
-          <span aria-hidden="true">·</span>
-          <a href={ANDROID_PLAY_STORE_URL} target="_blank" rel="noopener noreferrer">Android</a>
-        </p>
       </div>
 
       <!-- The rise wrapper is separate so its animated transform does not override the preview tilt. -->
@@ -125,95 +101,6 @@ const mobileEndorsementRows = [
           </figure>
         </div>
       </div>
-    </div>
-  </section>
-
-  <section id="endorsements" class="sec-endorsements" aria-labelledby="endorsements-title">
-    <div class="container">
-      <div class="endorsements-head">
-        <h2 id="endorsements-title">
-          {templateParts(t.endorsementsTitle).map((part) =>
-            typeof part === "string" ? part : <span class="endorsements-count">{users}</span>,
-          )}
-        </h2>
-        <p>{t.endorsementsSub}</p>
-      </div>
-    </div>
-
-    <div class="endorsement-carousel endorsement-carousel--desktop" aria-label={t.endorsementsLabel}>
-        {
-          desktopEndorsementRows.map((row, rowIndex) => (
-            <div class:list={["endorsement-row", rowIndex === 1 && "is-reverse"]}>
-              <div class="endorsement-track">
-                {[0, 1].map((groupIndex) => (
-                  <div class="endorsement-track-group" aria-hidden={groupIndex === 1 ? "true" : undefined}>
-                    {row.map((tweet) => (
-                      <a
-                        class="endorsement-card"
-                        href={tweet.link}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        aria-label={fillTemplate(t.readPost, { handle: tweet.handle })}
-                        tabindex={groupIndex === 1 ? "-1" : undefined}
-                      >
-                        <div class="endorsement-author">
-                          <img
-                            src={`/pfps/${tweet.handle}.webp`}
-                            alt=""
-                            width="28"
-                            height="28"
-                            loading="lazy"
-                            decoding="async"
-                          />
-                          <div class="endorsement-handle">@{tweet.handle}</div>
-                        </div>
-                        <p>{tweet.excerpt ?? tweet.content}</p>
-                      </a>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))
-        }
-    </div>
-
-    <div class="endorsement-carousel endorsement-carousel--mobile" aria-label={t.endorsementsLabel}>
-        {
-          mobileEndorsementRows.map((row, rowIndex) => (
-            <div class:list={["endorsement-row", rowIndex === 1 && "is-reverse"]}>
-              <div class="endorsement-track">
-                {[0, 1].map((groupIndex) => (
-                  <div class="endorsement-track-group" aria-hidden={groupIndex === 1 ? "true" : undefined}>
-                    {row.map((tweet) => (
-                      <a
-                        class="endorsement-card"
-                        href={tweet.link}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        aria-label={fillTemplate(t.readPost, { handle: tweet.handle })}
-                        tabindex={groupIndex === 1 ? "-1" : undefined}
-                      >
-                        <div class="endorsement-author">
-                          <img
-                            src={`/pfps/${tweet.handle}.webp`}
-                            alt=""
-                            width="28"
-                            height="28"
-                            loading="lazy"
-                            decoding="async"
-                          />
-                          <div class="endorsement-handle">@{tweet.handle}</div>
-                        </div>
-                        <p>{tweet.excerpt ?? tweet.content}</p>
-                      </a>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))
-        }
     </div>
   </section>
 
@@ -481,10 +368,9 @@ const mobileEndorsementRows = [
 
   const hero = document.querySelector<HTMLElement>(".hero");
   const field = document.querySelector<HTMLElement>(".hero-float");
-  const tracks = Array.from(document.querySelectorAll<HTMLElement>(".endorsement-track"));
   const caret = document.querySelector<HTMLElement>(".caret");
   if (hero && field && caret) {
-    startHomeMotion({ hero, field, tracks, caret });
+    startHomeMotion({ hero, field, caret });
   }
 </script>
 
@@ -621,28 +507,6 @@ const mobileEndorsementRows = [
   .hero-source-link:hover .hero-source-arrow {
     transform: translate(2px, -2px);
     opacity: 1;
-  }
-
-  .hero-mobile-line {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--fg-muted);
-    font-size: 13px;
-    letter-spacing: -0.005em;
-  }
-
-  .hero-mobile-line a {
-    color: var(--fg-muted);
-    text-decoration: underline;
-    text-decoration-color: rgba(163, 163, 163, 0.4);
-    text-underline-offset: 3px;
-    transition: color 0.18s ease, text-decoration-color 0.18s ease;
-  }
-
-  .hero-mobile-line a:hover {
-    color: var(--fg);
-    text-decoration-color: var(--fg);
   }
 
   .dl-icon {
@@ -826,164 +690,6 @@ const mobileEndorsementRows = [
     color: var(--fg-muted);
   }
   .harness-footer-item svg { color: var(--ok); }
-
-  .sec-endorsements {
-    overflow: hidden;
-  }
-
-  .endorsements-head {
-    max-width: 720px;
-    margin-bottom: 40px;
-  }
-
-  .endorsements-head h2 {
-    font-size: clamp(32px, 4vw, 48px);
-    font-weight: 600;
-    letter-spacing: -0.03em;
-    line-height: 1.05;
-    margin-bottom: 18px;
-  }
-
-  .endorsements-count {
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .endorsements-head p {
-    color: var(--fg-muted);
-    font-size: 18px;
-    max-width: 620px;
-    letter-spacing: -0.005em;
-  }
-
-  /* Two marquee rows scrolling in opposite directions. Each track holds the
-     row twice so a -50% translate loops seamlessly. The animation only runs
-     while a track is on screen (see homeMotion), and pauses on hover/focus. */
-  .endorsement-carousel {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  .endorsement-carousel--mobile {
-    display: none;
-  }
-
-  .endorsement-carousel::before,
-  .endorsement-carousel::after {
-    content: "";
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    z-index: 2;
-    width: max(48px, calc((100vw - 1240px) / 2 + 56px));
-    pointer-events: none;
-  }
-
-  .endorsement-carousel::before {
-    left: 0;
-    background: linear-gradient(90deg, var(--bg), transparent);
-  }
-
-  .endorsement-carousel::after {
-    right: 0;
-    background: linear-gradient(270deg, var(--bg), transparent);
-  }
-
-  .endorsement-row {
-    overflow: hidden;
-  }
-
-  .endorsement-track {
-    width: max-content;
-    display: flex;
-    animation: endorsementMarquee 76s linear infinite;
-    animation-play-state: var(--home-motion-state, paused);
-    will-change: transform;
-  }
-
-  .endorsement-track-group {
-    display: flex;
-    gap: 12px;
-    padding-right: 12px;
-  }
-
-  .endorsement-row.is-reverse .endorsement-track {
-    animation-direction: reverse;
-    animation-duration: 84s;
-  }
-
-  .endorsement-carousel:hover .endorsement-track,
-  .endorsement-carousel:focus-within .endorsement-track {
-    animation-play-state: paused;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .endorsement-track { animation: none; }
-  }
-
-  @keyframes endorsementMarquee {
-    from { transform: translateX(0); }
-    to { transform: translateX(-50%); }
-  }
-
-  .endorsement-card {
-    position: relative;
-    width: clamp(264px, 22vw, 308px);
-    height: 132px;
-    padding: 14px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--bg-elev);
-    transition:
-      border-color 0.18s ease,
-      background 0.18s ease;
-  }
-
-  .endorsement-card:hover {
-    border-color: var(--border-strong);
-    background: rgba(255, 255, 255, 0.03);
-  }
-
-  .endorsement-author {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-  }
-
-  .endorsement-author img {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    object-fit: cover;
-    flex-shrink: 0;
-  }
-
-  .endorsement-handle {
-    color: var(--fg-muted);
-    font-size: 13px;
-    font-weight: 500;
-    letter-spacing: -0.005em;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .endorsement-card p {
-    color: var(--fg);
-    font-size: 13.5px;
-    line-height: 1.4;
-    letter-spacing: -0.003em;
-    display: -webkit-box;
-    overflow: hidden;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 3;
-  }
 
   .git-inner {
     display: grid;
@@ -1235,32 +941,6 @@ const mobileEndorsementRows = [
     section { padding: 56px 0; }
     .sec-cta { padding: 80px 0; }
     .container { padding-left: 20px; padding-right: 20px; }
-    .endorsements-head {
-      margin-bottom: 40px;
-    }
-    .endorsement-carousel--desktop {
-      display: none;
-    }
-    .endorsement-carousel--mobile {
-      display: flex;
-    }
-    .endorsement-carousel::before,
-    .endorsement-carousel::after {
-      width: 28px;
-    }
-    .endorsement-track {
-      animation-duration: 68s;
-    }
-    .endorsement-row.is-reverse .endorsement-track {
-      animation-duration: 76s;
-    }
-    .endorsement-card {
-      width: 268px;
-      padding: 14px;
-    }
-    .endorsement-card p {
-      font-size: 13px;
-    }
     .open-term-body {
       padding: 16px;
       font-size: 11px;

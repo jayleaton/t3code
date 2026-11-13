@@ -1,4 +1,4 @@
-import { APP_NAME } from "@t3tools/shared/branding";
+import { APP_NAME, APP_SLOGAN } from "@t3tools/shared/branding";
 import type { Messages } from "./en";
 
 export const ko: Messages = {
@@ -12,28 +12,21 @@ export const ko: Messages = {
     githubStars: "GitHub 스타 {stars}",
     language: "언어",
     mitLicensed: "MIT 라이선스",
-    iosApp: "iOS 앱",
-    androidApp: "Android 앱",
     terms: "이용약관",
     privacy: "개인정보처리방침",
     security: "보안",
   },
   home: {
-    title: `${APP_NAME} | 코딩 에이전트를 위한 오픈 소스 컨트롤 플레인`,
+    title: `${APP_NAME} | ${APP_SLOGAN}`,
     description: `${APP_NAME}. 코딩 에이전트를 위한 오픈 소스 컨트롤 플레인.`,
-    heroTitle: ["코딩 에이전트용", "오픈 소스", "컨트롤 플레인."],
+    heroTitle: [APP_SLOGAN],
     heroSub:
       "Claude Code, Codex, Antigravity, OpenCode, Cursor, Grok을 한 화면에서 오케스트레이션하세요. 구독은 쓰던 그대로. 통째로 포크하세요.",
     downloadForMac: "macOS용 다운로드",
     downloadForWindows: "Windows용 다운로드",
     downloadForLinux: "Linux용 다운로드",
     sourceLink: "코드 훔쳐 가기(합법적으로)",
-    alsoOnPhone: "휴대폰에서도:",
     screenshotAlt: `하나의 스레드에서 Claude, Codex, Muse, Gemini 서브에이전트를 실행 중인 ${APP_NAME}`,
-    endorsementsTitle: "{users}명이 넘는 개발자가 참고 쓰는 중",
-    endorsementsSub: "몇몇은 트윗까지 했습니다.",
-    endorsementsLabel: "개발자 추천",
-    readPost: "X에서 {handle}님의 게시물 읽기",
     harnessTitle: "쓰던 구독 그대로",
     harnessBody: `${APP_NAME}는 토큰을 되팔지 않습니다. 이미 쓰고 있는 계정으로 Claude Code, Codex, Antigravity, OpenCode, Cursor, Grok을 연결하세요. 오케스트레이션은 저희가, 요금제는 그대로.`,
     googleSignIn: "Google 로그인",
@@ -72,7 +65,7 @@ export const ko: Messages = {
   },
   download: {
     title: `macOS, Windows, Linux용 ${APP_NAME} 다운로드 | ${APP_NAME}`,
-    description: `macOS, Windows, Linux용 공식 ${APP_NAME} 데스크톱 앱을 다운로드하거나 iOS 및 Android 앱을 받으세요.`,
+    description: `macOS, Windows, Linux용 공식 ${APP_NAME} 데스크톱 앱을 다운로드하세요.`,
     breadcrumb: "다운로드",
     heading: `${APP_NAME} 다운로드`,
     channelLabel: "릴리스 채널",
@@ -81,8 +74,6 @@ export const ko: Messages = {
     intelNote: "Intel Mac을 쓰시나요? {link}.",
     intelLink: "x64 빌드 다운로드",
     armNote: "ARM을 쓰시나요? arm64 {deb} 또는 {appimage}를 다운로드하세요.",
-    mobile: "모바일",
-    iphoneIpad: "iPhone & iPad",
     terminal: "터미널",
     allBuilds: "모든 빌드는 {link}에 있습니다",
     releasesPage: "GitHub 릴리스 페이지",

@@ -1,4 +1,4 @@
-import { APP_NAME } from "@t3tools/shared/branding";
+import { APP_NAME, APP_SLOGAN } from "@t3tools/shared/branding";
 import type { Messages } from "./en";
 
 export const de: Messages = {
@@ -12,28 +12,21 @@ export const de: Messages = {
     githubStars: "{stars} GitHub-Sterne",
     language: "Sprache",
     mitLicensed: "MIT-lizenziert",
-    iosApp: "iOS-App",
-    androidApp: "Android-App",
     terms: "Nutzungsbedingungen",
     privacy: "Datenschutz",
     security: "Sicherheit",
   },
   home: {
-    title: `${APP_NAME} | Die Open-Source-Steuerzentrale für Coding-Agents`,
+    title: `${APP_NAME} | ${APP_SLOGAN}`,
     description: `${APP_NAME}. Die Open-Source-Steuerzentrale für Coding-Agents.`,
-    heroTitle: ["Die Open-Source-", "Steuerzentrale", "für Coding-Agents."],
+    heroTitle: [APP_SLOGAN],
     heroSub:
       "Steuere Claude Code, Codex, Antigravity, OpenCode, Cursor und Grok von einer Oberfläche aus. Nutze dein eigenes Abo. Forke das ganze Ding.",
     downloadForMac: "Für macOS herunterladen",
     downloadForWindows: "Für Windows herunterladen",
     downloadForLinux: "Für Linux herunterladen",
     sourceLink: "Klau unseren Code (legal)",
-    alsoOnPhone: "Auch auf deinem Handy:",
     screenshotAlt: `${APP_NAME} führt Subagents von Claude, Codex, Muse und Gemini in einem Thread aus`,
-    endorsementsTitle: "Toleriert von über {users} Devs",
-    endorsementsSub: "Manche haben sogar darüber getwittert.",
-    endorsementsLabel: "Stimmen von Entwicklern",
-    readPost: "Beitrag von {handle} auf X lesen",
     harnessTitle: "Bring dein eigenes Abo mit",
     harnessBody: `${APP_NAME} verkauft keine Tokens weiter. Verbinde Claude Code, Codex, Antigravity, OpenCode, Cursor oder Grok mit den Zugangsdaten, die du schon hast. Wir orchestrieren sie, du behältst dein Abo.`,
     googleSignIn: "Google-Anmeldung",
@@ -75,7 +68,7 @@ export const de: Messages = {
   },
   download: {
     title: `${APP_NAME} für macOS, Windows und Linux herunterladen | ${APP_NAME}`,
-    description: `Lade die offizielle Desktop-App von ${APP_NAME} für macOS, Windows oder Linux herunter, oder hol dir die Apps für iOS und Android.`,
+    description: `Lade die offizielle Desktop-App von ${APP_NAME} für macOS, Windows oder Linux herunter.`,
     breadcrumb: "Download",
     heading: `${APP_NAME} herunterladen`,
     channelLabel: "Release-Kanal",
@@ -84,8 +77,6 @@ export const de: Messages = {
     intelNote: "Mac mit Intel-Chip? {link}.",
     intelLink: "Lade den x64-Build herunter",
     armNote: "Auf ARM? Lade das {deb} oder {appimage} für arm64 herunter.",
-    mobile: "Mobil",
-    iphoneIpad: "iPhone & iPad",
     terminal: "Terminal",
     allBuilds: "Alle Builds findest du auf der {link}",
     releasesPage: "GitHub-Releases-Seite",

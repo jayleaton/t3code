@@ -38,7 +38,7 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "../../appearanceFonts";
-import { MOBILE_APP_URL } from "../../branding";
+import { MOBILE_APP_STORES } from "../../branding";
 import { isElectron } from "../../env";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { usePersistEnvironmentProviderInstanceMutation } from "../../hooks/useSettings";
@@ -133,6 +133,7 @@ export function WelcomePage({
   const isPrimary = usePrimaryEnvironmentId() === environmentId;
   // The same access Settings → Sharing & access checks.
   const showPhone = welcomeOffersPhone({
+    hasStoreListing: MOBILE_APP_STORES.length > 0,
     isPrimary,
     canPair: useEnvironmentScope(environmentId, AuthAccessWriteScope),
     policy: useManagedPolicy(environmentId),
@@ -926,16 +927,17 @@ function PhoneSection() {
                 <PhoneConnectLink />
               </PhoneStep>
             </ol>
-            {/* One code for both stores: the link opens the store that matches the phone. */}
-            <div className="shrink-0 rounded-lg bg-white p-1.5">
-              <QRCodeSvg
-                value={MOBILE_APP_URL}
-                size={124}
-                level="M"
-                marginSize={2}
-                title={`${APP_NAME} app for iPhone and Android`}
-              />
-            </div>
+            {MOBILE_APP_STORES.map(({ store, url }) => (
+              <div key={store} className="shrink-0 rounded-lg bg-white p-1.5">
+                <QRCodeSvg
+                  value={url}
+                  size={124}
+                  level="M"
+                  marginSize={2}
+                  title={`${APP_NAME} on ${store}`}
+                />
+              </div>
+            ))}
           </div>
         </CollapsiblePanel>
       </Collapsible>

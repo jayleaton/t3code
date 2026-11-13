@@ -37,7 +37,7 @@ Your agents run wherever Ada runs: your desktop, a server, a VPS. You connect to
 
 ## How do I use Ada on my phone?
 
-Ada has no store listing yet. Get the T3 Code [iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824) or [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code) app, which pairs with Ada servers, then connect it to your computer with a pairing link over your LAN or Tailscale. The phone is a remote. Your computer does the work and needs to stay on. [Mobile setup](./install.md#mobile-app) · [Remote access](./remote-access.md)
+Ada's mobile app is not in the App Store or Google Play yet. With a test build, connect it to your computer with a pairing link over your LAN or Tailscale. The phone is a remote. Your computer does the work and needs to stay on. [Mobile setup](./install.md#mobile-app) · [Remote access](./remote-access.md)
 
 ## Will I get banned for using my subscription?
 

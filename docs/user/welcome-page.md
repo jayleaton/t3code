@@ -53,8 +53,9 @@ without one. Checked projects are still imported.
 
 ## Phone
 
-Select **Set up** and scan the code with your phone. It opens the App Store on an
-iPhone and Google Play on Android. Then pair the app with a code from
+Ada's mobile app is not in the App Store or Google Play yet, so the welcome page
+does not offer phone setup. To pair a phone running a
+[test build](./install.md#mobile-app), create a code in
 **Settings → Sharing & access**. The phone must reach this computer over your local
 network or Tailscale; see [remote access](./remote-access.md).
 

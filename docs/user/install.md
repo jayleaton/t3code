@@ -141,18 +141,11 @@ command cannot reach the app, start or update the desktop app and try again.
 
 ## Mobile app
 
-Ada has no store listing yet. The T3 Code mobile app on the
-[App Store](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824) or
-[Google Play](https://play.google.com/store/apps/details?id=com.t3tools.t3code)
-pairs with an Ada server. The phone connects to a server on another machine. Follow
-[remote access](./remote-access.md) to pair it with a pairing URL or QR code.
-
-Store links and QR codes are also available in **Settings → About → Mobile app**
-on web and desktop. The store apps work with both stable and Nightly servers. Test builds are optional:
-
-- **iPhone and iPad:** TestFlight is invite-only.
-- **Android:** download an APK from the
-  [Android beta releases](https://github.com/jayleaton/t3code/releases?q=android-beta-).
+Ada's mobile app is not in the App Store or Google Play yet. The phone connects
+to an Ada server on another machine. Follow [remote access](./remote-access.md) to
+pair it with a pairing URL or QR code. Until it is listed, iPhone and iPad test
+builds are available through TestFlight by invitation. There is no public Android
+build yet.
 
 If the app crashes during launch, open Settings → Diagnostics on the next launch
 that succeeds. It lists startup crashes from the last 7 days with the error and

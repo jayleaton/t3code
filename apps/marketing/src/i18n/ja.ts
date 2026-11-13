@@ -1,4 +1,4 @@
-import { APP_NAME } from "@t3tools/shared/branding";
+import { APP_NAME, APP_SLOGAN } from "@t3tools/shared/branding";
 import type { Messages } from "./en";
 
 export const ja: Messages = {
@@ -12,28 +12,21 @@ export const ja: Messages = {
     githubStars: "GitHub スター {stars}",
     language: "言語",
     mitLicensed: "MIT ライセンス",
-    iosApp: "iOS アプリ",
-    androidApp: "Android アプリ",
     terms: "利用規約",
     privacy: "プライバシー",
     security: "セキュリティ",
   },
   home: {
-    title: `${APP_NAME} | コーディングエージェントのためのオープンソースのコントロールプレーン`,
+    title: `${APP_NAME} | ${APP_SLOGAN}`,
     description: `${APP_NAME}。コーディングエージェントのためのオープンソースのコントロールプレーン。`,
-    heroTitle: ["コーディングエージェントの", "オープンソース", "コントロールプレーン。"],
+    heroTitle: [APP_SLOGAN],
     heroSub:
       "Claude Code、Codex、Antigravity、OpenCode、Cursor、Grok をひとつの画面からオーケストレーション。サブスクリプションは手持ちのものをそのまま。まるごとフォークも自由です。",
     downloadForMac: "macOS 版をダウンロード",
     downloadForWindows: "Windows 版をダウンロード",
     downloadForLinux: "Linux 版をダウンロード",
     sourceLink: "コードを盗もう（合法的に）",
-    alsoOnPhone: "スマホでも使えます：",
     screenshotAlt: `ひとつのスレッドで Claude、Codex、Muse、Gemini のサブエージェントを動かす ${APP_NAME}`,
-    endorsementsTitle: "{users} 人以上の開発者が我慢して使っています",
-    endorsementsSub: "ツイートまでしてくれた人もいます。",
-    endorsementsLabel: "開発者の声",
-    readPost: "X で {handle} の投稿を読む",
     harnessTitle: "サブスクは持ち込みで",
     harnessBody: `${APP_NAME} はトークンを転売しません。Claude Code、Codex、Antigravity、OpenCode、Cursor、Grok を、すでに持っている認証情報でつなぐだけ。オーケストレーションは私たちに任せて、プランは今のままで。`,
     googleSignIn: "Google でサインイン",
@@ -75,7 +68,7 @@ export const ja: Messages = {
   },
   download: {
     title: `${APP_NAME} をダウンロード（macOS、Windows、Linux）| ${APP_NAME}`,
-    description: `公式の ${APP_NAME} デスクトップアプリ（macOS、Windows、Linux）や、iOS・Android アプリをダウンロードできます。`,
+    description: `公式の ${APP_NAME} デスクトップアプリ（macOS、Windows、Linux）をダウンロードできます。`,
     breadcrumb: "ダウンロード",
     heading: `${APP_NAME} をダウンロード`,
     channelLabel: "リリースチャンネル",
@@ -84,8 +77,6 @@ export const ja: Messages = {
     intelNote: "Intel Mac をお使いですか？　{link}。",
     intelLink: "x64 版をダウンロード",
     armNote: "ARM をお使いですか？　arm64 版の {deb} または {appimage} をダウンロード。",
-    mobile: "モバイル",
-    iphoneIpad: "iPhone と iPad",
     terminal: "ターミナル",
     allBuilds: "すべてのビルドは {link} にあります",
     releasesPage: "GitHub のリリースページ",

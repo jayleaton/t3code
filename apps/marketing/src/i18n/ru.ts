@@ -1,4 +1,4 @@
-import { APP_NAME } from "@t3tools/shared/branding";
+import { APP_NAME, APP_SLOGAN } from "@t3tools/shared/branding";
 import type { Messages } from "./en";
 
 export const ru: Messages = {
@@ -12,28 +12,21 @@ export const ru: Messages = {
     githubStars: "{stars} звёзд на GitHub",
     language: "Язык",
     mitLicensed: "Лицензия MIT",
-    iosApp: "Приложение для iOS",
-    androidApp: "Приложение для Android",
     terms: "Условия",
     privacy: "Конфиденциальность",
     security: "Безопасность",
   },
   home: {
-    title: `${APP_NAME} | Открытый пульт управления ИИ-агентами для программирования`,
+    title: `${APP_NAME} | ${APP_SLOGAN}`,
     description: `${APP_NAME}. Открытый пульт управления ИИ-агентами для программирования.`,
-    heroTitle: ["Открытый пульт", "управления", "ИИ-агентами для кода."],
+    heroTitle: [APP_SLOGAN],
     heroSub:
       "Управляйте Claude Code, Codex, Antigravity, OpenCode, Cursor и Grok из одного окна. Пользуйтесь своей подпиской. Форкайте всё целиком.",
     downloadForMac: "Скачать для macOS",
     downloadForWindows: "Скачать для Windows",
     downloadForLinux: "Скачать для Linux",
     sourceLink: "Украдите наш код (легально)",
-    alsoOnPhone: "Есть и для телефона:",
     screenshotAlt: `${APP_NAME} запускает субагентов Claude, Codex, Muse и Gemini в одном треде`,
-    endorsementsTitle: "Нас терпят более {users} разработчиков",
-    endorsementsSub: "Некоторые даже написали об этом в X.",
-    endorsementsLabel: "Отзывы разработчиков",
-    readPost: "Читать пост {handle} в X",
     harnessTitle: "Со своей подпиской",
     harnessBody: `${APP_NAME} не перепродаёт токены. Подключайте Claude Code, Codex, Antigravity, OpenCode, Cursor или Grok с учётными данными, которые у вас уже есть. Мы управляем агентами, тариф остаётся вашим.`,
     googleSignIn: "Вход через Google",
@@ -72,7 +65,7 @@ export const ru: Messages = {
   },
   download: {
     title: `Скачать ${APP_NAME} для macOS, Windows и Linux | ${APP_NAME}`,
-    description: `Скачайте официальное десктопное приложение ${APP_NAME} для macOS, Windows или Linux либо приложения для iOS и Android.`,
+    description: `Скачайте официальное десктопное приложение ${APP_NAME} для macOS, Windows или Linux.`,
     breadcrumb: "Скачать",
     heading: `Скачать ${APP_NAME}`,
     channelLabel: "Канал релизов",
@@ -81,8 +74,6 @@ export const ru: Messages = {
     intelNote: "Mac на Intel? {link}.",
     intelLink: "Скачайте сборку x64",
     armNote: "На ARM? Скачайте {deb} или {appimage} для arm64.",
-    mobile: "Телефон",
-    iphoneIpad: "iPhone и iPad",
     terminal: "Терминал",
     allBuilds: "Все сборки на {link}",
     releasesPage: "странице релизов GitHub",

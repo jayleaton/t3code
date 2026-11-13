@@ -139,14 +139,17 @@ export function codexNeedsSetup(
 
 /**
  * The phone joins the primary computer with a pairing link, so another computer, a session that
- * cannot create pairing links, or a policy without remote clients gets no Phone section.
+ * cannot create pairing links, or a policy without remote clients gets no Phone section. Neither
+ * does a build with no store listing to install the app from.
  */
 export function welcomeOffersPhone(input: {
+  readonly hasStoreListing: boolean;
   readonly isPrimary: boolean;
   readonly canPair: boolean;
   readonly policy: ManagedPolicySummary | undefined;
 }) {
   return (
+    input.hasStoreListing &&
     input.isPrimary &&
     input.canPair &&
     managedCapabilityDenial(input.policy, "remoteClients") === undefined
