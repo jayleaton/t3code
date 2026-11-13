@@ -1,6 +1,7 @@
 import { GATEWAY_PORT_METHODS } from "./bridgeClient.ts";
 import type { GatewayEnvironmentSummary, GatewayRuntimePort } from "./port.ts";
 import type { ModeLimit } from "./portModes.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 /**
  * Every environment a runtime port call acts on: the first argument when it is an ID, or the
@@ -66,7 +67,7 @@ export function createRoutedGatewayPort(
       }
       if (remote === undefined) {
         throw new Error(
-          `Environment ${elsewhere} is not reachable from this chat. Open T3 Code on a device connected to it and grant it T3 Agents access.`,
+          `Environment ${elsewhere} is not reachable from this chat. Open ${APP_NAME} on a device connected to it and grant it ${APP_NAME} gateway access.`,
         );
       }
       // The calling chat is only meaningful to the local server that authenticated it.

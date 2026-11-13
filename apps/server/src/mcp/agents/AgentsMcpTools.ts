@@ -27,6 +27,7 @@ import { loadCaller } from "../threadAccess.ts";
 import { LocalGatewayPort } from "./LocalGatewayPort.ts";
 import { assertNotLinked } from "../linkOrigin.ts";
 import { assignRemoteChild, gatewayToolContext, READ_TOOL } from "./remoteThreads.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 type ToolResult = {
   readonly isError?: boolean;
@@ -134,7 +135,10 @@ export const layer = McpToolAccess.toLayer(
           const args = { ...payload };
           if (local === undefined || context === undefined) {
             return toCallToolResult(
-              failure(new Error("This server hosts no T3 Agents tools."), requestContext(args)),
+              failure(
+                new Error(`This server hosts no ${APP_NAME} gateway tools.`),
+                requestContext(args),
+              ),
             );
           }
           if (defaultEnvironment && typeof args.environmentId !== "string") {
@@ -143,7 +147,7 @@ export const layer = McpToolAccess.toLayer(
           if (!invocation.capabilities.has("orchestration")) {
             return toCallToolResult(
               failure(
-                new Error("This chat's MCP credential cannot use T3 Agents tools."),
+                new Error(`This chat's MCP credential cannot use ${APP_NAME} gateway tools.`),
                 requestContext(args),
               ),
             );

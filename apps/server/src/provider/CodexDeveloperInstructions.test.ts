@@ -58,7 +58,7 @@ describe("Codex orchestration context", () => {
     );
     NodeAssert.ok(
       orchestration.includes(
-        "For independent T3 delegated review rounds, call `delegate_task` again.",
+        "For independent Ada delegated review rounds, call `delegate_task` again.",
       ),
     );
     NodeAssert.ok(
@@ -120,6 +120,6 @@ describe("Codex device context", () => {
 
     NodeAssert.ok(tools(true).includes(T3_CODE_DEVICE_TOOL_INSTRUCTIONS));
     NodeAssert.ok(!tools(true).includes("ToolSearch"));
-    NodeAssert.ok(!tools(false).includes("## T3 Code devices"));
+    NodeAssert.ok(!tools(false).includes("## Ada devices"));
   });
 });

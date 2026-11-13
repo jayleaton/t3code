@@ -7,7 +7,7 @@ allowed-tools: Bash(playwright-cli:*) Bash(npx:*) Bash(npm:*)
 
 # Playwright CLI
 
-For browser work, prefer T3 collaborative preview tools when exposed, following their ownership and retry rules, or the provider's native browser or computer-use interface for an explicitly requested open browser. Use this CLI for an explicit CLI or repository workflow, or when no preferred interface is available. Honor the user's explicit tool choice.
+For browser work, prefer Ada collaborative preview tools when exposed, following their ownership and retry rules, or the provider's native browser or computer-use interface for an explicitly requested open browser. Use this CLI for an explicit CLI or repository workflow, or when no preferred interface is available. Honor the user's explicit tool choice.
 
 Use the installed CLI when appropriate to the task. Read `playwright-cli --help` and [commands.md](references/commands.md) for command usage. Open or select the intended browser/session, take a fresh snapshot, and use its current element references. Refresh references after navigation or substantial DOM changes.
 

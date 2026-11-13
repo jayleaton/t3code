@@ -15,6 +15,7 @@ import { threadWorkspaceRoot } from "../../../project/threadWorkspaceRoot.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { DeviceScreenshotToolkit, DeviceStandardToolkit, DeviceToolkit } from "./tools.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 function agentDeviceTargetArgs(device: DeviceSummary): ReadonlyArray<string> {
   return device.platform === "ios"
@@ -40,7 +41,7 @@ export function agentDeviceQuickStart(
   const platformNotes =
     host?.kind === "simlock"
       ? [
-          "This device is leased from a Simlock pool (alpha in T3 Code). The lease returns it to the pool, wiped, when it ends, so call device_close with shutdown: true when you are done. It starts with no apps installed.",
+          `This device is leased from a Simlock pool (alpha in ${APP_NAME}). The lease returns it to the pool, wiped, when it ends, so call device_close with shutdown: true when you are done. It starts with no apps installed.`,
           host.installDirectory
             ? `agent-device accepts install for this lease only when run from ${host.installDirectory}.`
             : "",
@@ -76,7 +77,7 @@ export function agentDeviceQuickStart(
     "Each device_open returns its own command; opening another device does not retarget this one.",
     ...(target === ""
       ? [
-          "The command is removed when the device closes or T3 Code restarts. If it is missing, call device_open again.",
+          `The command is removed when the device closes or ${APP_NAME} restarts. If it is missing, call device_open again.`,
         ]
       : []),
     platformNotes,

@@ -1,4 +1,5 @@
 // No T3 imports inside the string; resolve Pi and typebox from the user's Pi install.
+import { APP_NAME } from "@t3tools/shared/branding";
 import { T3_CODE_ORCHESTRATION_INSTRUCTIONS } from "@t3tools/provider-core/server/orchestrationInstructions";
 
 export const PI_T3_MCP_EXTENSION_FILENAME = "pi-t3-mcp-extension.ts";
@@ -252,7 +253,7 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
     projectTrustChecked = true;
     if (ctx.isProjectTrusted() || process.argv.some((arg) => arg === "--no-approve" || arg === "-na")) return;
     ctx.ui.notify(
-      \`Pi did not load project settings, extensions, skills, prompts, MCP servers or system prompt files for \${ctx.cwd} because the folder is not trusted. To load them, run the configured Pi binary there with the same PI_CODING_AGENT_DIR (if set), trust the folder or its parent with /trust, then start a new thread in that same worktree. To trust every project, add --approve to Pi's launch arguments in T3 Code settings; to keep them off without this notice, add --no-approve.\`,
+      \`Pi did not load project settings, extensions, skills, prompts, MCP servers or system prompt files for \${ctx.cwd} because the folder is not trusted. To load them, run the configured Pi binary there with the same PI_CODING_AGENT_DIR (if set), trust the folder or its parent with /trust, then start a new thread in that same worktree. To trust every project, add --approve to Pi's launch arguments in ${APP_NAME} settings; to keep them off without this notice, add --no-approve.\`,
       "warning",
     );
   });
@@ -293,7 +294,7 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
   // Only a tier the active model advertises is sent; Standard sends none.
   let serviceTier: string | undefined;
   pi.registerCommand(SERVICE_TIER_COMMAND, {
-    description: "Set the service tier T3 Code sends with provider requests",
+    description: "Set the service tier ${APP_NAME} sends with provider requests",
     handler: async (args) => {
       serviceTier = args.trim() || undefined;
     },
@@ -365,7 +366,7 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
       { signal: ctx.signal },
     );
     if (!approved) {
-      return { block: true, reason: \`\${event.toolName} was declined in T3 Code.\` };
+      return { block: true, reason: \`\${event.toolName} was declined in ${APP_NAME}.\` };
     }
   });
 

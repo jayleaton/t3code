@@ -3,6 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { JSONRPCMessageSchema } from "@modelcontextprotocol/sdk/types.js";
 import WebSocket from "ws";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const PROTOCOL = "t3-mcp-shared-v1";
 const AUTH_TIMEOUT_MS = 5_000;
@@ -177,7 +178,7 @@ export function connectMcpSession(input: {
       fail(
         new Error(
           nonce === undefined
-            ? "The port belongs to an older gateway or a different service that is not the T3 shared MCP gateway. Stop that process or use the configured gateway port."
+            ? `The port belongs to an older gateway or a different service that is not the ${APP_NAME} shared MCP gateway. Stop that process or use the configured gateway port.`
             : "Shared gateway authentication failed: the bridge token did not match. Verify the MCP gateway token configured for this environment.",
         ),
       );
@@ -196,7 +197,7 @@ export function connectMcpSession(input: {
           if (message.type !== "challenge" || typeof message.nonce !== "string") {
             fail(
               new Error(
-                "The port responded without a T3 shared gateway challenge. It belongs to a different service or an older gateway; stop that process or use the configured gateway port.",
+                `The port responded without an ${APP_NAME} shared gateway challenge. It belongs to a different service or an older gateway; stop that process or use the configured gateway port.`,
               ),
             );
             return;

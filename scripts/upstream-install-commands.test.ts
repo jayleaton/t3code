@@ -109,44 +109,10 @@ const BRAND_ALLOWLIST: ReadonlyArray<BrandAllowance> = [
     why: "Legal documents host.",
   },
   // Model-facing text changes only with its evals (evals/README.md); users never read it directly.
-  {
-    file: /^packages\/provider-core\/src\/server\/(?:orchestrationInstructions|runtimeInstructions|textGenerationPrompts)\.ts$/,
-    why: "Agent instructions and prompts.",
-  },
   { file: /^apps\/server\/src\/triage\//, why: "Triage agent prompt and its issue target." },
-  { file: /^apps\/server\/src\/mcp\//, why: "MCP tool descriptions and results for agents." },
-  { file: /^packages\/mcp-gateway\/src\/catalog\.ts$/, why: "MCP tool descriptions." },
-  {
-    file: /^apps\/server\/src\/orchestration-v2\/ContextHandoffService\.ts$/,
-    why: "Handoff preamble for the agent.",
-  },
-  {
-    file: /^packages\/provider-pi\/src\/server\/mcpExtensionSource\.ts$/,
-    why: "Tool text injected into Pi.",
-  },
-  {
-    file: /^apps\/server\/src\/device\/AgentDeviceShim\.ts$/,
-    why: "Errors from a command the agent runs.",
-  },
-  {
-    file: /^packages\/provider-acp\/src\/server\/mcpOverAcpBridge\.ts$/,
-    why: "Bridge errors returned to the provider.",
-  },
-  {
-    file: /^packages\/provider-muse\/src\/server\/textGeneration\.ts$/,
-    why: "Decline reasons returned to the provider.",
-  },
-  {
-    file: /^packages\/client-runtime\/src\/gateway\/(?:portRelay|routedPort)\.ts$/,
-    why: "Gateway errors returned to the MCP caller.",
-  },
-  {
-    file: /^packages\/shared\/src\/agentPresets\/skills\//,
-    why: "Skill descriptions read by agents.",
-  },
   // Identities other systems already know: providers, git history, peers, installed helpers.
   {
-    file: /^(?:apps\/server\/src\/provider\/(?:CodexProvider|CodexChatGptAuth|acp\/AntigravityAcpSupport)|packages\/provider-muse\/src\/server\/sdk)\.ts$/,
+    file: /^(?:apps\/server\/src\/(?:provider\/(?:CodexProvider|CodexChatGptAuth|acp\/AntigravityAcpSupport)|mcp\/McpHttpServer)|packages\/provider-muse\/src\/server\/sdk)\.ts$/,
     text: "T3 Code",
     why: "Client name sent to providers.",
   },
@@ -161,6 +127,11 @@ const BRAND_ALLOWLIST: ReadonlyArray<BrandAllowance> = [
   },
   {
     file: /^packages\/provider-opencode\/src\/server\/(?:OpenCodeServerLedger|v2\/adapter)\.ts$/,
+    why: "Maintainer log lines.",
+  },
+  {
+    file: /^apps\/server\/src\/mcp\/agents\/HeadlessGatewayHost\.ts$/,
+    text: "Headless T3 Agents gateway",
     why: "Maintainer log lines.",
   },
   {
@@ -207,21 +178,6 @@ const BRAND_ALLOWLIST: ReadonlyArray<BrandAllowance> = [
     file: /^docs\/user\/(?:install|updating)\.md$/,
     text: "T3 Code",
     why: "Warnings that T3 Code's installers replace Ada's server.",
-  },
-  {
-    file: /^docs\/user\/(?:install|faq)\.md$/,
-    text: "T3 Code mobile app",
-    why: "Ada has no store listing; the T3 Code app pairs with it.",
-  },
-  { file: /^docs\/user\/faq\.md$/, text: "Get the T3 Code", why: "Same store listing." },
-  {
-    file: /^apps\/web\/src\/branding\.ts$/,
-    text: "t3.codes/mobile",
-    why: "Store redirect for the T3 Code app, until Ada has its own listing.",
-  },
-  {
-    file: /^apps\/marketing\/src\/lib\/tweets\.ts$/,
-    why: "Real people's posts; rewriting them would invent endorsements.",
   },
   {
     file: /^apps\/marketing\/src\/(?:lib\/seo\.ts|pages\/95\.astro)$/,

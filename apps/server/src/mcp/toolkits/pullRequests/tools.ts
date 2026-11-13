@@ -20,6 +20,7 @@ import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
@@ -100,7 +101,7 @@ export class PullRequestThreadRequiredError extends Schema.TaggedError<PullReque
   {},
 ) {
   override get message(): string {
-    return "Pass threadId: this MCP client is not running inside a T3 thread.";
+    return `Pass threadId: this MCP client is not running inside an ${APP_NAME} thread.`;
   }
 }
 
@@ -255,7 +256,7 @@ export type UnlinkPullRequestsResult = typeof UnlinkPullRequestsResult.Type;
 export const WatchPullRequestResult = Schema.Struct({
   ...PullRequestIdentity,
   watching: Schema.Boolean.annotate({
-    description: "Whether T3 Code now watches the pull request for this thread.",
+    description: `Whether ${APP_NAME} now watches the pull request for this thread.`,
   }),
   watchSuspended: Schema.Boolean.annotate({
     description:
@@ -306,7 +307,7 @@ export const ListThreadPullRequestsResult = Schema.Struct({
 export type ListThreadPullRequestsResult = typeof ListThreadPullRequestsResult.Type;
 
 const LinkPullRequestTool = Tool.make("link_pull_request", {
-  description: `Links a pull request to this thread so T3 Code tracks it and shows its status beside the thread. Pull request completion does not settle the card; manual settlement or its configured idle age does. Pass the URL, or repository plus number. Linking an already-linked pull request succeeds with alreadyLinked=true. For several PRs, use \`link_pull_requests\`.`,
+  description: `Links a pull request to this thread so ${APP_NAME} tracks it and shows its status beside the thread. Pull request completion does not settle the card; manual settlement or its configured idle age does. Pass the URL, or repository plus number. Linking an already-linked pull request succeeds with alreadyLinked=true. For several PRs, use \`link_pull_requests\`.`,
   parameters: PullRequestTargetInput,
   success: LinkPullRequestResult,
   failure: PullRequestToolError,
@@ -386,8 +387,7 @@ const ListThreadPullRequestsTool = Tool.make("list_thread_pull_requests", {
   .annotate(Tool.OpenWorld, false);
 
 const WatchPullRequestTool = Tool.make("watch_pull_request", {
-  description:
-    "Have T3 Code watch an open pull request for this thread, linking it first if needed. T3 Code checks it every two minutes and wakes you with a message when a check fails, the required checks pass, someone else comments or reviews, or the branch starts to conflict with its base. Use this to monitor or babysit a pull request instead of polling, sleeping, or running a watcher. Only comments posted after this call wake you, so handle the existing ones first, then end your turn. A wake is news, not a merge decision: check readiness yourself before merging. While T3 Code watches, the thread stays in the user's Working list, not their inbox. When you hand the work back to the user, call unwatch_pull_request first so the thread returns to their inbox. Watching ends when the pull request merges or closes, when T3 Code fails to read it 8 times in a row (a host rate limit only delays it), when the user stops this thread, or when you call unwatch_pull_request. While watching, the thread does not settle through inactivity; settling it manually pauses the watch (watchSuspended=true) until the thread is unsettled. A subagent cannot watch: its parent thread owns the pull request.",
+  description: `Have ${APP_NAME} watch an open pull request for this thread, linking it first if needed. ${APP_NAME} checks it every two minutes and wakes you with a message when a check fails, the required checks pass, someone else comments or reviews, or the branch starts to conflict with its base. Use this to monitor or babysit a pull request instead of polling, sleeping, or running a watcher. Only comments posted after this call wake you, so handle the existing ones first, then end your turn. A wake is news, not a merge decision: check readiness yourself before merging. While ${APP_NAME} watches, the thread stays in the user's Working list, not their inbox. When you hand the work back to the user, call unwatch_pull_request first so the thread returns to their inbox. Watching ends when the pull request merges or closes, when ${APP_NAME} fails to read it 8 times in a row (a host rate limit only delays it), when the user stops this thread, or when you call unwatch_pull_request. While watching, the thread does not settle through inactivity; settling it manually pauses the watch (watchSuspended=true) until the thread is unsettled. A subagent cannot watch: its parent thread owns the pull request.`,
   parameters: PullRequestTargetInput,
   success: WatchPullRequestResult,
   failure: PullRequestToolError,

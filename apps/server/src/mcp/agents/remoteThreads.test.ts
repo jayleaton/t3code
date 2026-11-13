@@ -569,7 +569,7 @@ it.effect(
       expect(output.isFailure).toBe(true);
       const message = (output.result as { message: string }).message;
       expect(message).toContain("read-only");
-      expect(message).not.toContain("T3 app grants");
+      expect(message).not.toContain("Ada app grants");
       expect(macbook.called("createThread")).toEqual([]);
     }).pipe(Effect.provide(makeLayer(macbook, record, { self: "read-only" })));
   },

@@ -1,11 +1,11 @@
 ---
 name: t3-agents
-description: "Delegating work to the user's T3 agents (profileId) and internal helpers inside T3 Code: which tool to use, what to do when a profileId call fails, background waits, and how to end a turn under a Captain. Read before delegate_task, t3_thread_launch or create_threads."
+description: "Delegating work to the user's Ada agents (profileId) and internal helpers inside Ada: which tool to use, what to do when a profileId call fails, background waits, and how to end a turn under a Captain. Read before delegate_task, t3_thread_launch or create_threads."
 ---
 
-# Working with T3 agents
+# Working with Ada agents
 
-Defaults shared by T3 agents. Your own system prompt wins wherever it says something different.
+Defaults shared by Ada agents. Your own system prompt wins wherever it says something different.
 
 ## Running work as a named agent
 

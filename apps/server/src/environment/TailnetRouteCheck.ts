@@ -80,7 +80,7 @@ const checkTailnetRoute = Effect.fn("TailnetRouteCheck.check")(function* (input:
 
 const OBSERVED_TEXT = {
   "other-environment": `a different ${APP_NAME} environment answers there`,
-  "not-a-t3-server": "something other than T3 answers there",
+  "not-a-t3-server": `something other than ${APP_NAME} answers there`,
   unreachable: "nothing answers there (remote clients get 502 or time out)",
 } as const;
 

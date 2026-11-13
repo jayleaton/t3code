@@ -1,3 +1,4 @@
+import { APP_NAME } from "@t3tools/shared/branding";
 import { resolveManagedCodexHomeLayout } from "./CodexManagedHome.ts";
 import { CodexSettings, ProviderSetupError, type ProviderInstanceId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -67,7 +68,7 @@ export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(func
             instanceId: options.instanceId,
             operation: "runtime",
             detail:
-              "Could not prepare the private managed Codex token listener. Restart T3 and retry.",
+              `Could not prepare the private managed Codex token listener. Restart ${APP_NAME} and retry.`,
             cause,
           }),
       ),

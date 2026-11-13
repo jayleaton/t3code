@@ -32,6 +32,7 @@ import {
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { withWorkspaceLease } from "./workspaceLease.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 /** Live state the eligibility checks read. Production reads projections, sessions and terminals. */
 export interface ReclamationState {
@@ -230,7 +231,7 @@ export const make = Effect.fn("WorktreeReclamation.make")(function* (runtime: Re
             message:
               project === undefined
                 ? "The thread's project is no longer registered."
-                : `Only linked worktrees T3 created under '${runtime.worktreesDir}' can be reclaimed.`,
+                : `Only linked worktrees ${APP_NAME} created under '${runtime.worktreesDir}' can be reclaimed.`,
           },
         ],
         { worktreePath },

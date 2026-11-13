@@ -69,6 +69,7 @@ import type {
   GatewayRuntimePort,
   GatewayThreadExecutionState,
 } from "./port.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 /**
  * Agent tools act on an environment this gateway already connected to, so the
@@ -555,13 +556,13 @@ export function createGatewayRuntimePort(
           if (requiresResources && capabilities?.agentSkillResources !== true) {
             return yield* new EnvironmentRpcUnavailableError({
               environmentId,
-              message: "Update T3 on this machine to import skill resources.",
+              message: `Update ${APP_NAME} on this machine to import skill resources.`,
             });
           }
           if (requiresAgentFields && capabilities?.agentLibraryMutations !== true) {
             return yield* new EnvironmentRpcUnavailableError({
               environmentId,
-              message: "Update T3 on this machine to save agent icons and role tags.",
+              message: `Update ${APP_NAME} on this machine to save agent icons and role tags.`,
             });
           }
           yield* registry.run(environmentId, syncAgentLibraryBeforeUse());

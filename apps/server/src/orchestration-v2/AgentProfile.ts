@@ -14,6 +14,7 @@ import {
   type ProfileSnapshotContent,
   profileSnapshotContentHash,
 } from "./ProfileSnapshotContent.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 /**
  * Selects an agent's current revision for a new thread. Fields the caller set
@@ -194,7 +195,7 @@ export function agentProfileReminder(
 ): string {
   if (!content.systemPrompt?.trim() && content.skills.length === 0) return text;
   const skillNames = content.skills.map((skill) => skill.name);
-  const agent = profileName ? `the T3 agent "${profileName}"` : "a T3 agent";
+  const agent = profileName ? `the ${APP_NAME} agent "${profileName}"` : `an ${APP_NAME} agent`;
   const skills = skillNames.length === 0 ? "" : ` and assigned skills (${skillNames.join(", ")})`;
   return `<agent_profile_reminder>You are running as ${agent}. Your agent_profile_instructions${skills} from the start of this conversation still apply; re-read a skill's SKILL.md when its trigger applies.</agent_profile_reminder>\n\n${text}`;
 }

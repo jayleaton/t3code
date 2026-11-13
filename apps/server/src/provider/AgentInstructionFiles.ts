@@ -6,6 +6,7 @@ import * as NodeCrypto from "node:crypto";
 import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const decodeSkills = Schema.decodeUnknownEffect(Schema.Array(AgentSkill));
 const encodeBundle = Schema.encodeSync(
@@ -29,7 +30,7 @@ export const assignedSkillIndexEntry = (
 export const assignedSkillIndex = (entries: ReadonlyArray<string>) =>
   entries.length === 0
     ? ""
-    : `# Assigned T3 skills\n\nRead the SKILL.md file for each relevant skill before using it. Resolve its relative references, scripts, and assets from that SKILL.md directory. These are the current assignments; previous skill assignments are superseded.\n\n${entries.join("\n")}`;
+    : `# Assigned ${APP_NAME} skills\n\nRead the SKILL.md file for each relevant skill before using it. Resolve its relative references, scripts, and assets from that SKILL.md directory. These are the current assignments; previous skill assignments are superseded.\n\n${entries.join("\n")}`;
 
 export function agentInstructionRelativePath(threadId: string): string {
   const key = NodeCrypto.createHash("sha256").update(threadId).digest("hex");

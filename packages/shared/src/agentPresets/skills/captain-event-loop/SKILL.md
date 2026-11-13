@@ -1,13 +1,13 @@
 ---
 name: captain-event-loop
-description: "Captain's event loop for named children on T3 builds since nightly 20261016: arm one listener per running child, sweep every child on every wake, take the next step from the pipeline, and never end a turn with a child unwatched. Read at the start of every Captain turn that launches, messages or checks a child."
+description: "Captain's event loop for named children on Ada builds since nightly 20261016: arm one listener per running child, sweep every child on every wake, take the next step from the pipeline, and never end a turn with a child unwatched. Read at the start of every Captain turn that launches, messages or checks a child."
 ---
 
 # Captain event loop
 
 ## Why this exists
 
-Since T3 nightly 20261016.322001 (runtime commit `7089486ba`, "stop automatic child-to-parent messages"), a named child never wakes its parent. That covers `t3_thread_launch`, `create_threads` and `delegate_task` with a `profileId`, and it includes run ends, `stopped`, `interrupted`, task DONE/INPUT updates and check-backs. The only events that start an idle Captain turn are:
+Since Ada nightly 20261016.322001 (runtime commit `7089486ba`, "stop automatic child-to-parent messages"), a named child never wakes its parent. That covers `t3_thread_launch`, `create_threads` and `delegate_task` with a `profileId`, and it includes run ends, `stopped`, `interrupted`, task DONE/INPUT updates and check-backs. The only events that start an idle Captain turn are:
 
 1. a message from the user;
 2. a **profile-less `delegate_task` helper reaching any terminal state** (completed, failed, or interrupted). These arrive as one batched message, "Delegated tasks … reached terminal states", and are queued if Captain is mid-turn;
@@ -23,14 +23,14 @@ So every running child needs its own listener: a profile-less helper that blocks
 
 ### Children on another machine
 
-`t3_thread_wait`, `t3_thread_send`, `t3_thread_read` and the `t3_task_read` sweep only see threads on this machine. They return `thread_not_found` for a child launched with `t3_create_and_start_thread` on another environment (T3 gap, see bug report). For such a child:
+`t3_thread_wait`, `t3_thread_send`, `t3_thread_read` and the `t3_task_read` sweep only see threads on this machine. They return `thread_not_found` for a child launched with `t3_create_and_start_thread` on another environment (Ada gap, see bug report). For such a child:
 
 - Record its `environmentId` in PIPELINE.md.
 - Message it with `t3_send_message` + `environmentId`.
 - Read it with `t3_get_messages` / `t3_get_thread` + `environmentId`.
 - Arm the listener as a profile-less helper that calls `t3_get_thread` with `environmentId` every 60 s for at most 60 min. It replies when the latest run is no longer running or the last message has a `BLOCKED:` line.
 
-When the deliverable is a file or artifact on this machine, a background waiter on that file may be used instead. In each sweep, also check every remote child listed in PIPELINE.md this way. This is the one allowed exception to "never poll"; remove it once T3 supports cross-machine waits.
+When the deliverable is a file or artifact on this machine, a background waiter on that file may be used instead. In each sweep, also check every remote child listed in PIPELINE.md this way. This is the one allowed exception to "never poll"; remove it once Ada supports cross-machine waits.
 
 ## Arm: one listener per running child run
 
@@ -46,7 +46,7 @@ delegate_task {
 }
 ```
 
-Record the listener's `taskId` against the child in the pipeline table. A listener can still end without the run ending (a repeated connection error, or the 8-hour cap), so a wake means "look", not "the child stopped". The sweep decides. Fallback model: `codex` / `gpt-5.6-luna` / `reasoningEffort: low` (also proven). T3 caps one MCP tool call at 65 minutes, so the listener re-waits hourly itself. Captain is not woken unless a wait errors or the 8-hour cap is reached.
+Record the listener's `taskId` against the child in the pipeline table. A listener can still end without the run ending (a repeated connection error, or the 8-hour cap), so a wake means "look", not "the child stopped". The sweep decides. Fallback model: `codex` / `gpt-5.6-luna` / `reasoningEffort: low` (also proven). Ada caps one MCP tool call at 65 minutes, so the listener re-waits hourly itself. Captain is not woken unless a wait errors or the 8-hour cap is reached.
 
 ## Wake: sweep everything, then act
 
@@ -69,9 +69,9 @@ Keep the job's table in `.t3/captain/<job>/PIPELINE.md` so it survives context c
 
 Captain leads. Decide reversible and routine choices yourself: order, naming, which safe migration pattern, splitting PRs, starting a Cleaner round the user already authorised, re-running checks, resuming a stopped child, and merging each PR bottom-up once its review fixes are in, CI is green and the staging deploy is checked. State the choice under "Defaults taken" in the next update to the user. Ask the user, and keep the rest of the pipeline moving meanwhile, only for: production deploys or releases, architecture exceptions (per the repo's CLAUDE.md), product decisions the user has not made, destructive data operations, spending or purchases, and anything outward-facing that the user has not already approved.
 
-## Reboots and T3 updates
+## Reboots and Ada updates
 
-A reboot kills every child and listener run. Per the runtime source (restart recovery finalizes interrupted helper subagents and resumes their completion delivery), each killed listener should then deliver a terminal wake, and the sweep shows the children as `interrupted`, so resume them. This is not yet observed live. If no wake arrives, the user's next message is the wake: always sweep first. After any T3 update, recheck the wake semantics in the `delegate_task` and `t3_task_assign` tool descriptions before trusting this skill.
+A reboot kills every child and listener run. Per the runtime source (restart recovery finalizes interrupted helper subagents and resumes their completion delivery), each killed listener should then deliver a terminal wake, and the sweep shows the children as `interrupted`, so resume them. This is not yet observed live. If no wake arrives, the user's next message is the wake: always sweep first. After any Ada update, recheck the wake semantics in the `delegate_task` and `t3_task_assign` tool descriptions before trusting this skill.
 
 ## Cost
 

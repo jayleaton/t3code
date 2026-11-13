@@ -4,6 +4,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import { AgentSkill, AgentSkillResources, MAX_SKILL_RESOURCE_BYTES } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const decodeResources = Schema.decodeUnknownSync(AgentSkillResources);
 
@@ -92,7 +93,7 @@ export async function migrateSkillResources(
     const stored = (await read()).find((item) => item.skillId === entry.skillId);
     if (!stored || JSON.stringify(stored.resources) !== JSON.stringify(entry.resources)) {
       throw new Error(
-        `Resources were not retained for ${entry.skillId}; update all T3 clients and servers. Workaround retained.`,
+        `Resources were not retained for ${entry.skillId}; update all ${APP_NAME} clients and servers. Workaround retained.`,
       );
     }
     const content = removeResourceWorkaround(stored.content, entry.directory);
