@@ -2,7 +2,6 @@
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { APP_NAME, APP_SLOGAN } from "@t3tools/shared/branding";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
@@ -17,7 +16,7 @@ import sharp from "sharp";
 
 import { BRAND_ASSET_PATHS, DEVELOPMENT_PUBLIC_ICON_OVERRIDES } from "./lib/brand-assets.ts";
 import { encodePngIco, readPngDimensions, WINDOWS_ICON_SIZES } from "./lib/icon-export.ts";
-import { parsePip, PIP_COLORS, PIP_SOURCE, pipGlyphSvg, type Pip } from "./lib/pip.ts";
+import { parsePip, PIP_COLORS, PIP_SOURCE, pipGlyphSvg } from "./lib/pip.ts";
 
 const DESIGN_GENERATION = 26;
 const ICON_COMPOSER_EXECUTABLE_PARTS = [
@@ -288,14 +287,19 @@ const MARKETING_ICONS = [
 ] as const;
 const SOCIAL_CARD = "apps/marketing/src/assets/social-card.webp";
 
-// Open Graph card at 2x. Text uses system fonts, like the rest of this macOS-only export.
-const socialCardSvg = (pip: Pip) => {
-  const width = 2400;
-  const glyphHeight = 480;
-  const scale = glyphHeight / pip.height;
-  const tx = (width - pip.width * scale) / 2 - pip.x * scale;
-  const ty = 300 - pip.y * scale;
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="1260" viewBox="0 0 ${width} 1260"><rect width="${width}" height="1260" fill="${PIP_COLORS.navy}"/><g transform="translate(${tx.toFixed(3)} ${ty.toFixed(3)}) scale(${scale.toFixed(5)})"><path fill="${PIP_COLORS.lavender}" fill-rule="evenodd" d="${pip.d}"/></g><text xml:space="preserve" x="${width / 2}" y="1010" text-anchor="middle" fill="#FAF9F5" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="96"><tspan font-weight="700">${APP_NAME}</tspan><tspan fill-opacity="0.55"> · </tspan>${APP_SLOGAN}</text></svg>`;
+const SOCIAL_CARD_LOCKUP = "assets/agents/pip-lockup-dark.svg";
+
+// Open Graph card at 2x: the approved dark lockup on its own navy. The slogan uses system fonts,
+// like the rest of this macOS-only export.
+const socialCardSvg = (lockup: string) => {
+  const [width, height] = [2400, 1260];
+  const lockupWidth = 2240;
+  const lockupHeight = (lockupWidth * 560) / 1400;
+  const nested = lockup.replace(
+    /<svg [^>]*>/,
+    `<svg x="${(width - lockupWidth) / 2}" y="${(height - lockupHeight) / 2}" width="${lockupWidth}" height="${lockupHeight}" viewBox="0 0 1400 560">`,
+  );
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="${width}" height="${height}" fill="${PIP_COLORS.navy}"/>${nested}</svg>`;
 };
 
 const encodeWith = (label: string, encode: () => Promise<Buffer>) =>
@@ -843,10 +847,19 @@ export const exportBrandIcons = Effect.fn("exportBrandIcons")(function* (checkOn
       yield* encodeWith(target, () => sharp(sourceContents).webp({ quality: 90 }).toBuffer()),
     );
   }
+  const lockupSource = path.join(repositoryRoot, SOCIAL_CARD_LOCKUP);
+  const lockup = yield* fs
+    .readFileString(lockupSource)
+    .pipe(
+      Effect.mapError(
+        (cause) =>
+          new IconExportFileSystemError({ operation: "read-file", path: lockupSource, cause }),
+      ),
+    );
   generated.set(
     SOCIAL_CARD,
     yield* encodeWith(SOCIAL_CARD, () =>
-      sharp(Buffer.from(socialCardSvg(pip)))
+      sharp(Buffer.from(socialCardSvg(lockup)))
         .webp({ quality: 90 })
         .toBuffer(),
     ),

@@ -1,6 +1,6 @@
 # Brand icons
 
-`agents/pip.svg` is the only hand-edited brand source: Ada's mark, Pip. Everything else is generated from it.
+`agents/pip.svg` is the hand-edited source for Ada's mark, Pip, and every icon is generated from it. `agents/pip-lockup-{dark,light}.{svg,png}` are the approved wordmark lockups, used as-is by the README and, through the export, the social card.
 
 The three Icon Composer projects give each release channel its backdrop:
 
