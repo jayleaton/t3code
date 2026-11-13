@@ -2593,6 +2593,27 @@ export function resolveDesktopProductName(version: string): string {
     : (desktopPackageJson.productName ?? APP_NAME);
 }
 
+/**
+ * What a build is called, read once so packaging and payload checks agree. The product name is
+ * what people see (shortcuts, uninstall entry, window titles); the Windows exe name can differ.
+ */
+export const resolveDesktopPackageIdentity = Effect.fn("resolveDesktopPackageIdentity")(function* (
+  version: string,
+) {
+  const productName = yield* Config.String("T3CODE_DESKTOP_PRODUCT_NAME").pipe(
+    Config.withDefault(resolveDesktopProductName(version)),
+  );
+  const brand = yield* Config.String("T3CODE_DESKTOP_BRAND").pipe(Config.withDefault("t3"));
+  return {
+    productName,
+    brand,
+    windowsExecutableName: resolveWindowsExecutableName(productName, brand),
+    // Desktop downloads only; CLI archives keep `t3-<version>-…` (see cliArchiveFileName).
+    artifactName:
+      brand === "agents" ? "Ada-${version}-${arch}.${ext}" : "T3-Code-${version}-${arch}.${ext}",
+  };
+});
+
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   platform: typeof BuildPlatform.Type,
   target: string,
@@ -2612,18 +2633,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   const appId = yield* Config.String("T3CODE_DESKTOP_APP_ID").pipe(
     Config.withDefault(DESKTOP_APP_ID),
   );
-  const productName = yield* Config.String("T3CODE_DESKTOP_PRODUCT_NAME").pipe(
-    Config.withDefault(resolveDesktopProductName(version)),
-  );
-  const brand = yield* Config.String("T3CODE_DESKTOP_BRAND").pipe(Config.withDefault("t3"));
+  const { productName, brand, windowsExecutableName, artifactName } =
+    yield* resolveDesktopPackageIdentity(version);
   const buildConfig: Record<string, unknown> = {
     afterPack: (yield* Path.Path).join(yield* RepoRoot, "scripts/prepare-server-compile-cache.cjs"),
     appId,
     productName,
-    artifactName:
-      brand === "agents"
-        ? "T3-Agents-${version}-${arch}.${ext}"
-        : "T3-Code-${version}-${arch}.${ext}",
+    artifactName,
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     files: [
       ...DESKTOP_FILE_EXCLUSIONS,
@@ -2807,7 +2823,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       // Resource editing sets product icons even when code signing is disabled.
       signAndEditExecutable: true,
       // Taskbar pins, CLI shims and service units point at the exe path the fork shipped before the rename.
-      ...(brand === "agents" ? { executableName: LEGACY_FORK_WINDOWS_EXECUTABLE_NAME } : {}),
+      ...(windowsExecutableName === productName ? {} : { executableName: windowsExecutableName }),
     };
     if (signed && (yield* HostProcess.Platform) === "win32") {
       winConfig.azureSignOptions = yield* AzureTrustedSigningOptionsConfig;
@@ -3912,9 +3928,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   if (options.platform === "win") {
     yield* validateWindowsPackagedPayload({
       stageDistDir,
-      appExecutableName: `${yield* Config.String("T3CODE_DESKTOP_PRODUCT_NAME").pipe(
-        Config.withDefault(resolveDesktopProductName(appVersion)),
-      )}.exe`,
+      appExecutableName: `${(yield* resolveDesktopPackageIdentity(appVersion)).windowsExecutableName}.exe`,
       targetArch: options.arch,
       appVersion,
       expectWslRuntime: bundlesWslRuntime({

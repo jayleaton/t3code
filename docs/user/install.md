@@ -85,7 +85,7 @@ update it with `git pull` and a rebuild.
 
 Download a release from [GitHub Releases](https://github.com/jayleaton/t3code/releases):
 a `.dmg` for macOS, an `.exe` for Windows, and an AppImage or `.deb` for Linux.
-On Debian or Ubuntu, install the `.deb` with `sudo apt install ./T3-Agents-*.deb`.
+On Debian or Ubuntu, install the `.deb` with `sudo apt install ./Ada-*.deb`.
 Package managers such as winget, Homebrew, the AUR, and Nix install T3 Code,
 not Ada.
 
@@ -97,11 +97,11 @@ architecture with `uname -m`: for `x86_64`, choose a file ending in
 `arm64.deb`.
 
 To launch an AppImage, open a terminal in its download folder. Replace
-`T3-Agents.AppImage` below with the exact filename you downloaded:
+`Ada.AppImage` below with the exact filename you downloaded:
 
 ```bash
-chmod +x ./T3-Agents.AppImage
-./T3-Agents.AppImage
+chmod +x ./Ada.AppImage
+./Ada.AppImage
 ```
 
 The `.deb` updates itself like the other desktop builds. It asks for your

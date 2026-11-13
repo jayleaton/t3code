@@ -52,6 +52,7 @@ import {
   stageBrowserSecret,
   validateMacPackagedPayload,
   validateWindowsPackagedPayload,
+  resolveDesktopPackageIdentity,
   verifyPackagedBundleIsSelfContained,
   WindowsPrimaryNativeProbeError,
   WindowsDesktopBuildPrerequisitesMissingError,
@@ -583,7 +584,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       );
       assert.equal(config.appId, "com.jayleaton.t3agents");
       assert.equal(config.productName, "T3 Agents");
-      assert.equal(config.artifactName, "T3-Agents-${version}-${arch}.${ext}");
+      assert.equal(config.artifactName, "Ada-${version}-${arch}.${ext}");
       assert.deepStrictEqual(config.publish, [
         {
           provider: "github",
@@ -688,6 +689,33 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.deepInclude(config.extraResources as unknown[], MCP_GATEWAY_EXTRA_RESOURCE);
       }
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
+  it.effect("keeps the Windows primary at T3 Agents.exe when the product is named Ada", () =>
+    Effect.gen(function* () {
+      const identity = yield* resolveDesktopPackageIdentity("1.2.3-nightly.20261113.1");
+      const config = yield* createBuildConfig(
+        "win",
+        "nsis",
+        "1.2.3-nightly.20261113.1",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+      // The payload check expects `${windowsExecutableName}.exe`; packaging must write the same exe.
+      assert.equal(`${identity.windowsExecutableName}.exe`, "T3 Agents.exe");
+      assert.equal(config.productName, "Ada");
+      assert.equal((config.win as { executableName?: string }).executableName, "T3 Agents");
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: { T3CODE_DESKTOP_PRODUCT_NAME: "Ada", T3CODE_DESKTOP_BRAND: "agents" },
+          }),
+        ),
+      ),
+    ),
   );
 
   it.effect("chains the shared NSIS customizations into the Agents installer", () =>
