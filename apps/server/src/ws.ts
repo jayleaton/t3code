@@ -1,6 +1,7 @@
 import { OrchestrationCommandReceiptRepository } from "./persistence/OrchestrationCommandReceipts.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as McpGatewayBroker from "./mcp/McpGatewayBroker.ts";
+import * as HeadlessGatewayHost from "./mcp/agents/HeadlessGatewayHost.ts";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -1541,6 +1542,7 @@ export const layerWsRpc = (
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const storageCleanup = yield* StorageCleanup.StorageCleanup;
       const databaseStorage = yield* DatabaseStorage.DatabaseStorage;
+      const agentGateway = yield* HeadlessGatewayHost.HeadlessGatewayHost;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const secretResolver = yield* SecretResolver.SecretResolver;
       const peerLinks = yield* PeerLinks.PeerLinks;
@@ -2676,6 +2678,12 @@ export const layerWsRpc = (
         [WS_METHODS.serverGetStorageCleanupReport]: () => storageCleanup.reports,
         [WS_METHODS.serverGetDatabaseStorage]: () => databaseStorage.status,
         [WS_METHODS.serverReclaimDatabaseSpace]: () => databaseStorage.requestReclaim,
+        [WS_METHODS.serverGetAgentGateway]: () => agentGateway.status,
+        [WS_METHODS.serverUpdateAgentGateway]: (input) => agentGateway.update(input),
+        [WS_METHODS.serverRevealAgentGatewayToken]: () =>
+          agentGateway.revealToken.pipe(Effect.map((token) => ({ token }))),
+        [WS_METHODS.serverRotateAgentGatewayToken]: () =>
+          agentGateway.rotateToken.pipe(Effect.map((token) => ({ token }))),
         [WS_METHODS.peerLinksList]: (_input) =>
           peerLinks.list.pipe(Effect.map((links) => ({ links }))),
         [WS_METHODS.peerLinksLink]: (input) => peerLinks.link(input),

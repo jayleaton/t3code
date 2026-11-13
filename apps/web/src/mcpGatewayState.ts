@@ -36,6 +36,22 @@ export type McpGatewayUiState = "disabled" | "connecting" | "running" | "degrade
 
 export const MCP_GATEWAY_BASELINE_SCOPES: ReadonlyArray<GatewayScope> = ["read", "create", "send"];
 export const MCP_GATEWAY_CONFIGURABLE_SCOPES: ReadonlyArray<GatewayScope> = GATEWAY_SCOPE_VALUES;
+/**
+ * The baseline above is least privilege; menus list the rest separately so additional authority
+ * is never granted implicitly.
+ */
+export const MCP_GATEWAY_SCOPE_LABELS: Record<GatewayScope, string> = {
+  read: "Read environments and threads",
+  create: "Create threads",
+  send: "Send messages",
+  control: "Control active work",
+  lifecycle: "Pause, retry, and restart work",
+  approval: "Review and decide approvals",
+  artifact: "Retrieve thread artifacts",
+  review: "Read and update code reviews",
+  admin: "Change repositories and access",
+  delivery: "Manage subscriptions and webhooks",
+};
 const GATEWAY_SCOPES = new Set<GatewayScope>(MCP_GATEWAY_CONFIGURABLE_SCOPES);
 let currentMcpGatewayStatus: McpGatewayUiState = "disabled";
 

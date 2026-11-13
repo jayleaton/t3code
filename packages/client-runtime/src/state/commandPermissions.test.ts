@@ -162,6 +162,9 @@ describe("command permissions", () => {
     { method: WS_METHODS.serverRunStorageCleanup, scope: AuthSettingsWriteScope },
     { method: WS_METHODS.serverMutateAgentLibrary, scope: AuthSettingsWriteScope },
     { method: WS_METHODS.serverReclaimDatabaseSpace, scope: AuthEnvironmentMaintainScope },
+    { method: WS_METHODS.serverUpdateAgentGateway, scope: AuthAccessWriteScope },
+    { method: WS_METHODS.serverRevealAgentGatewayToken, scope: AuthAccessWriteScope },
+    { method: WS_METHODS.serverRotateAgentGatewayToken, scope: AuthAccessWriteScope },
     // A read-only app of the device network opens other members; the server caps the grant.
     { method: WS_METHODS.tailnetDevicesOpenDevice, scope: AuthOrchestrationReadScope },
   ])("requires the destination $scope grant for $method", ({ method, scope }) =>

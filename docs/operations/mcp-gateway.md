@@ -68,11 +68,14 @@ their durable receipts.
 ## Headless servers
 
 Without a desktop app, nothing feeds thread events to the owner, so `thread.*` events and
-webhooks stay silent. A server started with `T3_MCP_HEADLESS_GATEWAY=1` (and not in desktop
-mode) hosts the runtime itself ([HeadlessGatewayHost.ts](../../apps/server/src/mcp/agents/HeadlessGatewayHost.ts)).
-It reads `T3_MCP_BRIDGE_TOKEN` and the other launcher variables from its environment, then from
-`~/.config/t3code/mcp-gateway.env` (owner-only, mode 0600), and grants its own environment
-`T3_MCP_HEADLESS_SCOPES` (default `read,delivery`).
+webhooks stay silent. A server not in desktop mode hosts the runtime itself when its
+`agentGateway` setting is on ([HeadlessGatewayHost.ts](../../apps/server/src/mcp/agents/HeadlessGatewayHost.ts)),
+granting only its own environment the setting's scopes. Until a client saves the setting,
+`T3_MCP_HEADLESS_GATEWAY=1` and `T3_MCP_HEADLESS_SCOPES` (default `read,delivery`) stand in
+for it. The other launcher variables come from its environment, then from
+`~/.config/t3code/mcp-gateway.env` (owner-only, mode 0600), except the token: the file's wins,
+because rotating rewrites it and restarts the owner, which is what cuts off the old token. A
+desktop-mode server refuses the setting; the desktop's renderer is its runtime.
 
 It runs the owner in the server process when the bridge port is free, without the idle
 shutdown, and otherwise joins the owner already there; it retries the port every 15 seconds,

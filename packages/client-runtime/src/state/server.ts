@@ -1300,6 +1300,24 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverReclaimDatabaseSpace,
       concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
+    agentGateway: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:agent-gateway",
+      tag: WS_METHODS.serverGetAgentGateway,
+      idleTtlMs: 0,
+    }),
+    updateAgentGateway: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:update-agent-gateway",
+      tag: WS_METHODS.serverUpdateAgentGateway,
+    }),
+    revealAgentGatewayToken: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:reveal-agent-gateway-token",
+      tag: WS_METHODS.serverRevealAgentGatewayToken,
+    }),
+    rotateAgentGatewayToken: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:rotate-agent-gateway-token",
+      tag: WS_METHODS.serverRotateAgentGatewayToken,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
     storageCleanupReport: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:storage-cleanup-report",
       tag: WS_METHODS.serverGetStorageCleanupReport,

@@ -84,19 +84,15 @@ If the file contains credentials, restrict access to that file with `chmod 600`
 ### T3 Agents webhooks without the desktop app
 
 T3 Agents events and webhooks normally come from the desktop app. To have a headless service
-send them, opt in and add the gateway's bridge token to `~/.config/t3code/mcp-gateway.env`,
-the file the desktop app reads the token from, and `chmod 600` it. This keeps the token out of
-the service's environment; `~/.t3/service.env` also works.
+send them, open the service's environment in a browser or the mobile app and turn on its
+**Server gateway** in Settings → Environments → MCP Gateway (mobile: Settings → Maintenance →
+Agent gateway). The service creates the bridge token in `~/.config/t3code/mcp-gateway.env`,
+the file the desktop app reads it from, if there is none; **Show token** and **Rotate token**
+are on the same row. Webhooks registered with `t3_register_webhook` fire while the service
+runs. When you open the desktop app, it takes over and the service steps aside.
 
-```dotenv
-T3_MCP_HEADLESS_GATEWAY=1
-T3_MCP_BRIDGE_TOKEN=<the token your MCP launchers use>
-# Optional: scopes for this machine's environment (default read,delivery)
-T3_MCP_HEADLESS_SCOPES=read,delivery
-```
-
-Then run `t3 service restart`. Webhooks registered with `t3_register_webhook` fire while the
-service runs. When you open the desktop app, it takes over and the service steps aside.
+Until the setting is saved once, the service follows `T3_MCP_HEADLESS_GATEWAY=1` and
+`T3_MCP_HEADLESS_SCOPES` from its environment, as older versions did.
 
 ## Platform support
 
