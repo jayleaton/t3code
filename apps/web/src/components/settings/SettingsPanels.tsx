@@ -31,7 +31,7 @@ import {
   ScreenReaderAnnouncements,
   ToolCallVisibility,
 } from "@t3tools/contracts/settings";
-import { desktopUpdateChannelOf } from "@t3tools/shared/cliRelease";
+import { desktopUpdateChannelOf, LICENSE_URL } from "@t3tools/shared/cliRelease";
 import { createModelSelection } from "@t3tools/shared/model";
 import { resolvePastedPath } from "@t3tools/shared/path";
 import * as Equal from "effect/Equal";
@@ -2411,6 +2411,19 @@ export function AboutSettingsPanel() {
               variant="outline"
             >
               View policy
+            </Button>
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("license")}
+          description={`The license ${APP_NAME}'s source code is released under.`}
+          control={
+            <Button
+              render={<a href={LICENSE_URL} target="_blank" rel="noreferrer noopener" />}
+              size="sm"
+              variant="outline"
+            >
+              View license
             </Button>
           }
         />

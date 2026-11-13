@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { LICENSE_URL } from "@t3tools/shared/cliRelease";
+
 import { isLegalDocumentUrl } from "./legal-document-url";
 
 describe("isLegalDocumentUrl", () => {
@@ -9,4 +11,8 @@ describe("isLegalDocumentUrl", () => {
       expect(isLegalDocumentUrl(url)).toBe(false);
     },
   );
+
+  it("allows the fork's license", () => {
+    expect(isLegalDocumentUrl(`${LICENSE_URL}/`)).toBe(true);
+  });
 });

@@ -1,6 +1,7 @@
+import { LICENSE_URL } from "@t3tools/shared/cliRelease";
+
 import { SettingsLegalDocumentRouteScreen } from "./components/SettingsLegalDocumentRouteScreen";
-import { LEGAL_URL } from "./lib/legal-document-url";
 
 export function SettingsLegalRouteScreen() {
-  return <SettingsLegalDocumentRouteScreen documentName="Legal" documentUrl={LEGAL_URL} />;
+  return <SettingsLegalDocumentRouteScreen documentName="License" documentUrl={LICENSE_URL} />;
 }

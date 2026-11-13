@@ -921,6 +921,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["logs traces processes resource history failures spans cpu memory"],
   },
   {
+    id: "license",
+    title: "License",
+    to: "/settings/about",
+    searchTerms: ["legal MIT"],
+  },
+  {
     id: "open-source-licenses",
     title: "Open source licenses",
     to: "/settings/about",

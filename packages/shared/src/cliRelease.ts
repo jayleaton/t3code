@@ -8,6 +8,7 @@ import { compareSemverVersions } from "./semver.ts";
 // scripts/install.sh and install.ps1 repeat it; scripts/install.test.ts keeps them in step.
 export const CLI_RELEASE_REPOSITORY = "jayleaton/t3code";
 export const CLI_RELEASES_PAGE_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/releases`;
+export const LICENSE_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/blob/main/LICENSE`;
 export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";
 /** The release's `t3` package manifest, listed in its checksums; read by npmReleaseDatabaseMigration. */
 export const CLI_RELEASE_MANIFEST_FILE = "t3-release.json";
