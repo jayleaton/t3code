@@ -7,11 +7,11 @@
       "layers": [
         {
           "glass": true,
-          "image-name": "text.svg",
-          "name": "Text",
+          "image-name": "pip.svg",
+          "name": "Pip",
           "position": {
-            "scale": 8.5,
-            "translation-in-points": [0, 0]
+            "scale": 8.4,
+            "translation-in-points": [0, -24]
           }
         },
         {
