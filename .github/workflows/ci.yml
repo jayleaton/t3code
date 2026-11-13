@@ -13,7 +13,7 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Upstream runs every job on Blacksmith runners. The jayleaton/t3code fork has
+# Upstream runs every job on Blacksmith runners. The jayleaton/ada fork has
 # no Blacksmith runners, so there each job uses the GitHub-hosted image of the
 # same OS (ubuntu-24.04 is the image Blacksmith boots; macos-26 for the native
 # lint). Public-repo hosted runners have 4 Linux vCPUs and 3 macOS cores, half
@@ -30,7 +30,7 @@ jobs:
   # open: if the diff cannot be resolved, everything runs.
   changes:
     name: Changes
-    runs-on: ${{ github.repository == 'jayleaton/t3code' && 'ubuntu-24.04' || 'blacksmith-2vcpu-ubuntu-2404' }}
+    runs-on: ${{ github.repository == 'jayleaton/ada' && 'ubuntu-24.04' || 'blacksmith-2vcpu-ubuntu-2404' }}
     timeout-minutes: 5
     outputs:
       typecheck: ${{ steps.detect.outputs.typecheck }}
@@ -72,8 +72,8 @@ jobs:
       contents: read
       id-token: write
     name: Lint
-    runs-on: ${{ github.repository == 'jayleaton/t3code' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
-    timeout-minutes: ${{ github.repository == 'jayleaton/t3code' && 20 || 10 }}
+    runs-on: ${{ github.repository == 'jayleaton/ada' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    timeout-minutes: ${{ github.repository == 'jayleaton/ada' && 20 || 10 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -150,8 +150,8 @@ jobs:
     name: Build and Typecheck
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.build != 'false' || needs.changes.outputs.typecheck != 'false') }}
-    runs-on: ${{ github.repository == 'jayleaton/t3code' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
-    timeout-minutes: ${{ github.repository == 'jayleaton/t3code' && 20 || 10 }}
+    runs-on: ${{ github.repository == 'jayleaton/ada' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    timeout-minutes: ${{ github.repository == 'jayleaton/ada' && 20 || 10 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -305,8 +305,8 @@ jobs:
     name: Test
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.test != 'false' }}
-    runs-on: ${{ github.repository == 'jayleaton/t3code' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
-    timeout-minutes: ${{ github.repository == 'jayleaton/t3code' && 20 || 10 }}
+    runs-on: ${{ github.repository == 'jayleaton/ada' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    timeout-minutes: ${{ github.repository == 'jayleaton/ada' && 20 || 10 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -404,8 +404,8 @@ jobs:
     name: Test Web
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.test_web != 'false' }}
-    runs-on: ${{ github.repository == 'jayleaton/t3code' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
-    timeout-minutes: ${{ github.repository == 'jayleaton/t3code' && 20 || 10 }}
+    runs-on: ${{ github.repository == 'jayleaton/ada' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    timeout-minutes: ${{ github.repository == 'jayleaton/ada' && 20 || 10 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -462,7 +462,7 @@ jobs:
       contents: read
       id-token: write
     name: Test Server ${{ matrix.shard }}
-    runs-on: ${{ github.repository == 'jayleaton/t3code' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ github.repository == 'jayleaton/ada' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -576,7 +576,7 @@ jobs:
     name: Rust
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
-    runs-on: ${{ github.repository == 'jayleaton/t3code' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ github.repository == 'jayleaton/ada' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -609,8 +609,8 @@ jobs:
     name: Mobile Native Static Analysis
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.mobile_native != 'false' }}
-    runs-on: ${{ github.repository == 'jayleaton/t3code' && 'macos-26' || 'blacksmith-6vcpu-macos-26' }}
-    timeout-minutes: ${{ github.repository == 'jayleaton/t3code' && 20 || 10 }}
+    runs-on: ${{ github.repository == 'jayleaton/ada' && 'macos-26' || 'blacksmith-6vcpu-macos-26' }}
+    timeout-minutes: ${{ github.repository == 'jayleaton/ada' && 20 || 10 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -642,8 +642,8 @@ jobs:
     name: Release Smoke
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.release_smoke != 'false' }}
-    runs-on: ${{ github.repository == 'jayleaton/t3code' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
-    timeout-minutes: ${{ github.repository == 'jayleaton/t3code' && 20 || 15 }}
+    runs-on: ${{ github.repository == 'jayleaton/ada' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    timeout-minutes: ${{ github.repository == 'jayleaton/ada' && 20 || 15 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -682,7 +682,7 @@ jobs:
         mobile_native_static_analysis,
         release_smoke,
       ]
-    runs-on: ${{ github.repository == 'jayleaton/t3code' && 'ubuntu-24.04' || 'blacksmith-2vcpu-ubuntu-2404' }}
+    runs-on: ${{ github.repository == 'jayleaton/ada' && 'ubuntu-24.04' || 'blacksmith-2vcpu-ubuntu-2404' }}
     timeout-minutes: 5
     steps:
       - name: Require every job to pass

@@ -4,5 +4,5 @@
   "description": "Allows Ada to capture the focused window, identify it for optional accessibility text, and animate it into Ada. Disable this extension to revoke access.",
   "shell-version": ["45", "46", "47", "48", "49", "50", "51"],
   "version": 3,
-  "url": "https://github.com/jayleaton/t3code"
+  "url": "https://github.com/jayleaton/ada"
 }

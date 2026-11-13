@@ -48,7 +48,7 @@ async function config(): Promise<SharedGatewayConfig> {
     port: address.port,
     token: TOKEN,
     stateFile: NodePath.join(directory, "events.sqlite"),
-    repositoryAllowlist: ["jayleaton/t3code"],
+    repositoryAllowlist: ["jayleaton/ada"],
     initialGrants: {},
     retentionEvents: 1_000,
   };

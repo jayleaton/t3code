@@ -12,6 +12,7 @@ import { createGatewayEventStore, type GatewayEventStore } from "./events.ts";
 import { GATEWAY_SCOPE_VALUES, hasGatewayScopes, type GatewayScope } from "./port.ts";
 import { createMcpGateway } from "./server.ts";
 import { acceptMcpSession, rejectRetiring, type GatewayBuild } from "./sharedTransport.ts";
+import { DEFAULT_REPOSITORY_ALLOWLIST } from "./tools.ts";
 
 export interface SharedGatewayConfig {
   readonly port: number;
@@ -57,7 +58,7 @@ export function sharedGatewayConfigFromEnvironment(
   if (token === undefined || token.length < 16) {
     throw new Error("T3_MCP_BRIDGE_TOKEN must contain at least 16 characters.");
   }
-  const repositoryAllowlist = (env.T3_MCP_REPOSITORY_ALLOWLIST ?? "jayleaton/t3code")
+  const repositoryAllowlist = (env.T3_MCP_REPOSITORY_ALLOWLIST ?? DEFAULT_REPOSITORY_ALLOWLIST)
     .split(",")
     .map((repository) => repository.trim())
     .filter((repository) => /^[^/\s]+\/[^/\s]+$/u.test(repository));

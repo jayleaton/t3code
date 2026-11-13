@@ -21,6 +21,10 @@ import {
 import type { GatewayEvent, GatewayEventStore } from "./events.ts";
 import type { ScheduledTaskSchedule } from "@t3tools/contracts";
 import { APP_NAME } from "@t3tools/shared/branding";
+import { CLI_RELEASE_REPOSITORY } from "@t3tools/shared/cliRelease";
+
+// The pre-rename name stays allowed: existing clones still name it in their remote.
+export const DEFAULT_REPOSITORY_ALLOWLIST = `${CLI_RELEASE_REPOSITORY},jayleaton/t3code`;
 
 export type GatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
 export type GatewayGrantSource = GatewayGrants | (() => GatewayGrants);
@@ -1118,7 +1122,7 @@ function assertRepositoryAllowed(
   repository: string,
 ): void {
   const identity = `${owner}/${repository}`.toLowerCase();
-  const allowlist = context.repositoryAllowlist ?? ["jayleaton/t3code"];
+  const allowlist = context.repositoryAllowlist ?? DEFAULT_REPOSITORY_ALLOWLIST.split(",");
   if (!allowlist.some((candidate) => candidate.toLowerCase() === identity)) {
     throw new GatewayError({
       code: "scope_required",

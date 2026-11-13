@@ -379,7 +379,7 @@ const wideWork = (calls: Array<string>) => {
         {
           id: "project-1",
           title: "t3code",
-          repositoryIdentity: { owner: "jayleaton", name: "t3code" },
+          repositoryIdentity: { owner: "jayleaton", name: "ada" },
         },
       ],
       snapshotAt: "snapshot-1",
@@ -441,7 +441,7 @@ const wideWork = (calls: Array<string>) => {
   } as unknown as Partial<GatewayRuntimePort>;
 };
 
-const PR = { projectId: "project-1", repository: "t3code", number: 7 };
+const PR = { projectId: "project-1", repository: "ada", number: 7 };
 const MUTATING_TOOLS: ReadonlyArray<readonly [string, Record<string, unknown>, string]> = [
   [
     "t3_create_scheduled_task",
@@ -493,7 +493,7 @@ const MUTATING_TOOLS: ReadonlyArray<readonly [string, Record<string, unknown>, s
     "t3_create_pr",
     {
       projectId: "project-1",
-      repository: "t3code",
+      repository: "ada",
       owner: "jayleaton",
       headBranch: "wide",
       baseBranch: "main",

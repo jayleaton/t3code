@@ -2,7 +2,7 @@
 
 Status: implementation specification
 Scope: production MCP orchestration over the existing T3 runtime and its direct, Tailscale and SSH access paths
-Repository: `jayleaton/t3code` fork only
+Repository: `jayleaton/ada` fork only
 
 ## 1. Decision and non-goals
 
@@ -276,7 +276,7 @@ Approval decisions are idempotent by `requestId` and actor, and fail closed when
 
 ## 11. Git, PR, and code review workflow
 
-Support repositories on the `jayleaton/t3code` fork and configured upstream repositories without ever pushing to `pingdotgg/t3code`. The repository target is explicit in every write operation: owner, repository, base branch, head branch, and fork/upstream role.
+Support repositories on the `jayleaton/ada` fork and configured upstream repositories without ever pushing to `pingdotgg/t3code`. The repository target is explicit in every write operation: owner, repository, base branch, head branch, and fork/upstream role.
 
 MCP tools:
 
@@ -337,7 +337,7 @@ The release is accepted only when all of these pass against production builds an
 6. Pause/resume, stop/cancel, retry a failure, and restart an interrupted thread; verify canonical states and durable history.
 7. Retrieve an image, screenshot, file, patch, log/document, and PR link from the owning remote environment with authorization enforced.
 8. Approve one pending action, reject another, and verify destructive confirmation is separately required.
-9. Create a draft PR on `jayleaton/t3code`, return URL/checks/unresolved count, apply a review fix, push it, and verify comments remain unresolved until refreshed against the pushed commit.
+9. Create a draft PR on `jayleaton/ada`, return URL/checks/unresolved count, apply a review fix, push it, and verify comments remain unresolved until refreshed against the pushed commit.
 10. Exercise disconnected, degraded, webhook retry, cursor-expired, unauthorized, stale-plan, stale-comment, and artifact-failed paths with typed errors.
 11. Disable MCP and verify no MCP socket/session/credential is created and ordinary T3 local/remote operation remains unaffected.
 12. Run focused package tests, schema/type checks, and production packaging checks for the changed surfaces; do not claim voice-agent acceptance from mocks alone.

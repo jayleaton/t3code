@@ -588,7 +588,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         {
           provider: "github",
           owner: "jayleaton",
-          repo: "t3code",
+          repo: "ada",
           releaseType: "prerelease",
           channel: "nightly",
         },
@@ -613,7 +613,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
               T3CODE_DESKTOP_APP_ID: "com.jayleaton.t3agents",
               T3CODE_DESKTOP_PRODUCT_NAME: "T3 Agents",
               T3CODE_DESKTOP_BRAND: "agents",
-              T3CODE_DESKTOP_UPDATE_REPOSITORY: "jayleaton/t3code",
+              T3CODE_DESKTOP_UPDATE_REPOSITORY: "jayleaton/ada",
               GITHUB_REPOSITORY: "pingdotgg/t3code",
             },
           }),

@@ -6,7 +6,7 @@ import { compareSemverVersions } from "./semver.ts";
 
 // The fork publishes its own `t3` builds; installing upstream's would replace the fork server.
 // scripts/install.sh and install.ps1 repeat it; scripts/install.test.ts keeps them in step.
-export const CLI_RELEASE_REPOSITORY = "jayleaton/t3code";
+export const CLI_RELEASE_REPOSITORY = "jayleaton/ada";
 export const CLI_RELEASES_PAGE_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/releases`;
 export const LICENSE_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/blob/main/LICENSE`;
 export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";

@@ -48,7 +48,7 @@ describe("takeLauncherEnvironment", () => {
         T3_MCP_HEADLESS_SCOPES: "read,delivery",
         T3_MCP_BRIDGE_PORT: "47700",
         T3_MCP_BRIDGE_TOKEN: TOKEN,
-        T3_MCP_REPOSITORY_ALLOWLIST: "jayleaton/t3code",
+        T3_MCP_REPOSITORY_ALLOWLIST: "jayleaton/ada",
         T3_MCP_EVENT_RETENTION: "5000",
         T3_MCP_STATE_FILE: "/home/jj/.t3/mcp-gateway-v3.sqlite",
         T3_MCP_GRANTS: "{}",
@@ -111,7 +111,7 @@ describe("resolveGatewayConfig", () => {
         token: TOKEN,
         stateFile: "/home/jj/.t3/mcp-gateway-v3.sqlite",
         retentionEvents: 100_000,
-        repositoryAllowlist: ["jayleaton/t3code"],
+        repositoryAllowlist: ["jayleaton/ada", "jayleaton/t3code"],
         initialGrants: {},
       },
     });

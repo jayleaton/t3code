@@ -4,7 +4,7 @@ import { APP_NAME } from "@t3tools/shared/branding";
 export type DesktopUpdateButtonAction = "download" | "install" | "none";
 
 // T3 Agents follows the fork's own releases, not upstream T3 Code's.
-const DEFAULT_DESKTOP_RELEASE_REPOSITORY = "jayleaton/t3code";
+const DEFAULT_DESKTOP_RELEASE_REPOSITORY = "jayleaton/ada";
 const GITHUB_REPOSITORY_SEGMENT = /^[A-Za-z0-9._-]+$/u;
 
 function isValidRepositorySegment(value: string | undefined): value is string {

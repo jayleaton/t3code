@@ -1,4 +1,4 @@
-const REPO = "jayleaton/t3code";
+const REPO = "jayleaton/ada";
 
 export const RELEASES_URL = `https://github.com/${REPO}/releases`;
 export const NIGHTLY_RELEASES_URL = `${RELEASES_URL}?q=nightly&expanded=true`;

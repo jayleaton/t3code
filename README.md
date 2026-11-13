@@ -30,7 +30,7 @@ to it from anywhere.
 
 ### Desktop app
 
-Download Ada from [GitHub Releases](https://github.com/jayleaton/t3code/releases): the `.dmg` on macOS, the `.exe` on Windows, or the `.AppImage` or `.deb` on Linux. Its updater then follows nightly releases; there is no Stable track yet.
+Download Ada from [GitHub Releases](https://github.com/jayleaton/ada/releases): the `.dmg` on macOS, the `.exe` on Windows, or the `.AppImage` or `.deb` on Linux. Its updater then follows nightly releases; there is no Stable track yet.
 
 `winget`, Homebrew, the AUR, Nix and `npx t3` install T3 Code, not Ada.
 
@@ -99,6 +99,6 @@ vp i
 
 Read [CONTRIBUTING.md](./CONTRIBUTING.md) before reporting a bug or opening a PR.
 
-Have a feature request? Start a [discussion](https://github.com/jayleaton/t3code/discussions).
+Have a feature request? Start a [discussion](https://github.com/jayleaton/ada/discussions).
 
-Found a bug? Open an [issue](https://github.com/jayleaton/t3code/issues).
+Found a bug? Open an [issue](https://github.com/jayleaton/ada/issues).

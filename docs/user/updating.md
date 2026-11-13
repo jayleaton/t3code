@@ -38,7 +38,7 @@ below.
 ## Release channel
 
 Every Ada release is a nightly, published on
-[GitHub Releases](https://github.com/jayleaton/t3code/releases). There is no
+[GitHub Releases](https://github.com/jayleaton/ada/releases). There is no
 stable track to switch to. Do not update with T3 Code's installers or
 its npm package: they replace Ada's server with T3 Code's.
 
@@ -152,7 +152,7 @@ provider update shows as unavailable; Ada does not try the public registry
 instead. Machines without npm check the public npm registry directly.
 
 To download Ada releases through a mirror of
-[GitHub Releases](https://github.com/jayleaton/t3code/releases), set
+[GitHub Releases](https://github.com/jayleaton/ada/releases), set
 `T3CODE_RELEASE_BASE_URL` for the installer and in the server's environment.
 
 ## Update providers

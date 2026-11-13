@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   sync:
-    if: github.repository == 'jayleaton/t3code' && vars.FORK_RELEASE_ENABLED == 'true'
+    if: github.repository == 'jayleaton/ada' && vars.FORK_RELEASE_ENABLED == 'true'
     runs-on: ubuntu-24.04
     env:
       GH_TOKEN: ${{ github.token }}
