@@ -33,6 +33,10 @@ const ANDROID_FRACTION = 0.4;
 const SVG_DENSITY = 300;
 const OUTPUT_DIRECTORY = "apps/mobile/assets/agents";
 const WIDGET_MARK = "apps/mobile/assets/widget/PipMark.svg";
+const DEV_ICON_EDGE = "#347FF8";
+const DEV_ICON_LAYERS = ["background.svg", "annotations.svg"].map(
+  (name) => `assets/dev/app-icon.icon/Assets/${name}`,
+);
 
 export class AndroidIconRenderError extends Schema.TaggedError<AndroidIconRenderError>()(
   "AndroidIconRenderError",
@@ -53,6 +57,31 @@ const exportAndroidIcons = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const repositoryRoot = path.resolve(import.meta.dirname, "..");
+  /** The dev blueprint layers, full bleed, with `top` composited over them. */
+  const layered = (layer: string, size: number, ...top: ReadonlyArray<Buffer>) =>
+    Effect.forEach(DEV_ICON_LAYERS, (source) =>
+      fs
+        .readFileString(path.join(repositoryRoot, source))
+        .pipe(Effect.flatMap((svg) => rasterize(source, svg, size))),
+    ).pipe(
+      Effect.flatMap(([background, ...overlays]) =>
+        Effect.tryPromise({
+          // sharp composites last, so flatten in a second pass. The blueprint rounds its own
+          // corners; launchers mask further in, and iOS icons take no alpha.
+          try: async () =>
+            sharp(
+              await sharp(background)
+                .composite([...overlays, ...top].map((input) => ({ input })))
+                .png()
+                .toBuffer(),
+            )
+              .flatten({ background: DEV_ICON_EDGE })
+              .png()
+              .toBuffer(),
+          catch: (cause) => new AndroidIconRenderError({ layer, cause }),
+        }),
+      ),
+    );
   const pip = parsePip(yield* fs.readFileString(path.join(repositoryRoot, PIP_SOURCE)));
   const splashMarkHeight = Math.round((SPLASH_MARK_WIDTH * pip.height) / pip.width);
 
@@ -103,6 +132,24 @@ const exportAndroidIcons = Effect.gen(function* () {
     ],
     // A template image: iOS tints it, so only the shape matters.
     [WIDGET_MARK, pipGlyphSvg(pip, PIP_COLORS.black)],
+    // Dev builds wear the desktop dev icon's blueprint with a white Pip, matching their in-app mark.
+    [
+      `${OUTPUT_DIRECTORY}/dev-ios-icon-1024.png`,
+      yield* layered(
+        "dev-ios-icon",
+        IOS_CANVAS,
+        yield* canvas("dev-ios-pip", pip, {
+          size: IOS_CANVAS,
+          fraction: ICON_FRACTION,
+          fill: PIP_COLORS.white,
+          lift: PIP_ICON_LIFT,
+        }),
+      ),
+    ],
+    [
+      `${OUTPUT_DIRECTORY}/android-dev-icon-background.png`,
+      yield* layered("dev-android-background", ADAPTIVE_CANVAS),
+    ],
   ];
   for (const [relativePath, contents] of outputs) {
     yield* fs.writeFile(
