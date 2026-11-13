@@ -1,7 +1,7 @@
 # Headless T3 server: the server from the fork's AppImage, without the Electron window.
 # Install with packaging/linux-headless/t3-headless-update; see docs/operations/headless-linux.md.
 [Unit]
-Description=T3 Code server (headless)
+Description=Ada server (headless)
 # No network wait: T3CODE_HOST=0.0.0.0 also covers LAN and Tailscale addresses
 # that appear after start, and clients re-read the advertised addresses.
 # A remote host has nobody to reset a start limit: keep retrying with backoff
