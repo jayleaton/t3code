@@ -33,6 +33,14 @@ describe("resolveT3McpToolPresentation", () => {
     }
   });
 
+  it("labels the T3 Agents schedule tools, not the retired update_scheduled_task", () => {
+    expect(
+      resolveT3McpToolDefinition("mcp__t3-code__t3_create_scheduled_task")?.summaryAction,
+    ).toBe("schedule-create");
+    expect(resolveT3McpToolDefinition("t3_run_scheduled_task")?.summaryAction).toBe("schedule-run");
+    expect(resolveT3McpToolDefinition("update_scheduled_task")).toBeNull();
+  });
+
   it("matches OpenCode 2's per-thread server names, whose thread ids hold underscores", () => {
     expect(
       resolveT3McpToolPresentation("t3-code-thread_opencode2-adapter_delegate_task")?.displayName,

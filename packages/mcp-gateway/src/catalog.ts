@@ -317,8 +317,8 @@ export const TOOL_SPECS = {
     { environmentId },
   ],
   t3_create_scheduled_task: [
-    "Schedule a prompt to run on an agent, once (runAt) or repeatedly (cron + timezone). The first run creates the task's thread from the agent profile in the project; later runs post into the same thread. The task is stored on and runs on the environment that hosts the project, so pass that environment (omit it for this chat's own machine), not the device you are talking through. Tasks run only while that environment's server is up; a run missed while it was down fires once when it returns. Runs use the agent's permission mode, so an agent that needs approvals will wait for them. Requires create or admin access.",
-    { environmentId, ...scheduledTaskFields },
+    "Schedule a prompt to run on an agent, once (runAt) or repeatedly (cron + timezone). The first run creates the task's thread from the agent profile in the project; later runs post into the same thread. The task is stored on and runs on the environment that hosts the project, so pass that environment (omit it for this chat's own machine), not the device you are talking through. Tasks run only while that environment's server is up; a run missed while it was down fires once when it returns. Runs use the agent's permission mode, so an agent that needs approvals will wait for them. Retrying with the same idempotencyKey returns the same task. Requires create or admin access.",
+    { environmentId, ...scheduledTaskFields, idempotencyKey: idempotencyKey.optional() },
   ],
   t3_update_scheduled_task: [
     "Change a scheduled task by taskId: prompt, title, schedule (runAt or cron/timezone), agent, project, or enabled to pause/resume. Changing agent or project starts a new thread on the next run. Re-arming a finished one-time task needs a future runAt. Requires create or admin access.",

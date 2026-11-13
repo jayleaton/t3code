@@ -222,7 +222,10 @@ const ScheduledTaskRunTool = Tool.make("run_scheduled_task_now", {
     "Run one scheduled task now. Needs a full-access or default caller. Returns its thread, or null if not started. Success means started, not finished.",
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
-    taskId: ScheduledTaskId,
+    scheduledTaskId: Schema.optional(ScheduledTaskId),
+    taskId: Schema.optional(
+      ScheduledTaskId.annotate({ description: "Older name for scheduledTaskId." }),
+    ),
   }),
   success: Schema.Struct({
     taskId: ScheduledTaskId,

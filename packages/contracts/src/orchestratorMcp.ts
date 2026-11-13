@@ -69,7 +69,7 @@ const OrchestratorMcpSchedule = Schema.Union([
   OrchestratorMcpScheduleFromJsonString,
 ]).annotate({
   description:
-    "Trigger: {type:'interval',everyMs}, {type:'fixed_time',timeOfDay,weekdays?}, {type:'once',runAt}, or {type:'webhook'}.",
+    "Trigger: {type:'interval',everyMs}, {type:'fixed_time',timeOfDay,weekdays?}, {type:'cron',expression,timezone} for other calendar patterns, {type:'once',runAt}, or {type:'webhook'}.",
 });
 
 const OrchestratorMcpTargetOptionsFromRecord = Schema.Record(
@@ -890,6 +890,12 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   blockedByPolicy: Schema.optional(Schema.String).annotate({
     description: "Present when an administrator's policy stops this task from running.",
   }),
+  archived: Schema.optional(
+    Schema.Struct({ reason: Schema.String, deletesAt: IsoDateTime }).annotate({
+      description:
+        "Archived for going stale: it is off and is deleted at deletesAt. schedule_task enabled=true restores it.",
+    }),
+  ),
 });
 export type OrchestratorMcpScheduledTask = typeof OrchestratorMcpScheduledTask.Type;
 
@@ -902,6 +908,9 @@ export const OrchestratorMcpListScheduledTasksInput = Schema.Struct({
     ProjectId.annotate({
       description: "Default: your thread's project, or all outside a thread.",
     }),
+  ),
+  includeArchived: Schema.optional(
+    Schema.Boolean.annotate({ description: "Also list tasks archived for going stale." }),
   ),
 });
 export type OrchestratorMcpListScheduledTasksInput =

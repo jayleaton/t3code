@@ -95,14 +95,20 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
   run_scheduled_task_now: McpToolAccess.writesEnvironment((input) =>
     Effect.gen(function* () {
       const scheduler = yield* ScheduledTasks.ScheduledTaskService;
+      const taskId = input.scheduledTaskId ?? input.taskId;
+      if (taskId === undefined)
+        return yield* new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message: "Pass the task's scheduledTaskId.",
+        });
       const { tasks } = yield* scheduler.list().pipe(Effect.mapError(unavailable));
-      if (!tasks.some((task) => task.id === input.taskId))
+      if (!tasks.some((task) => task.id === taskId))
         return yield* new OrchestratorMcpFailure({
           code: "invalid_request",
           message: "The scheduled task was not found.",
         });
       const { task, threadId } = yield* scheduler
-        .runNow({ id: input.taskId })
+        .runNow({ id: taskId })
         .pipe(
           Effect.mapError(
             (error) =>

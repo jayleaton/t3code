@@ -885,6 +885,9 @@ export function createGatewayRuntimePort(
                   projectId: ProjectId.make(input.projectId),
                   workspaceStrategy: { type: "root" },
                   ...routing,
+                  ...(input.commandId === undefined
+                    ? {}
+                    : { commandId: CommandId.make(input.commandId) }),
                   createdBy: "agent",
                   creationSource: "mcp",
                 }),

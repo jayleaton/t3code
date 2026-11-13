@@ -202,6 +202,13 @@ it.effect("adds every tool that needs no event store and is not a lifecycle alia
     expect(tools.has("t3_subscribe_events")).toBe(false);
     expect(tools.has("t3_control_thread")).toBe(true);
     for (const alias of SERVER_SUPERSEDED_TOOLS) expect(tools.has(alias)).toBe(false);
+    // The in-process server already has schedule_task; these remain for one release.
+    expect(tools.get("t3_create_scheduled_task")?.description).toBe(
+      "Deprecated: use `schedule_task` with `profileId`.",
+    );
+    expect(tools.get("t3_run_scheduled_task")?.description).toMatch(
+      /^Deprecated: use `run_scheduled_task_now`/,
+    );
     const schema = tools.get("t3_get_thread")!.inputSchema as unknown as {
       properties: Record<string, unknown>;
       required?: Array<string>;

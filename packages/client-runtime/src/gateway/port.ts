@@ -177,8 +177,10 @@ export interface GatewayScheduledTaskCreate {
   readonly projectId: string;
   readonly schedule: ScheduledTaskSchedule;
   readonly enabled?: boolean;
+  /** Derived from the caller's idempotency key, so a retried create returns the same task. */
+  readonly commandId?: string;
 }
-export type GatewayScheduledTaskPatch = Partial<GatewayScheduledTaskCreate>;
+export type GatewayScheduledTaskPatch = Partial<Omit<GatewayScheduledTaskCreate, "commandId">>;
 
 export type GatewayTodoRequest =
   | { readonly action: "list"; readonly projectId: string }

@@ -2876,6 +2876,34 @@ describe("OrchestratorMcpService provider resolution", () => {
       }),
     );
 
+    it.effect("lists archived tasks only when asked, with why and when they are deleted", () =>
+      Effect.gen(function* () {
+        const upserted = yield* Ref.make(0);
+        const archived = task({
+          id: ScheduledTaskId.make("scheduled-task:archived"),
+          enabled: false,
+          archivedAt: "2026-11-01T00:00:00.000Z",
+          archiveReason: "paused",
+        });
+        const mcp = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
+          Effect.provide(service([task({}), archived], null, upserted)),
+        );
+        const active = yield* mcp.listScheduledTasks(supervisedClient, { projectId });
+        assert.deepEqual(
+          active.tasks.map((summary) => summary.scheduledTaskId),
+          ["scheduled-task:webhook"],
+        );
+        const all = yield* mcp.listScheduledTasks(supervisedClient, {
+          projectId,
+          includeArchived: true,
+        });
+        assert.deepEqual(
+          all.tasks.map((summary) => summary.archived),
+          [undefined, { reason: "paused", deletesAt: "2026-12-01T00:00:00.000Z" }],
+        );
+      }),
+    );
+
     it.effect("hides a webhook URL from a thread whose turn has ended", () =>
       Effect.gen(function* () {
         const callerId = ThreadId.make("thread:scheduled-ended");

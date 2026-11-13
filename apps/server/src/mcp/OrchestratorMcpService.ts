@@ -62,6 +62,7 @@ import {
   type ScheduledTask,
   type ScheduledTaskUpsertInput,
   threadParentRelationship,
+  scheduledTaskDeletesAt,
   scheduledTaskThreadMode,
   type ServerProvider,
   type ServerProviderModel,
@@ -304,7 +305,15 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
       ? {}
       : { webhookSignature: task.webhook.hasSecret ? "set" : "none" }),
     ...(task.blockedByPolicy === undefined ? {} : { blockedByPolicy: task.blockedByPolicy }),
+    ...archivedSummary(task),
   };
+}
+
+function archivedSummary(task: ScheduledTask) {
+  const deletesAt = scheduledTaskDeletesAt(task);
+  return deletesAt === null
+    ? {}
+    : { archived: { reason: task.archiveReason ?? "stale", deletesAt } };
 }
 
 /**
@@ -2186,7 +2195,11 @@ const make = Effect.gen(function* () {
           );
         return {
           tasks: yield* Effect.forEach(
-            tasks.filter((task) => projectId === undefined || task.projectId === projectId),
+            tasks.filter(
+              (task) =>
+                (projectId === undefined || task.projectId === projectId) &&
+                (input.includeArchived === true || task.archivedAt === undefined),
+            ),
             (task) => summarizeScheduledTask(scope, { parent, limits }, task),
           ),
         };

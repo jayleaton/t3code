@@ -1670,7 +1670,7 @@ export async function callGatewayTool(
       const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);
       if (!context.port.scheduledTask)
         throw new Error("Scheduled tasks are unavailable in this runtime. Update T3.");
-      const fields = scheduledTaskFields(input);
+      const { idempotencyKey, ...fields } = scheduledTaskFields(input);
       if (!("schedule" in fields)) {
         throw new GatewayError({
           code: "invalid_input",
@@ -1680,7 +1680,19 @@ export async function callGatewayTool(
       }
       return context.port.scheduledTask(environmentId, {
         action: "create",
-        input: fields as unknown as GatewayScheduledTaskCreate,
+        input: {
+          ...(fields as unknown as GatewayScheduledTaskCreate),
+          ...(typeof idempotencyKey === "string"
+            ? {
+                commandId: scopedIdFor(
+                  "scheduled-task",
+                  environmentId,
+                  "scheduled-task",
+                  idempotencyKey,
+                ),
+              }
+            : {}),
+        },
       });
     }
     case "t3_update_scheduled_task": {

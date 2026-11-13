@@ -65,11 +65,23 @@ const AGENTS_TOOL_NAMES = Object.keys(TOOL_SPECS).filter(
   (name) => !GATEWAY_ONLY_TOOLS.has(name) && !SERVER_SUPERSEDED_TOOLS.has(name),
 );
 
+/**
+ * This server's own schedule tools cover these, so in-process agents see one tool set. They stay
+ * one release for agents that learned them; then drop them like SERVER_SUPERSEDED_TOOLS.
+ */
+const DEPRECATED_SCHEDULE_TOOLS: Readonly<Record<string, string>> = {
+  t3_list_scheduled_tasks: "Deprecated: use `list_scheduled_tasks`.",
+  t3_create_scheduled_task: "Deprecated: use `schedule_task` with `profileId`.",
+  t3_update_scheduled_task: "Deprecated: use `schedule_task` with `scheduledTaskId`.",
+  t3_delete_scheduled_task: "Deprecated: use `delete_scheduled_task`.",
+  t3_run_scheduled_task: "Deprecated: use `run_scheduled_task_now`.",
+};
+
 // The gateway validates arguments against the catalog's own schema (agentsToolInputSchema),
 // so the toolkit passes the object through.
 const agentsTool = (name: string) =>
   Tool.make(name, {
-    description: specOf(name)[0],
+    description: DEPRECATED_SCHEDULE_TOOLS[name] ?? specOf(name)[0],
     parameters: Schema.Record(Schema.String, Schema.Unknown),
     success: Schema.instanceOf(McpSchema.CallToolResult),
     failure: OrchestratorMcpFailure,

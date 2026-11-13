@@ -449,6 +449,17 @@ describe("gateway chat tools", () => {
       taskId: "t1",
       patch: { enabled: false },
     });
+    // A retry with the same key must reuse the task instead of creating a second one.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await callGatewayTool(context, "t3_create_scheduled_task", {
+        ...base,
+        cron: "0 7 * * *",
+        idempotencyKey: "nightly-pull",
+      });
+    }
+    const [first, second] = requests.splice(3) as Array<{ input: { commandId?: string } }>;
+    expect(first?.input.commandId).toMatch(/^mcp-scheduled-task-v2-[0-9a-f]{64}$/);
+    expect(second?.input.commandId).toBe(first?.input.commandId);
     expect(requests).toEqual([
       {
         action: "create",
