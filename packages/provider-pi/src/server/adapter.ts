@@ -91,8 +91,7 @@ const PI_SESSION_TIMEOUT_MS = 60_000;
 const MAX_EXTENSION_STATUSES = 32;
 const MAX_EXTENSION_STATUS_KEY_LENGTH = 256;
 const MAX_EXTENSION_STATUS_TEXT_LENGTH = 4096;
-const PI_UNSOLICITED_ACTIVITY_ERROR =
-  `Pi started agent work outside an active ${APP_NAME} turn. The session was stopped to prevent invisible tool execution.`;
+const PI_UNSOLICITED_ACTIVITY_ERROR = `Pi started agent work outside an active ${APP_NAME} turn. The session was stopped to prevent invisible tool execution.`;
 const SETTLE_PROBE_MAX_ATTEMPTS = 3;
 const SETTLE_PROBE_RETRY_DELAY = Duration.millis(100);
 

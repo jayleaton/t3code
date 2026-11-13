@@ -156,8 +156,7 @@ function curatedCauseMessages(cause: unknown): {
         }
         case "ContextHandoffDeliveryUncertainError":
           return {
-            known:
-              `${APP_NAME} could not confirm whether conversation history reached the provider. Retry the turn to recover the session.`,
+            known: `${APP_NAME} could not confirm whether conversation history reached the provider. Retry the turn to recover the session.`,
             category: categoryMessage(),
           };
         case "ProviderAdapterProtocolError": {

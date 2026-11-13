@@ -67,8 +67,7 @@ export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(func
           new ProviderSetupError({
             instanceId: options.instanceId,
             operation: "runtime",
-            detail:
-              `Could not prepare the private managed Codex token listener. Restart ${APP_NAME} and retry.`,
+            detail: `Could not prepare the private managed Codex token listener. Restart ${APP_NAME} and retry.`,
             cause,
           }),
       ),
