@@ -11,13 +11,13 @@ launch T3 Code and configure providers afterwards.
 ## Command line
 
 ```bash
-curl -fsSL https://t3.codes/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/jayleaton/t3code/main/scripts/install.sh | sh
 ```
 
 On Windows, in PowerShell:
 
 ```powershell
-irm https://t3.codes/install.ps1 | iex
+irm https://raw.githubusercontent.com/jayleaton/t3code/main/scripts/install.ps1 | iex
 ```
 
 This installs the `t3` binary to `~/.local/bin`. If that folder is not on your
@@ -25,8 +25,29 @@ This installs the `t3` binary to `~/.local/bin`. If that folder is not on your
 a command to add it. On Windows, `t3` works in the same PowerShell window right
 away; add the folder to your `PATH` for new windows. If a `t3` that the
 installer or the desktop app did not create is already there, it leaves that
-one alone and stops. Set `T3CODE_CHANNEL=nightly` to install the nightly train, or
-`T3CODE_VERSION` to pin an exact version.
+one alone and stops.
+
+Every release of this fork is a nightly, so the installer follows the nightly
+channel. To pin an exact version, set `T3CODE_VERSION`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jayleaton/t3code/main/scripts/install.sh | T3CODE_VERSION=<version> sh
+```
+
+```powershell
+$env:T3CODE_VERSION="<version>"; irm https://raw.githubusercontent.com/jayleaton/t3code/main/scripts/install.ps1 | iex
+```
+
+Each [release](https://github.com/jayleaton/t3code/releases) also carries
+`install.sh` and `install.ps1`. Use only these scripts: upstream T3 Code's
+installers and its npm package install the upstream server and replace this
+one.
+
+For a headless host, run the installer and then `t3 service install`. The
+background service is the only headless setup that the app's **Update** button
+can update ([details](./background-service.md)). Hosts that already run the
+AppImage-based systemd unit can keep following
+[Headless Linux host](../operations/headless-linux.md).
 
 | Task                                             | Command                                                                 |
 | ------------------------------------------------ | ----------------------------------------------------------------------- |
@@ -34,7 +55,7 @@ one alone and stops. Set `T3CODE_CHANNEL=nightly` to install the nightly train, 
 | Start the server without a browser               | `t3 serve`                                                              |
 | Use it from your other devices                   | `t3 up` ([details](./remote-access.md))                                 |
 | Keep it running in the background (macOS, Linux) | `t3 service install` ([details](./background-service.md))               |
-| Move to the newest release                       | `t3 update`                                                             |
+| Move to the newest release                       | `t3 update`, or `t3 update <version>`                                   |
 | Reclaim database space                           | `t3 doctor` ([details](./background-service.md#reclaim-database-space)) |
 | Remove it again                                  | `t3 uninstall`                                                          |
 
@@ -46,21 +67,14 @@ If `t3` or `t3 start` reports an already running server, connect to that server
 instead. Stop it before starting a replacement, or use a different `--base-dir`
 for an independent server.
 
-To try T3 Code once without installing it, run `npx t3@latest` instead (needs
-Node.js for `npx`). It offers to install the `t3` command first. If you say no,
-it asks again at the next minor release, and `npx t3 install` installs it later.
-`npx t3` always runs the version npm picked, even when a `t3` is installed. On
-the nightly train, run your installed `t3` (for example `t3 up`), not
-`npx t3`, which runs the latest stable release.
-
 ### Intel Macs
 
 There is no `t3` executable for Intel Macs (the desktop app is available). To
 run a server there, build it from source with `vp`, which provides the Node version it needs
-([Install vp](https://github.com/pingdotgg/t3code#install-vp)):
+([Install vp](https://github.com/jayleaton/t3code#install-vp)):
 
 ```bash
-git clone https://github.com/pingdotgg/t3code
+git clone https://github.com/jayleaton/t3code
 cd t3code && vp i && vp run build:desktop
 node apps/server/dist/bin.mjs
 ```
@@ -70,17 +84,11 @@ update it with `git pull` and a rebuild.
 
 ## Desktop app
 
-Download a release from [GitHub Releases](https://github.com/pingdotgg/t3code/releases),
-or use a package manager:
-
-| Platform           | Install                                                      |
-| ------------------ | ------------------------------------------------------------ |
-| Windows            | `winget install T3Tools.T3Code`                              |
-| macOS              | `brew install --cask t3-code`                                |
-| Debian, Ubuntu     | `sudo apt install ./T3-Code-*.deb`                           |
-| Arch Linux         | `yay -S t3code-bin`                                          |
-| Arch Linux nightly | `yay -S t3code-nightly-bin`                                  |
-| Nix                | `nix profile add github:NixOS/nixpkgs/nixos-unstable#t3code` |
+Download a release from [GitHub Releases](https://github.com/jayleaton/t3code/releases):
+a `.dmg` for macOS, an `.exe` for Windows, and an AppImage or `.deb` for Linux.
+On Debian or Ubuntu, install the `.deb` with `sudo apt install ./T3-Agents-*.deb`.
+Package managers such as winget, Homebrew, the AUR, and Nix install the upstream
+T3 Code app, not this fork.
 
 ### Linux
 
@@ -90,42 +98,16 @@ architecture with `uname -m`: for `x86_64`, choose a file ending in
 `arm64.deb`.
 
 To launch an AppImage, open a terminal in its download folder. Replace
-`T3-Code.AppImage` below with the exact filename you downloaded:
+`T3-Agents.AppImage` below with the exact filename you downloaded:
 
 ```bash
-chmod +x ./T3-Code.AppImage
-./T3-Code.AppImage
+chmod +x ./T3-Agents.AppImage
+./T3-Agents.AppImage
 ```
 
 The `.deb` updates itself like the other desktop builds. It asks for your
 password to install each update. If your desktop has no password prompt, the
 update fails. Download the new `.deb` and install it the same way.
-
-The AUR packages currently support x86_64 only; on ARM64, use the AppImage.
-Update AUR installs with your AUR helper, such as `yay -Syu`, instead of the
-in-app updater.
-
-### Nix (nixpkgs)
-
-T3 Code is maintained in [nixpkgs](https://github.com/NixOS/nixpkgs/tree/nixos-unstable/pkgs/by-name/t3/t3code).
-The command above installs from `nixos-unstable` and requires Nix 2.30 or later with
-`nix-command` and `flakes` enabled. Launch the desktop app with `t3code-desktop`;
-the package also includes the `t3` command.
-
-On NixOS, you can instead add the package to your system configuration, using
-a nixpkgs revision that includes `t3code`:
-
-```nix
-environment.systemPackages = [ pkgs.t3code ];
-```
-
-Apply the change with `sudo nixos-rebuild switch`. For Home Manager, add
-`pkgs.t3code` to `home.packages` and run `home-manager switch`.
-
-Update a profile installation with `nix profile upgrade t3code`. For NixOS or
-Home Manager, update your configuration's nixpkgs input or channel and rebuild.
-Nix manages both the desktop app and the bundled
-`t3` command; use Nix to update them instead of the in-app updater or `t3 update`.
 
 ### The `t3` command
 

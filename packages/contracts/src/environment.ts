@@ -64,7 +64,8 @@ export const ServerSelfUpdateMethod = Schema.Literals(["boot-service", "respawn"
 export type ServerSelfUpdateMethod = typeof ServerSelfUpdateMethod.Type;
 
 export const ServerInstallation = Schema.Union([
-  Schema.Struct({ kind: Schema.Literals(["npx", "pnpm-dlx", "bunx"]) }),
+  // npm kinds come from servers before the fork stopped offering npm updates.
+  Schema.Struct({ kind: Schema.Literals(["npx", "pnpm-dlx", "bunx", "linux-headless"]) }),
   Schema.Struct({ kind: Schema.Literal("npm-global"), prefix: TrimmedNonEmptyString }),
 ]);
 export type ServerInstallation = typeof ServerInstallation.Type;
@@ -154,7 +155,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadPullRequestWatch: Schema.optionalKey(Schema.Boolean),
   pullRequestStackActions: Schema.optionalKey(Schema.Boolean),
   serverSelfUpdate: Schema.optionalKey(ServerSelfUpdateCapability),
-  /** Server answers server.getNpmRelease using its configured npm registry. */
+  /** Server answers server.getNpmRelease from the fork's GitHub releases. */
   npmReleaseLookup: Schema.optionalKey(Schema.Boolean),
   /** Manual commands must update this install, not the host's default global prefix. */
   serverInstallation: ForwardCompatibleOptional(ServerInstallation),

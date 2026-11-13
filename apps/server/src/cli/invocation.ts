@@ -63,6 +63,10 @@ export const resolveEntryPath = Effect.gen(function* () {
 });
 
 export const resolveServerInstallation = Effect.gen(function* () {
+  // packaging/linux-headless/t3code-headless.service sets this; it updates with t3-headless-update.
+  if ((yield* HostProcess.Environment).T3CODE_INSTALLATION === "linux-headless") {
+    return { kind: "linux-headless" } satisfies ServerInstallation;
+  }
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;

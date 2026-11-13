@@ -208,5 +208,37 @@
     "title": "authenticates each release page until the requested channel is found",
     "sha256": "27087ffcad39c66a702a1d45e6758a96a762a75fbcf0c659e5deb8874b7f9842",
     "sources": ["packages/shared/src/cliRelease.ts"]
+  },
+  {
+    "fix": "#221",
+    "protects": "headless installs, updates and track switches use the fork's releases, never upstream's npm or install.sh",
+    "test": "scripts/upstream-install-commands.test.ts",
+    "title": "keeps upstream install commands out of user-facing fork code and docs",
+    "sha256": "d4049b2321e8acb667d5c68161a73ef29b31c0c0594c6de34150f8d288e09fbd",
+    "sources": ["packages/shared/src/cliRelease.ts"]
+  },
+  {
+    "fix": "#221",
+    "protects": "headless installs, updates and track switches use the fork's releases, never upstream's npm or install.sh",
+    "test": "scripts/install.test.ts",
+    "title": "%s installs the fork's nightly releases",
+    "sha256": "3d0a5a3ee8c83494a38864f13aaf172d941a8ae41b78fea57391da845ddf5719",
+    "sources": ["scripts/install.sh", "scripts/install.ps1"]
+  },
+  {
+    "fix": "#221",
+    "protects": "headless installs, updates and track switches use the fork's releases, never upstream's npm or install.sh",
+    "test": "packages/shared/src/cliRelease.test.ts",
+    "title": "updates an unmanaged %j server from the fork's releases",
+    "sha256": "40ef620681b6dce0cc7c9b3d6759155e9e253bb438e6844f79aeb5c761aeaa43",
+    "sources": ["packages/shared/src/cliRelease.ts"]
+  },
+  {
+    "fix": "#221",
+    "protects": "headless installs, updates and track switches use the fork's releases, never upstream's npm or install.sh",
+    "test": "apps/server/src/service/npmRelease.test.ts",
+    "title": "reads %s from the fork's releases with its checked database migration",
+    "sha256": "e41e02a2614e7f0ea79c3ddfd93928d64b0caf67027e3cfce739c2fdf6d17718",
+    "sources": ["apps/server/src/service/npmRelease.ts"]
   }
 ]

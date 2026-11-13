@@ -260,29 +260,42 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
     }),
   );
 
-  it.effect("leaves local, standalone, missing and unreadable installs unknown", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped();
-      for (const relative of [
-        "project/node_modules/t3/dist/bin.mjs",
-        "project/apps/server/dist/bin.mjs",
-        ".t3/runtime/0.0.45/t3",
-        "missing/dist/bin.mjs",
-      ]) {
-        const entry = path.join(root, relative);
-        if (!relative.startsWith("missing")) {
-          yield* fs.makeDirectory(path.dirname(entry), { recursive: true });
-          yield* fs.writeFileString(entry, "");
+  it.effect(
+    "leaves local, standalone, missing and unreadable installs unknown unless the headless unit names itself",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped();
+        for (const relative of [
+          "project/node_modules/t3/dist/bin.mjs",
+          "project/apps/server/dist/bin.mjs",
+          ".t3/runtime/0.0.45/t3",
+          "missing/dist/bin.mjs",
+        ]) {
+          const entry = path.join(root, relative);
+          if (!relative.startsWith("missing")) {
+            yield* fs.makeDirectory(path.dirname(entry), { recursive: true });
+            yield* fs.writeFileString(entry, "");
+          }
+          expect(
+            yield* resolveServerInstallation.pipe(
+              Effect.provideService(HostProcess.Arguments, ["node", entry]),
+              Effect.provideService(HostProcess.IsExecutable, false),
+            ),
+          ).toBeNull();
         }
         expect(
           yield* resolveServerInstallation.pipe(
-            Effect.provideService(HostProcess.Arguments, ["node", entry]),
-            Effect.provideService(HostProcess.IsExecutable, false),
+            Effect.provideService(HostProcess.Arguments, [
+              "node",
+              path.join(root, "missing/dist/bin.mjs"),
+            ]),
+            Effect.provideService(HostProcess.Environment, {
+              T3CODE_INSTALLATION: "linux-headless",
+            }),
           ),
-        ).toBeNull();
-      }
-    }),
+        ).toEqual({ kind: "linux-headless" });
+      }),
   );
 });

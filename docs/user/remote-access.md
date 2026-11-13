@@ -145,11 +145,14 @@ Mobile keeps its manual environment selection.
 Join both devices to the same tailnet. In the desktop app, enable **Tailscale
 HTTPS** in **Settings → Environments**. Turn it off there to remove that route.
 
-To start a command-line server with Tailscale HTTPS:
+A command-line server publishes itself on the tailnet with Tailscale HTTPS by
+default, and its startup log says so. To keep a server off the tailnet:
 
 ```bash
-t3 serve --tailscale-serve
+t3 serve --no-tailscale-serve
 ```
+
+Setting `T3CODE_TAILSCALE_SERVE=false` in the server's environment does the same.
 
 For an already-running server:
 

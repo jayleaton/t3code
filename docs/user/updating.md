@@ -9,10 +9,9 @@ of the sidebar and **Settings → Environments** offer to update it.
 The update button at the bottom of the sidebar updates every connected machine
 in one step. It updates outdated providers, then servers that are behind, then
 the desktop app you are using. Servers move to the
-version your desktop app is installing, or to your web app's version. A
-background service stays on its current release channel. A remote desktop app
-installs the latest release from its own channel. Hover the button to see what
-it will update.
+version your desktop app is installing, or to your web app's version. A remote
+desktop app installs the latest nightly. Hover the button to see what it will
+update.
 
 While it runs, the button widens to show progress. It names a machine that is
 taking longer than usual, and offers **Retry** for a server that failed. Click
@@ -36,28 +35,12 @@ The confirmation counts the running threads that the restarts will interrupt,
 and how many can resume afterwards. See **Continue threads after restarts**
 below.
 
-## Switch between Stable and Nightly
+## Release channel
 
-In the desktop app, change **Settings → About → Update track**. T3 Code shows each
-connected machine it will move and each one it skips, then moves them in one
-step. Remote servers install the latest release on the new track. Remote desktop
-apps reinstall on the new track. This app reinstalls last. Your threads,
-settings, and data stay.
-
-A background service cannot move to an older release remotely. When Stable is
-older than its Nightly, run `t3 update --channel stable --allow-downgrade` on
-that machine.
-
-A switch is blocked for a machine whose database already has changes the
-target release does not support, or when T3 Code cannot confirm that it does.
-The dialog says why: update a machine on its current track first when its
-release is too old to check, or wait until the target track includes the
-changes. A Mac running the desktop app must switch on that Mac.
-
-Each machine keeps the new track even if its switch did not finish, but it
-moves to that track only through a switch. **Update track** shows how many
-machines still run the other track. **Review** opens the same dialog with fresh
-checks.
+Every release of this fork is a nightly, published on
+[GitHub Releases](https://github.com/jayleaton/t3code/releases). There is no
+stable track to switch to. Do not update with upstream T3 Code's installers or
+its npm package: they replace this fork's server with upstream's.
 
 ## Before you update
 
@@ -103,8 +86,7 @@ The offered action depends on how the server runs:
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Update server**          | Keep the client open while it installs and reconnects. Supported background services update remotely. For a desktop-hosted server, this also closes and relaunches the desktop app on the host. |
 | **Update the desktop app** | Update the desktop app on the machine running the server, then reopen it if needed.                                                                                                             |
-| **Copy update command**    | Run the command on the named host to update the detected global npm install, then restart the server with your usual options.                                                                   |
-| **Copy relaunch command**  | Stop the command-line server on its host and relaunch with the copied command, keeping your usual subcommand and options. This does not update an installed `t3` command.                       |
+| **Copy update command**    | Run the copied command on the server's host. It is `t3 update <version>`, or `t3-headless-update install <version>` on the AppImage headless unit.                                              |
 
 On the host, run:
 
@@ -116,16 +98,15 @@ Replace `<client-version>` with the version shown in the notice. The command
 asks before restarting the background service; if you decline, run
 `t3 service restart` when you are ready. For a server you started by hand,
 stop it and start it again afterwards with your usual options such as `--host`
-or `--tailscale-serve`.
+or `--tailscale-serve`. `t3 update` with no version moves to the newest release.
+For a host running the AppImage-based systemd unit, run
+`t3-headless-update install <version>` instead; see
+[Headless Linux host](../operations/headless-linux.md).
 
 A background service installed by an older release refuses **Update server**
 until you update it once on the host and let that update restart it. If you
 decline the restart, the service can stay down after a crash or reboot until you
 run `t3 service restart`.
-
-If you run the server with `npx` rather than an installed `t3`, there is
-nothing to update on the host: stop the server and relaunch it as
-`npx t3@<client-version>` with the same subcommand and options.
 
 ## If an update fails
 
@@ -134,7 +115,7 @@ update can roll back to the previous version. If the update still fails:
 
 1. Retry the offered action once.
 2. Check that you updated the server's machine, not only the device you are using.
-3. For a command-line server, stop it and relaunch the exact version shown in the notice.
+3. For a command-line server, run `t3 update <version>` with the exact version shown in the notice, then start it again.
 
 Only one server can use a T3 home directory at a time. If startup reports that
 another server owns it, stop that server before retrying, or use a separate home
@@ -163,13 +144,16 @@ details** to include the error in a bug report.
 
 ## Registries and proxies
 
-Each server checks T3 Code releases, and providers installed with npm, through
-its own npm, so the checks use npm's configured registry, authentication, and
-proxy settings. Providers installed with Homebrew or pnpm check through those
-tools.
+Each server checks providers installed with npm through its own npm, so the
+checks use npm's configured registry, authentication, and proxy settings.
+Providers installed with Homebrew or pnpm check through those tools.
 Configure npm on the server's machine. If that registry cannot be reached, the
-release shows as unavailable; T3 Code does not try the public registry instead.
-Machines without npm check the public npm registry directly.
+provider update shows as unavailable; T3 Code does not try the public registry
+instead. Machines without npm check the public npm registry directly.
+
+To download T3 Code releases through a mirror of
+[GitHub Releases](https://github.com/jayleaton/t3code/releases), set
+`T3CODE_RELEASE_BASE_URL` for the installer and in the server's environment.
 
 ## Update providers
 
@@ -193,8 +177,7 @@ status and refresh it again.
 ## Mobile updates
 
 To update an environment from your phone, open **Settings → Environments** and
-select it. **Check for updates** finds the latest release on that environment's
-current release channel. Keep the app open while the environment updates and
+select it. **Check for updates** finds the latest nightly for that environment. Keep the app open while the environment updates and
 reconnects. Hosts that cannot update remotely show instructions for updating on
 the machine instead.
 

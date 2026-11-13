@@ -1,5 +1,9 @@
 # Headless Linux host for the fork
 
+The supported headless setup is now the install script followed by `t3 service install`
+([Install T3 Code](../user/install.md)); it is the only one the app's **Update** button can
+update. This guide is for hosts already running the AppImage-based unit.
+
 Run the fork's server on a Linux host without the Electron window, under a systemd user unit,
 and update it from the fork's nightly feed. Clients (web over Tailscale, the desktop app on
 another machine, mobile) connect to it like any other remote environment.

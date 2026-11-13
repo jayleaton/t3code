@@ -1,8 +1,32 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { cliArchiveTarCommand, newestCliReleaseVersion, parseChecksums } from "./cliRelease.ts";
+import {
+  cliArchiveTarCommand,
+  cliInstallCommand,
+  manualServerUpdateCommand,
+  newestCliReleaseVersion,
+  parseChecksums,
+} from "./cliRelease.ts";
 
 describe("cliRelease", () => {
+  it.each([
+    [undefined, "t3 update 0.0.45"],
+    [{ kind: "npx" } as const, "t3 update 0.0.45"],
+    [{ kind: "npm-global", prefix: "/opt/node" } as const, "t3 update 0.0.45"],
+    [{ kind: "linux-headless" } as const, "t3-headless-update install 0.0.45"],
+  ])("updates an unmanaged %j server from the fork's releases", (installation, command) => {
+    expect(manualServerUpdateCommand("0.0.45", installation)).toBe(command);
+  });
+
+  it("installs the CLI from the fork's install scripts", () => {
+    expect(cliInstallCommand("posix", "1.2.3")).toBe(
+      "curl -fsSL https://raw.githubusercontent.com/jayleaton/t3code/main/scripts/install.sh | T3CODE_VERSION=1.2.3 sh",
+    );
+    expect(cliInstallCommand("win32")).toBe(
+      "irm https://raw.githubusercontent.com/jayleaton/t3code/main/scripts/install.ps1 | iex",
+    );
+  });
+
   it("parses sha256sum output including binary-mode markers", () => {
     const checksums = parseChecksums(
       [
