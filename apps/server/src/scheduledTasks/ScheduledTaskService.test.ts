@@ -1175,3 +1175,54 @@ it.effect("the sweep keeps an archived task whose run starts after the sweep rea
     }).pipe(Effect.provide(layer));
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
+
+it.effect(
+  "a run does not start on a task deleted and recreated under its id after it read it",
+  () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(CLEANUP_T0);
+      const sql = yield* SqlClient.SqlClient;
+      const startPaused = yield* Deferred.make<void>();
+      const resumeStart = yield* Deferred.make<void>();
+      let launches = 0;
+      // Pauses the run's start UPDATE, after it has read the task.
+      const pausingSql = new Proxy(sql, {
+        apply(target, thisArg, args: [TemplateStringsArray, ...Array<unknown>]) {
+          const statement: ReturnType<SqlClient.SqlClient["unsafe"]> = Reflect.apply(
+            target,
+            thisArg,
+            args,
+          );
+          return args[0].join("").includes("last_run_webhook_delivery_id = ")
+            ? Deferred.succeed(startPaused, undefined).pipe(
+                Effect.andThen(Deferred.await(resumeStart)),
+                Effect.andThen(statement),
+              )
+            : statement;
+        },
+      });
+      const layer = cleanupLayer({
+        launch: () =>
+          Effect.sync(() => {
+            launches += 1;
+            return { threadId: ThreadId.make("thread:old-run"), resumed: false } as never;
+          }),
+      });
+      yield* Effect.gen(function* () {
+        const service = yield* ScheduledTaskService.ScheduledTaskService;
+        const id = ScheduledTaskId.make("task:recreated");
+        yield* service.upsert(cleanupInput(id, { enabled: false }));
+        const run = yield* service.runNow({ id }).pipe(Effect.exit, Effect.forkChild);
+        yield* Deferred.await(startPaused);
+        yield* service.delete({ id });
+        yield* TestClock.adjust(1);
+        yield* service.upsert(cleanupInput(id, { enabled: false }));
+        yield* Deferred.succeed(resumeStart, undefined);
+        assert.isTrue(Exit.isFailure(yield* Fiber.join(run)));
+        assert.equal(launches, 0);
+        const [replacement] = (yield* service.list()).tasks;
+        assert.equal(replacement?.lastRunStatus, "never");
+        assert.equal(replacement?.runCount, 0);
+      }).pipe(Effect.provide(layer), Effect.provideService(SqlClient.SqlClient, pausingSql));
+    }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
