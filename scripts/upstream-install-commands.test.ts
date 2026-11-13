@@ -39,6 +39,8 @@ it("keeps upstream install commands out of user-facing fork code and docs", () =
 
 // The fork ships as Ada (packages/shared/src/branding.ts). Upstream syncs bring these back.
 const UPSTREAM_BRAND = /T3 Code|T3 Agents|\bTheo\b|t3\.codes|pingdotgg/;
+// Upstream product phrases ("T3 Connect", "T3 home") and `t3 <subcommand>` hints, which the names above miss.
+const UPSTREAM_PHRASE = /\bT3 [A-Za-z]|(?<![\w./@$-])t3 (?:[a-z][\w-]*|--[a-z])/;
 
 const BRAND_SCANNED = [
   "README.md",
@@ -101,8 +103,9 @@ const BRAND_ALLOWLIST: ReadonlyArray<BrandAllowance> = [
   },
   { file: /^apps\/web\/src\/legalLinks\.ts$/, why: "Privacy policy link." },
   {
-    file: /^apps\/mobile\/src\/features\/settings\/lib\/legal-document-url\.ts$/,
-    why: "Legal documents host.",
+    file: /^(?:apps\/desktop\/resources\/linux\/com\.t3tools\.t3code\.metainfo\.xml|apps\/marketing\/src\/components\/LegalPage\.astro|scripts\/build-desktop-artifact\.ts)$/,
+    text: "T3 Tools",
+    why: "Upstream's company, the copyright holder in LICENSE.",
   },
   // Identities other systems already know: providers, git history, peers, installed helpers.
   {
@@ -183,6 +186,69 @@ const BRAND_ALLOWLIST: ReadonlyArray<BrandAllowance> = [
     text: "Written by T3 Code",
     why: "Launcher marker that older desktop builds look for to recognise their own launchers.",
   },
+  {
+    file: /^apps\/server\/src\/provider\/AgentInstructionFiles\.ts$/,
+    text: "T3 managed instructions",
+    why: "Marker in instruction files already written to users' projects.",
+  },
+  {
+    file: /^packages\/mcp-gateway\/src\/skillImport\.ts$/,
+    text: "T3 syncs this text",
+    why: "Recognises a section older versions wrote into imported skills.",
+  },
+  {
+    file: /^packages\/client-runtime\/src\/errors\/transport\.ts$/,
+    text: "T3 server WebSocket",
+    why: "Matches an error older servers send.",
+  },
+  // The `t3` command still exists beside `ada`, so copy that names it on purpose stays.
+  ...["Another t3 ", "another t3", "t3 command", "t3 launcher", "t3 triage"].map((text) => ({
+    file: /^apps\/(?:desktop\/src\/app\/(?:DesktopCliCommand|DesktopCliShim|DesktopApp)\.ts|web\/src\/(?:components\/settings\/CliCommandSettingsRow\.tsx|lib\/bootError\.ts))$/,
+    text,
+    why: "The desktop links `t3` and puts `ada` beside it as a best-effort alias, so these name the link it found or wrote.",
+  })),
+  {
+    file: /^scripts\/install\.(?:sh|ps1)$/,
+    text: "ada and t3",
+    why: "The installer sets up both commands.",
+  },
+  {
+    file: /^(?:packages\/shared\/src\/cliRelease\.ts|apps\/web\/src\/components\/sidebar\/updateEverything\.logic\.ts|docs\/user\/updating\.md)$/,
+    text: "t3 update",
+    why: "The copied update command runs on hosts older than `ada`.",
+  },
+  ...["t3 --version", "which -a t3", "older t3", "/t3 service install", "t3 service update"].map(
+    (text) => ({
+      file: /^apps\/server\/src\/service\/servicePreflight\.ts$/,
+      text,
+      why: "Diagnoses a stale `t3` from an npm or nvm install shadowing the installed one.",
+    }),
+  ),
+  {
+    file: /^apps\/server\/src\/cli\/uninstall\.ts$/,
+    text: "This t3 runs",
+    why: "Upstream's npm package, which this message says how to remove.",
+  },
+  {
+    file: /^README\.md$/,
+    text: "t3 service uninstall",
+    why: "T3 Code's own command for its background service.",
+  },
+  {
+    file: /^(?:README\.md|docs\/user\/remote-access\.md|apps\/(?:web|mobile)\/src\/(?:components|features\/connection)\/ConnectOnlyNoticeCoordinator\.tsx|apps\/(?:web|mobile)\/src\/connection\/storage\.ts|apps\/server\/src\/environment\/ConnectTeardown\.ts)$/,
+    text: "T3 Connect",
+    why: "The removed upstream service, named so the people who used it know what changed.",
+  },
+  {
+    file: /^docs\/user\/outside-agents\.md$/,
+    text: " t3 ",
+    why: "The MCP server name readers give the agent; renaming it renames every tool they call.",
+  },
+  {
+    file: /^docs\/user\/cursor\.md$/,
+    text: "--filter t3",
+    why: "The workspace package name.",
+  },
 ];
 
 /** Comment lines are for maintainers, not users. Markdown has no comments worth skipping. */
@@ -208,7 +274,9 @@ it("keeps upstream brand names out of user-facing fork code and docs", () => {
         if (entry.text === undefined) return [];
         visible = visible.replaceAll(entry.text, "");
       }
-      return UPSTREAM_BRAND.test(visible) ? [`${file}:${index + 1}`] : [];
+      return UPSTREAM_BRAND.test(visible) || UPSTREAM_PHRASE.test(visible)
+        ? [`${file}:${index + 1}`]
+        : [];
     }),
   );
   expect(hits).toEqual([]);
