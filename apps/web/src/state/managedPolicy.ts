@@ -1,4 +1,5 @@
 import type { EnvironmentId, ManagedPolicySummary, ProviderDriverKind } from "@t3tools/contracts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 import { useServerConfigs } from "./entities";
 import { usePrimaryEnvironmentId } from "./environments";
@@ -30,13 +31,11 @@ export function firstManagedDenial(
   return undefined;
 }
 
-/** What usage-data notices say when the policy turns product analytics off. */
-export function managedTelemetryOffMessage(
-  policy: ManagedPolicySummary | undefined,
-): string | undefined {
+/** What usage-data notices say; a policy can only turn product analytics off. */
+export function usageDataNotice(policy: ManagedPolicySummary | undefined): string {
   return policy?.limits?.telemetry === false
     ? `${policy.organization} turned off anonymous usage data.`
-    : undefined;
+    : `${APP_NAME} doesn't collect usage data unless you turn it on with T3CODE_TELEMETRY_ENABLED.`;
 }
 
 export interface ManagedInstanceLocks {

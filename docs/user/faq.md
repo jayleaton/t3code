@@ -59,7 +59,7 @@ No. Ada is a serious developer tool. Locally runnable models are not capable of 
 
 ## Does my code go to Ada servers?
 
-No. Your code and prompts go from your machine to your provider (Anthropic, OpenAI, etc.), not to us. Your devices connect straight to your machine over your LAN or Tailscale. Ada does send basic product usage events (provider, model, token totals, that kind of thing). No prompts, no file contents. Set `T3CODE_TELEMETRY_ENABLED=false` if you want it off. [Product usage data](./telemetry.md)
+No. Your code and prompts go from your machine to your provider (Anthropic, OpenAI, etc.), not to us. Your devices connect straight to your machine over your LAN or Tailscale. Ada doesn't collect usage data unless you turn it on with `T3CODE_TELEMETRY_ENABLED=true`. [Product usage data](./telemetry.md)
 
 ## Worktrees are eating my disk. How do I clean them up?
 

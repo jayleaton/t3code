@@ -101,7 +101,6 @@ const BRAND_ALLOWLIST: ReadonlyArray<BrandAllowance> = [
     file: /^apps\/marketing\/src\/pages\/\.well-known\/security\.txt\.ts$/,
     why: "Security contact belongs with the security policy.",
   },
-  { file: /^apps\/web\/src\/legalLinks\.ts$/, why: "Privacy policy link." },
   {
     file: /^(?:apps\/desktop\/resources\/linux\/com\.t3tools\.t3code\.metainfo\.xml|apps\/marketing\/src\/components\/LegalPage\.astro|scripts\/build-desktop-artifact\.ts)$/,
     text: "T3 Tools",
