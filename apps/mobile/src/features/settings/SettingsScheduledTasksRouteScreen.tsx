@@ -728,11 +728,7 @@ function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }
     ]);
   });
   return (
-    <SettingsScreen
-      title={title}
-      // Native Back pops before removal guards; a bar action lets the guard run first.
-      guardBack={preventRemove}
-    >
+    <SettingsScreen title={title}>
       <ScrollView
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"

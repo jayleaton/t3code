@@ -83,8 +83,6 @@ export interface AppBarProps {
   readonly menus?: ReadonlyArray<AppBarMenu>;
   readonly search?: AppBarSearch;
   readonly onBack?: () => void;
-  /** Back runs `onBack` and swipe-back is off, so a `usePreventRemove` guard sees it first. */
-  readonly guardBack?: boolean;
   /**
    * Back for a page whose parent is the workspace list. Hidden in split view, where the list is
    * beside the page; shown even when the page opened with nothing beneath it.
