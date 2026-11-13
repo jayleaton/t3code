@@ -242,7 +242,7 @@
     "sources": ["apps/server/src/service/npmRelease.ts"]
   },
   {
-    "fix": "#ada-rebrand",
+    "fix": "#233",
     "protects": "the fork ships as Ada and upstream syncs cannot bring T3 Code, T3 Agents, Theo, t3.codes or pingdotgg back into user-facing copy",
     "test": "scripts/upstream-install-commands.test.ts",
     "title": "keeps upstream brand names out of user-facing fork code and docs",
@@ -250,7 +250,7 @@
     "sources": ["packages/shared/src/branding.ts"]
   },
   {
-    "fix": "#ada-rebrand",
+    "fix": "#233",
     "protects": "the fork ships as Ada and upstream syncs cannot bring T3 Code, T3 Agents, Theo, t3.codes or pingdotgg back into user-facing copy",
     "test": "apps/mobile/src/lib/mobileBranding.test.ts",
     "title": "names the fork's app Ada",
@@ -258,7 +258,7 @@
     "sources": ["apps/mobile/src/lib/mobileBranding.ts", "packages/shared/src/branding.ts"]
   },
   {
-    "fix": "#ada-rebrand",
+    "fix": "#233",
     "protects": "the fork ships as Ada and upstream syncs cannot bring T3 Code, T3 Agents, Theo, t3.codes or pingdotgg back into user-facing copy",
     "test": "apps/mobile/src/lib/mobileBranding.test.ts",
     "title": "shows no upstream name in the app",
