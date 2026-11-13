@@ -44,6 +44,7 @@ export function cliArchiveTarCommand(
   return `${systemRoot}\\System32\\tar.exe`;
 }
 
+// install.sh, install.ps1 and `t3 update` fetch this exact name, so it stays `t3-…` while desktop downloads say Ada.
 export function cliArchiveFileName(version: string, platformKey: CliArchivePlatformKey): string {
   return `t3-${version}-${platformKey}.${platformKey.startsWith("win32") ? "zip" : "tar.gz"}`;
 }

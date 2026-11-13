@@ -1006,6 +1006,6 @@ jobs:
         env:
           PRODUCT_NAME: ${{ inputs.product_name }}
         run: |
-          $installers = @(Get-ChildItem release/T3-Agents-*.exe)
+          $installers = @(Get-ChildItem release/Ada-*.exe)
           if ($installers.Count -ne 1) { throw 'Expected exactly one Agents installer.' }
           ./scripts/test-agents-windows-installer.ps1 -Installer $installers[0].FullName -ProductName $env:PRODUCT_NAME
