@@ -86,19 +86,19 @@ The offered action depends on how the server runs:
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Update server**          | Keep the client open while it installs and reconnects. Supported background services update remotely. For a desktop-hosted server, this also closes and relaunches the desktop app on the host. |
 | **Update the desktop app** | Update the desktop app on the machine running the server, then reopen it if needed.                                                                                                             |
-| **Copy update command**    | Run the copied command on the server's host. It is `t3 update <version>`, or `t3-headless-update install <version>` on the AppImage headless unit.                                              |
+| **Copy update command**    | Run the copied command on the server's host. It is `t3 update <version>`, which works on any version, or `t3-headless-update install <version>` on the AppImage headless unit.                  |
 
 On the host, run:
 
 ```sh
-t3 update <client-version>
+ada update <client-version>
 ```
 
 Replace `<client-version>` with the version shown in the notice. The command
 asks before restarting the background service; if you decline, run
-`t3 service restart` when you are ready. For a server you started by hand,
+`ada service restart` when you are ready. For a server you started by hand,
 stop it and start it again afterwards with your usual options such as `--host`
-or `--tailscale-serve`. `t3 update` with no version moves to the newest release.
+or `--tailscale-serve`. `ada update` with no version moves to the newest release.
 For a host running the AppImage-based systemd unit, run
 `t3-headless-update install <version>` instead; see
 [Headless Linux host](../operations/headless-linux.md).
@@ -106,7 +106,7 @@ For a host running the AppImage-based systemd unit, run
 A background service installed by an older release refuses **Update server**
 until you update it once on the host and let that update restart it. If you
 decline the restart, the service can stay down after a crash or reboot until you
-run `t3 service restart`.
+run `ada service restart`.
 
 ## If an update fails
 
@@ -115,7 +115,7 @@ update can roll back to the previous version. If the update still fails:
 
 1. Retry the offered action once.
 2. Check that you updated the server's machine, not only the device you are using.
-3. For a command-line server, run `t3 update <version>` with the exact version shown in the notice, then start it again.
+3. For a command-line server, run `ada update <version>` with the exact version shown in the notice, then start it again.
 
 Only one server can use a T3 home directory at a time. If startup reports that
 another server owns it, stop that server before retrying, or use a separate home

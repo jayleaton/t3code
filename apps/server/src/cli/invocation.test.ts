@@ -101,6 +101,36 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
         'sudo env "PATH=$PATH" t3 browser setup',
       );
 
+      // `ada` wins when it runs this install, through the desktop's `ada` shim beside `t3`.
+      const adaShim = path.join(path.dirname(shim), "ada");
+      yield* fs.writeFileString(adaShim, "#!/bin/sh\n", { mode: 0o755 });
+      // A fresh folder: PATH lookups are cached per PATH value.
+      const adaLinked = yield* fs.makeTempDirectoryScoped();
+      yield* fs.symlink(adaShim, path.join(adaLinked, "ada"));
+      expect(yield* rootCommand({ ...desktop, path: adaLinked })).toBe(
+        'sudo env "PATH=$PATH" ada browser setup',
+      );
+      // Another program's `ada` falls back to the `t3` that runs this install.
+      const foreignAda = yield* fs.makeTempDirectoryScoped();
+      yield* fs.writeFileString(path.join(foreignAda, "ada"), "#!/bin/sh\n", { mode: 0o755 });
+      expect(yield* rootCommand({ ...desktop, path: `${foreignAda}:${linked}` })).toBe(
+        'sudo env "PATH=$PATH" t3 browser setup',
+      );
+      // The install scripts link `ada` straight to the standalone executable.
+      const executable = path.join(home, "runtime/versions/1.0.0/t3");
+      yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
+      yield* fs.writeFileString(executable, "#!/bin/sh\n", { mode: 0o755 });
+      const scriptBin = yield* fs.makeTempDirectoryScoped();
+      yield* fs.symlink(executable, path.join(scriptBin, "ada"));
+      expect(
+        yield* rootCommand({
+          node: executable,
+          entry: executable,
+          executable: true,
+          path: scriptBin,
+        }),
+      ).toBe('sudo env "PATH=$PATH" ada browser setup');
+
       expect(
         yield* rootCommand({
           node: "/opt/t3/t3",

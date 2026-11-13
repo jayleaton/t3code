@@ -59,8 +59,11 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer home
         },
       );
       expect(status, stdout + stderr).toBe(0);
-      expect(stderr).toContain(`Installed T3 Code ${version}`);
+      expect(stderr).toContain(`Installed Ada ${version}`);
       expect(await NodeFSP.readlink(launcher)).toBe(NodePath.join(target, "t3"));
+      expect(await NodeFSP.readlink(NodePath.join(root, "bin/ada"))).toBe(
+        NodePath.join(target, "t3"),
+      );
       expect(
         NodeChildProcess.execFileSync(launcher, ["--version"], {
           cwd: NodeOS.tmpdir(),
@@ -136,7 +139,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer chan
         },
       );
       expect(code, output).toBe(0);
-      expect(output).toContain(`Installed T3 Code ${version}`);
+      expect(output).toContain(`Installed Ada ${version}`);
     } finally {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -184,12 +187,23 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("install.sh t3 
       const home = NodePath.join(root, "home");
       const binDir = NodePath.join(root, "bin");
       const link = NodePath.join(binDir, "t3");
+      const adaLink = NodePath.join(binDir, "ada");
       await NodeFSP.mkdir(binDir, { recursive: true });
 
+      // Another t3 alone still leaves `ada` to link.
       await NodeFSP.writeFile(link, "#!/bin/sh\necho mine\n");
+      const besideForeign = await installOver({ script: "install.sh", home, binDir });
+      expect(besideForeign.code, besideForeign.output).toBe(0);
+      expect(besideForeign.output).toContain(`Another t3 is already at ${link}, so it was left`);
+      expect(await NodeFSP.readlink(adaLink)).toBe(NodePath.join(besideForeign.target, "t3"));
+      expect(await NodeFSP.readFile(link, "utf8")).toBe("#!/bin/sh\necho mine\n");
+
+      // From here another program owns `ada`, so each case below turns on the t3 link alone.
+      await NodeFSP.rm(adaLink);
+      await NodeFSP.writeFile(adaLink, "#!/bin/sh\necho theirs\n");
       const foreign = await installOver({ script: "install.sh", home, binDir });
       expect(foreign.code).not.toBe(0);
-      expect(foreign.output).toContain(`another t3 is already at ${link}`);
+      expect(foreign.output).toContain(`another ada and t3 are already at ${adaLink} and ${link}`);
       expect(await NodeFSP.readFile(link, "utf8")).toBe("#!/bin/sh\necho mine\n");
       // Not even from inside the versions folder, where `.` would resolve into it.
       const fromVersions = await installOver({
@@ -236,6 +250,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("install.sh t3 
       expect(upgrade.output).toContain(
         `printf '\\n%s\\n' 'export PATH="$PATH:$HOME/bin"' >> ~/.zshrc`,
       );
+      expect(upgrade.output).toContain(`Another ada is already at ${adaLink}, so it was left`);
+      expect(upgrade.output).toContain("Then open a new terminal and run t3.");
+      expect(await NodeFSP.readFile(adaLink, "utf8")).toBe("#!/bin/sh\necho theirs\n");
+      await NodeFSP.rm(adaLink);
 
       // Containers and CI often have no SHELL; `set -u` must not stop the installer there.
       const noShell = await installOver({
@@ -255,7 +273,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("install.sh t3 
         env: { HOME: root, PATH: `${binDir}/:/usr/bin:/bin` },
       });
       expect(slashed.code, slashed.output).toBe(0);
-      expect(slashed.output).toContain("Run t3 to use T3 Code here");
+      expect(slashed.output).toContain("Run ada to use Ada here, or ada up");
 
       // A relative folder is made absolute, so the PATH command never follows the working directory.
       const relative = await installOver({
@@ -270,6 +288,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("install.sh t3 
 
       await NodeFSP.rm(link);
       await NodeFSP.symlink(NodePath.join(home, "bin/t3"), link);
+      await NodeFSP.rm(adaLink);
+      await NodeFSP.symlink(NodePath.join(home, "bin/ada"), adaLink);
       const overDesktop = await installOver({
         script: "install.sh",
         home: `${home}//`,
@@ -277,6 +297,12 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("install.sh t3 
       });
       expect(overDesktop.code, overDesktop.output).toBe(0);
       expect(await NodeFSP.readlink(link)).toBe(NodePath.join(home, "runtime/versions/1.2.3/t3"));
+      expect(await NodeFSP.readlink(adaLink)).toBe(
+        NodePath.join(home, "runtime/versions/1.2.3/t3"),
+      );
+      expect(
+        (await NodeFSP.readFile(NodePath.join(home, "runtime/launchers"), "utf8")).split("\n"),
+      ).toEqual(expect.arrayContaining([adaLink, link]));
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
@@ -291,13 +317,16 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")("install.ps1 t3
       const home = NodePath.join(root, "José", ".t3");
       const binDir = NodePath.join(root, "bin[t3]");
       const shim = NodePath.join(binDir, "t3.cmd");
+      const adaShim = NodePath.join(binDir, "ada.cmd");
       await NodeFSP.mkdir(binDir, { recursive: true });
 
+      // From here another program owns ada.cmd, so each case below turns on t3.cmd alone.
       const desktopShim = '@echo off\r\n"C:\\Program Files\\T3 Code\\T3 Code.exe" "x" %*\r\n';
       await NodeFSP.writeFile(shim, desktopShim);
+      await NodeFSP.writeFile(adaShim, desktopShim);
       const foreign = await installOver({ script: "install.ps1", home, binDir });
       expect(foreign.code).not.toBe(0);
-      expect(foreign.output).toContain("another t3 is already at");
+      expect(foreign.output).toContain("another ada and t3 are already at");
       expect(await NodeFSP.readFile(shim, "utf8")).toBe(desktopShim);
 
       // A hand-edited wrapper may set its own environment; replacing it would drop that.
@@ -320,14 +349,20 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")("install.ps1 t3
       expect(await NodeFSP.readFile(shim, "utf8")).toContain(
         NodePath.join(upgrade.target, "t3.exe"),
       );
+      expect(upgrade.output).toContain(`Another ada is already at ${adaShim}, so it was left`);
+      expect(await NodeFSP.readFile(adaShim, "utf8")).toBe(desktopShim);
 
+      await NodeFSP.rm(adaShim);
       const again = await installOver({ script: "install.ps1", home, binDir });
       expect(again.code, again.output).toBe(0);
+      expect(await NodeFSP.readFile(adaShim, "utf8")).toContain(
+        NodePath.join(again.target, "t3.exe"),
+      );
 
-      // Another t3 first on PATH still runs, so the installer names this one in full.
+      // Another ada first on PATH still runs, so the installer names this one in full.
       const otherBin = NodePath.join(root, "other");
       await NodeFSP.mkdir(otherBin);
-      await NodeFSP.writeFile(NodePath.join(otherBin, "t3.cmd"), "@echo off\r\n");
+      await NodeFSP.writeFile(NodePath.join(otherBin, "ada.cmd"), "@echo off\r\n");
       // Windows spells it Path; a second PATH key would be ambiguous.
       const pathKey =
         Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
@@ -339,7 +374,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")("install.ps1 t3
       });
       expect(shadowed.code, shadowed.output).toBe(0);
       expect(shadowed.output).toContain(
-        `Another t3 at ${NodePath.join(otherBin, "t3.cmd")} runs first`,
+        `Another ada at ${NodePath.join(otherBin, "ada.cmd")} runs first`,
       );
 
       // Its own folder on PATH with a trailing separator is already on PATH.
@@ -350,7 +385,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")("install.ps1 t3
         env: { [pathKey]: `${binDir}\\;${process.env[pathKey] ?? ""}` },
       });
       expect(slashed.code, slashed.output).toBe(0);
-      expect(slashed.output).toContain("to use T3 Code here");
+      expect(slashed.output).toContain("to use Ada here");
       // The same when the install folder itself is given with a trailing separator.
       const bothSlashed = await installOver({
         script: "install.ps1",
@@ -359,7 +394,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")("install.ps1 t3
         env: { [pathKey]: `${binDir}\\;${process.env[pathKey] ?? ""}` },
       });
       expect(bothSlashed.code, bothSlashed.output).toBe(0);
-      expect(bothSlashed.output).toContain("to use T3 Code here");
+      expect(bothSlashed.output).toContain("to use Ada here");
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
@@ -469,7 +504,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer chec
           } else {
             expect(code).not.toBe(0);
             expect(output).toContain("checksum mismatch");
-            expect(output).not.toContain("Installed T3 Code");
+            expect(output).not.toContain("Installed Ada");
             expect(await NodeFSP.readdir(versions)).toEqual([]);
           }
         } finally {

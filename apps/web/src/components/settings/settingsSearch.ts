@@ -14,7 +14,7 @@ import { TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "../../appearanceFonts";
 import { writeLocalStorageValue } from "../../hooks/useLocalStorage";
 import { commandLabel } from "./KeybindingsSettings.logic";
 import type { ResolvedSettingsScope } from "./settingsScope";
-import { APP_NAME } from "@t3tools/shared/branding";
+import { APP_NAME, CLI_COMMAND } from "@t3tools/shared/branding";
 
 export type SettingsPath =
   | "/settings/projects"
@@ -881,9 +881,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "cli-command",
-    title: "t3 command",
+    title: `${CLI_COMMAND} command`,
     to: "/settings/about",
-    searchTerms: ["cli terminal shell path install command line"],
+    searchTerms: ["cli terminal shell path install command line t3"],
     desktopOnly: true,
   },
   {

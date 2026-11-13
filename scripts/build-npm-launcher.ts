@@ -11,6 +11,7 @@ import * as Schema from "effect/Schema";
 import { Command, Flag } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import { APP_NAME, CLI_COMMAND, LEGACY_CLI_COMMAND } from "@t3tools/shared/branding";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
@@ -35,11 +36,11 @@ export function npmLauncherPackageManifest(version: string, databaseMigration: n
   return {
     name: NPM_LAUNCHER_PACKAGE_NAME,
     version,
-    description:
-      "T3 Code CLI. Downloads the self-contained executable for this platform from the GitHub Release.",
+    description: `${APP_NAME} CLI. Downloads the self-contained executable for this platform from the GitHub Release.`,
     license: serverPackageJson.license,
     repository: serverPackageJson.repository,
-    bin: { t3: "./bin/t3.mjs" },
+    // `ada` is the command's name; `t3` keeps existing installs and scripts working.
+    bin: { [CLI_COMMAND]: "./bin/t3.mjs", [LEGACY_CLI_COMMAND]: "./bin/t3.mjs" },
     files: ["bin", "dist"],
     engines: { node: ">=20.11" },
     t3code: { databaseMigration },
@@ -121,7 +122,7 @@ const command = Command.make(
     outputDir: Flag.String("output-dir").pipe(Flag.withDefault("npm-packages")),
   },
   buildNpmLauncher,
-).pipe(Command.withDescription("Build the t3 npm launcher package."));
+).pipe(Command.withDescription("Build the npm launcher package."));
 
 if (import.meta.main) {
   Command.run(command, { version: "0.0.0" }).pipe(

@@ -193,7 +193,7 @@ install_headless() {
   mkdir -p "$(dirname "$headless_dropin")"
   {
     echo "[Service]"
-    echo "# Host the T3 Agents gateway runtime that the desktop app used to provide."
+    echo "# Host the Ada gateway runtime that the desktop app used to provide."
     echo "Environment=T3_MCP_HEADLESS_GATEWAY=1"
     [[ -n "$server_gateway_env" ]] && echo "EnvironmentFile=$server_gateway_env"
   } >"$headless_dropin"

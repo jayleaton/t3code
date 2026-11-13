@@ -1,3 +1,4 @@
+import { CLI_COMMAND, LEGACY_CLI_COMMAND } from "@t3tools/shared/branding";
 import { cliInstallCommand } from "@t3tools/shared/cliRelease";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { pathSetupCommand } from "@t3tools/shared/shell";
@@ -42,7 +43,7 @@ const standaloneRuntime = Effect.gen(function* () {
   return Option.some({ executable, versionsDir, runtimeDir });
 });
 
-/** Links this runtime as the `t3` command the way the install scripts do, replacing only our own link. */
+/** Links this runtime as the `ada` and `t3` commands the way the install scripts do, replacing only our own links. */
 export const installCli = Effect.fn("cli.install.install")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -54,22 +55,20 @@ export const installCli = Effect.fn("cli.install.install")(function* () {
   if (Option.isNone(runtime)) {
     const script = cliInstallCommand(windows ? "win32" : "posix");
     return yield* new CliInstallError({
-      reason: `Only the standalone t3 can install itself. Use \`${script}\`, or Settings in the desktop app.`,
+      reason: `Only the standalone CLI can install itself. Use \`${script}\`, or Settings in the desktop app.`,
     });
   }
   const { executable, versionsDir, runtimeDir } = runtime.value;
   // cmd.exe expands `%` and reads the shim in the OEM code page, so such a path would not run.
   if (windows && /[%\u0080-\uffff]/.test(executable)) {
     return yield* new CliInstallError({
-      reason: `A t3.cmd cannot run ${executable}, because the path has % or non-ASCII characters. Run ${executable} directly instead.`,
+      reason: `A .cmd launcher cannot run ${executable}, because the path has % or non-ASCII characters. Run ${executable} directly instead.`,
     });
   }
   // Absolute, so the PATH hint never adds a folder that changes with the working directory.
   const binDir = path.resolve(
     environment.T3CODE_INSTALL_BIN_DIR?.trim() || path.join(home, ".local", "bin"),
   );
-  const name = windows ? "t3.cmd" : "t3";
-  const link = path.join(binDir, name);
   const failed = (reason: string) => (cause: unknown) => new CliInstallError({ reason, cause });
 
   // Resolve fully so a link through a symlinked T3 home still counts as ours; a dangling one
@@ -77,76 +76,99 @@ export const installCli = Effect.fn("cli.install.install")(function* () {
   const realVersionsDir = yield* fs
     .realPath(versionsDir)
     .pipe(Effect.orElseSucceed(() => versionsDir));
-  const current = windows
-    ? yield* fs.readFileString(link).pipe(Effect.map(generatedWindowsShimTarget), Effect.option)
-    : yield* fs.readLink(link).pipe(
-        Effect.flatMap((target) =>
-          fs.realPath(link).pipe(Effect.orElseSucceed(() => path.resolve(binDir, target))),
+  /** Links `command` to this runtime, replacing only our own link; none when another program has it. */
+  const linkCommand = Effect.fn("cli.install.link")(function* (command: string) {
+    const name = windows ? `${command}.cmd` : command;
+    const link = path.join(binDir, name);
+    const current = windows
+      ? yield* fs.readFileString(link).pipe(Effect.map(generatedWindowsShimTarget), Effect.option)
+      : yield* fs.readLink(link).pipe(
+          Effect.flatMap((target) =>
+            fs.realPath(link).pipe(Effect.orElseSucceed(() => path.resolve(binDir, target))),
+          ),
+          Effect.option,
+        );
+    // A dangling symlink is occupied too: writing the shim would follow it.
+    const occupied =
+      Option.isSome(current) ||
+      (yield* fs.exists(link)) ||
+      Option.isSome(yield* fs.readLink(link).pipe(Effect.option));
+    if (
+      occupied &&
+      !(
+        Option.isSome(current) &&
+        current.value !== undefined &&
+        (isVersionExecutable(path, versionsDir, current.value) ||
+          isVersionExecutable(path, realVersionsDir, current.value) ||
+          // This home's desktop launcher, which install.sh also replaces.
+          current.value === path.join(path.dirname(runtimeDir), "bin", name))
+      )
+    ) {
+      return Option.none<string>();
+    }
+
+    yield* fs
+      .makeDirectory(binDir, { recursive: true })
+      .pipe(Effect.mapError(failed(`Could not create ${binDir}.`)));
+    // An empty spot is created exclusively, so a file that appears after the check above is kept.
+    if (windows) {
+      yield* fs
+        .writeFileString(link, `@echo off\r\n"${executable}" %*`, occupied ? {} : { flag: "wx" })
+        .pipe(Effect.mapError(failed(`Could not write ${link}.`)));
+    } else if (!occupied) {
+      yield* fs.symlink(executable, link).pipe(Effect.mapError(failed(`Could not link ${link}.`)));
+    } else {
+      // Swap a temporary link into place so a running command never sees it missing.
+      const staging = `${link}.${process.pid}.tmp`;
+      // Clean up only a staging link this call made, never a file that was already there.
+      yield* fs
+        .symlink(executable, staging)
+        .pipe(
+          Effect.andThen(
+            fs
+              .rename(staging, link)
+              .pipe(Effect.tapError(() => fs.remove(staging, { force: true }).pipe(Effect.ignore))),
+          ),
+          Effect.mapError(failed(`Could not link ${link}.`)),
+        );
+    }
+
+    // Pruning keeps what recorded launchers point at; a background service cannot see binDir otherwise.
+    const recorded = path.join(
+      yield* fs.realPath(binDir).pipe(Effect.orElseSucceed(() => binDir)),
+      name,
+    );
+    yield* recordPinnedRuntimeLauncher({
+      baseDir: path.dirname(runtimeDir),
+      launcher: recorded,
+    }).pipe(
+      Effect.catch(() =>
+        Console.error(
+          `Warning: could not record ${recorded} in ${path.join(runtimeDir, "launchers")}. Cleanup may remove the version it runs.`,
         ),
-        Effect.option,
-      );
-  // A dangling symlink is occupied too: writing the shim would follow it.
-  const occupied =
-    Option.isSome(current) ||
-    (yield* fs.exists(link)) ||
-    Option.isSome(yield* fs.readLink(link).pipe(Effect.option));
-  if (
-    occupied &&
-    !(
-      Option.isSome(current) &&
-      current.value !== undefined &&
-      (isVersionExecutable(path, versionsDir, current.value) ||
-        isVersionExecutable(path, realVersionsDir, current.value) ||
-        // This home's desktop launcher, which install.sh also replaces.
-        current.value === path.join(path.dirname(runtimeDir), "bin", name))
-    )
-  ) {
+      ),
+    );
+    return Option.some(link);
+  });
+
+  // `ada` is the command's name; `t3` keeps existing scripts working. Either one is enough.
+  const legacy = yield* linkCommand(LEGACY_CLI_COMMAND);
+  const primary = yield* linkCommand(CLI_COMMAND);
+  const command = Option.isSome(primary) ? CLI_COMMAND : LEGACY_CLI_COMMAND;
+  const link = Option.getOrUndefined(Option.orElse(primary, () => legacy));
+  if (link === undefined) {
     return yield* new CliInstallError({
-      reason: `Another t3 is already at ${link}. Remove it, then run this again.`,
+      reason: `Another ${CLI_COMMAND} and ${LEGACY_CLI_COMMAND} are already in ${binDir}. Remove one, then run this again.`,
     });
   }
-
-  yield* fs
-    .makeDirectory(binDir, { recursive: true })
-    .pipe(Effect.mapError(failed(`Could not create ${binDir}.`)));
-  // An empty spot is created exclusively, so a file that appears after the check above is kept.
-  if (windows) {
-    yield* fs
-      .writeFileString(link, `@echo off\r\n"${executable}" %*`, occupied ? {} : { flag: "wx" })
-      .pipe(Effect.mapError(failed(`Could not write ${link}.`)));
-  } else if (!occupied) {
-    yield* fs.symlink(executable, link).pipe(Effect.mapError(failed(`Could not link ${link}.`)));
-  } else {
-    // Swap a temporary link into place so a running `t3` never sees the command missing.
-    const staging = `${link}.${process.pid}.tmp`;
-    // Clean up only a staging link this call made, never a file that was already there.
-    yield* fs
-      .symlink(executable, staging)
-      .pipe(
-        Effect.andThen(
-          fs
-            .rename(staging, link)
-            .pipe(Effect.tapError(() => fs.remove(staging, { force: true }).pipe(Effect.ignore))),
-        ),
-        Effect.mapError(failed(`Could not link ${link}.`)),
-      );
-  }
-
-  // Pruning keeps what recorded launchers point at; a background service cannot see binDir otherwise.
-  const recorded = path.join(
-    yield* fs.realPath(binDir).pipe(Effect.orElseSucceed(() => binDir)),
-    name,
-  );
-  yield* recordPinnedRuntimeLauncher({
-    baseDir: path.dirname(runtimeDir),
-    launcher: recorded,
-  }).pipe(
-    Effect.catch(() =>
-      Console.error(
-        `Warning: could not record ${recorded} in ${path.join(runtimeDir, "launchers")}. Cleanup may remove the version it runs.`,
-      ),
-    ),
-  );
+  const kept = [
+    ...(Option.isNone(primary)
+      ? [path.join(binDir, windows ? `${CLI_COMMAND}.cmd` : CLI_COMMAND)]
+      : []),
+    ...(Option.isNone(legacy)
+      ? [path.join(binDir, windows ? `${LEGACY_CLI_COMMAND}.cmd` : LEGACY_CLI_COMMAND)]
+      : []),
+  ];
 
   // resolve() drops trailing separators, so `~/.local/bin/` on PATH still matches.
   const normalize = (value: string) =>
@@ -154,13 +176,13 @@ export const installCli = Effect.fn("cli.install.install")(function* () {
   const same = (entry: string) => entry !== "" && normalize(entry) === normalize(binDir);
   const entries = (environment.PATH ?? environment.Path ?? "").split(windows ? ";" : ":");
   const onPath = entries.some(same);
-  // A t3 earlier on PATH runs instead, and an added folder goes last. Runner caches (npx's own
+  // A command of the same name earlier on PATH runs instead, and an added folder goes last. Runner caches (npx's own
   // .bin) are not installs.
   const firstOther = Effect.gen(function* () {
     for (const entry of entries) {
       if (same(entry)) return undefined;
       if (!path.isAbsolute(entry) || detectCliRunner(`${entry}/`) !== null) continue;
-      for (const name of windows ? ["t3.cmd", "t3.exe"] : ["t3"]) {
+      for (const name of windows ? [`${command}.cmd`, `${command}.exe`] : [command]) {
         const candidate = path.join(entry, name);
         if (yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))) return candidate;
       }
@@ -170,6 +192,8 @@ export const installCli = Effect.fn("cli.install.install")(function* () {
   const shadowedBy = yield* firstOther;
   return {
     link,
+    command,
+    kept,
     onPath: onPath && shadowedBy === undefined,
     shadowedBy,
     pathCommand:
@@ -196,30 +220,38 @@ export const installCli = Effect.fn("cli.install.install")(function* () {
 const reportInstalled = Effect.fn("cli.install.report")(function* (
   installed: Effect.Success<ReturnType<typeof installCli>>,
 ) {
-  yield* Console.log(`Installed t3 ${packageJson.version} at ${installed.link}.`);
+  const command = installed.command;
+  yield* Console.log(`Installed ${command} ${packageJson.version} at ${installed.link}.`);
+  for (const kept of installed.kept) {
+    yield* Console.log(`Another program is already at ${kept}, so it was left in place.`);
+  }
   if (installed.shadowedBy !== undefined) {
     return yield* Console.log(
-      `Another t3 at ${installed.shadowedBy} runs first, so run ${installed.link} to use this one.`,
+      `Another ${command} at ${installed.shadowedBy} runs first, so run ${installed.link} to use this one.`,
     );
   }
-  if (installed.onPath) return yield* Console.log("Run `t3` to get started.");
+  if (installed.onPath) return yield* Console.log(`Run \`${command}\` to get started.`);
   if (installed.pathCommand === undefined) {
-    return yield* Console.log(`Add ${installed.binDir} to your PATH, then run \`t3\`.`);
+    return yield* Console.log(`Add ${installed.binDir} to your PATH, then run \`${command}\`.`);
   }
   if ((yield* HostProcess.Platform) === "win32") {
     yield* Console.log(
       `${installed.binDir} is not on your PATH yet. In this PowerShell window, run:`,
     );
     yield* Console.log(`  ${installed.pathCommand}`);
-    return yield* Console.log("Then run `t3`. For new windows, add the folder to your PATH.");
+    return yield* Console.log(
+      `Then run \`${command}\`. For new windows, add the folder to your PATH.`,
+    );
   }
   yield* Console.log(`${installed.binDir} is not on your PATH yet. Add it with:`);
   yield* Console.log(`  ${installed.pathCommand}`);
-  yield* Console.log("Then open a new terminal and run `t3`.");
+  yield* Console.log(`Then open a new terminal and run \`${command}\`.`);
 });
 
 export const installCommand = Command.make("install").pipe(
-  Command.withDescription("Install this version as the `t3` command."),
+  Command.withDescription(
+    `Install this version as the \`${CLI_COMMAND}\` command, with \`${LEGACY_CLI_COMMAND}\` beside it.`,
+  ),
   Command.withHandler(() => installCli().pipe(Effect.flatMap(reportInstalled))),
 );
 
@@ -320,16 +352,20 @@ export const offerCliInstall = Effect.fn("cli.install.offer")(function* <E, R, E
   if (Option.isNone(runtime)) return true;
   const { runtimeDir } = runtime.value;
 
-  // Any t3 already installed means no prompt: ours (even when off PATH) or another on PATH.
+  // Any ada or t3 already installed means no prompt: ours (even when off PATH) or another on PATH.
   // Runners put their own cache's node_modules/.bin on PATH, so skip those.
   const windows = platform === "win32";
-  const names = windows ? ["t3.cmd", "t3.exe"] : ["t3"];
+  const names = [CLI_COMMAND, LEGACY_CLI_COMMAND].flatMap((command) =>
+    windows ? [`${command}.cmd`, `${command}.exe`] : [command],
+  );
   const launchers = yield* fs
     .readFileString(path.join(runtimeDir, "launchers"))
     .pipe(Effect.orElseSucceed(() => ""));
   const candidates = [
     ...launchers.split(/\r?\n/).filter(Boolean),
-    path.join(path.dirname(runtimeDir), "bin", windows ? "t3.cmd" : "t3"),
+    ...names
+      .filter((name) => !name.endsWith(".exe"))
+      .map((name) => path.join(path.dirname(runtimeDir), "bin", name)),
     ...(environment.PATH ?? environment.Path ?? "")
       .split(windows ? ";" : ":")
       .filter(
@@ -352,7 +388,7 @@ export const offerCliInstall = Effect.fn("cli.install.offer")(function* <E, R, E
   const answer = yield* input.confirm.pipe(Effect.timeoutOption(PROMPT_TIMEOUT));
   if (Option.isNone(answer)) {
     yield* saveDecline;
-    yield* Console.log(`\nNo answer, so t3 was not installed. ${installHint}\n`);
+    yield* Console.log(`\nNo answer, so ${CLI_COMMAND} was not installed. ${installHint}\n`);
     return true;
   }
   if (answer.value === undefined) return false;
@@ -364,7 +400,10 @@ export const offerCliInstall = Effect.fn("cli.install.offer")(function* <E, R, E
   yield* installCli().pipe(
     Effect.flatMap(reportInstalled),
     Effect.catch((error) =>
-      Effect.andThen(saveDecline, Console.error(`Could not install t3: ${error.message}`)),
+      Effect.andThen(
+        saveDecline,
+        Console.error(`Could not install ${CLI_COMMAND}: ${error.message}`),
+      ),
     ),
   );
   yield* Console.log("");
@@ -373,7 +412,7 @@ export const offerCliInstall = Effect.fn("cli.install.offer")(function* <E, R, E
 
 export const confirmCliInstall = Prompt.run(
   Prompt.Confirm({
-    message: "Install the t3 command? Then you can run `t3` directly.",
+    message: `Install the ${CLI_COMMAND} command? Then you can run \`${CLI_COMMAND}\` directly.`,
     initial: true,
   }),
 ).pipe(Effect.catchTags({ QuitError: () => Effect.void }));

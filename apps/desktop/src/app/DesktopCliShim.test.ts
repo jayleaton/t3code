@@ -6,7 +6,7 @@ import * as NodePath from "node:path";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { type CliShimTarget, renderCliShim } from "./DesktopCliShim.ts";
+import { type CliShimTarget, isOwnShim, renderCliShim } from "./DesktopCliShim.ts";
 
 const directories: Array<string> = [];
 afterEach(() => {
@@ -122,5 +122,9 @@ describe("renderCliShim", () => {
     );
     expect(bare).toEqual([]);
     expect(lines).toContain('set "T3CODE_CLI_PATH=C:\\Users\\José\\.t3\\bin\\t3.cmd"');
+    expect(isOwnShim(script)).toBe(true);
+    // The marker predates the rename, so older builds still see these shims as the app's own.
+    expect(isOwnShim("rem Written by T3 Code: runs the desktop app's bundled t3 CLI.")).toBe(true);
+    expect(isOwnShim("@echo off\r\nnode t3.js %*")).toBe(false);
   });
 });

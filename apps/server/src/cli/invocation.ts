@@ -5,6 +5,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import type { ServerInstallation } from "@t3tools/contracts";
+import { CLI_COMMAND } from "@t3tools/shared/branding";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveCommandPath } from "@t3tools/shared/shell";
 
@@ -146,9 +147,31 @@ const resolveInstallLauncher = Effect.gen(function* () {
     : Option.none<string>();
 });
 
+/** Whether `ada` on PATH runs this install: its own launcher, or the desktop's `ada` shim beside it. */
+const adaRunsThisInstall = Effect.gen(function* () {
+  const onPath = yield* resolveCommandPath(CLI_COMMAND);
+  if (onPath === null) return false;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const real = (file: string) => fs.realPath(file).pipe(Effect.orElseSucceed(() => null));
+  const shim = (yield* HostProcess.Environment).T3CODE_CLI_PATH?.trim();
+  const own = shim
+    ? [shim, path.join(path.dirname(shim), `${CLI_COMMAND}${path.extname(shim)}`)]
+    : [
+        (yield* HostProcess.IsExecutable)
+          ? yield* HostProcess.ExecutablePath
+          : yield* resolveEntryPath,
+      ];
+  const target = yield* real(onPath);
+  for (const file of own) {
+    if (target !== null && target === (yield* real(file))) return true;
+  }
+  return false;
+});
+
 /**
- * Uses this install's `t3` on PATH, the originating runner, or its absolute launcher path.
- * Arguments are quoted for POSIX shells or PowerShell on Windows.
+ * Uses this install's `ada` or `t3` on PATH, the originating runner, or its absolute launcher
+ * path. Arguments are quoted for POSIX shells or PowerShell on Windows.
  */
 export const resolveHostCliCommand = Effect.fn("invocation.resolveHostCliCommand")(function* (
   subcommand: string,
@@ -159,6 +182,9 @@ export const resolveHostCliCommand = Effect.fn("invocation.resolveHostCliCommand
     [prefix, ...args.map((arg) => hostShellWord(platform, arg))].join(" ");
   const command = yield* resolveCliCommand(subcommand);
   if (command !== `t3 ${subcommand}`) return { command: withArgs(command), launcher: false };
+  if (yield* adaRunsThisInstall) {
+    return { command: withArgs(`${CLI_COMMAND} ${subcommand}`), launcher: false };
+  }
   const onPath = yield* resolveCommandPath("t3");
   if (onPath !== null) {
     const shim = (yield* HostProcess.Environment).T3CODE_CLI_PATH?.trim();

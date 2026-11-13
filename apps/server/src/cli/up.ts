@@ -1,3 +1,4 @@
+import { APP_NAME, CLI_COMMAND } from "@t3tools/shared/branding";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -90,7 +91,7 @@ const formatSetup = (setup: Setup) => {
       ? ["Anyone on your LAN or tailnet can reach the port. A pairing code is the only lock."]
       : []),
     ...(setup.lanFromOldDefault
-      ? ["Older installs keep LAN access on. Turn it off: `t3 up --no-lan`."]
+      ? [`Older installs keep LAN access on. Turn it off: \`${CLI_COMMAND} up --no-lan\`.`]
       : []),
   ];
   return [
@@ -103,8 +104,8 @@ const formatNextSteps = (lan: boolean, serviceInstalled: boolean, pairCommand: s
   lan
     ? `Run \`${pairCommand}\`. Use the code on your other device.`
     : serviceInstalled
-      ? "Remote access is off. T3 Code still runs here in the background."
-      : "Remote access is off. Run `t3` to use T3 Code here.";
+      ? `Remote access is off. ${APP_NAME} still runs here in the background.`
+      : `Remote access is off. Run \`${CLI_COMMAND}\` to use ${APP_NAME} here.`;
 
 const interactiveTerminal = () => Boolean(process.stdin.isTTY && process.stdout.isTTY);
 
@@ -144,8 +145,7 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
   } else if (plan.ask && !flags.yes && !before.service.installed) {
     return yield* new CliError.UserError({
       cause: "routes",
-      userMessage:
-        "No terminal. Choose access with --lan or --no-lan, or use --yes for the default. See `t3 up --help`.",
+      userMessage: `No terminal. Choose access with --lan or --no-lan, or use --yes for the default. See \`${CLI_COMMAND} up --help\`.`,
     });
   }
   if (lan && !before.lan) {
@@ -178,7 +178,7 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
     const confirmed = yield* Prompt.run(
       Prompt.Confirm({
         message: update
-          ? "Update and restart T3 Code? Running agent turns will stop."
+          ? `Update and restart ${APP_NAME}? Running agent turns will stop.`
           : "Apply changes and restart? Running agent turns will stop.",
         initial: true,
       }),
@@ -227,7 +227,7 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
       yield* Console.log(`Keeping installed service version t3@${installedVersion}.`);
     }
     if (update && !interactive) {
-      yield* Console.log("Updating T3 Code. Running agent turns will stop.");
+      yield* Console.log(`Updating ${APP_NAME}. Running agent turns will stop.`);
     }
     const result = newer
       ? ({ changed: false } as const)
@@ -251,7 +251,7 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
       yield* Console.log(CliService.formatServiceChange(result));
     } else if (restart) {
       if (!interactive && !stopped) {
-        yield* Console.log("Restarting T3 Code. Running agent turns will stop.");
+        yield* Console.log(`Restarting ${APP_NAME}. Running agent turns will stop.`);
       }
       const outcome = yield* service.restart.pipe(Effect.tapError(() => rollBack));
       if (outcome === "queued") {
@@ -259,7 +259,7 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
       }
       if (outcome === "skipped") {
         yield* Console.log(
-          "The installed service was not restarted. Run `t3 service status` to see why.",
+          `The installed service was not restarted. Run \`${CLI_COMMAND} service status\` to see why.`,
         );
       }
     }
@@ -291,16 +291,16 @@ export const upCommand = Command.make("up", {
     Flag.withDefault(false),
   ),
 }).pipe(
-  Command.withShortDescription("Set up remote access and the T3 Code background service."),
+  Command.withShortDescription(`Set up remote access and the ${APP_NAME} background service.`),
   Command.withDescription(
-    "Set up remote access and the T3 Code background service. An access flag skips the question. Without a terminal, a needed restart runs without asking and stops running agent turns.",
+    `Set up remote access and the ${APP_NAME} background service. An access flag skips the question. Without a terminal, a needed restart runs without asking and stops running agent turns.`,
   ),
   Command.withExamples([
-    { command: "t3 up", description: "Choose remote access." },
-    { command: "t3 up --lan", description: "Allow LAN access with pairing codes." },
-    { command: "t3 up --no-lan", description: "Stop LAN access." },
-    { command: "t3 up --yes", description: "Take the defaults with no questions." },
-    { command: "t3 status --json", description: "Read the settings from a script." },
+    { command: `${CLI_COMMAND} up`, description: "Choose remote access." },
+    { command: `${CLI_COMMAND} up --lan`, description: "Allow LAN access with pairing codes." },
+    { command: `${CLI_COMMAND} up --no-lan`, description: "Stop LAN access." },
+    { command: `${CLI_COMMAND} up --yes`, description: "Take the defaults with no questions." },
+    { command: `${CLI_COMMAND} status --json`, description: "Read the settings from a script." },
   ]),
   Command.withHandler(
     Effect.fn("cli.up.run")(function* (flags) {
@@ -348,8 +348,8 @@ export const statusCommand = Command.make("status", {
 }).pipe(
   Command.withDescription("Show service setup and remote access settings."),
   Command.withExamples([
-    { command: "t3 status", description: "Show the settings." },
-    { command: "t3 status --json", description: "Print them for scripts and agents." },
+    { command: `${CLI_COMMAND} status`, description: "Show the settings." },
+    { command: `${CLI_COMMAND} status --json`, description: "Print them for scripts and agents." },
   ]),
   Command.withHandler(
     Effect.fn("cli.status")(function* (flags) {
@@ -366,7 +366,7 @@ export const statusCommand = Command.make("status", {
           ? setupJson(setup)
           : setup.service.otherBaseDir !== undefined
             ? `This machine\n${formatSetup(setup)}`
-            : `This machine\n${formatSetup(setup)}\n\nChange access: \`t3 up\`.`,
+            : `This machine\n${formatSetup(setup)}\n\nChange access: \`${CLI_COMMAND} up\`.`,
       );
     }),
   ),

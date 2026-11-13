@@ -1003,7 +1003,9 @@ jobs:
         if: inputs.brand == 'agents'
         timeout-minutes: 5
         shell: powershell
+        env:
+          PRODUCT_NAME: ${{ inputs.product_name }}
         run: |
           $installers = @(Get-ChildItem release/T3-Agents-*.exe)
           if ($installers.Count -ne 1) { throw 'Expected exactly one Agents installer.' }
-          ./scripts/test-agents-windows-installer.ps1 -Installer $installers[0].FullName
+          ./scripts/test-agents-windows-installer.ps1 -Installer $installers[0].FullName -ProductName $env:PRODUCT_NAME

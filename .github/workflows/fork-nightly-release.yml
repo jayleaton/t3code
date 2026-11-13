@@ -30,7 +30,7 @@ jobs:
       - name: Require production configuration and stable Mac signing
         env:
           APP_ID: ${{ vars.FORK_APP_ID || 'com.jayleaton.t3agents' }}
-          PRODUCT_NAME: ${{ vars.FORK_PRODUCT_NAME || 'T3 Agents' }}
+          PRODUCT_NAME: ${{ vars.FORK_PRODUCT_NAME || 'Ada' }}
           TEAM: ${{ vars.APPLE_TEAM_ID }}
           CERTIFICATE: ${{ secrets.CSC_LINK }}
           CERTIFICATE_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
@@ -136,7 +136,7 @@ jobs:
       release_channel: nightly
       brand: agents
       app_id: ${{ vars.FORK_APP_ID || 'com.jayleaton.t3agents' }}
-      product_name: ${{ vars.FORK_PRODUCT_NAME || 'T3 Agents' }}
+      product_name: ${{ vars.FORK_PRODUCT_NAME || 'Ada' }}
       update_repository: ${{ github.repository }}
       label: macOS arm64
       runner: macos-15
@@ -158,7 +158,7 @@ jobs:
       release_channel: nightly
       brand: agents
       app_id: ${{ vars.FORK_APP_ID || 'com.jayleaton.t3agents' }}
-      product_name: ${{ vars.FORK_PRODUCT_NAME || 'T3 Agents' }}
+      product_name: ${{ vars.FORK_PRODUCT_NAME || 'Ada' }}
       update_repository: ${{ github.repository }}
       label: macOS x64
       runner: macos-15-intel
@@ -183,7 +183,7 @@ jobs:
       release_channel: nightly
       brand: agents
       app_id: ${{ vars.FORK_APP_ID || 'com.jayleaton.t3agents' }}
-      product_name: ${{ vars.FORK_PRODUCT_NAME || 'T3 Agents' }}
+      product_name: ${{ vars.FORK_PRODUCT_NAME || 'Ada' }}
       update_repository: ${{ github.repository }}
       label: Linux x64
       runner: ubuntu-24.04
@@ -207,7 +207,7 @@ jobs:
       release_channel: nightly
       brand: agents
       app_id: ${{ vars.FORK_APP_ID || 'com.jayleaton.t3agents' }}
-      product_name: ${{ vars.FORK_PRODUCT_NAME || 'T3 Agents' }}
+      product_name: ${{ vars.FORK_PRODUCT_NAME || 'Ada' }}
       update_repository: ${{ github.repository }}
       label: Linux arm64
       runner: ubuntu-24.04-arm
@@ -232,7 +232,7 @@ jobs:
       release_channel: nightly
       brand: agents
       app_id: ${{ vars.FORK_APP_ID || 'com.jayleaton.t3agents' }}
-      product_name: ${{ vars.FORK_PRODUCT_NAME || 'T3 Agents' }}
+      product_name: ${{ vars.FORK_PRODUCT_NAME || 'Ada' }}
       update_repository: ${{ github.repository }}
       label: Windows x64
       runner: ubuntu-24.04
@@ -255,7 +255,7 @@ jobs:
       release_channel: nightly
       brand: agents
       app_id: ${{ vars.FORK_APP_ID || 'com.jayleaton.t3agents' }}
-      product_name: ${{ vars.FORK_PRODUCT_NAME || 'T3 Agents' }}
+      product_name: ${{ vars.FORK_PRODUCT_NAME || 'Ada' }}
       update_repository: ${{ github.repository }}
       label: Windows arm64
       runner: ubuntu-24.04
@@ -338,6 +338,6 @@ jobs:
         run: |
           set -euo pipefail
           printf 'Community fork build from `%s`. T3 Connect is not included; this is not an official T3 release.\n' "$RELEASE_COMMIT" > "$RUNNER_TEMP/release-notes.md"
-          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --target "$RELEASE_COMMIT" --title "T3 Agents Nightly $VERSION" --notes-file "$RUNNER_TEMP/release-notes.md" --prerelease --draft
+          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --target "$RELEASE_COMMIT" --title "Ada Nightly $VERSION" --notes-file "$RUNNER_TEMP/release-notes.md" --prerelease --draft
           gh release upload "v$VERSION" release-assets/* --repo "$GITHUB_REPOSITORY"
           gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease

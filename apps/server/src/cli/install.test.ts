@@ -43,7 +43,15 @@ const setup = Effect.gen(function* () {
         ...env,
       }),
     );
-  return { root, npmPackage, runtimeDir, executable, link: path.join(binDir, "t3"), provide };
+  return {
+    root,
+    npmPackage,
+    runtimeDir,
+    executable,
+    link: path.join(binDir, "t3"),
+    adaLink: path.join(binDir, "ada"),
+    provide,
+  };
 });
 
 it.layer(NodeServices.layer)("t3 install", (it) => {
@@ -51,13 +59,15 @@ it.layer(NodeServices.layer)("t3 install", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const { root, runtimeDir, executable, link, provide } = yield* setup;
+      const { root, runtimeDir, executable, link, adaLink, provide } = yield* setup;
 
       const older = path.join(runtimeDir, "versions/0.0.1/t3");
       yield* fs.makeDirectory(path.dirname(link), { recursive: true });
       yield* fs.symlink(older, link);
       const installed = yield* provide(installCli());
       assert.equal(yield* fs.readLink(link), executable);
+      assert.equal(yield* fs.readLink(adaLink), executable);
+      assert.equal(installed.link, adaLink);
       assert.isFalse(installed.onPath);
       assert.include(installed.pathCommand, "$HOME/bin");
 
@@ -68,30 +78,54 @@ it.layer(NodeServices.layer)("t3 install", (it) => {
       yield* fs.symlink(path.join(alias, "runtime/versions", VERSION, "t3"), link);
       const onPath = yield* provide(installCli(), { PATH: `/usr/bin:${path.join(root, "bin")}/` });
       assert.isTrue(onPath.onPath);
-      // Another t3 earlier on PATH still runs first, so `t3` would not run this one.
+      // Another ada earlier on PATH still runs first, so `ada` would not run this one.
       const otherBin = path.join(root, "other-bin");
       yield* fs.makeDirectory(otherBin);
-      yield* fs.writeFileString(path.join(otherBin, "t3"), "");
+      yield* fs.writeFileString(path.join(otherBin, "ada"), "");
       const shadowed = yield* provide(installCli(), {
         PATH: `${otherBin}:${path.join(root, "bin")}`,
       });
       assert.isFalse(shadowed.onPath);
-      assert.equal(shadowed.shadowedBy, path.join(otherBin, "t3"));
+      assert.equal(shadowed.shadowedBy, path.join(otherBin, "ada"));
       assert.isUndefined(shadowed.pathCommand);
+      const realBin = yield* fs.realPath(path.join(root, "bin"));
       const recorded = yield* fs.readFileString(path.join(runtimeDir, "launchers"));
-      assert.equal(recorded, `\n${yield* fs.realPath(path.join(root, "bin"))}/t3\n`);
+      assert.deepEqual(recorded.split("\n").filter(Boolean), [`${realBin}/t3`, `${realBin}/ada`]);
 
+      // Another t3 alone still leaves `ada` to link; it is left in place and reported.
+      yield* fs.remove(link);
+      yield* fs.writeFileString(link, "#!/bin/sh\n");
+      const besideForeign = yield* provide(installCli());
+      assert.deepEqual(besideForeign.kept, [link]);
+      assert.equal(besideForeign.command, "ada");
+      assert.equal(yield* fs.readFileString(link), "#!/bin/sh\n");
+      // A desktop `ada` launcher of this home is ours too; `t3` serves when `ada` is someone else's.
+      yield* fs.remove(adaLink);
+      yield* fs.symlink(path.join(root, ".t3/bin/ada"), adaLink);
+      yield* provide(installCli());
+      assert.equal(yield* fs.readLink(adaLink), executable);
+      yield* fs.remove(adaLink);
+      yield* fs.writeFileString(adaLink, "#!/bin/sh\necho theirs\n");
+      yield* fs.remove(link);
+      yield* fs.symlink(older, link);
+      const besideForeignAda = yield* provide(installCli());
+      assert.equal(besideForeignAda.link, link);
+      assert.equal(besideForeignAda.command, "t3");
+      assert.deepEqual(besideForeignAda.kept, [adaLink]);
+      assert.equal(yield* fs.readFileString(adaLink), "#!/bin/sh\necho theirs\n");
+
+      // From here another program owns `ada`, so each case below turns on the t3 link alone.
       yield* fs.remove(link);
       yield* fs.writeFileString(link, "#!/bin/sh\n");
       const error = yield* provide(installCli()).pipe(Effect.flip);
-      assert.include(error.message, "Another t3 is already at");
+      assert.include(error.message, "Another ada and t3 are already in");
       assert.equal(yield* fs.readFileString(link), "#!/bin/sh\n");
 
       // Only `<version>/t3` is ours, not another program inside a version.
       yield* fs.remove(link);
       yield* fs.symlink(path.join(runtimeDir, "versions/0.0.1/node"), link);
       const sibling = yield* provide(installCli()).pipe(Effect.flip);
-      assert.include(sibling.message, "Another t3 is already at");
+      assert.include(sibling.message, "Another ada and t3 are already in");
       // This home's desktop launcher is replaced, as install.sh does.
       yield* fs.remove(link);
       yield* fs.symlink(path.join(root, ".t3/bin/t3"), link);
@@ -130,8 +164,9 @@ it.layer(NodeServices.layer)("t3 install", (it) => {
       const desktopShim =
         '@echo off\r\nrem Written by T3 Code\r\n"C:\\T3 Code\\T3 Code.exe" "x" %*\r\n';
       yield* fs.writeFileString(shim, desktopShim);
+      yield* fs.writeFileString(path.join(root, "bin", "ada.cmd"), desktopShim);
       const foreignShim = yield* windows(installCli()).pipe(Effect.flip);
-      assert.include(foreignShim.message, "Another t3 is already at");
+      assert.include(foreignShim.message, "Another ada and t3 are already in");
       assert.equal(yield* fs.readFileString(shim), desktopShim);
       // A user's wrapper that also runs a managed t3.exe is still theirs.
       const wrapper = `@echo off\r\nset FOO=1\r\n"${path.join(runtimeDir, "versions/0.0.1/t3.exe")}" %*`;
@@ -169,7 +204,7 @@ it.layer(NodeServices.layer)("t3 install", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const { root, npmPackage, runtimeDir, executable, link, provide } = yield* setup;
+      const { root, npmPackage, runtimeDir, executable, link, adaLink, provide } = yield* setup;
       let asked = 0;
       const offer = (
         answer: boolean | undefined | Effect.Effect<boolean>,
@@ -236,6 +271,7 @@ it.layer(NodeServices.layer)("t3 install", (it) => {
       yield* offer(true);
       assert.equal(asked, 2);
       assert.equal(yield* fs.readLink(link), executable);
+      assert.equal(yield* fs.readLink(adaLink), executable);
 
       yield* fs.remove(path.join(runtimeDir, "install-prompt-declined"));
       yield* offer(true);
@@ -244,8 +280,10 @@ it.layer(NodeServices.layer)("t3 install", (it) => {
       // A yes that cannot install, and no answer at all, also wait for the next minor release.
       const declined = path.join(runtimeDir, "install-prompt-declined");
       yield* fs.remove(link);
+      yield* fs.remove(adaLink);
       yield* fs.remove(path.join(runtimeDir, "launchers"));
       yield* fs.writeFileString(link, "#!/bin/sh\necho mine\n");
+      yield* fs.writeFileString(adaLink, "#!/bin/sh\necho theirs\n");
       asked = 0;
       assert.isTrue(yield* offer(true));
       assert.equal(yield* fs.readFileString(link), "#!/bin/sh\necho mine\n");

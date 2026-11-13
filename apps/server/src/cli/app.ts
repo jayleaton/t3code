@@ -1,4 +1,5 @@
 // @effect-diagnostics globalTimers:off -- The Node socket client owns its response deadline and clears it on every completion path.
+import { APP_NAME, CLI_COMMAND } from "@t3tools/shared/branding";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect stat follows symlinks; IPC ownership validation requires lstat.
 import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
@@ -37,7 +38,7 @@ export class DesktopAppSshUnsupportedError extends Schema.TaggedError<DesktopApp
   {},
 ) {
   override get message(): string {
-    return "`t3 app` only controls a desktop app on the same machine. It cannot run over SSH.";
+    return `\`${CLI_COMMAND} app\` only controls a desktop app on the same machine. It cannot run over SSH.`;
   }
 }
 
@@ -46,7 +47,7 @@ export class DesktopAppPlatformUnsupportedError extends Schema.TaggedError<Deskt
   { platform: Schema.String },
 ) {
   override get message(): string {
-    return `\`t3 app\` is not supported on ${this.platform}.`;
+    return `\`${CLI_COMMAND} app\` is not supported on ${this.platform}.`;
   }
 }
 
@@ -60,7 +61,7 @@ export class DesktopAppUnreachableError extends Schema.TaggedError<DesktopAppUnr
   },
 ) {
   override get message(): string {
-    return "Could not reach the T3 Code desktop app. Start or update the desktop app on this machine, then run `t3 app` again. A running T3 Code server is not enough.";
+    return `Could not reach the ${APP_NAME} desktop app. Start or update the desktop app on this machine, then run \`${CLI_COMMAND} app\` again. A running ${APP_NAME} server is not enough.`;
   }
 }
 
@@ -74,7 +75,7 @@ export class DesktopAppRequestFailedError extends Schema.TaggedError<DesktopAppR
   },
 ) {
   override get message(): string {
-    return `T3 Code could not open ${this.workspaceRoot} (${this.code}).`;
+    return `${APP_NAME} could not open ${this.workspaceRoot} (${this.code}).`;
   }
 }
 
@@ -266,7 +267,7 @@ const runAppCommand = Effect.fn("cli.app")(function* (flags: {
     });
   }
 
-  yield* Console.log(`Opened ${workspaceRoot} in T3 Code.`);
+  yield* Console.log(`Opened ${workspaceRoot} in ${APP_NAME}.`);
 });
 
 export const appCommand = Command.make("app", {
@@ -276,6 +277,6 @@ export const appCommand = Command.make("app", {
     Argument.optional,
   ),
 }).pipe(
-  Command.withDescription("Open a project in the running T3 Code desktop app."),
+  Command.withDescription(`Open a project in the running ${APP_NAME} desktop app.`),
   Command.withHandler(runAppCommand),
 );

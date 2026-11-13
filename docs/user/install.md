@@ -20,12 +20,12 @@ On Windows, in PowerShell:
 irm https://raw.githubusercontent.com/jayleaton/t3code/main/scripts/install.ps1 | iex
 ```
 
-This installs the `t3` binary to `~/.local/bin`. If that folder is not on your
+This installs the `ada` command, and `t3` beside it for existing scripts, to `~/.local/bin`. If that folder is not on your
 `PATH` yet, the installer says so and, for zsh, bash on Linux, and fish, prints
-a command to add it. On Windows, `t3` works in the same PowerShell window right
-away; add the folder to your `PATH` for new windows. If a `t3` that the
-installer or the desktop app did not create is already there, it leaves that
-one alone and stops.
+a command to add it. On Windows, `ada` works in the same PowerShell window right
+away; add the folder to your `PATH` for new windows. If an `ada` or `t3` that
+the installer or the desktop app did not create is already there, it leaves
+that one alone and installs the other; it stops only when both are taken.
 
 Every Ada release is a nightly, so the installer follows the nightly
 channel. To pin an exact version, set `T3CODE_VERSION`:
@@ -42,33 +42,33 @@ Each [release](https://github.com/jayleaton/t3code/releases) also carries
 `install.sh` and `install.ps1`. Use only these scripts: T3 Code's
 installers and its npm package install T3 Code's server and replace Ada's.
 
-For a headless host, run the installer and then `t3 service install`. The
+For a headless host, run the installer and then `ada service install`. The
 background service is the only headless setup that the app's **Update** button
 can update ([details](./background-service.md)). Hosts that already run the
 AppImage-based systemd unit can keep following
 [Headless Linux host](../operations/headless-linux.md).
 
-| Task                                             | Command                                                                 |
-| ------------------------------------------------ | ----------------------------------------------------------------------- |
-| Start the server and open the web app            | `t3`                                                                    |
-| Start the server without a browser               | `t3 serve`                                                              |
-| Use it from your other devices                   | `t3 up` ([details](./remote-access.md))                                 |
-| Keep it running in the background (macOS, Linux) | `t3 service install` ([details](./background-service.md))               |
-| Move to the newest release                       | `t3 update`, or `t3 update <version>`                                   |
-| Reclaim database space                           | `t3 doctor` ([details](./background-service.md#reclaim-database-space)) |
-| Remove it again                                  | `t3 uninstall`                                                          |
+| Task                                             | Command                                                                  |
+| ------------------------------------------------ | ------------------------------------------------------------------------ |
+| Start the server and open the web app            | `ada`                                                                    |
+| Start the server without a browser               | `ada serve`                                                              |
+| Use it from your other devices                   | `ada up` ([details](./remote-access.md))                                 |
+| Keep it running in the background (macOS, Linux) | `ada service install` ([details](./background-service.md))               |
+| Move to the newest release                       | `ada update`, or `ada update <version>`                                  |
+| Reclaim database space                           | `ada doctor` ([details](./background-service.md#reclaim-database-space)) |
+| Remove it again                                  | `ada uninstall`                                                          |
 
-Run `t3 help` or `t3 --help` for the full reference. To start in a new working
-directory, use an explicit path such as `t3 ./my-project`. A bare directory name
+Run `ada help` or `ada --help` for the full reference. To start in a new working
+directory, use an explicit path such as `ada ./my-project`. A bare directory name
 is accepted only if it already exists.
 
-If `t3` or `t3 start` reports an already running server, connect to that server
+If `ada` or `ada start` reports an already running server, connect to that server
 instead. Stop it before starting a replacement, or use a different `--base-dir`
 for an independent server.
 
 ### Intel Macs
 
-There is no `t3` executable for Intel Macs (the desktop app is available). To
+There is no `ada` executable for Intel Macs (the desktop app is available). To
 run a server there, build it from source with `vp`, which provides the Node version it needs
 ([Install vp](https://github.com/jayleaton/t3code#install-vp)):
 
@@ -78,7 +78,7 @@ cd t3code && vp i && vp run build:desktop
 node apps/server/dist/bin.mjs
 ```
 
-`t3 update` and the background service do not apply to a server run this way;
+`ada update` and the background service do not apply to a server run this way;
 update it with `git pull` and a rebuild.
 
 ## Desktop app
@@ -108,16 +108,17 @@ The `.deb` updates itself like the other desktop builds. It asks for your
 password to install each update. If your desktop has no password prompt, the
 update fails. Download the new `.deb` and install it the same way.
 
-### The `t3` command
+### The `ada` command
 
-The desktop app includes the `t3` command-line tool. A new install sets it up
+The desktop app includes the `ada` command-line tool. A new install sets it up
 on first launch; after an update, or any time, choose **Install** next to
-**t3 command** in **Settings → About**. On macOS and Linux it adds a `t3` link
+**ada command** in **Settings → About**. On macOS and Linux it adds `ada` and `t3` links
 in `~/.local/bin` (or `~/bin`); on Windows it adds the app's command folder to
 your `PATH`. Open a new terminal afterwards. If the folder is not on your
 `PATH`, **Add to PATH** on the Welcome page or in **Settings → About** adds one
 line to your shell's startup file. **Remove** takes it off, and the app does not
-add it again. If you already have another `t3`, it stays as it is.
+add it again. If you already have another `ada` or `t3`, it stays as it is. `t3` runs the same
+command, so existing scripts and services keep working.
 
 ### Windows Subsystem for Linux
 
@@ -131,11 +132,11 @@ take longer.
 With the desktop app already running on the same machine:
 
 ```bash
-t3 app
+ada app
 ```
 
 This opens a new thread for the current directory, adding the project if needed.
-Pass a path, such as `t3 app ../my-project`, to open another directory. It requires
+Pass a path, such as `ada app ../my-project`, to open another directory. It requires
 the desktop app, so a standalone server or an SSH session is not enough. If the
 command cannot reach the app, start or update the desktop app and try again.
 

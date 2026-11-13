@@ -8,14 +8,14 @@ the desktop app, a browser, or the mobile app.
 ## Roll out a policy
 
 1. Write the policy as JSON, starting from the [example](#write-a-policy).
-2. Run `t3 policy check policy.json`. It prints what the policy will do, or what is wrong with it.
+2. Run `ada policy check policy.json`. It prints what the policy will do, or what is wrong with it.
 3. Deploy the policy to each machine with your device management tool, in
    [one of the supported places](#where-the-policy-goes).
 4. Restart Ada on the machine. The server reads the policy only when it starts.
-5. Run `t3 policy show` on the machine to
+5. Run `ada policy show` on the machine to
    [check what the server loaded](#check-what-the-server-loaded).
 
-The desktop app includes the `t3` command; see [The `t3` command](./install.md#the-t3-command).
+The desktop app includes the `ada` command; see [The `ada` command](./install.md#the-t3-command).
 
 ## Write a policy
 
@@ -63,12 +63,12 @@ administrators.
 `organization`, `supportUrl`, `settings`, `limits`); JSON objects become dictionaries and lists
 become arrays. To make the payload from a policy file you checked, run
 `plutil -convert xml1 -o com.t3tools.t3code.plist policy.json` and upload the result, or run
-`t3 policy templates <directory> --policy policy.json` to write a complete
+`ada policy templates <directory> --policy policy.json` to write a complete
 `macos/t3code.mobileconfig`. Install it as
 a device profile, since Ada ignores user profiles, and deploy only one profile for this domain.
 A profile cannot hold `null`, so use a policy file if a setting's value must be `null`.
 
-**Windows Group Policy.** Run `t3 policy templates <directory>` and copy
+**Windows Group Policy.** Run `ada policy templates <directory>` and copy
 `windows/t3code.admx` and `windows/en-US/t3code.adml` into your `PolicyDefinitions` folder or
 central store, or import them into Intune. The policies appear under Computer Configuration >
 Administrative Templates > Ada. Set **Organization** whenever you set any other Ada policy.
@@ -93,7 +93,7 @@ Set-ItemProperty -Path HKLM:\SOFTWARE\Policies\T3Tools\T3Code -Name Policy -Valu
 
 ## Check what the server loaded
 
-Run `t3 policy show` as the user who runs Ada. It prints the installed policy and its
+Run `ada policy show` as the user who runs Ada. It prints the installed policy and its
 fingerprint, then says whether the running server loaded that policy or an older one. The server
 reads the policy only when it starts, so "Restart Ada to apply the installed policy" means it
 still enforces the old one. In Settings, users see that your organization manages the environment,
@@ -102,7 +102,7 @@ and each locked control shows **Managed by**.
 ## Change or remove a policy
 
 After you deploy, change, or remove a policy, restart the Ada server on the machine: quit and
-reopen the desktop app, or run `t3 service restart` for the
+reopen the desktop app, or run `ada service restart` for the
 [background service](./background-service.md). Reconnecting a phone or browser does not reload the
 policy.
 
@@ -118,7 +118,7 @@ policy it cannot read or parse, a setting it does not know, a value of the wrong
 version does not support, or a machine with both a native policy and a file. The error names where
 the policy came from and what is wrong.
 
-`t3 policy check` catches the same problems in a JSON file. For a profile or registry value, check
+`ada policy check` catches the same problems in a JSON file. For a profile or registry value, check
 the JSON before you convert it. For the Group Policy template, check a complete policy file that
 holds the same settings, then paste its `settings` and `limits.providers.instances` objects into the
 two JSON policies. A policy written for a newer version can use keys an older one
@@ -216,7 +216,7 @@ The limit decides which modes Ada asks the provider for. It is not a sandbox; se
 `clients` lists how the server may run:
 
 - `desktop`: as the desktop app's own server.
-- `local-browser`: as a server only browsers on this machine reach, such as a plain `t3`.
+- `local-browser`: as a server only browsers on this machine reach, such as a plain `ada`.
 - `remote`: reachable from phones, other computers, and app.t3.codes over the network.
 
 `remote` is the line that matters. A server reachable from the network also accepts browsers on
@@ -227,12 +227,12 @@ Without `remote`, the server listens only on a loopback address, creates no pair
 signs out devices that paired earlier. It does not start with a host other than a loopback
 address or `localhost`. A [background service](./background-service.md) installed before
 `T3CODE_LAN` existed keeps private-network access, so without `remote` it refuses to start.
-Run `t3 up --no-lan` when its `service.env` sets no `T3CODE_HOST`, or set
-`T3CODE_HOST=127.0.0.1` in `service.env`, then run `t3 service restart`. The desktop app starts
+Run `ada up --no-lan` when its `service.env` sets no `T3CODE_HOST`, or set
+`T3CODE_HOST=127.0.0.1` in `service.env`, then run `ada service restart`. The desktop app starts
 with network access and Tailscale Serve off, whatever the user chose.
 
 When it starts, the server also turns off each Tailscale Serve route, HTTPS or TCP, that forwards
-to it, such as one `t3 pair --tailscale` set up, and leaves other routes alone. It does not start
+to it, such as one `ada pair --tailscale` set up, and leaves other routes alone. It does not start
 while such a route stays on, or while Tailscale's answer cannot be read; the error names the
 command that turns the route off. A route whose target is a name, such as `localhost` or another
 machine on the same port, also stops it, since a name can resolve to this server; change the route
@@ -257,7 +257,7 @@ so restart Ada after that.
 `claudeAgent` (Claude), `cursor` (Cursor), `grok` (Grok), `opencode` (OpenCode), `antigravity`
 (Antigravity), `fx` (fx), `kiro` (Kiro), `pi` (Pi), `muse` (Muse Code), and `acpRegistry` (ACP
 Registry).
-`t3 policy check` rejects an ID this version does not know. Threads on other providers stay,
+`ada policy check` rejects an ID this version does not know. Threads on other providers stay,
 marked unavailable, and users can still turn those providers off.
 
 `providers.instances` sets fields on every instance of a provider, such as an environment variable
@@ -273,7 +273,7 @@ starts the binary you set.
 
 - `mode`: `auto` keeps the normal update flow. `off` stops Ada from checking for updates, for
   machines that get Ada through device management.
-- `feedUrl`: Ada updates from your own mirror instead of GitHub: the desktop app, `t3 update`,
+- `feedUrl`: Ada updates from your own mirror instead of GitHub: the desktop app, `ada update`,
   and updates started from another device. Publish only the versions you have approved, laid out
   as on a GitHub release. The release's update files (`latest.yml`, `latest-mac.yml`,
   `latest-linux.yml`, `latest-linux-arm64.yml`, and their `nightly` versions if you allow nightly)

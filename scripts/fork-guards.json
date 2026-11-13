@@ -214,7 +214,7 @@
     "protects": "headless installs, updates and track switches use the fork's releases, never upstream's npm or install.sh",
     "test": "scripts/upstream-install-commands.test.ts",
     "title": "keeps upstream install commands out of user-facing fork code and docs",
-    "sha256": "0f8df916d0ccc4aac99ec4ea5d9e05bb4f8cf4cf610cbc6d5ecff9cb955024f6",
+    "sha256": "3697a6a8b84950338f50f4de0f01c665f041976f7f3ad40af019df69419feb02",
     "sources": ["packages/shared/src/cliRelease.ts"]
   },
   {

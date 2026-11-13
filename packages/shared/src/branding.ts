@@ -14,6 +14,10 @@ export const MOBILE_APP_STORE_LINKS: {
   readonly android: string | null;
 } = { ios: null, android: null };
 
+/** The CLI's primary name. `t3` stays installed beside it so existing scripts and service units keep working. */
+export const CLI_COMMAND = "ada";
+export const LEGACY_CLI_COMMAND = "t3";
+
 /**
  * The upstream app this fork installs beside and protects (shared profile, installer guards).
  * Use it only where the copy names that other product, never for this app.

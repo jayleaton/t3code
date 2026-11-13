@@ -29,7 +29,7 @@ const latestAnnouncement = {
 } as const;
 const nightlyAnnouncement = { ...latestAnnouncement, target: "prerelease" } as const;
 const webhookUrl = new URL("https://discord.com/api/webhooks/123456/test-secret-token");
-const intro = "A new T3 Code prerelease is available for nightly testers.";
+const intro = "A new Ada prerelease is available for nightly testers.";
 const notes = `## What's Changed\n* Fix remote reconnection by @contributor in https://github.com/pingdotgg/t3code/pull/10\n* Improve thread search in https://github.com/pingdotgg/t3code/pull/11\n\n**Full Changelog**: https://github.com/pingdotgg/t3code/compare/v1.2.2...v1.2.3`;
 const formattedNotes = `## What's Changed\n* [Fix remote reconnection](https://github.com/pingdotgg/t3code/pull/10) by [@contributor](https://github.com/contributor)\n* [Improve thread search](https://github.com/pingdotgg/t3code/pull/11)\n\n[Full Changelog](https://github.com/pingdotgg/t3code/compare/v1.2.2...v1.2.3)`;
 const runCli = Command.runWith(notifyDiscordReleaseCommand, { version: "0.0.0" });

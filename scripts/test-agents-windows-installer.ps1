@@ -1,4 +1,8 @@
-param([Parameter(Mandatory = $true)][string]$Installer)
+param(
+  [Parameter(Mandatory = $true)][string]$Installer,
+  # Shortcuts and the uninstaller follow the product name; the exe stays pinned to 'T3 Agents.exe'.
+  [Parameter(Mandatory = $true)][string]$ProductName
+)
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'This destructive installer test is only for disposable GitHub runners.' }
 
@@ -28,13 +32,13 @@ function Install-And-Remove-Agents {
   if ((Get-ItemProperty $installKey).InstallLocation.TrimEnd('\') -ne $agents) {
     throw 'Agents registered the wrong install directory.'
   }
-  $shortcut = Join-Path ([Environment]::GetFolderPath('Desktop')) 'T3 Agents.lnk'
+  $shortcut = Join-Path ([Environment]::GetFolderPath('Desktop')) "$ProductName.lnk"
   $shell = New-Object -ComObject WScript.Shell
   if (!(Test-Path $shortcut) -or $shell.CreateShortcut($shortcut).TargetPath -ne $exe) {
     throw 'Agents shortcut does not target the installed executable.'
   }
   Assert-OfficialPreserved
-  $uninstaller = Join-Path $agents 'Uninstall T3 Agents.exe'
+  $uninstaller = Join-Path $agents "Uninstall $ProductName.exe"
   $process = Start-Process -FilePath $uninstaller -ArgumentList "/S _?=$agents" -PassThru -Wait
   if ($process.ExitCode -ne 0) { throw "Uninstaller failed: $($process.ExitCode)" }
   Assert-OfficialPreserved

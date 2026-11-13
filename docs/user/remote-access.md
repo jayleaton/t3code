@@ -38,27 +38,27 @@ On a desktop host, open **Settings → Environments**, enable **Network access**
 then create a pairing link using an address the other device can reach. Changing
 network access restarts the desktop app. You can turn it off in the same place.
 
-For a command-line host, run `t3 up` and choose the local network, or run:
+For a command-line host, run `ada up` and choose the local network, or run:
 
 ```bash
-t3 up --lan
+ada up --lan
 ```
 
-On Linux and macOS, `t3 up` then runs Ada as a
+On Linux and macOS, `ada up` then runs Ada as a
 [background service](./background-service.md). The background service is not
-available on Windows, so there `t3 up` prints the `t3 serve` command to keep
-running in a terminal. Run `t3 up` again to change your choice, and `t3 status`
-to see it. `t3 up` asks nothing when you pass `--lan` or `--no-lan`, and `--yes`
-takes the defaults; `t3 up --help` lists every flag.
+available on Windows, so there `ada up` prints the `ada serve` command to keep
+running in a terminal. Run `ada up` again to change your choice, and `ada status`
+to see it. `ada up` asks nothing when you pass `--lan` or `--no-lan`, and `--yes`
+takes the defaults; `ada up --help` lists every flag.
 
-For a server in a terminal, run `t3 serve --lan`. Either way, Ada then
+For a server in a terminal, run `ada serve --lan`. Either way, Ada then
 accepts connections from your local network and tailnet, so a pairing code is
 all that keeps other devices on them out.
 
 If a server is already running, generate a fresh link without restarting it:
 
 ```bash
-t3 pair
+ada pair
 ```
 
 Scan the QR code on your phone or paste the pairing URL into **Add environment**
@@ -97,7 +97,7 @@ current LAN and Tailscale addresses and adds them as routes. When the
 machine's LAN address changes, for example after it joins another Wi-Fi network,
 the learned route follows it. The machine must allow network access for its LAN
 address to be learned: **Network access** in the desktop app, or the
-[local network](./background-service.md#local-network-access) choice in `t3 up`.
+[local network](./background-service.md#local-network-access) choice in `ada up`.
 You can reorder a learned route, but not remove it; it
 goes away with the route it was learned through, or when the machine stops
 reporting that address.
@@ -149,7 +149,7 @@ A command-line server publishes itself on the tailnet with Tailscale HTTPS by
 default, and its startup log says so. To keep a server off the tailnet:
 
 ```bash
-t3 serve --no-tailscale-serve
+ada serve --no-tailscale-serve
 ```
 
 Setting `T3CODE_TAILSCALE_SERVE=false` in the server's environment does the same.
@@ -157,7 +157,7 @@ Setting `T3CODE_TAILSCALE_SERVE=false` in the server's environment does the same
 For an already-running server:
 
 ```bash
-t3 pair --tailscale
+ada pair --tailscale
 ```
 
 The pairing link uses an address such as `https://machine.tailnet.ts.net/`.
@@ -169,7 +169,7 @@ tailscale serve --https=443 --set-path=/ off
 ```
 
 If that port is already in use, choose another with
-`--tailscale-serve-port`. See `t3 pair --help` for other pairing options.
+`--tailscale-serve-port`. See `ada pair --help` for other pairing options.
 
 ### Hosted web app
 
@@ -206,8 +206,8 @@ running is left alone.
 
 Each desktop app keeps one session on the host for its SSH connection and reuses
 it when it reconnects. Revoke sessions you no longer use in **Settings →
-Environments** on the host, or on a headless host with `t3 auth session list` and
-`t3 auth session revoke <id>`. A desktop that can still sign in over SSH pairs
+Environments** on the host, or on a headless host with `ada auth session list` and
+`ada auth session revoke <id>`. A desktop that can still sign in over SSH pairs
 again on its next connect.
 
 For Antigravity's Google callback on a remote host, see
@@ -262,19 +262,19 @@ the server says so at startup, and browser tabs and HTML previews show the
 command to run on the host:
 
 ```sh
-sudo t3 browser setup
+sudo ada browser setup
 ```
 
 The server shows the exact line for how you started it, and keeps your `PATH`
-when you started it with `npx` and Node is installed only for your user. Where `t3` is not on your `PATH`, such as with only the
-desktop app installed, it names the full path of the app's own `t3` instead. It allows Chrome's sandbox with an AppArmor profile and installs
+when you started it with `npx` and Node is installed only for your user. Where `ada` is not on your `PATH`, such as with only the
+desktop app installed, it names the full path of the app's own `ada` instead. It allows Chrome's sandbox with an AppArmor profile and installs
 any missing libraries and system fonts with apt; pages that load without text
 can mean the host has no fonts. It is safe to run again. Without `sudo`, it only
 reports what it would change.
 
 The browser runs in Chrome's sandbox by default. Chrome cannot start that sandbox
 as root. If your Ada server runs as root, run it as a nonroot user to keep
-sandboxing enabled. `t3 browser setup` does not fix this root restriction.
+sandboxing enabled. `ada browser setup` does not fix this root restriction.
 
 If you need to run as root, or cannot enable the sandbox on your host, set
 `T3CODE_SERVER_BROWSER_SANDBOX=0` in the **Ada server's environment** and restart
@@ -399,7 +399,7 @@ app has an address for that machine and is connected to it with a session that
 manages access there, it makes the pairing code itself; otherwise paste one
 from that machine's **Settings → Environments**. An address you type always
 needs a pasted code. From a terminal, use
-`t3 environment link <address> --pairing-code <code> --access <mode>`.
+`ada environment link <address> --pairing-code <code> --access <mode>`.
 
 You can also ask an agent to link a machine by name, such as "delegate this to
 my vps". It shows a card in the thread where you pick the machine the same way
@@ -435,7 +435,7 @@ others** ends every other paired phone, browser, desktop, and linked machine at
 once. A revoked device says the machine revoked its pairing; to restore it,
 create a fresh pairing link and use **Pair again** in the connection details on
 that device. Its saved threads stay. Command-line management is
-available through `t3 auth --help`.
+available through `ada auth --help`.
 
 When the app connects to more than one environment, choose one at the top of the
 page. A desktop app with **Local environment** off can manage a background
@@ -447,11 +447,11 @@ expires.
 To choose a token's permissions, pass `--scope` once for each scope you want:
 
 ```sh
-t3 pair --scope orchestration:read --scope filesystem:read
+ada pair --scope orchestration:read --scope filesystem:read
 ```
 
 The selected scopes replace the default permissions. The same option works with
-`t3 auth pairing create` and `t3 auth session issue`; each command's
+`ada auth pairing create` and `ada auth session issue`; each command's
 `--help` lists the available scopes. Without `--scope`, pairing tokens and issued
 bearer sessions get every permission, including managing access.
 A terminal or a full-access agent on the host can reach those as well, so a

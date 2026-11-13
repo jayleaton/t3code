@@ -2,6 +2,7 @@ import type { DesktopBridge, DesktopCliCommandState } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/reactivity";
+import { CLI_COMMAND, LEGACY_CLI_COMMAND } from "@t3tools/shared/branding";
 
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 
@@ -12,7 +13,7 @@ class DesktopCliCommandUnavailableError extends Schema.TaggedError<DesktopCliCom
   {},
 ) {
   override get message(): string {
-    return "The t3 command is unavailable.";
+    return `The ${CLI_COMMAND} command is unavailable.`;
   }
 }
 
@@ -21,9 +22,13 @@ class DesktopCliCommandLoadError extends Schema.TaggedError<DesktopCliCommandLoa
   { cause: Schema.Defect() },
 ) {
   override get message(): string {
-    return "Failed to load the t3 command state.";
+    return `Failed to load the ${CLI_COMMAND} command state.`;
   }
 }
+
+/** The name that runs the installed command. A desktop build that predates `command` links only `t3`. */
+export const installedCliCommand = (state: DesktopCliCommandState) =>
+  state.command ?? LEGACY_CLI_COMMAND;
 
 export function getDesktopCliCommandBridge(): DesktopCliCommandBridge | undefined {
   return typeof window === "undefined" ? undefined : window.desktopBridge?.cliCommand;
