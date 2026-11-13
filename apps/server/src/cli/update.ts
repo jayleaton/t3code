@@ -1,3 +1,4 @@
+import { APP_NAME, CLI_COMMAND, LEGACY_CLI_COMMAND } from "@t3tools/shared/branding";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   CLI_RELEASE_BASE_URL_ENV,
@@ -132,32 +133,61 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
     const current = yield* fs.readFileString(shimPath).pipe(Effect.option);
     const quoted = Option.isSome(current) ? windowsShimTarget(current.value) : undefined;
     if (quoted === undefined || !ownsTarget(quoted)) return Option.none<string>();
-    yield* remember(shimPath);
-    yield* fs
-      .writeFileString(shimPath, `@echo off\r\n"${input.targetEntryPath}" %*`)
-      .pipe(
-        Effect.mapError(
-          () => new CliUpdateError({ reason: `Could not rewrite the t3 launcher at ${shimPath}.` }),
+    const rewrite = (shim: string) =>
+      remember(shim).pipe(
+        Effect.andThen(
+          fs
+            .writeFileString(shim, `@echo off\r\n"${input.targetEntryPath}" %*`)
+            .pipe(
+              Effect.mapError(
+                () => new CliUpdateError({ reason: `Could not rewrite the launcher at ${shim}.` }),
+              ),
+            ),
         ),
       );
+    yield* rewrite(shimPath);
+    for (const sibling of launcherSiblings(path, shimPath)) {
+      const contents = yield* fs.readFileString(sibling).pipe(Effect.option);
+      const target = Option.isSome(contents) ? windowsShimTarget(contents.value) : undefined;
+      if (target !== undefined && ownsTarget(target)) yield* rewrite(sibling).pipe(Effect.ignore);
+    }
     return Option.some(shimPath);
   }
 
-  const linkTarget = yield* fs.readLink(input.launchedAs).pipe(Effect.option);
-  if (Option.isNone(linkTarget)) return Option.none<string>();
-  const resolvedTarget = path.resolve(path.dirname(input.launchedAs), linkTarget.value);
-  if (!ownsTarget(resolvedTarget)) return Option.none<string>();
-  yield* remember(input.launchedAs);
-  const tempLink = `${input.launchedAs}.${process.pid}.tmp`;
-  yield* fs.symlink(input.targetEntryPath, tempLink).pipe(
-    Effect.andThen(fs.rename(tempLink, input.launchedAs)),
-    Effect.mapError(
-      () =>
-        new CliUpdateError({ reason: `Could not repoint the t3 launcher at ${input.launchedAs}.` }),
-    ),
-  );
+  const ownedLink = (launcher: string) =>
+    fs.readLink(launcher).pipe(
+      Effect.map((target) => ownsTarget(path.resolve(path.dirname(launcher), target))),
+      Effect.orElseSucceed(() => false),
+    );
+  const repoint = (launcher: string) =>
+    remember(launcher).pipe(
+      Effect.andThen(
+        fs.symlink(input.targetEntryPath, `${launcher}.${process.pid}.tmp`).pipe(
+          Effect.andThen(fs.rename(`${launcher}.${process.pid}.tmp`, launcher)),
+          Effect.mapError(
+            () => new CliUpdateError({ reason: `Could not repoint the launcher at ${launcher}.` }),
+          ),
+        ),
+      ),
+    );
+  if (!(yield* ownedLink(input.launchedAs))) return Option.none<string>();
+  yield* repoint(input.launchedAs);
+  for (const sibling of launcherSiblings(path, input.launchedAs)) {
+    if (yield* ownedLink(sibling)) yield* repoint(sibling).pipe(Effect.ignore);
+  }
   return Option.some(input.launchedAs);
 });
+
+/** `ada` and `t3` run the same install, so an update moves both and neither keeps an older version. */
+const launcherSiblings = (path: Path.Path, launcher: string) => {
+  const extension = path.extname(launcher);
+  const name = path.basename(launcher, extension);
+  const names = [CLI_COMMAND, LEGACY_CLI_COMMAND];
+  if (!names.includes(name)) return [];
+  return names
+    .filter((other) => other !== name)
+    .map((other) => path.join(path.dirname(launcher), `${other}${extension}`));
+};
 
 /** Node preserves argv0's spelling; resolve bare names on PATH to find the launcher symlink. */
 export const resolveLauncherPath = Effect.gen(function* () {
@@ -193,15 +223,17 @@ export const findWindowsShim = Effect.fn("cli.update.find_windows_shim")(functio
     ...(environment["PATH"] ?? environment["Path"] ?? "").split(";"),
   ].filter((entry) => entry.trim().length > 0);
   for (const directory of candidates) {
-    const shimPath = path.join(directory, "t3.cmd");
-    const contents = yield* fs.readFileString(shimPath).pipe(Effect.option);
-    if (Option.isNone(contents)) continue;
-    const target = windowsShimTarget(contents.value);
-    if (
-      target !== undefined &&
-      path.resolve(target).toLowerCase() === path.resolve(executablePath).toLowerCase()
-    ) {
-      return shimPath;
+    for (const name of [LEGACY_CLI_COMMAND, CLI_COMMAND]) {
+      const shimPath = path.join(directory, `${name}.cmd`);
+      const contents = yield* fs.readFileString(shimPath).pipe(Effect.option);
+      if (Option.isNone(contents)) continue;
+      const target = windowsShimTarget(contents.value);
+      if (
+        target !== undefined &&
+        path.resolve(target).toLowerCase() === path.resolve(executablePath).toLowerCase()
+      ) {
+        return shimPath;
+      }
     }
   }
   return undefined;
@@ -363,7 +395,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
         `t3@${targetVersion} is a preview build.`,
         "  Preview builds are cut by maintainers from unreleased branches to exercise the release",
         "  pipeline. They can be broken, receive no fixes, and are never offered as updates; you",
-        `  will have to switch back to ${currentChannel} yourself with \`t3 update --channel ${currentChannel} --allow-downgrade\`.`,
+        `  will have to switch back to ${currentChannel} yourself with \`${CLI_COMMAND} update --channel ${currentChannel} --allow-downgrade\`.`,
       ].join("\n"),
     );
     if (!(process.stdin.isTTY && process.stdout.isTTY)) {
@@ -406,8 +438,8 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   if (executableCurrent && serviceCurrent) {
     yield* Console.log(
       serviceVersion !== undefined
-        ? `t3 and its background service are already on ${targetVersion} (${targetChannel}).`
-        : `t3 is already on ${targetVersion} (${targetChannel}).`,
+        ? `${CLI_COMMAND} and its background service are already on ${targetVersion} (${targetChannel}).`
+        : `${CLI_COMMAND} is already on ${targetVersion} (${targetChannel}).`,
     );
     return;
   }
@@ -430,8 +462,8 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       : executableCurrent
         ? `Updating the background service ${serviceVersion ?? "(unknown version)"} -> ${targetVersion} (${targetChannel}).`
         : alreadyOnDisk
-          ? "Switching T3 Code"
-          : "Updating T3 Code",
+          ? `Switching ${APP_NAME}`
+          : `Updating ${APP_NAME}`,
     executableCurrent
       ? ""
       : `${currentVersion} → ${targetVersion}${targetChannel === "stable" ? "" : ` (${targetChannel})`}`,
@@ -452,7 +484,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       ).pipe(Effect.catchTags({ QuitError: () => Effect.succeed(false) }));
     } else {
       yield* Console.log(
-        "  Not a terminal, so the service keeps running its current version. Rerun with --yes to restart it now, or run `t3 service restart` later.",
+        `  Not a terminal, so the service keeps running its current version. Rerun with --yes to restart it now, or run \`${CLI_COMMAND} service restart\` later.`,
       );
     }
   }
@@ -553,9 +585,9 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     });
   }
 
-  progress.success(`Installed T3 Code ${targetVersion}`);
+  progress.success(`Installed ${APP_NAME} ${targetVersion}`);
   if (Option.isSome(repointed)) {
-    yield* Console.log("  Run t3 to get started.\n");
+    yield* Console.log(`  Run ${CLI_COMMAND} to get started.\n`);
   } else {
     yield* Console.log(`  Run ${runtime.entryPath}\n`);
   }
@@ -576,7 +608,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
           ? `the version before ${serviceVersion}`
           : serviceVersion;
     yield* Console.log(
-      `  Background service still running ${running}. Run \`t3 service restart\` when you are ready to switch it to ${targetVersion}.`,
+      `  Background service still running ${running}. Run \`${CLI_COMMAND} service restart\` when you are ready to switch it to ${targetVersion}.`,
     );
   } else if (status.installed && !servesThisHome) {
     yield* Console.log(

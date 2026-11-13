@@ -207,6 +207,9 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
       }
       yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
       yield* fs.symlink(oldExe, launcher);
+      // The `ada` beside it runs the same install and moves with it.
+      const ada = path.join(root, "bin/ada");
+      yield* fs.symlink(oldExe, ada);
 
       const repointed = yield* repointLauncher({
         launchedAs: launcher,
@@ -216,6 +219,16 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
 
       assert.deepStrictEqual(Option.getOrUndefined(repointed), launcher);
       assert.equal(yield* fs.readLink(launcher), newExe);
+      assert.equal(yield* fs.readLink(ada), newExe);
+
+      // Launched as `ada`, a `t3` that is another program's stays as it is.
+      yield* fs.remove(launcher);
+      yield* fs.writeFileString(launcher, "#!/bin/sh\n");
+      yield* fs.remove(ada);
+      yield* fs.symlink(oldExe, ada);
+      yield* repointLauncher({ launchedAs: ada, baseDir: root, targetEntryPath: newExe });
+      assert.equal(yield* fs.readLink(ada), newExe);
+      assert.equal(yield* fs.readFileString(launcher), "#!/bin/sh\n");
     }).pipe(Effect.scoped, Effect.provideService(HostProcess.Platform, "linux")),
   );
 
@@ -521,7 +534,7 @@ it.layer(NodeServices.layer)("t3 update with a background service", (it) => {
 
       assert.include(
         output,
-        `Background service still running the version before ${version}. Run \`t3 service restart\` when you are ready to switch it to ${version}.`,
+        `Background service still running the version before ${version}. Run \`ada service restart\` when you are ready to switch it to ${version}.`,
       );
     }).pipe(
       Effect.scoped,

@@ -116,6 +116,11 @@ it.layer(NodeServices.layer)("DesktopCliCommand", (it) => {
       expect(installed.launcherPath).toBe(path.join(home, ".t3", "bin", "t3"));
       expect(installed.pathSetup).toEqual({ file: "~/.zshrc", added: false });
       expect(yield* fs.readLink(link)).toBe(path.join(home, ".t3", "bin", "t3"));
+      const alias = path.join(home, ".local", "bin", "ada");
+      expect(yield* fs.readLink(alias)).toBe(path.join(home, ".t3", "bin", "ada"));
+      expect(yield* fs.readFileString(path.join(home, ".t3", "bin", "ada"))).toContain(
+        `T3CODE_CLI_PATH='${path.join(home, ".t3", "bin", "ada")}'`,
+      );
       expect((yield* command.install).installedPath).toBe(link);
 
       // Add to PATH appends one line, once, and keeps a final line with no newline intact.
@@ -129,11 +134,12 @@ it.layer(NodeServices.layer)("DesktopCliCommand", (it) => {
       yield* Effect.all([command.addToPath, command.addToPath], { concurrency: "unbounded" });
       expect((yield* command.addToPath).pathSetup).toEqual({ file: "~/.zshrc", added: true });
       expect(yield* fs.readFileString(zshrc)).toBe(
-        '# mine\n# Added by T3 Code\nexport PATH="$PATH:$HOME/.local/bin"\n',
+        '# mine\n# Added by Ada\nexport PATH="$PATH:$HOME/.local/bin"\n',
       );
 
       expect((yield* command.uninstall).installedPath).toBeNull();
       expect(yield* fs.exists(link)).toBe(false);
+      expect(yield* fs.exists(alias)).toBe(false);
       expect(yield* fs.exists(path.join(home, ".t3", "bin", "t3"))).toBe(true);
       // Removed stays removed: first launch never installs again.
       yield* command.installOnFirstLaunch;
@@ -153,7 +159,11 @@ it.layer(NodeServices.layer)("DesktopCliCommand", (it) => {
         const upgradedHome = yield* fs.makeTempDirectoryScoped();
         const leftFile = path.join(upgradedHome, ".t3", left);
         yield* fs.makeDirectory(path.dirname(leftFile), { recursive: true });
-        yield* fs.writeFileString(leftFile, `#!/bin/sh\n# ${DesktopCliShim.MARKER}\n`);
+        // Written by a build from before the rename.
+        yield* fs.writeFileString(
+          leftFile,
+          "#!/bin/sh\n# Written by T3 Code: runs the desktop app's bundled t3 CLI.\n",
+        );
         const upgraded = yield* commandIn({ home: upgradedHome, env });
         yield* upgraded.installOnFirstLaunch;
         const upgradedLink = path.join(upgradedHome, ".local", "bin", "t3");
@@ -181,6 +191,23 @@ it.layer(NodeServices.layer)("DesktopCliCommand", (it) => {
       yield* command.uninstall;
       expect(yield* fs.readFileString(theirs)).toBe("npm's t3\n");
       expect(yield* fs.readLink(path.join(home, "bin", "t3"))).toBe(path.join(home, "gone"));
+
+      // Someone else's ada (in the user folder or in place of the ada launcher) stays, and t3 still
+      // installs.
+      const adaHome = yield* fs.makeTempDirectoryScoped();
+      const theirAda = path.join(adaHome, ".local", "bin", "ada");
+      yield* fs.makeDirectory(path.dirname(theirAda), { recursive: true });
+      yield* fs.writeFileString(theirAda, "their ada\n");
+      const theirAdaLauncher = path.join(adaHome, ".t3", "bin", "ada");
+      yield* fs.makeDirectory(path.dirname(theirAdaLauncher), { recursive: true });
+      yield* fs.writeFileString(theirAdaLauncher, "their ada launcher\n");
+      const adaCommand = yield* commandIn({ home: adaHome });
+      expect((yield* adaCommand.install).installedPath).toBe(
+        path.join(adaHome, ".local", "bin", "t3"),
+      );
+      yield* adaCommand.uninstall;
+      expect(yield* fs.readFileString(theirAda)).toBe("their ada\n");
+      expect(yield* fs.readFileString(theirAdaLauncher)).toBe("their ada launcher\n");
 
       // A fresh install beside someone else's t3 (even off PATH or a dangling link) adds no second
       // t3 in ~/bin.
@@ -258,6 +285,9 @@ it.layer(NodeServices.layer)("DesktopCliCommand", (it) => {
         path.join(home, "new-t3", "bin", "t3"),
       );
       expect(yield* fs.exists(path.join(home, ".local", "bin", "t3"))).toBe(false);
+      expect(yield* fs.readLink(path.join(home, "bin", "ada"))).toBe(
+        path.join(home, "new-t3", "bin", "ada"),
+      );
       expect(yield* fs.readFileString(path.join(home, "bin", "t3.staging"))).toBe("mine");
     }).pipe(Effect.scoped),
   );
