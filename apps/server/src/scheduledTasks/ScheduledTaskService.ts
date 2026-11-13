@@ -1498,7 +1498,14 @@ export const layer = Layer.effect(
         profileId !== undefined && requestedThreadMode === "new_thread"
           ? "continue"
           : requestedThreadMode;
-      const keptThreadId = input.threadId ?? existingTask?.threadId ?? null;
+      // The agent owned its thread, so leaving it with an explicit null thread starts fresh.
+      const leftAgentUnbound =
+        input.profileId === null &&
+        input.threadId === null &&
+        existingTask?.profileId !== undefined;
+      const keptThreadId = leftAgentUnbound
+        ? null
+        : (input.threadId ?? existingTask?.threadId ?? null);
       // A bound thread belongs to its project, so moving the task leaves it for a new one.
       const movedOffThread =
         existingTask !== null &&

@@ -1,20 +1,36 @@
 import {
   SCHEDULED_TASK_ARCHIVE_AFTER_DAYS,
   SCHEDULED_TASK_UNUSED_WEBHOOK_ARCHIVE_AFTER_DAYS,
+  scheduledTaskTarget,
   type ScheduledTask,
+  type ScheduledTaskTarget,
 } from "@t3tools/contracts";
-
-export type ScheduledTaskView = "active" | "archived";
 
 export function isScheduledTaskArchived(task: Pick<ScheduledTask, "archivedAt">): boolean {
   return task.archivedAt != null;
 }
 
-export function scheduledTasksInView<T extends Pick<ScheduledTask, "archivedAt">>(
-  tasks: ReadonlyArray<T>,
-  view: ScheduledTaskView,
-): T[] {
-  return tasks.filter((task) => isScheduledTaskArchived(task) === (view === "archived"));
+export type ScheduledTaskFilter = "all" | ScheduledTaskTarget | "archived";
+
+export const SCHEDULED_TASK_FILTERS: ReadonlyArray<{
+  readonly value: ScheduledTaskFilter;
+  readonly label: string;
+}> = [
+  { value: "all", label: "All" },
+  { value: "agent", label: "Agents" },
+  { value: "thread", label: "Threads" },
+  { value: "new_thread", label: "New thread" },
+  { value: "archived", label: "Archived" },
+];
+
+/** Archived tasks show only under Archived; the other filters split the rest by target. */
+export function scheduledTaskMatchesFilter(
+  task: Pick<ScheduledTask, "archivedAt" | "profileId" | "threadId" | "threadMode">,
+  filter: ScheduledTaskFilter,
+): boolean {
+  if (filter === "archived") return isScheduledTaskArchived(task);
+  if (isScheduledTaskArchived(task)) return false;
+  return filter === "all" || scheduledTaskTarget(task) === filter;
 }
 
 const ARCHIVE_REASON_LABELS: Record<string, string> = {

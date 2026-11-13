@@ -141,6 +141,21 @@ it.effect(
           overrideFields: ["runtimeMode"],
         });
         assert.equal(launches[1]?.runtimeMode, "approval-required");
+
+        // Leaving the agent for an unbound continuing thread drops the agent's thread.
+        const plain = yield* service.upsert({
+          ...input,
+          id: task.id,
+          profileId: null,
+          threadId: null,
+          threadMode: "continue",
+        });
+        assert.isUndefined(plain.task.profileId);
+        assert.isNull(plain.task.threadId);
+        yield* service.runNow({ id: task.id });
+        assert.equal(launches.length, 3);
+        assert.isUndefined(launches[2]?.profileSelection);
+        assert.equal(sends.length, 1);
       }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(dependencies))));
     }).pipe(Effect.provide(memoryDatabase)),
 );

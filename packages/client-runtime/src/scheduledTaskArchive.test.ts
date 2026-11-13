@@ -1,18 +1,41 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { ThreadId } from "@t3tools/contracts";
+
 import {
+  SCHEDULED_TASK_FILTERS,
   scheduledTaskArchiveLabel,
+  scheduledTaskMatchesFilter,
   scheduledTaskRestoreNeedsEditor,
-  scheduledTasksInView,
 } from "./scheduledTaskArchive.ts";
 
 describe("archived scheduled tasks", () => {
-  it("lists archived tasks only under Archived", () => {
-    const active: { id: string; archivedAt?: string } = { id: "active" };
-    const archived = { id: "archived", archivedAt: "2026-11-01T00:00:00.000Z" };
-    expect(scheduledTasksInView([active, archived], "active")).toEqual([active]);
-    expect(scheduledTasksInView([active, archived], "archived")).toEqual([archived]);
-  });
+  const threadId = ThreadId.make("thread");
+  const tasks = {
+    agent: { profileId: "reviewer", threadId, threadMode: "continue" },
+    thread: { threadId, threadMode: "fresh_session" },
+    new_thread: { threadId: null, threadMode: "new_thread" },
+    legacyThread: { threadId },
+    archivedAgent: { profileId: "reviewer", threadId: null, archivedAt: "2026-11-01T00:00:00Z" },
+  } as const;
+
+  it.each([
+    ["all", ["agent", "thread", "new_thread", "legacyThread"]],
+    ["agent", ["agent"]],
+    ["thread", ["thread", "legacyThread"]],
+    ["new_thread", ["new_thread"]],
+    ["archived", ["archivedAgent"]],
+  ] as const)(
+    "filter %s lists its targets, and archived tasks only under Archived",
+    (filter, ids) => {
+      expect(
+        Object.entries(tasks)
+          .filter(([, task]) => scheduledTaskMatchesFilter(task, filter))
+          .map(([id]) => id),
+      ).toEqual(ids);
+      expect(SCHEDULED_TASK_FILTERS.map((option) => option.value)).toContain(filter);
+    },
+  );
 
   it.each([
     ["completed", "Archived: finished its one-time run"],

@@ -56,11 +56,22 @@ const archivedTask: ScheduledTask = {
   archiveReason: "paused",
 };
 
+const agentTask: ScheduledTask = {
+  ...task,
+  id: ScheduledTaskId.make("agent-task"),
+  title: "Morning pull",
+  profileId: "reviewer",
+  threadId: ThreadId.make("agent-thread"),
+  threadMode: "continue",
+  schedule: { type: "cron", expression: "30 8 * * 1-5", timezone: "Europe/London" },
+};
+
 const state = vi.hoisted(() => ({
   connected: true,
   tasksLoaded: true,
   secondary: false,
   archived: false,
+  agent: false,
   commands: [] as unknown[],
 }));
 const secondaryId = EnvironmentId.make("secondary");
@@ -71,6 +82,7 @@ function setup() {
   state.tasksLoaded = true;
   state.secondary = false;
   state.archived = false;
+  state.agent = false;
   state.commands = [];
   permissions.clear();
   permissions.set(environmentId, Atom.make(true));
@@ -142,7 +154,15 @@ vi.mock(import("../../state/query"), async (original) => ({
     data:
       request === null || request === threadFamilyRead
         ? request
-        : { tasks: state.tasksLoaded ? (state.archived ? [task, archivedTask] : [task]) : [] },
+        : {
+            tasks: state.tasksLoaded
+              ? [
+                  task,
+                  ...(state.archived ? [archivedTask] : []),
+                  ...(state.agent ? [agentTask] : []),
+                ]
+              : [],
+          },
     error: null,
     isPending: false,
     refresh: vi.fn(),
@@ -167,6 +187,14 @@ vi.mock(import("../../state/environments"), async (original) => ({
 vi.mock(import("../../state/entities"), async (original) => ({
   ...(await original()),
   useProjects: (() => [{ id: projectId, environmentId, title: "Project" }]) as never,
+  useQuietThreadShell: ((ref: { threadId: ThreadId } | null) =>
+    ref && { environmentId, id: ref.threadId, projectId, title: "Fix login bug" }) as never,
+}));
+vi.mock(import("~/hooks/useAgentLibrary"), async (original) => ({
+  ...(await original()),
+  useAgentLibrary: (() => ({
+    profiles: [{ profileId: "reviewer", name: "Reviewer", runtimeMode: "full-access" }],
+  })) as never,
 }));
 vi.mock(import("../../hooks/useSettings"), async (original) => ({
   ...(await original()),
@@ -230,6 +258,47 @@ describe("ScheduledTasksSettings", () => {
         { environmentId, input: { id: archivedTask.id, enabled: true } },
       ]),
     );
+  });
+
+  it("filters by target and edits an agent task's agent and cron schedule", async () => {
+    setup();
+    state.agent = true;
+    await using screen = await render(<ScheduledTasksSettings />);
+    await screen.getByRole("button", { name: "Agents" }).click();
+    await expect.element(screen.getByText("Morning pull")).toBeVisible();
+    await expect.element(screen.getByText("Review issues")).not.toBeInTheDocument();
+
+    await screen.getByRole("button", { name: "Actions for Morning pull" }).click();
+    await page.getByRole("menuitem", { name: "Edit" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect.element(dialog.getByLabelText("Agent")).toHaveTextContent("Reviewer");
+    await expect.element(dialog.getByLabelText("Repeat")).toHaveTextContent("Weekdays");
+    await userEvent.fill(dialog.getByLabelText("Time", { exact: true }), "09:15");
+    await userEvent.fill(dialog.getByLabelText("Time zone"), "Asia/Tokyo");
+    await dialog.getByRole("button", { name: "Save task" }).click();
+    await vi.waitFor(() =>
+      expect(state.commands).toEqual([
+        {
+          environmentId,
+          input: expect.objectContaining({
+            id: agentTask.id,
+            profileId: "reviewer",
+            threadId: agentTask.threadId,
+            schedule: { type: "cron", expression: "15 9 * * 1-5", timezone: "Asia/Tokyo" },
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("opens a new task bound to the linked thread", async () => {
+    setup();
+    await using _screen = await render(
+      <ScheduledTasksSettings environmentId={environmentId} threadId={task.threadId!} />,
+    );
+    const dialog = page.getByRole("dialog");
+    await expect.element(dialog.getByRole("heading", { name: "New task" })).toBeInTheDocument();
+    await expect.element(dialog.getByText("Fix login bug")).toBeVisible();
   });
 
   it("keeps a linked task's unsaved edits across a disconnect and reconnect", async () => {

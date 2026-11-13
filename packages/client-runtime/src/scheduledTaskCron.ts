@@ -111,19 +111,3 @@ export function describeSchedule(
       return `Cron ${schedule.expression}${zone}`;
   }
 }
-
-/** `<input type="datetime-local">` value for an instant, in the viewer's zone. */
-export function isoToLocalInput(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
-    date.getHours(),
-  )}:${pad(date.getMinutes())}`;
-}
-
-/** The instant a `datetime-local` value names in the viewer's zone, or null when incomplete. */
-export function localInputToIso(value: string): string | null {
-  if (value === "") return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
-}

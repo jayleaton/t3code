@@ -5,7 +5,7 @@ import {
   describeSchedule,
   repeatFormToCron,
   type RepeatForm,
-} from "./scheduledTasks.logic";
+} from "./scheduledTaskCron.ts";
 
 const form = (patch: Partial<RepeatForm>): RepeatForm => ({
   preset: "daily",

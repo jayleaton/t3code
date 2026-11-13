@@ -1,16 +1,26 @@
 import { isWebhookDedupeTemplate, scheduledTaskThreadMode } from "@t3tools/contracts";
 import type {
+  EnvironmentId,
+  McpGatewayProfile,
   ModelSelection,
+  ProviderInteractionMode,
   ServerConfig,
+  ServerProvider,
   ProjectId,
   RuntimeMode,
   ScheduledTask,
-  ScheduledTaskSchedule,
   ScheduledTaskThreadMode,
   ScheduledTaskUpsertSchedule,
   ScheduledTaskWebhookSignature,
   ThreadId,
 } from "@t3tools/contracts";
+import { resolveScheduledTaskProfileRouting } from "@t3tools/client-runtime/gateway";
+import {
+  cronToRepeatForm,
+  localTimeZone,
+  repeatFormToCron,
+  type RepeatForm,
+} from "@t3tools/client-runtime/scheduled-task-cron";
 
 import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
 import {
@@ -53,9 +63,10 @@ export function scheduledTaskDefaultModel(
 }
 
 export type ScheduleDraft = {
-  /** "kept" leaves a cron schedule (set from the Agents board or MCP) unchanged. */
-  readonly mode: "fixed_time" | "once" | "interval" | "webhook" | "kept";
-  readonly kept: Extract<ScheduledTaskSchedule, { type: "cron" }> | null;
+  readonly mode: "fixed_time" | "once" | "interval" | "cron" | "webhook";
+  readonly repeat: RepeatForm;
+  /** IANA zone the cron expression runs in. */
+  readonly timezone: string;
   readonly timeOfDay: string;
   /** ISO time for a one-time run. Empty until the user picks the "Once" mode. */
   readonly runAt: string;
@@ -76,7 +87,8 @@ export const DEFAULT_SCHEDULE: ScheduleDraft = {
   runAt: "",
   weekdays: [1, 2, 3, 4, 5],
   intervalMinutes: "15",
-  kept: null,
+  repeat: { preset: "daily", time: "09:00", weekday: 1, expression: "0 9 * * *" },
+  timezone: localTimeZone(),
   signature: null,
   replayKey: "",
   coalesceKey: "",
@@ -88,7 +100,12 @@ export const DEFAULT_SCHEDULE: ScheduleDraft = {
 export function scheduleDraftForTask(task: Pick<ScheduledTask, "schedule">): ScheduleDraft {
   switch (task.schedule.type) {
     case "cron":
-      return { ...DEFAULT_SCHEDULE, mode: "kept", kept: task.schedule };
+      return {
+        ...DEFAULT_SCHEDULE,
+        mode: "cron",
+        repeat: cronToRepeatForm(task.schedule.expression),
+        timezone: task.schedule.timezone,
+      };
     case "fixed_time":
       return {
         ...DEFAULT_SCHEDULE,
@@ -127,7 +144,13 @@ export function parseIntervalMinutes(value: string): number {
 }
 
 export function scheduleFromDraft(draft: ScheduleDraft): ScheduledTaskUpsertSchedule | null {
-  if (draft.mode === "kept") return draft.kept;
+  if (draft.mode === "cron") {
+    const expression = repeatFormToCron(draft.repeat);
+    const [, minute = ""] = draft.repeat.time.split(":");
+    if (expression.split(/\s+/).length !== 5) return null;
+    if (draft.repeat.preset === "hourly" && !/^[0-5]?\d$/.test(minute)) return null;
+    return { type: "cron", expression, timezone: draft.timezone.trim() || localTimeZone() };
+  }
   if (draft.mode === "webhook") {
     const replayKey = draft.replayKey.trim();
     const coalesceKey = draft.coalesceKey.trim();
@@ -201,6 +224,8 @@ export type ScheduledTaskDraft = {
   readonly prompt: string;
   readonly projectId: ProjectId | null;
   readonly threadId: ThreadId | null;
+  /** Set for a task that runs as this agent in the agent's own thread. */
+  readonly profileId: string | null;
   readonly modelSelection: ModelSelection | null;
   readonly modelSelectionIsExplicit: boolean;
   readonly schedule: ScheduleDraft;
@@ -219,6 +244,7 @@ function draftSignature(draft: ScheduledTaskDraft): string {
     draft.prompt,
     draft.projectId,
     draft.threadId,
+    draft.profileId,
     draft.modelSelection?.instanceId,
     draft.modelSelection?.model,
     [...(draft.modelSelection?.options ?? [])]
@@ -229,6 +255,8 @@ function draftSignature(draft: ScheduledTaskDraft): string {
     draft.schedule.runAt,
     [...draft.schedule.weekdays].sort((a, b) => a - b),
     draft.schedule.intervalMinutes,
+    draft.schedule.repeat,
+    draft.schedule.timezone,
     draft.schedule.replayKey,
     draft.schedule.coalesceKey,
     draft.schedule.coalesceWindowSeconds,
@@ -258,6 +286,7 @@ export function moveDraftToThread(
     ...draft,
     threadId: thread.id,
     projectId: thread.projectId,
+    profileId: null,
     threadMode: draft.threadMode === "new_thread" ? "continue" : draft.threadMode,
   };
 }
@@ -292,6 +321,7 @@ export function createDraft(
     prompt: "",
     projectId,
     threadId: null,
+    profileId: null,
     modelSelection,
     modelSelectionIsExplicit: false,
     schedule: DEFAULT_SCHEDULE,
@@ -312,6 +342,7 @@ export function editDraft(task: ScheduledTask): ScheduledTaskDraft {
     prompt: task.prompt,
     projectId: task.projectId,
     threadId: task.threadId,
+    profileId: task.profileId ?? null,
     modelSelection: task.modelSelection,
     modelSelectionIsExplicit: true,
     schedule: scheduleDraftForTask(task),
@@ -329,5 +360,80 @@ export function editDraft(task: ScheduledTask): ScheduledTaskDraft {
         ? (task.workspaceStrategy.startFromOrigin ?? false)
         : true,
     runtimeMode: task.runtimeMode,
+  };
+}
+
+/** Runs go to this agent's own thread, the one it already had when the agent is unchanged. */
+export function moveDraftToAgent(draft: ScheduledTaskDraft, profileId: string): ScheduledTaskDraft {
+  return {
+    ...draft,
+    profileId,
+    threadId: draft.task?.profileId === profileId ? draft.task.threadId : null,
+    threadMode: "continue",
+  };
+}
+
+/** Leaves the agent and its thread; the caller picks the thread mode. */
+export function moveDraftOffAgent(draft: ScheduledTaskDraft): ScheduledTaskDraft {
+  return draft.profileId === null ? draft : { ...draft, profileId: null, threadId: null };
+}
+
+/** Agents that can run tasks on this environment: not read-only, and not scoped elsewhere. */
+export function schedulableAgentProfiles(
+  profiles: ReadonlyArray<McpGatewayProfile>,
+  environmentId: EnvironmentId,
+): ReadonlyArray<McpGatewayProfile> {
+  return profiles.filter(
+    (profile) =>
+      profile.runtimeMode !== "read-only" &&
+      (!profile.environmentIds?.length || profile.environmentIds.includes(environmentId)),
+  );
+}
+
+/**
+ * Where a save sends runs, and the model and modes they use. Agent tasks take them from the
+ * agent, and existing ones keep theirs until the agent changes. `profileId: null` clears a
+ * task's agent; omitted leaves a task that never had one alone.
+ */
+export function scheduledTaskDraftRouting(
+  draft: ScheduledTaskDraft,
+  context: {
+    readonly profiles: ReadonlyArray<McpGatewayProfile>;
+    readonly providers: ReadonlyArray<ServerProvider>;
+    readonly offersThreadModes: boolean;
+  },
+):
+  | string
+  | {
+      readonly profileId?: string | null;
+      readonly threadId: ThreadId | null;
+      readonly threadMode?: ScheduledTaskThreadMode;
+      readonly modelSelection: ModelSelection;
+      readonly runtimeMode: RuntimeMode;
+      readonly interactionMode: ProviderInteractionMode;
+    } {
+  const task = draft.task;
+  if (draft.profileId !== null) {
+    const routing =
+      task && task.profileId === draft.profileId
+        ? {
+            profileId: draft.profileId,
+            modelSelection: task.modelSelection,
+            runtimeMode: task.runtimeMode,
+            interactionMode: task.interactionMode,
+          }
+        : resolveScheduledTaskProfileRouting(context.profiles, draft.profileId, context.providers);
+    return typeof routing === "string" ? routing : { ...routing, threadId: draft.threadId };
+  }
+  if (draft.modelSelection === null) return "Choose a model.";
+  const wasAgent = task?.profileId !== undefined;
+  return {
+    ...(wasAgent ? { profileId: null } : {}),
+    threadId: draft.threadId,
+    ...(context.offersThreadModes ? { threadMode: draft.threadMode } : {}),
+    modelSelection: draft.modelSelection,
+    runtimeMode: draft.runtimeMode,
+    // An agent's interaction mode does not carry over to a plain thread.
+    interactionMode: task && !wasAgent ? task.interactionMode : "default",
   };
 }
