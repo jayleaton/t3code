@@ -225,7 +225,7 @@ export function ConnectAgentSurface() {
           />
           <p className="text-xs text-muted-foreground">
             Get one from Use {APP_NAME} in another app (MCP), Settings → Environments, or{" "}
-            <code>t3 auth pairing create</code> on this machine.
+            <code>ada auth pairing create</code> on this machine.
           </p>
         </div>
 

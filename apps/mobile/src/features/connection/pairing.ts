@@ -105,7 +105,7 @@ export function validateMobilePairingUrl(pairingUrl: string): void {
     hostname === "::"
   ) {
     throw new Error(
-      "Localhost points to this phone, not your Mac. Generate a new pairing link with t3 pair --tailscale, or use your Mac's LAN IP and a fresh pairing token.",
+      "Localhost points to this phone, not your Mac. Generate a new pairing link with ada pair --tailscale, or use your Mac's LAN IP and a fresh pairing token.",
     );
   }
 }

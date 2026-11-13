@@ -20,10 +20,10 @@ import {
 } from "../../state/use-composer-drafts";
 import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 
-const CLI_COMMAND = "t3 triage";
+const CLI_COMMAND = "ada triage";
 
 /**
- * In-app `t3 triage`, as on web: the server writes the session files and
+ * In-app `ada triage`, as on web: the server writes the session files and
  * clones the matching source, then a No project draft opens with the prompt.
  */
 export function useStartTriage() {

@@ -13,8 +13,7 @@ export function SettingsNotificationsRouteScreen() {
           Push notifications and Live Activities are not available in this app.
         </Text>
         <Text className="text-sm leading-normal text-foreground-muted">
-          They were delivered through T3 Connect, which this build does not include. Open the app to
-          see what your agents are doing.
+          Open the app to see what your agents are doing.
         </Text>
       </ScrollView>
     </SettingsScreen>
