@@ -48,8 +48,9 @@ export function formatNextScheduledTaskRun(nextRunAt: string, now: number): stri
 
   const time = next.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   if (days === 1) return `Next run tomorrow at ${time}`;
-  if (days <= 7) {
-    return `Next run next ${next.toLocaleDateString([], { weekday: "long" })} at ${time}`;
+  // A week out repeats today's weekday, so it falls through to the date instead.
+  if (days < 7) {
+    return `Next run ${next.toLocaleDateString([], { weekday: "long" })} at ${time}`;
   }
   const date = next.toLocaleDateString([], {
     month: "short",

@@ -1232,7 +1232,7 @@ function TaskForm({
 
         <SettingsSection title="Schedule">
           <SelectRow
-            label="Runs"
+            label="Type"
             value={SCHEDULE_MODE_LABELS[draft.schedule.mode]}
             actions={[
               "fixed_time" as const,

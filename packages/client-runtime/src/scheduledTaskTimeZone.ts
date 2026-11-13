@@ -34,8 +34,8 @@ function offsetLabel(minutes: number): string {
 }
 
 /**
- * Short label for the server zone a fixed-time schedule runs in. With a run time it names
- * that instant's offset (PST/PDT); without one it uses the generic name (PT).
+ * Short label for the server zone a fixed-time schedule runs in (PST/PDT, GMT+7), at the run
+ * time when there is one and now otherwise, so the editor and the list name it the same way.
  */
 export function scheduleTimeZoneLabel(
   timeZone: string | undefined,
@@ -49,7 +49,7 @@ export function scheduleTimeZoneLabel(
       : DateTime.toEpochMillis(DateTime.nowUnsafe());
     const name = new Intl.DateTimeFormat("en-US", {
       timeZone,
-      timeZoneName: runAt ? "short" : "shortGeneric",
+      timeZoneName: "short",
     })
       .formatToParts(at)
       .find((part) => part.type === "timeZoneName")?.value;
