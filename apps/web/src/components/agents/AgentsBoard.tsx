@@ -269,7 +269,6 @@ export function AgentsBoard() {
         <Link to="/" className="agents-brand">
           <BrandMark className="size-4" />
           <strong>{APP_NAME}</strong>
-          <span>/ agents</span>
         </Link>
         <nav aria-label="Workspace view">
           <span aria-current="page">Agents</span>

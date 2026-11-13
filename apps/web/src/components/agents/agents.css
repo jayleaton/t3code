@@ -33,9 +33,6 @@
   gap: 5px;
   white-space: nowrap;
 }
-.agents-brand span {
-  color: var(--muted-foreground);
-}
 .agents-topbar nav {
   display: flex;
   gap: 2px;
