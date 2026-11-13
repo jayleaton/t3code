@@ -34,11 +34,10 @@ if (
   );
 }
 
-// This fork ships as T3 Agents: every variant uses the Agents mark from
-// assets/agents/source.png (the desktop icon), told apart by name only. iOS
+// Every variant uses Pip (scripts/export-android-icons.ts), told apart by name only. iOS
 // gets a full-bleed square because it applies its own mask; Android gets the
 // mark alone over a navy adaptive background so the launcher mask never crops it.
-const AGENTS_NAVY = "#0A1442";
+const AGENTS_NAVY = "#111925";
 const AGENTS_ASSETS = {
   appIcon: "./assets/agents/ios-icon-1024.png",
   iosIcon: "./assets/agents/ios-icon-1024.png",
