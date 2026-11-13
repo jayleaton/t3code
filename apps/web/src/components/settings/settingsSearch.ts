@@ -881,9 +881,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "cli-command",
-    title: "t3 command",
+    title: `${CLI_COMMAND} command`,
     to: "/settings/about",
-    searchTerms: ["cli terminal shell path install command line"],
+    searchTerms: ["cli terminal shell path install command line t3"],
     desktopOnly: true,
   },
   {

@@ -184,10 +184,10 @@ const BRAND_ALLOWLIST: ReadonlyArray<BrandAllowance> = [
     text: "https://t3.codes",
     why: "Site origin, until the fork has its own domain.",
   },
-  // Renamed by the CLI alias change stacked on this one, which removes this entry.
   {
-    file: /^(?:apps\/server\/src\/(?:cli\/|service\/|serviceLauncher\.ts)|apps\/desktop\/src\/app\/DesktopCli(?:Command|Shim)\.ts|scripts\/install\.(?:sh|ps1)$)/,
-    why: "CLI copy, renamed with the ada command.",
+    file: /^apps\/desktop\/src\/app\/DesktopCliShim\.ts$/,
+    text: "Written by T3 Code",
+    why: "Launcher marker that older desktop builds look for to recognise their own launchers.",
   },
 ];
 

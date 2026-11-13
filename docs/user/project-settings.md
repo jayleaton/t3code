@@ -188,7 +188,7 @@ redeliver from the sender once it is back.
 
 ### Trigger a webhook only when something changes
 
-`t3 watch` turns external state into a webhook call without spending a model
+`ada watch` turns external state into a webhook call without spending a model
 run on polling. It probes a file, an HTTP endpoint, or a command's exit status,
 and sends one POST to your webhook task only when a value changes into one you
 listed. While nothing changes it sends nothing. Send actionable changes only,
@@ -232,18 +232,18 @@ Commands run directly, without a shell. The webhook URL can be the direct or
 Tailscale URL. Failed deliveries retry, and a still-undelivered
 event is re-sent with the same `Idempotency-Key` on the next run.
 
-Use the `t3` command from the same Ada release as your server. Earlier
-releases and the `t3` package on npm don't include `watch`, so if `t3 watch`
-reports an unknown command, that `t3` is too old.
+Use the `ada` command from the same Ada release as your server. Earlier
+releases and the `ada` package on npm don't include `watch`, so if `ada watch`
+reports an unknown command, that `ada` is too old.
 
 - **Desktop app:** the app keeps its own launcher at `~/.t3/bin/t3`, or
   `%USERPROFILE%\.t3\bin\t3.cmd` on Windows (under your T3 home if you changed
-  it). [The `t3` command](./install.md#the-t3-command) explains how to put it on
+  it). [The `ada` command](./install.md#the-t3-command) explains how to put it on
   your `PATH`.
-- **Server without the desktop app:** use the standalone `t3` CLI built with
+- **Server without the desktop app:** use the standalone `ada` CLI built with
   the same release, not one installed from npm.
 
-Run `t3 watch /path/config.json --once` from a scheduler, or `t3 watch
+Run `ada watch /path/config.json --once` from a scheduler, or `ada watch
 /path/config.json --interval 30` under any supervisor. Progress is kept next
 to the config, in `config.json.state.json`.
 
@@ -255,7 +255,7 @@ copy a state file to another host or machine; give each its own. To start fresh,
 delete the state file.
 
 Schedulers don't read your shell's `PATH`, so give them absolute paths for
-both the `t3` launcher and the config. These examples use the desktop app's
+both the `ada` launcher and the config. These examples use the desktop app's
 launcher. Check them against your scheduler's own documentation before relying
 on them:
 

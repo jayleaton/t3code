@@ -41,7 +41,6 @@ import { traceCommand } from "./cli/trace.ts";
 import { watchCommand } from "./cli/watch.ts";
 import { triageCommand } from "./cli/triage.ts";
 import { statusCommand, upCommand } from "./cli/up.ts";
-import { APP_NAME } from "@t3tools/shared/branding";
 
 const layerCliRuntime = Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer);
 

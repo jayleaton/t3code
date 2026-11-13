@@ -13,7 +13,7 @@ Bring your own: Claude Code, Codex, Cursor, Grok Build, OpenCode, Google Antigra
 We were inspired by the Codex desktop app, Conductor, Claude Desktop, and Cursor Glass, but none met our bar. What you get:
 
 - Bring your own sub. Claude, Codex, and whatever else you already have installed.
-- Best in class remote. Run `t3 up` on any box and drive it from anywhere.
+- Best in class remote. Run `ada up` on any box and drive it from anywhere.
 - Best in class mobile app.
 - Truly 100% open source. If we go the wrong direction, fork it.
 
@@ -33,7 +33,7 @@ Ada drives Claude through Anthropic's Agent SDK. This is a known bug on Anthropi
 
 ## How do I use Ada remotely?
 
-Your agents run wherever Ada runs: your desktop, a server, a VPS. You connect to it from anywhere. Run `t3 up` on that machine, then pair over your LAN or Tailscale. [app.t3.codes](https://app.t3.codes) is the web client. [Remote access](./remote-access.md)
+Your agents run wherever Ada runs: your desktop, a server, a VPS. You connect to it from anywhere. Run `ada up` on that machine, then pair over your LAN or Tailscale. [app.t3.codes](https://app.t3.codes) is the web client. [Remote access](./remote-access.md)
 
 ## How do I use Ada on my phone?
 
@@ -71,7 +71,7 @@ Yes. On iPhone and Android, dictation uses on-device speech by default; you can 
 
 ## Does it work on Windows, Mac, and Linux?
 
-Yes, all three. Desktop app, CLI, the works. One catch: there is no `t3` binary for Intel Macs, so use the desktop app there. Windows folks can also run agents inside WSL. [Install](./install.md)
+Yes, all three. Desktop app, CLI, the works. One catch: there is no `ada` binary for Intel Macs, so use the desktop app there. Windows folks can also run agents inside WSL. [Install](./install.md)
 
 ## Why is my provider not showing up?
 

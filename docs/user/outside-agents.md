@@ -61,7 +61,7 @@ The page names the agent and where its access goes:
 
 Only approve a sign-in you just started. To approve, enter a code from
 **Use Ada in another app (MCP)**, **Settings → Environments**, or
-`t3 auth pairing create` on the host. A browser already signed in to the
+`ada auth pairing create` on the host. A browser already signed in to the
 environment with permission to manage access can approve without a code.
 
 A code from **Use Ada in another app (MCP)** already carries the level you
@@ -121,14 +121,14 @@ Agents without OAuth support cannot connect.
 
 ## Scripts on the host
 
-On the machine that runs the environment, `t3 thread` uses the same tools
+On the machine that runs the environment, `ada thread` uses the same tools
 without a sign-in:
 
 ```sh
 id=$(t3 thread start . "Find why the tests are slow")
-t3 thread send "$id" "Now fix it" --wait
-t3 thread show "$id"
-t3 thread list
+ada thread send "$id" "Now fix it" --wait
+ada thread show "$id"
+ada thread list
 ```
 
 `.` means the project that contains the current folder; a project id also

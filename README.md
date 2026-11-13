@@ -28,7 +28,7 @@ Download Ada from [GitHub Releases](https://github.com/jayleaton/t3code/releases
 
 ### Command line
 
-The desktop app includes the `t3` command (**Settings → About → t3 command**). `t3 update` and `t3 service install` download Ada's releases. For a Linux machine without a desktop, see [Headless Linux host](./docs/operations/headless-linux.md).
+The desktop app includes the `ada` command (**Settings → About → t3 command**). `ada update` and `ada service install` download Ada's releases. For a Linux machine without a desktop, see [Headless Linux host](./docs/operations/headless-linux.md).
 
 ### Switching from T3 Code
 

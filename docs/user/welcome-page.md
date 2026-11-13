@@ -41,7 +41,7 @@ is found, it reads **Set up an agent** and opens by itself:
   **Settings → Providers**.
 - **Browse** opens the ACP Registry for more agents.
 
-On the desktop app, when the folder of the `t3` command is not on your `PATH`,
+On the desktop app, when the folder of the `ada` command is not on your `PATH`,
 **Add to PATH** adds one line to your shell's startup file.
 
 The setup terminal uses the home directory and environment configured for the
