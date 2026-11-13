@@ -133,7 +133,7 @@ describe("runtime profile persistence", () => {
         // Servers that predate icons and tags would drop them, so the write fails visibly.
         yield* Effect.promise(() =>
           expect(port.updateProfile!("local", reviewId, { iconId: "palette" })).rejects.toThrow(
-            "Update T3",
+            "Update Ada",
           ),
         );
         mutationsSupported = true;
@@ -182,7 +182,7 @@ describe("runtime profile persistence", () => {
         yield* Effect.promise(() =>
           expect(
             port.updateSkill!("local", skillId, { resources: skillInput.resources }),
-          ).rejects.toThrow("Update T3"),
+          ).rejects.toThrow("Update Ada"),
         );
         expect(settings.agentSkills[0]?.resources).toEqual([]);
         resourcesSupported = true;
