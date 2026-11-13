@@ -13,7 +13,7 @@ import { makeComponentLogger } from "./DesktopObservability.ts";
 const { logInfo, logWarning } = makeComponentLogger("desktop-cli-shim");
 
 // Older builds recognise their launchers by this exact text; a new one would look foreign to them.
-export const MARKER = "Written by T3 Code: runs the desktop app's bundled t3 CLI.";
+const MARKER = "Written by T3 Code: runs the desktop app's bundled t3 CLI.";
 
 export const isOwnShim = (content: string) => content.includes(MARKER);
 
