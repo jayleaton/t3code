@@ -358,7 +358,7 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
     {
       refusal: "another server owns the T3 home",
       code: SERVER_EXIT_CODE_STATE_DIR_OWNED,
-      message: "owns this T3 home",
+      message: "owns this Ada home",
     },
     {
       refusal: "the database is refused",

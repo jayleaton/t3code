@@ -1076,7 +1076,9 @@ export class Launcher {
       await discardDatabaseBackup(this.#baseDir, pending.id).catch(() => undefined);
       await this.#repointServiceUnit(next.activeVersion);
     }
-    this.#idle(`Another ${APP_NAME} server owns this T3 home. Stop it, then restart this service.`);
+    this.#idle(
+      `Another ${APP_NAME} server owns this ${APP_NAME} home. Stop it, then restart this service.`,
+    );
   }
 
   /**

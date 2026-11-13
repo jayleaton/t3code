@@ -3,6 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
+import { APP_NAME } from "@t3tools/shared/branding";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -913,7 +914,7 @@ export function terminatePosixOwnedProcessTree(input: {
     discover(table);
     const byPid = new Map(table.map((entry) => [entry.pid, entry]));
     const current = input.controller.identity(process.pid);
-    if (current === undefined) throw fail("Cannot identify the current T3 process group");
+    if (current === undefined) throw fail(`Cannot identify the current ${APP_NAME} process group`);
     const ledgerByPid = new Map(
       [...ledger.values()].map((process) => [process.pid, process] as const),
     );

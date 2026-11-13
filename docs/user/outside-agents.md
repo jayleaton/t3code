@@ -125,7 +125,7 @@ On the machine that runs the environment, `ada thread` uses the same tools
 without a sign-in:
 
 ```sh
-id=$(t3 thread start . "Find why the tests are slow")
+id=$(ada thread start . "Find why the tests are slow")
 ada thread send "$id" "Now fix it" --wait
 ada thread show "$id"
 ada thread list

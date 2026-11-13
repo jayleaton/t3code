@@ -456,11 +456,11 @@ if [ -n "$T3_NODE_SCRIPT_PATH" ]; then
 fi
 T3_ARCHIVE_VERSION=@@T3_ARCHIVE_VERSION@@
 if [ -z "$T3_ARCHIVE_VERSION" ]; then
-  printf 'No t3 release version was provided for the remote runtime.\\n' >&2
+  printf 'No ${APP_NAME} release version was provided for the remote runtime.\\n' >&2
   exit 1
 fi
 # Self-contained release archive: no Node, npm, or compiler on the remote.
-# Unpacked into the pinned-runtime layout so \`t3 service install\` reuses it.
+# Unpacked into the pinned-runtime layout so \`ada service install\` reuses it.
 T3_RELEASE_BASE_URL=@@T3_RELEASE_BASE_URL@@
 T3_RUNTIME_DIR="$HOME/.t3/runtime/versions/$T3_ARCHIVE_VERSION"
 t3_runtime_ready() {
@@ -503,7 +503,7 @@ if ! t3_runtime_ready; then
     "Darwin arm64") T3_PLATFORM_KEY="darwin-arm64" ;;
     "Linux arm64" | "Linux aarch64") T3_PLATFORM_KEY="linux-arm64" ;;
     "Linux x86_64" | "Linux amd64") T3_PLATFORM_KEY="linux-x64" ;;
-    *) printf 'Remote host %s has no t3 release archive.\\n' "$(uname -s) $(uname -m)" >&2; exit 1 ;;
+    *) printf 'Remote host %s has no ${APP_NAME} release archive.\\n' "$(uname -s) $(uname -m)" >&2; exit 1 ;;
   esac
   T3_ARCHIVE="t3-$T3_ARCHIVE_VERSION-$T3_PLATFORM_KEY.tar.gz"
   T3_STAGING="$(mktemp -d "$HOME/.t3/runtime/versions/.staging-XXXXXX")"
@@ -870,7 +870,7 @@ export class SshInvalidArchiveVersionError extends Schema.TaggedError<SshInvalid
   { archiveVersion: Schema.String },
 ) {
   override get message(): string {
-    return `'${this.archiveVersion}' is not an exact t3 version and cannot name a runtime directory.`;
+    return `'${this.archiveVersion}' is not an exact ${APP_NAME} version and cannot name a runtime directory.`;
   }
 }
 
@@ -885,7 +885,7 @@ export class SshMissingRunnerError extends Schema.TaggedError<SshMissingRunnerEr
   {},
 ) {
   override get message(): string {
-    return "A remote t3 runner needs an archive version or a node script path.";
+    return `A remote ${APP_NAME} runner needs an archive version or a node script path.`;
   }
 }
 

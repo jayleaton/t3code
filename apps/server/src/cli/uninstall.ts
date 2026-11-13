@@ -182,7 +182,7 @@ export const uninstallCommand = Command.make("uninstall", {
   ),
 }).pipe(
   Command.withDescription(
-    "Remove t3 from this machine: the background service, the launcher, and every downloaded version. Your projects and threads are kept.",
+    `Remove ${APP_NAME} from this machine: the background service, the launcher, and every downloaded version. Your projects and threads are kept.`,
   ),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
@@ -206,7 +206,7 @@ const runUninstall = Effect.fn("cli.uninstall.run")(function* (input: {
   const plan = yield* planUninstall({ baseDir: input.baseDir });
 
   if (!plan.service && plan.launchers.length === 0 && plan.runtimeDir === undefined) {
-    yield* Console.log(`Nothing to remove: t3 is not installed for ${input.baseDir}.`);
+    yield* Console.log(`Nothing to remove: ${APP_NAME} is not installed for ${input.baseDir}.`);
     if (!(yield* HostProcess.IsExecutable)) {
       yield* Console.log(
         "  This t3 runs from a Node script, so it was built from source or is upstream's npm package. Delete the checkout, or run `npm uninstall -g t3` for the npm package.",
@@ -233,7 +233,7 @@ const runUninstall = Effect.fn("cli.uninstall.run")(function* (input: {
       });
     }
     const confirmed = yield* Prompt.run(
-      Prompt.Confirm({ message: "Remove t3 from this machine?", initial: false }),
+      Prompt.Confirm({ message: `Remove ${APP_NAME} from this machine?`, initial: false }),
     ).pipe(Effect.catchTags({ QuitError: () => Effect.succeed(false) }));
     if (!confirmed) {
       yield* Console.log("Left as is.");
@@ -272,7 +272,7 @@ const runUninstall = Effect.fn("cli.uninstall.run")(function* (input: {
             reason: `Could not schedule removal of ${runtimeDir}. Delete it yourself once this window is closed.`,
           }),
       });
-      yield* Console.log(`${runtimeDir} will be removed once t3 exits.`);
+      yield* Console.log(`${runtimeDir} will be removed once ${CLI_COMMAND} exits.`);
     } else {
       yield* fs
         .remove(plan.runtimeDir, { recursive: true, force: true })

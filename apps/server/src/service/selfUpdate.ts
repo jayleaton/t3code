@@ -97,7 +97,7 @@ export const pruneRuntimesOnStart = Effect.fn("cloud.server_self_update.prune_on
       keep: [packageJson.version],
     });
     if (removed.length > 0) {
-      yield* Effect.logInfo("Removed unused t3 runtimes.", { versions: removed });
+      yield* Effect.logInfo(`Removed unused ${APP_NAME} runtimes.`, { versions: removed });
     }
     return removed;
   },
@@ -194,7 +194,7 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
     if (unsafeCrossing !== null) return yield* failWith(unsafeCrossing);
     const targetVersion = input.targetVersion.trim();
     if (!isExactServiceVersion(targetVersion)) {
-      return yield* failWith(`'${targetVersion}' is not an exact t3 version.`);
+      return yield* failWith(`'${targetVersion}' is not an exact ${APP_NAME} version.`);
     }
     if (yield* Ref.getAndSet(inFlight, true)) {
       return yield* failWith("A server update is already in progress.");

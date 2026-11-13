@@ -54,7 +54,7 @@ export class CaptureFeedback {
       }
     } catch (error) {
       this._clearActors();
-      console.warn(`T3 capture effects unavailable: ${error.message}`);
+      console.warn(`Ada capture effects unavailable: ${error.message}`);
     }
     return Boolean(this._actor);
   }

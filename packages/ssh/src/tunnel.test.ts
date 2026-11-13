@@ -217,7 +217,7 @@ describe("ssh tunnel scripts", () => {
           assert.include(result.stderr, "download attempt");
         } else {
           assert.notInclude(result.stderr, "download attempt");
-          assert.include(result.stderr, "has no t3 release archive.");
+          assert.include(result.stderr, "has no Ada release archive.");
         }
       } finally {
         NodeFS.rmSync(root, { recursive: true, force: true });

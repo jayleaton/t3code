@@ -40,7 +40,7 @@ import {
   type PersistedServerRuntimeState,
 } from "./serverRuntimeState.ts";
 import { SERVER_SHUTDOWN_DEADLINE } from "./serverShutdown.ts";
-import { APP_NAME } from "@t3tools/shared/branding";
+import { APP_NAME, CLI_COMMAND } from "@t3tools/shared/branding";
 
 export class ServerAlreadyRunningError extends Schema.TaggedError<ServerAlreadyRunningError>()(
   "ServerAlreadyRunningError",
@@ -50,7 +50,7 @@ export class ServerAlreadyRunningError extends Schema.TaggedError<ServerAlreadyR
   override readonly [Runtime.errorExitCode] = SERVER_EXIT_CODE_STATE_DIR_OWNED;
 
   override get message(): string {
-    return `An ${APP_NAME} server already owns ${this.stateDir}. Stop that server, or use a separate T3 home and pair with it, then retry. No server was stopped. server-owner.sqlite is the ownership lock; do not delete it while a server is running.`;
+    return `An ${APP_NAME} server already owns ${this.stateDir}. Stop that server, or use a separate ${APP_NAME} home and pair with it, then retry. No server was stopped. server-owner.sqlite is the ownership lock; do not delete it while a server is running.`;
   }
 }
 
@@ -61,7 +61,7 @@ export class OlderBootServiceError extends Schema.TaggedError<OlderBootServiceEr
   override readonly [Runtime.errorExitCode] = SERVER_EXIT_CODE_STATE_DIR_OWNED;
 
   override get message(): string {
-    return `An ${APP_NAME} background service set up for ${this.baseDir} may still run a release without the ownership lock. On that machine, try \`t3 update\` and let it restart (or run \`t3 service restart\` if the update is already installed). If the older launcher cannot update, run \`t3 service uninstall\`, then reinstall with \`t3 service install\` from a current CLI. You can also leave the service uninstalled. Pass \`--base-dir ${this.baseDir}\` to each command, and install \`t3\` with \`${cliInstallCommand("posix")}\` if it is missing or outdated. Then retry. No server was stopped.`;
+    return `An ${APP_NAME} background service set up for ${this.baseDir} may still run a release without the ownership lock. On that machine, try \`${CLI_COMMAND} update\` and let it restart (or run \`${CLI_COMMAND} service restart\` if the update is already installed). If the older launcher cannot update, run \`${CLI_COMMAND} service uninstall\`, then reinstall with \`${CLI_COMMAND} service install\` from a current CLI. You can also leave the service uninstalled. Pass \`--base-dir ${this.baseDir}\` to each command, and install \`${CLI_COMMAND}\` with \`${cliInstallCommand("posix")}\` if it is missing or outdated. Then retry. No server was stopped.`;
   }
 }
 
@@ -284,7 +284,7 @@ export const acquireServerOwnership = Effect.fn("acquireServerOwnership")(functi
   ) {
     const remaining = yield* stoppingOwnerRemaining(statePath);
     if (Option.isNone(remaining)) return yield* refused;
-    yield* Effect.logInfo("waiting for the stopping server to release this T3 home", {
+    yield* Effect.logInfo("waiting for the stopping server to release this Ada home", {
       stateDir,
       remainingMs: Duration.toMillis(remaining.value),
     });
@@ -347,7 +347,7 @@ export const acquireServerOwnership = Effect.fn("acquireServerOwnership")(functi
         current.ino !== lock.identity.ino;
     }
     yield* Effect.logError(
-      `Server ownership lock at ${lockPath} was deleted or replaced. Another server may now share this T3 home. Stop any other server using this home, then restart this server. Do not delete server-owner.sqlite while a server is running.`,
+      `Server ownership lock at ${lockPath} was deleted or replaced. Another server may now share this ${APP_NAME} home. Stop any other server using this home, then restart this server. Do not delete server-owner.sqlite while a server is running.`,
     );
   }).pipe(Effect.forkScoped);
 
