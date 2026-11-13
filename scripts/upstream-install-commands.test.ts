@@ -27,11 +27,7 @@ const UPSTREAM_INSTALL =
 it("keeps upstream install commands out of user-facing fork code and docs", () => {
   const files = trackedFiles(
     ["apps", "packages", "scripts", "packaging", "docs/user"],
-    [
-      /\.test\.tsx?$/,
-      // Model-facing text, changed only with its evals (evals/README.md).
-      /^apps\/server\/src\/triage\/triagePrompt\.ts$/,
-    ],
+    [/\.test\.tsx?$/],
   );
   const hits = files.flatMap((file) =>
     readLines(file).flatMap((line, index) =>
@@ -108,8 +104,6 @@ const BRAND_ALLOWLIST: ReadonlyArray<BrandAllowance> = [
     file: /^apps\/mobile\/src\/features\/settings\/lib\/legal-document-url\.ts$/,
     why: "Legal documents host.",
   },
-  // Model-facing text changes only with its evals (evals/README.md); users never read it directly.
-  { file: /^apps\/server\/src\/triage\//, why: "Triage agent prompt and its issue target." },
   // Identities other systems already know: providers, git history, peers, installed helpers.
   {
     file: /^(?:apps\/server\/src\/(?:provider\/(?:CodexProvider|CodexChatGptAuth|acp\/AntigravityAcpSupport)|mcp\/McpHttpServer)|packages\/provider-muse\/src\/server\/sdk)\.ts$/,
