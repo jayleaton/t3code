@@ -113,20 +113,22 @@ const recordTwentyEvents = Effect.gen(function* () {
   }
 });
 
-const analyticsLayerWith = (client: HttpClient.HttpClient, policy?: ManagedPolicyDocument) =>
+const OPTED_IN = {
+  T3CODE_TELEMETRY_ENABLED: true,
+  T3CODE_POSTHOG_KEY: "phc_test_key",
+  T3CODE_POSTHOG_HOST: "http://localhost",
+};
+
+const analyticsLayerWith = (
+  client: HttpClient.HttpClient,
+  policy?: ManagedPolicyDocument,
+  config: Record<string, unknown> = OPTED_IN,
+) =>
   AnalyticsService.layer.pipe(
     Layer.provideMerge(
       ServerConfig.ServerConfig.layerTest(process.cwd(), { prefix: "t3-telemetry-retry-" }),
     ),
-    Layer.provide(
-      ConfigProvider.layer(
-        ConfigProvider.fromUnknown({
-          T3CODE_TELEMETRY_ENABLED: true,
-          T3CODE_POSTHOG_KEY: "phc_test_key",
-          T3CODE_POSTHOG_HOST: "http://localhost",
-        }),
-      ),
-    ),
+    Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(config))),
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(HostProcess.Platform, "win32"),
@@ -151,6 +153,7 @@ const sendFor = (
     AnalyticsService.AnalyticsService | Effect.Services<typeof getTelemetryIdentity>
   > = recordTwentyEvents,
   policy?: ManagedPolicyDocument,
+  config?: Record<string, unknown>,
 ) =>
   Effect.gen(function* () {
     const batches: Array<ReadonlyArray<SentEvent>> = [];
@@ -165,7 +168,7 @@ const sendFor = (
         return yield* respond(request);
       }),
     );
-    const runtimeLayer = analyticsLayerWith(client, policy);
+    const runtimeLayer = analyticsLayerWith(client, policy, config);
 
     yield* Effect.gen(function* () {
       yield* record;
@@ -199,6 +202,46 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
       assert.deepEqual(
         batches.flat().map((event) => event.event),
         ["test.allowed"],
+      );
+    }),
+  );
+
+  it.effect("sends nothing unless T3CODE_TELEMETRY_ENABLED opts in", () =>
+    Effect.gen(function* () {
+      const { T3CODE_TELEMETRY_ENABLED: _optIn, ...unset } = OPTED_IN;
+      const batches = yield* sendFor(
+        10,
+        respondWithStatus(204),
+        recordTwentyEvents,
+        undefined,
+        unset,
+      ).pipe(Effect.provideService(HostProcess.Environment, {}));
+      assert.deepEqual(batches, []);
+    }),
+  );
+
+  it.effect("lets the desktop's login shell opt in after discovery", () =>
+    Effect.gen(function* () {
+      const { T3CODE_TELEMETRY_ENABLED: _optIn, ...unset } = OPTED_IN;
+      const env: NodeJS.ProcessEnv = { T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING: "1" };
+      const batches = yield* sendFor(
+        0,
+        respondWithStatus(204),
+        Effect.gen(function* () {
+          const analytics = yield* AnalyticsService.AnalyticsService;
+          delete env.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING;
+          yield* analytics.record("test.shell-unset");
+          yield* analytics.flush;
+          env.T3CODE_TELEMETRY_ENABLED = "true";
+          yield* analytics.record("test.shell-opted-in");
+          yield* analytics.flush;
+        }),
+        undefined,
+        unset,
+      ).pipe(Effect.provideService(HostProcess.Environment, env));
+      assert.deepEqual(
+        batches.flat().map((event) => event.event),
+        ["test.shell-opted-in"],
       );
     }),
   );

@@ -1,4 +1,4 @@
-import { APP_NAME } from "@t3tools/shared/branding";
+import { APP_NAME, CLI_COMMAND } from "@t3tools/shared/branding";
 import {
   OrchestratorMcpFailure,
   OrchestratorMcpThreadListResult,
@@ -219,7 +219,7 @@ const withThreadTools = Effect.fn("cli.thread.withThreadTools")(function* <A, E,
     const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
     const issued = yield* Effect.acquireRelease(
       environmentAuth.issueMcpClientSession({
-        label: "t3 thread cli",
+        label: `${CLI_COMMAND} thread cli`,
         // The CLI runs as the machine's owner. New threads still start at
         // the project's default mode, never at this ceiling by default.
         access: "full-access",

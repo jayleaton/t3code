@@ -1,8 +1,16 @@
-# Ada
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/agents/pip-lockup-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/agents/pip-lockup-light.png">
+    <img src="assets/agents/pip-lockup-light.png" alt="Ada: Engineering is better with Agents." width="560">
+  </picture>
+</p>
 
-**Agentic Desktop Application. Engineering is better with Agents.**
+<p align="center">
+  <a href="https://x.com/jayleaton"><img src="https://img.shields.io/badge/Follow-%40jayleaton-000000?logo=x&logoColor=white" alt="Follow @jayleaton"></a> <a href="https://buymeacoffee.com/jayleaton"><img src="https://img.shields.io/badge/Buy_Me_a_Coffee-Support-FFDD00?logo=buymeacoffee&logoColor=black" alt="Buy Me a Coffee: Support"></a>
+</p>
 
-Ada lets you direct the coding agents on your machine (Claude Code, Codex, Cursor, Grok Build,
+Ada (Agentic Desktop Application) lets you direct the coding agents on your machine (Claude Code, Codex, Cursor, Grok Build,
 OpenCode, Google Antigravity, and fx) from one workspace, across a desktop app, a web app, and a
 mobile app. Your agents run wherever Ada runs: your desktop, a server, or a VPS, and you can connect
 to it from anywhere.
@@ -28,7 +36,7 @@ Download Ada from [GitHub Releases](https://github.com/jayleaton/t3code/releases
 
 ### Command line
 
-The desktop app includes the `ada` command (**Settings → About → t3 command**). `ada update` and `ada service install` download Ada's releases. For a Linux machine without a desktop, see [Headless Linux host](./docs/operations/headless-linux.md).
+The desktop app includes the `ada` command (**Settings → About → ada command**). `ada update` and `ada service install` download Ada's releases. For a Linux machine without a desktop, see [Headless Linux host](./docs/operations/headless-linux.md).
 
 ### Switching from T3 Code
 

@@ -1,6 +1,12 @@
 export const BRAND_ASSET_PATHS = {
   agentsDesktopIconPng: "assets/agents/icon.png",
   agentsWindowsIconIco: "assets/agents/windows.ico",
+  agentsWebFaviconIco: "assets/agents/favicon.ico",
+  agentsWebFavicon16Png: "assets/agents/favicon-16x16.png",
+  agentsWebFavicon32Png: "assets/agents/favicon-32x32.png",
+  agentsWebAppleTouchIconPng: "assets/agents/apple-touch-icon.png",
+  agentsWebIcon192Png: "assets/agents/icon-192x192.png",
+  agentsWebIcon512Png: "assets/agents/icon-512x512.png",
 
   developmentIconComposerProject: "assets/dev/app-icon.icon",
   developmentIosIconPng: "assets/dev/blueprint-ios-1024.png",
@@ -66,12 +72,12 @@ const WEB_ICON_TARGET_FILENAMES = {
 
 const WEB_ICON_SOURCE_PATHS_BY_BRAND = {
   agents: {
-    faviconIco: "assets/agents/favicon.ico",
-    favicon16Png: "assets/agents/favicon-16x16.png",
-    favicon32Png: "assets/agents/favicon-32x32.png",
-    appleTouchIconPng: "assets/agents/apple-touch-icon.png",
-    icon192Png: "assets/agents/icon-192x192.png",
-    icon512Png: "assets/agents/icon-512x512.png",
+    faviconIco: BRAND_ASSET_PATHS.agentsWebFaviconIco,
+    favicon16Png: BRAND_ASSET_PATHS.agentsWebFavicon16Png,
+    favicon32Png: BRAND_ASSET_PATHS.agentsWebFavicon32Png,
+    appleTouchIconPng: BRAND_ASSET_PATHS.agentsWebAppleTouchIconPng,
+    icon192Png: BRAND_ASSET_PATHS.agentsWebIcon192Png,
+    icon512Png: BRAND_ASSET_PATHS.agentsWebIcon512Png,
   },
   development: {
     faviconIco: BRAND_ASSET_PATHS.developmentWebFaviconIco,

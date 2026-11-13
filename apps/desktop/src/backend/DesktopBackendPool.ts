@@ -26,7 +26,7 @@ import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
-import { APP_NAME } from "@t3tools/shared/branding";
+import { APP_NAME, CLI_COMMAND } from "@t3tools/shared/branding";
 
 const { logWarning: logBackendPoolWarning } =
   DesktopObservability.makeComponentLogger("desktop-backend-pool");
@@ -179,8 +179,8 @@ export const layer = Layer.effect(
       onStateDirOwned: () =>
         Effect.flatMap(HostProcess.Platform, (platform) =>
           electronDialog.showErrorBox(
-            "This T3 home is unavailable",
-            `Another ${APP_NAME} server, such as the background service, is using this data directory, or an older background service is set up for it. Stop that server or try \`t3 update\`. If the older launcher cannot update, run \`t3 service uninstall\` and optionally reinstall with \`t3 service install\` from a current CLI. If \`t3\` is missing or outdated, install it with \`${cliInstallCommand(platform === "win32" ? "win32" : "posix")}\`, and pass \`--base-dir\` with the service's T3 home to each command. Then reopen ${APP_NAME}. You can also set a separate T3CODE_HOME and pair with the running server.`,
+            `This ${APP_NAME} home is unavailable`,
+            `Another ${APP_NAME} server, such as the background service, is using this data directory, or an older background service is set up for it. Stop that server or try \`${CLI_COMMAND} update\`. If the older launcher cannot update, run \`${CLI_COMMAND} service uninstall\` and optionally reinstall with \`${CLI_COMMAND} service install\` from a current CLI. If \`${CLI_COMMAND}\` is missing or outdated, install it with \`${cliInstallCommand(platform === "win32" ? "win32" : "posix")}\`, and pass \`--base-dir\` with the service's ${APP_NAME} home to each command. Then reopen ${APP_NAME}. You can also set a separate T3CODE_HOME and pair with the running server.`,
           ),
         ).pipe(Effect.andThen(electronApp.quit)),
       onDatabaseRefused: () =>

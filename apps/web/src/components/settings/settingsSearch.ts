@@ -901,10 +901,10 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["onboarding setup first run getting started agents import projects"],
   },
   {
-    id: "privacy-policy",
-    title: "Privacy policy",
+    id: "usage-data",
+    title: "Usage data",
     to: "/settings/about",
-    searchTerms: ["telemetry analytics usage data tracking legal opt out"],
+    searchTerms: ["telemetry analytics privacy tracking legal opt in"],
   },
   {
     id: "telemetry-export",
@@ -919,6 +919,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Diagnostics",
     to: "/settings/maintenance",
     searchTerms: ["logs traces processes resource history failures spans cpu memory"],
+  },
+  {
+    id: "license",
+    title: "License",
+    to: "/settings/about",
+    searchTerms: ["legal MIT"],
   },
   {
     id: "open-source-licenses",

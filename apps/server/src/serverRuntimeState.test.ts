@@ -325,7 +325,7 @@ describe("server ownership", () => {
             ? []
             : [
                 [
-                  `Server ownership lock at ${lockPath} was deleted or replaced. Another server may now share this T3 home. Stop any other server using this home, then restart this server. Do not delete server-owner.sqlite while a server is running.`,
+                  `Server ownership lock at ${lockPath} was deleted or replaced. Another server may now share this Ada home. Stop any other server using this home, then restart this server. Do not delete server-owner.sqlite while a server is running.`,
                 ],
               ];
         assert.deepEqual(messages, expected);
@@ -435,8 +435,8 @@ describe("server ownership", () => {
           assert.equal(result.failure._tag, "OlderBootServiceError");
           assert.equal(Runtime.getErrorExitCode(result.failure), 78);
           assert.include(result.failure.message, t3Home);
-          assert.include(result.failure.message, "t3 update");
-          assert.include(result.failure.message, "t3 service restart");
+          assert.include(result.failure.message, "ada update");
+          assert.include(result.failure.message, "ada service restart");
           assert.include(result.failure.message, "No server was stopped");
         }
       }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),

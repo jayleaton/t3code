@@ -127,7 +127,7 @@ function AppSettingsSection() {
         label="Open source licenses"
         target="SettingsOpenSourceLicenses"
       />
-      <SettingsRow icon="doc.text" label="Legal" fullScreenTarget="SettingsLegal" />
+      <SettingsRow icon="doc.text" label="License" fullScreenTarget="SettingsLegal" />
       {updateCheckAvailable ? (
         <Pressable
           accessibilityLabel={`Version ${versionLabel}`}

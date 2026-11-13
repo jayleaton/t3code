@@ -14,6 +14,7 @@ import {
   parseChecksums,
   type CliReleaseChannel,
 } from "@t3tools/shared/cliRelease";
+import { APP_NAME } from "@t3tools/shared/branding";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
@@ -62,14 +63,14 @@ export const findNewestReleaseVersion = Effect.fn("NpmRelease.findNewestReleaseV
       token === undefined
         ? request
         : HttpClientRequest.setHeader(request, "Authorization", `Bearer ${token}`),
-      "Could not list t3 releases.",
+      `Could not list ${APP_NAME} releases.`,
     );
     const releases = Option.getOrUndefined(
       decodeReleaseIndex(new TextDecoder().decode(Option.getOrElse(body, () => new Uint8Array()))),
     );
     if (releases === undefined) {
       return yield* new ServerNpmReleaseError({
-        reason: "The t3 release index had an unexpected shape.",
+        reason: `The ${APP_NAME} release index had an unexpected shape.`,
       });
     }
     const version = newestCliReleaseVersion(releases, channel);

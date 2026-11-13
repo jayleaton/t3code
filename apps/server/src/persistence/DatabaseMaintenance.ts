@@ -16,7 +16,7 @@ import { isSqlError } from "effect/sql/SqlError";
 
 import * as ProjectionMaintenance from "../orchestration-v2/ProjectionMaintenance.ts";
 import { rebuildMessageSearch } from "../orchestration-v2/messageSearchIndex.ts";
-import { APP_NAME } from "@t3tools/shared/branding";
+import { APP_NAME, CLI_COMMAND } from "@t3tools/shared/branding";
 
 export class DatabaseMissingError extends Schema.TaggedError<DatabaseMissingError>()(
   "DatabaseMissingError",
@@ -279,7 +279,7 @@ export const runRequestedReclaim = Effect.fn("DatabaseMaintenance.runRequestedRe
             .writeFileString(
               files.failure,
               error._tag === "DatabaseInUseError"
-                ? `Another program kept the database open. Close other ${APP_NAME} apps and t3 commands on this machine, then try again.`
+                ? `Another program kept the database open. Close other ${APP_NAME} apps and ${CLI_COMMAND} commands on this machine, then try again.`
                 : error.message,
             )
             .pipe(

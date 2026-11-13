@@ -2,6 +2,7 @@
 import * as NodeFSP from "node:fs/promises";
 
 import type { AntigravityAuthMethod, ProviderInstanceId } from "@t3tools/contracts";
+import { APP_NAME } from "@t3tools/shared/branding";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveNodeExecutable, nodeRuntimeUnavailableMessage } from "@t3tools/shared/nodeRuntime";
 import * as Digest from "effect/crypto/Digest";
@@ -345,7 +346,7 @@ export const prepareAntigravityProfile = Effect.fn("prepareAntigravityProfile")(
     helperExecutable.includes("%s")
   ) {
     return yield* authSupportError(
-      "The T3 runtime path cannot be used to suppress Antigravity browser launches.",
+      `The ${APP_NAME} runtime path cannot be used to suppress Antigravity browser launches.`,
     );
   }
 

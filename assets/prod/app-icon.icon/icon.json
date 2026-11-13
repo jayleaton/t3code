@@ -1,16 +1,16 @@
 {
   "fill": {
-    "solid": "display-p3:0.00000,0.00000,0.00000,1.00000"
+    "solid": "srgb:0.06667,0.09804,0.14510,1.00000"
   },
   "groups": [
     {
       "layers": [
         {
-          "image-name": "text.svg",
-          "name": "Text",
+          "image-name": "pip.svg",
+          "name": "Pip",
           "position": {
-            "scale": 8.5,
-            "translation-in-points": [0, 0]
+            "scale": 8.4,
+            "translation-in-points": [0, -24]
           }
         }
       ],

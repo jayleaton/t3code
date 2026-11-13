@@ -143,7 +143,7 @@ function formatProtection(
   if (protection === undefined) return [];
   return [
     protection.unprotected === undefined
-      ? `  Memory protection: on${protection.setByProtect ? " (t3 service protect)" : ""}`
+      ? `  Memory protection: on${protection.setByProtect ? ` (${CLI_COMMAND} service protect)` : ""}`
       : `  Memory protection: off, ${protection.unprotected} grants none. Run \`${CLI_COMMAND} service protect\`.`,
     ...(protection.oomScoreAdj === undefined ? [] : [`  OOM score: ${protection.oomScoreAdj}`]),
   ];
@@ -163,7 +163,7 @@ function formatServiceStatus(
   if (status.otherBaseDir !== undefined) {
     return [
       `${APP_NAME} service`,
-      "  Status: installed for another T3 home",
+      `  Status: installed for another ${APP_NAME} home`,
       `  Base dir: ${status.otherBaseDir}`,
       `  Next: Pass \`${BootService.formatBootServiceBaseDirOption(status.otherBaseDir)}\` to manage it.`,
     ].join("\n");

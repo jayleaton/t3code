@@ -1,6 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
 import { NotificationSettings } from "./NotificationSettings";
-import { PRIVACY_POLICY_URL } from "../../legalLinks";
 import { CheckIcon } from "lucide-react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useRef, useState } from "react";
@@ -31,7 +30,7 @@ import {
   ScreenReaderAnnouncements,
   ToolCallVisibility,
 } from "@t3tools/contracts/settings";
-import { desktopUpdateChannelOf } from "@t3tools/shared/cliRelease";
+import { desktopUpdateChannelOf, LICENSE_URL } from "@t3tools/shared/cliRelease";
 import { createModelSelection } from "@t3tools/shared/model";
 import { resolvePastedPath } from "@t3tools/shared/path";
 import * as Equal from "effect/Equal";
@@ -75,7 +74,7 @@ import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { ThreadTitleInstructionsSettings } from "./ThreadTitleInstructionsSettings";
 import { SnoozePresetsRow } from "./SnoozePresetsSettings";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
-import { managedTelemetryOffMessage, usePrimaryManagedPolicy } from "../../state/managedPolicy";
+import { usageDataNotice, usePrimaryManagedPolicy } from "../../state/managedPolicy";
 import {
   getCustomModelOptionsByInstance,
   resolveAppModelSelectionState,
@@ -2344,7 +2343,6 @@ export function AboutSettingsPanel() {
   const primaryPolicy = usePrimaryManagedPolicy();
   // The Welcome page sets up this computer, so it needs one.
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const telemetryOff = managedTelemetryOffMessage(primaryPolicy);
   return (
     <SettingsPageContainer>
       <SettingsSection id="about" title={APP_NAME}>
@@ -2398,19 +2396,19 @@ export function AboutSettingsPanel() {
 
       <SettingsSection id="legal" title="Legal">
         <SettingsRow
-          {...searchableSetting("privacy-policy")}
-          description={
-            telemetryOff === undefined
-              ? `How we handle your data, including the anonymous usage data ${APP_NAME} collects.`
-              : `How we handle your data. ${telemetryOff}`
-          }
+          {...searchableSetting("usage-data")}
+          description={usageDataNotice(primaryPolicy)}
+        />
+        <SettingsRow
+          {...searchableSetting("license")}
+          description={`The license ${APP_NAME}'s source code is released under.`}
           control={
             <Button
-              render={<a href={PRIVACY_POLICY_URL} target="_blank" rel="noreferrer noopener" />}
+              render={<a href={LICENSE_URL} target="_blank" rel="noreferrer noopener" />}
               size="sm"
               variant="outline"
             >
-              View policy
+              View license
             </Button>
           }
         />

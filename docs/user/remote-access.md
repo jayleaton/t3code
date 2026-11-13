@@ -221,7 +221,7 @@ directly. Every other device, and the desktop app for other environments,
 streams them from the host. Agents keep using them while no device is
 connected, and `localhost` addresses reach servers on the host.
 
-The first tab downloads a headless Chrome, about 120 MB, into the T3 home. It
+The first tab downloads a headless Chrome, about 120 MB, into the Ada home. It
 is the same browser [HTML renders](html-renders.md) use, so a host downloads it
 only once. Some Linux hosts need [setup](#browser-host-setup) before it can
 start.
@@ -281,7 +281,7 @@ If you need to run as root, or cannot enable the sandbox on your host, set
 the server. This disables Chrome's sandbox. For a manual launch:
 
 ```sh
-T3CODE_SERVER_BROWSER_SANDBOX=0 t3 serve
+T3CODE_SERVER_BROWSER_SANDBOX=0 ada serve
 ```
 
 For a systemd service, add `Environment=T3CODE_SERVER_BROWSER_SANDBOX=0` under
@@ -778,7 +778,7 @@ desktop app, open **Settings → Environments** and switch off **Local
 environment**. Ada restarts without a local server: no local agents or terminals run, WSL
 backends stay off, and other devices can no longer connect to this computer. Your projects,
 history, and saved connections are kept, and you keep working through pairing or SSH.
-If a [background service](./background-service.md) on this computer uses the same T3 home, the
+If a [background service](./background-service.md) on this computer uses the same Ada home, the
 app still treats it as this computer: **Open in** and file reveal for its projects run here,
 whichever connection you reach it through.
 

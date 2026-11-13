@@ -17,7 +17,7 @@ import { useNewThreadHandler } from "./useHandleNewThread";
 import { useScratchProject } from "./useScratchProject";
 import { APP_NAME } from "@t3tools/shared/branding";
 
-export const TRIAGE_CLI_COMMAND = "t3 triage";
+export const TRIAGE_CLI_COMMAND = "ada triage";
 
 const copyTriageCliCommand = () =>
   writeTextToClipboard(TRIAGE_CLI_COMMAND, "command").catch(() =>
@@ -31,7 +31,7 @@ const copyTriageCliCommand = () =>
 export const isTriagePrompt = (prompt: string) => prompt.includes(`[${TRIAGE_PROMPT_FILE_NAME}](`);
 
 /**
- * In-app `t3 triage`: the server writes the session files and starts cloning
+ * In-app `ada triage`: the server writes the session files and starts cloning
  * the matching source, then a No project draft opens with the playbook linked.
  * The draft hero explains the rest; the user picks a provider and describes
  * the problem.

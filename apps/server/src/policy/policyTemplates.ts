@@ -7,7 +7,7 @@ import {
 } from "@t3tools/shared/managedPolicyFile";
 
 import { knownDriverLabels } from "./managedProviders.ts";
-import { APP_NAME } from "@t3tools/shared/branding";
+import { APP_NAME, CLI_COMMAND } from "@t3tools/shared/branding";
 
 type ValueName = keyof typeof WINDOWS_POLICY_VALUES;
 type ListKey = keyof typeof WINDOWS_POLICY_LISTS;
@@ -159,7 +159,7 @@ const policies = (): ReadonlyArray<Policy> => [
   {
     id: "Settings",
     title: "Managed settings (JSON)",
-    help: `Defaults and locks for server settings, as the "settings" object of an ${APP_NAME} policy. Each key is a setting path; each value is {"value": ..., "locked": true|false}.\n\nExample: {"enableAgentBrowserAccess": {"value": false, "locked": true}}\n\nRun "t3 policy check" on a policy file with the same object to validate it first.`,
+    help: `Defaults and locks for server settings, as the "settings" object of an ${APP_NAME} policy. Each key is a setting path; each value is {"value": ..., "locked": true|false}.\n\nExample: {"enableAgentBrowserAccess": {"value": false, "locked": true}}\n\nRun "${CLI_COMMAND} policy check" on a policy file with the same object to validate it first.`,
     elements: [{ kind: "text", name: "Settings", label: "Settings JSON", json: true }],
   },
   {

@@ -246,7 +246,7 @@
     "protects": "the fork ships as Ada and upstream syncs cannot bring T3 Code, T3 Agents, Theo, t3.codes or pingdotgg back into user-facing copy",
     "test": "scripts/upstream-install-commands.test.ts",
     "title": "keeps upstream brand names out of user-facing fork code and docs",
-    "sha256": "85d9b5d8a33ac522361b474782651de8799697cb0302250dba43220b233ef46c",
+    "sha256": "b4783358437d945c2851a094712cc45dfa318da65cfe64d5400a7dc74b11f23c",
     "sources": ["packages/shared/src/branding.ts"]
   },
   {

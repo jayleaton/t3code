@@ -169,7 +169,10 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
   const remember = (file: string) =>
     recordPinnedRuntimeLauncher({ baseDir: input.baseDir, launcher: file }).pipe(
       Effect.mapError(
-        () => new CliUpdateError({ reason: `Could not record the t3 launcher at ${file}.` }),
+        () =>
+          new CliUpdateError({
+            reason: `Could not record the ${CLI_COMMAND} launcher at ${file}.`,
+          }),
       ),
     );
   const repoint = (file: string) =>
@@ -262,7 +265,7 @@ const updateFlags = {
   ...projectLocationFlags,
   channel: Flag.Literals("channel", CLI_RELEASE_CHANNELS).pipe(
     Flag.withDescription(
-      "Release channel to follow. Defaults to the channel this t3 was published on.",
+      `Release channel to follow. Defaults to the channel this ${APP_NAME} was published on.`,
     ),
     Flag.optional,
   ),
@@ -291,7 +294,7 @@ export const updateCommand = Command.make("update", {
   version: versionArgument,
 }).pipe(
   Command.withDescription(
-    "Download a newer t3 and switch this machine to it, including the background service when one is installed.",
+    `Download a newer ${APP_NAME} and switch this machine to it, including the background service when one is installed.`,
   ),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
@@ -393,7 +396,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   }
   if (input.requestedVersion !== undefined && !isExactServiceVersion(input.requestedVersion)) {
     return yield* new CliUpdateError({
-      reason: `'${input.requestedVersion}' is not an exact t3 version.`,
+      reason: `'${input.requestedVersion}' is not an exact ${APP_NAME} version.`,
     });
   }
   const progress = createUpdateProgress();
@@ -495,7 +498,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   let restartService = false;
   if (serviceInstalled && !serviceCurrent) {
     yield* Console.log(
-      "  A background service is installed for this T3 home. Restarting it interrupts anything running in it: agent turns, terminals, remote clients.",
+      `  A background service is installed for this ${APP_NAME} home. Restarting it interrupts anything running in it: agent turns, terminals, remote clients.`,
     );
     if (input.assumeYes) {
       restartService = true;
@@ -641,7 +644,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     );
   } else if (status.installed && !servesThisHome) {
     yield* Console.log(
-      `  The background service serves ${status.installedBaseDir ?? "another T3 home"} and was left unchanged.`,
+      `  The background service serves ${status.installedBaseDir ?? `another ${APP_NAME} home`} and was left unchanged.`,
     );
   }
   if (foreground !== undefined) {

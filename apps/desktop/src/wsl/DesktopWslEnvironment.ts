@@ -326,7 +326,7 @@ export const buildWslRuntimeInstallScript = (
     "trap cleanup_runtime_install EXIT",
     `tar -xzf ${shellQuote(linuxArchivePath)} -C "$runtime_tmp" --strip-components=1`,
     'if ! runtime_entry_runs "$runtime_tmp"; then',
-    "  printf 'WSL runtime archive does not contain a working t3 executable\\n' >&2",
+    `  printf 'WSL runtime archive does not contain a working ${APP_NAME} executable\\n' >&2`,
     "  exit 1",
     "fi",
     'installed_entry_digest=$(runtime_server_entry_digest "$runtime_tmp")',

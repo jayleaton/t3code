@@ -12,9 +12,11 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { Command, Flag } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import sharp from "sharp";
 
 import { BRAND_ASSET_PATHS, DEVELOPMENT_PUBLIC_ICON_OVERRIDES } from "./lib/brand-assets.ts";
 import { encodePngIco, readPngDimensions, WINDOWS_ICON_SIZES } from "./lib/icon-export.ts";
+import { parsePip, PIP_COLORS, PIP_SOURCE, pipGlyphSvg } from "./lib/pip.ts";
 
 const DESIGN_GENERATION = 26;
 const ICON_COMPOSER_EXECUTABLE_PARTS = [
@@ -254,6 +256,57 @@ const ICON_VARIANTS = [
     },
   },
 ] as const satisfies ReadonlyArray<IconVariant>;
+
+// Each Icon Composer project draws Pip in its own colour over its own backdrop.
+const ICON_COMPOSER_GLYPHS = [
+  { project: BRAND_ASSET_PATHS.productionIconComposerProject, fill: PIP_COLORS.lavender },
+  { project: BRAND_ASSET_PATHS.nightlyIconComposerProject, fill: PIP_COLORS.white },
+  { project: BRAND_ASSET_PATHS.developmentIconComposerProject, fill: PIP_COLORS.white },
+] as const;
+
+// Byte copies of rendered assets. The fork ships the production render as its agents brand.
+const GENERATED_COPIES = [
+  [BRAND_ASSET_PATHS.productionMacIconPng, BRAND_ASSET_PATHS.agentsDesktopIconPng],
+  [BRAND_ASSET_PATHS.productionWindowsIconIco, BRAND_ASSET_PATHS.agentsWindowsIconIco],
+  [BRAND_ASSET_PATHS.productionWebFaviconIco, BRAND_ASSET_PATHS.agentsWebFaviconIco],
+  [BRAND_ASSET_PATHS.productionWebFavicon16Png, BRAND_ASSET_PATHS.agentsWebFavicon16Png],
+  [BRAND_ASSET_PATHS.productionWebFavicon32Png, BRAND_ASSET_PATHS.agentsWebFavicon32Png],
+  [BRAND_ASSET_PATHS.productionWebAppleTouchIconPng, BRAND_ASSET_PATHS.agentsWebAppleTouchIconPng],
+  [BRAND_ASSET_PATHS.productionWebIcon192Png, BRAND_ASSET_PATHS.agentsWebIcon192Png],
+  [BRAND_ASSET_PATHS.productionWebIcon512Png, BRAND_ASSET_PATHS.agentsWebIcon512Png],
+  [BRAND_ASSET_PATHS.productionWebAppleTouchIconPng, "apps/web/public/brand-mark.png"],
+  [BRAND_ASSET_PATHS.productionWebFaviconIco, "apps/marketing/public/favicon.ico"],
+  [BRAND_ASSET_PATHS.productionWebFavicon16Png, "apps/marketing/public/favicon-16x16.png"],
+  [BRAND_ASSET_PATHS.productionWebFavicon32Png, "apps/marketing/public/favicon-32x32.png"],
+  [BRAND_ASSET_PATHS.productionWebAppleTouchIconPng, "apps/marketing/public/apple-touch-icon.png"],
+] as const;
+
+const MARKETING_ICONS = [
+  [BRAND_ASSET_PATHS.productionIosIconPng, "apps/marketing/src/assets/icon.webp"],
+  [BRAND_ASSET_PATHS.nightlyIosIconPng, "apps/marketing/src/assets/icon-nightly.webp"],
+] as const;
+const SOCIAL_CARD = "apps/marketing/src/assets/social-card.webp";
+
+const SOCIAL_CARD_LOCKUP = "assets/agents/pip-lockup-dark.svg";
+
+// Open Graph card at 2x: the approved dark lockup on its own navy. The slogan uses system fonts,
+// like the rest of this macOS-only export.
+const socialCardSvg = (lockup: string) => {
+  const [width, height] = [2400, 1260];
+  const lockupWidth = 2240;
+  const lockupHeight = (lockupWidth * 560) / 1400;
+  const nested = lockup.replace(
+    /<svg [^>]*>/,
+    `<svg x="${(width - lockupWidth) / 2}" y="${(height - lockupHeight) / 2}" width="${lockupWidth}" height="${lockupHeight}" viewBox="0 0 1400 560">`,
+  );
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="${width}" height="${height}" fill="${PIP_COLORS.navy}"/>${nested}</svg>`;
+};
+
+const encodeWith = (label: string, encode: () => Promise<Buffer>) =>
+  Effect.tryPromise({
+    try: encode,
+    catch: (cause) => new IconExportEncodingError({ variant: label, cause }),
+  });
 
 const RepositoryRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("..", import.meta.url))),
@@ -596,8 +649,24 @@ const renderVariant = Effect.fn("iconExport.renderVariant")(function* (
     catch: (cause) => new IconExportEncodingError({ variant: variant.label, cause }),
   });
 
+  // Icon Composer renders macOS full-bleed, so the Dock's margin comes from Apple's 824-on-1024 grid.
+  const macos = yield* encodeWith(`${variant.label}-macos`, async () =>
+    sharp({
+      create: {
+        width: 1024,
+        height: 1024,
+        channels: 4,
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      },
+    })
+      .composite([{ input: await sharp(ios).resize(824, 824).png().toBuffer(), gravity: "centre" }])
+      .png()
+      .toBuffer(),
+  );
+
   return new Map<string, Buffer>([
     [variant.outputs.ios, ios],
+    [variant.outputs.macos, macos],
     [variant.outputs.universal, ios],
     [variant.outputs.appleTouch, yield* render("iOS", 180)],
     [variant.outputs.webIcon192, yield* render("iOS", 192)],
@@ -722,6 +791,26 @@ export const exportBrandIcons = Effect.fn("exportBrandIcons")(function* (checkOn
   );
 
   const generated = new Map<string, Buffer>();
+  const path = yield* Path.Path;
+  const pipSource = path.join(repositoryRoot, PIP_SOURCE);
+  const pip = parsePip(
+    yield* fs
+      .readFileString(pipSource)
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new IconExportFileSystemError({ operation: "read-file", path: pipSource, cause }),
+        ),
+      ),
+  );
+  for (const { project, fill } of ICON_COMPOSER_GLYPHS) {
+    const glyphPath = `${project}/Assets/pip.svg`;
+    const glyph = Buffer.from(pipGlyphSvg(pip, fill));
+    generated.set(glyphPath, glyph);
+    // Icon Composer reads the glyph from disk, so it must be current before rendering.
+    if (!checkOnly) yield* writeAtomically(repositoryRoot, glyphPath, glyph);
+  }
+
   for (const variant of ICON_VARIANTS) {
     yield* Console.log(`Rendering ${variant.label} from ${variant.source}...`);
     const variantAssets = yield* renderVariant(
@@ -735,15 +824,46 @@ export const exportBrandIcons = Effect.fn("exportBrandIcons")(function* (checkOn
     }
   }
 
-  for (const override of DEVELOPMENT_PUBLIC_ICON_OVERRIDES) {
-    const sourceContents = generated.get(override.sourceRelativePath);
+  const copies = [
+    ...DEVELOPMENT_PUBLIC_ICON_OVERRIDES.map(
+      (override) => [override.sourceRelativePath, override.targetRelativePath] as const,
+    ),
+    ...GENERATED_COPIES,
+  ];
+  for (const [source, target] of copies) {
+    const sourceContents = generated.get(source);
     if (sourceContents === undefined) {
-      return yield* Effect.die(
-        new Error(`Generated development web icon is missing: ${override.sourceRelativePath}`),
-      );
+      return yield* Effect.die(new Error(`Generated icon is missing: ${source}`));
     }
-    generated.set(override.targetRelativePath, sourceContents);
+    generated.set(target, sourceContents);
   }
+  for (const [source, target] of MARKETING_ICONS) {
+    const sourceContents = generated.get(source);
+    if (sourceContents === undefined) {
+      return yield* Effect.die(new Error(`Generated icon is missing: ${source}`));
+    }
+    generated.set(
+      target,
+      yield* encodeWith(target, () => sharp(sourceContents).webp({ quality: 90 }).toBuffer()),
+    );
+  }
+  const lockupSource = path.join(repositoryRoot, SOCIAL_CARD_LOCKUP);
+  const lockup = yield* fs
+    .readFileString(lockupSource)
+    .pipe(
+      Effect.mapError(
+        (cause) =>
+          new IconExportFileSystemError({ operation: "read-file", path: lockupSource, cause }),
+      ),
+    );
+  generated.set(
+    SOCIAL_CARD,
+    yield* encodeWith(SOCIAL_CARD, () =>
+      sharp(Buffer.from(socialCardSvg(lockup)))
+        .webp({ quality: 90 })
+        .toBuffer(),
+    ),
+  );
 
   if (checkOnly) {
     const stale = yield* Effect.filter(

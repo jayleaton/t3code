@@ -49,7 +49,7 @@ export const T3ProjectFileScript = Schema.Struct({
   stopOnSettle: Schema.optionalKey(
     Schema.Boolean.annotate({
       description:
-        "When true, T3 stops this action's terminal and child processes when its thread settles.",
+        "When true, Ada stops this action's terminal and child processes when its thread settles.",
     }),
   ),
   async: Schema.optionalKey(
@@ -110,7 +110,7 @@ export const T3ProjectFile = Schema.Struct({
       .check(Schema.isMaxLength(T3_PROJECT_FILE_MAX_SCRIPTS)),
   ),
 }).annotate({
-  title: "T3 project file",
+  title: "Ada project file",
   description:
     "Checked-in project configuration for Ada (t3.json at the repository root). See https://github.com/jayleaton/t3code for documentation.",
 });

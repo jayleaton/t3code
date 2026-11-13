@@ -44,7 +44,7 @@ without expanding shell expressions.
 Registry agents always run on the machine that hosts your Ada server. That stays true when you
 connect through `app.t3.codes` or from another device.
 
-Agents install under `tools/<agent-id>/<version>/` inside T3 home. Ada verifies SHA-256 when the Registry entry
+Agents install under `tools/<agent-id>/<version>/` inside Ada home. Ada verifies SHA-256 when the Registry entry
 provides one; entries without a checksum retain the Registry's HTTPS distribution guarantee.
 Registry `npx` and `uvx` packages use Ada-owned npm prefixes and Python tool directories at the exact
 version published by the Registry. Their commands are available in a new server terminal for
