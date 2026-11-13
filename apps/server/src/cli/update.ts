@@ -105,9 +105,57 @@ export const resolveMirrorVersion = Effect.fn("cli.update.resolve_mirror")(funct
 });
 
 /**
- * Only a launcher that already points into this home's `runtime/versions` tree is touched; a
- * plain copy of the executable, or a launcher for some other install, is left alone. It is
- * recorded before it moves, so prune never meets a repointed launcher it does not know about.
+ * The launcher this process ran through and its `ada`/`t3` sibling, each kept only when it already
+ * points into this home's `runtime/versions` tree. A plain copy of the executable, or a launcher
+ * for some other install, is another program's.
+ */
+const ownedLaunchers = Effect.fn("cli.update.owned_launchers")(function* (input: {
+  readonly launchedAs: string | undefined;
+  readonly baseDir: string;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const platform = yield* HostProcess.Platform;
+  if (input.launchedAs === undefined) return [];
+  const versionsDir = pinnedRuntimeVersionsDir(path, input.baseDir);
+  const ownsTarget = (candidate: string) => launcherOwnsVersionsDir(path, versionsDir, candidate);
+  const owned = (launcher: string) =>
+    platform === "win32"
+      ? fs.readFileString(launcher).pipe(
+          Effect.map((contents) => {
+            const target = windowsShimTarget(contents);
+            return target !== undefined && ownsTarget(target);
+          }),
+          Effect.orElseSucceed(() => false),
+        )
+      : fs.readLink(launcher).pipe(
+          Effect.map((target) => ownsTarget(path.resolve(path.dirname(launcher), target))),
+          Effect.orElseSucceed(() => false),
+        );
+  const launcher =
+    platform === "win32" ? yield* findWindowsShim(input.launchedAs) : input.launchedAs;
+  if (launcher === undefined || !(yield* owned(launcher))) return [];
+  const result = [launcher];
+  for (const sibling of launcherSiblings(path, launcher)) {
+    if (yield* owned(sibling)) result.push(sibling);
+  }
+  return result;
+});
+
+/**
+ * The command to tell the user to run: `ada` when this install owns it, else `t3`, else
+ * `fallback`. A collision can leave either name to another program, and older installs have only `t3`.
+ */
+const launcherCommand = (path: Path.Path, owned: ReadonlyArray<string>, fallback: string) => {
+  const names = owned.map((launcher) => path.basename(launcher, path.extname(launcher)));
+  return [CLI_COMMAND, LEGACY_CLI_COMMAND].find((name) => names.includes(name)) ?? fallback;
+};
+
+const quoted = (file: string) => (/[\s"'$`]/.test(file) ? `"${file}"` : file);
+
+/**
+ * Repoints the launchers {@link ownedLaunchers} finds. Each is recorded before it moves, so
+ * prune never meets a repointed launcher it does not know about.
  */
 export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function* (input: {
   readonly launchedAs: string | undefined;
@@ -115,67 +163,38 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
   readonly targetEntryPath: string;
 }) {
   const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
-  if (input.launchedAs === undefined) return Option.none<string>();
-  const versionsDir = pinnedRuntimeVersionsDir(path, input.baseDir);
-  const ownsTarget = (candidate: string) => launcherOwnsVersionsDir(path, versionsDir, candidate);
-  const remember = (launcher: string) =>
-    recordPinnedRuntimeLauncher({ baseDir: input.baseDir, launcher }).pipe(
+  const [launcher, ...siblings] = yield* ownedLaunchers(input);
+  if (launcher === undefined) return Option.none<string>();
+  const remember = (file: string) =>
+    recordPinnedRuntimeLauncher({ baseDir: input.baseDir, launcher: file }).pipe(
       Effect.mapError(
-        () => new CliUpdateError({ reason: `Could not record the t3 launcher at ${launcher}.` }),
+        () => new CliUpdateError({ reason: `Could not record the t3 launcher at ${file}.` }),
       ),
     );
-
-  if (platform === "win32") {
-    const shimPath = yield* findWindowsShim(input.launchedAs);
-    if (shimPath === undefined) return Option.none<string>();
-    const current = yield* fs.readFileString(shimPath).pipe(Effect.option);
-    const quoted = Option.isSome(current) ? windowsShimTarget(current.value) : undefined;
-    if (quoted === undefined || !ownsTarget(quoted)) return Option.none<string>();
-    const rewrite = (shim: string) =>
-      remember(shim).pipe(
-        Effect.andThen(
-          fs
-            .writeFileString(shim, `@echo off\r\n"${input.targetEntryPath}" %*`)
-            .pipe(
+  const repoint = (file: string) =>
+    remember(file).pipe(
+      Effect.andThen(
+        platform === "win32"
+          ? fs
+              .writeFileString(file, `@echo off\r\n"${input.targetEntryPath}" %*`)
+              .pipe(
+                Effect.mapError(
+                  () =>
+                    new CliUpdateError({ reason: `Could not rewrite the launcher at ${file}.` }),
+                ),
+              )
+          : fs.symlink(input.targetEntryPath, `${file}.${process.pid}.tmp`).pipe(
+              Effect.andThen(fs.rename(`${file}.${process.pid}.tmp`, file)),
               Effect.mapError(
-                () => new CliUpdateError({ reason: `Could not rewrite the launcher at ${shim}.` }),
+                () => new CliUpdateError({ reason: `Could not repoint the launcher at ${file}.` }),
               ),
             ),
-        ),
-      );
-    yield* rewrite(shimPath);
-    for (const sibling of launcherSiblings(path, shimPath)) {
-      const contents = yield* fs.readFileString(sibling).pipe(Effect.option);
-      const target = Option.isSome(contents) ? windowsShimTarget(contents.value) : undefined;
-      if (target !== undefined && ownsTarget(target)) yield* rewrite(sibling).pipe(Effect.ignore);
-    }
-    return Option.some(shimPath);
-  }
-
-  const ownedLink = (launcher: string) =>
-    fs.readLink(launcher).pipe(
-      Effect.map((target) => ownsTarget(path.resolve(path.dirname(launcher), target))),
-      Effect.orElseSucceed(() => false),
-    );
-  const repoint = (launcher: string) =>
-    remember(launcher).pipe(
-      Effect.andThen(
-        fs.symlink(input.targetEntryPath, `${launcher}.${process.pid}.tmp`).pipe(
-          Effect.andThen(fs.rename(`${launcher}.${process.pid}.tmp`, launcher)),
-          Effect.mapError(
-            () => new CliUpdateError({ reason: `Could not repoint the launcher at ${launcher}.` }),
-          ),
-        ),
       ),
     );
-  if (!(yield* ownedLink(input.launchedAs))) return Option.none<string>();
-  yield* repoint(input.launchedAs);
-  for (const sibling of launcherSiblings(path, input.launchedAs)) {
-    if (yield* ownedLink(sibling)) yield* repoint(sibling).pipe(Effect.ignore);
-  }
-  return Option.some(input.launchedAs);
+  yield* repoint(launcher);
+  for (const sibling of siblings) yield* repoint(sibling).pipe(Effect.ignore);
+  return Option.some(launcher);
 });
 
 /** `ada` and `t3` run the same install, so an update moves both and neither keeps an older version. */
@@ -388,6 +407,11 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   ).pipe(Effect.ensuring(Effect.sync(progress.finish)));
   const targetChannel = cliReleaseChannelOf(targetVersion);
 
+  const launchedAs = (yield* HostProcess.IsExecutable) ? yield* resolveLauncherPath : undefined;
+  const owned = yield* ownedLaunchers({ launchedAs, baseDir: input.baseDir });
+  // Before the new runtime is on disk, `t3` is the one name every install of ours has had.
+  const command = launcherCommand(path, owned, LEGACY_CLI_COMMAND);
+
   const currentChannel = cliReleaseChannelOf(currentVersion);
   if (targetChannel === "preview" && currentChannel !== "preview") {
     yield* Console.log(
@@ -395,7 +419,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
         `t3@${targetVersion} is a preview build.`,
         "  Preview builds are cut by maintainers from unreleased branches to exercise the release",
         "  pipeline. They can be broken, receive no fixes, and are never offered as updates; you",
-        `  will have to switch back to ${currentChannel} yourself with \`${CLI_COMMAND} update --channel ${currentChannel} --allow-downgrade\`.`,
+        `  will have to switch back to ${currentChannel} yourself with \`${command} update --channel ${currentChannel} --allow-downgrade\`.`,
       ].join("\n"),
     );
     if (!(process.stdin.isTTY && process.stdout.isTTY)) {
@@ -438,8 +462,8 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   if (executableCurrent && serviceCurrent) {
     yield* Console.log(
       serviceVersion !== undefined
-        ? `${CLI_COMMAND} and its background service are already on ${targetVersion} (${targetChannel}).`
-        : `${CLI_COMMAND} is already on ${targetVersion} (${targetChannel}).`,
+        ? `${command} and its background service are already on ${targetVersion} (${targetChannel}).`
+        : `${command} is already on ${targetVersion} (${targetChannel}).`,
     );
     return;
   }
@@ -484,7 +508,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       ).pipe(Effect.catchTags({ QuitError: () => Effect.succeed(false) }));
     } else {
       yield* Console.log(
-        `  Not a terminal, so the service keeps running its current version. Rerun with --yes to restart it now, or run \`${CLI_COMMAND} service restart\` later.`,
+        `  Not a terminal, so the service keeps running its current version. Rerun with --yes to restart it now, or run \`${command} service restart\` later.`,
       );
     }
   }
@@ -538,7 +562,6 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     ),
   );
 
-  const launchedAs = (yield* HostProcess.IsExecutable) ? yield* resolveLauncherPath : undefined;
   const repointed = yield* repointLauncher({
     launchedAs,
     baseDir: input.baseDir,
@@ -585,12 +608,18 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     });
   }
 
+  // The repointed launchers are the ones owned before, so they name the command that now works.
+  const installedCommand = launcherCommand(
+    path,
+    Option.isSome(repointed) ? owned : [],
+    quoted(runtime.entryPath),
+  );
   progress.success(`Installed ${APP_NAME} ${targetVersion}`);
-  if (Option.isSome(repointed)) {
-    yield* Console.log(`  Run ${CLI_COMMAND} to get started.\n`);
-  } else {
-    yield* Console.log(`  Run ${runtime.entryPath}\n`);
-  }
+  yield* Console.log(
+    Option.isSome(repointed)
+      ? `  Run ${installedCommand} to get started.\n`
+      : `  Run ${installedCommand}\n`,
+  );
   if (servicePlan?.handedOff === true) {
     yield* Console.log(
       `  Background service switching to ${targetVersion} from a separate systemd unit, since this session runs inside it and disconnects when it restarts. Result: ${servicePlan.logPath}`,
@@ -608,7 +637,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
           ? `the version before ${serviceVersion}`
           : serviceVersion;
     yield* Console.log(
-      `  Background service still running ${running}. Run \`${CLI_COMMAND} service restart\` when you are ready to switch it to ${targetVersion}.`,
+      `  Background service still running ${running}. Run \`${installedCommand} service restart\` when you are ready to switch it to ${targetVersion}.`,
     );
   } else if (status.installed && !servesThisHome) {
     yield* Console.log(

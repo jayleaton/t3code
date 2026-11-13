@@ -470,7 +470,12 @@ const withoutTerminals = Effect.acquireRelease(
 );
 
 it.layer(NodeServices.layer)("t3 update with a background service", (it) => {
-  it.effect("names the version a service with a pending restart still runs", () =>
+  it.effect.each([
+    { name: "only t3 is installed", ada: "missing", expected: "t3" },
+    { name: "another program owns ada", ada: "foreign", expected: "t3" },
+    { name: "ada and t3 are both installed", ada: "owned", expected: "ada" },
+    { name: "no launcher is installed", ada: "missing", t3: "missing", expected: "runtime" },
+  ] as const)("names the command and version a pending restart needs when $name", (row) =>
     Effect.gen(function* () {
       yield* withoutTerminals;
       const fs = yield* FileSystem.FileSystem;
@@ -498,6 +503,13 @@ it.layer(NodeServices.layer)("t3 update with a background service", (it) => {
         install: () => Effect.succeed({ program: [runtime.entryPath], baseDir, unitPath, logPath }),
       });
       vi.spyOn(BootService, "layer").mockReturnValue(service);
+      const bin = path.join(baseDir, "bin");
+      yield* fs.makeDirectory(bin);
+      const launchers = { t3: "t3" in row ? row.t3 : "owned", ada: row.ada };
+      for (const [name, kind] of Object.entries(launchers)) {
+        if (kind === "owned") yield* fs.symlink(runtime.entryPath, path.join(bin, name));
+        if (kind === "foreign") yield* fs.writeFileString(path.join(bin, name), "#!/bin/sh\n");
+      }
       const runner = ProcessRunner.ProcessRunner.of({
         run: (input) =>
           input.args?.includes("--version") === true
@@ -516,6 +528,7 @@ it.layer(NodeServices.layer)("t3 update with a background service", (it) => {
         allowDowngrade: false,
         assumeYes: false,
       }).pipe(
+        Effect.provideService(HostProcess.InvokedAs, path.join(bin, "t3")),
         Effect.andThen(TestConsole.logLines),
         Effect.map((lines) => lines.join("\n")),
         Effect.provide(
@@ -532,13 +545,18 @@ it.layer(NodeServices.layer)("t3 update with a background service", (it) => {
         ),
       );
 
+      const command = row.expected === "runtime" ? runtime.entryPath : row.expected;
       assert.include(
         output,
-        `Background service still running the version before ${version}. Run \`ada service restart\` when you are ready to switch it to ${version}.`,
+        `Background service still running the version before ${version}. Run \`${command} service restart\` when you are ready to switch it to ${version}.`,
       );
+      if (row.ada === "foreign") {
+        assert.equal(yield* fs.readFileString(path.join(bin, "ada")), "#!/bin/sh\n");
+      }
     }).pipe(
       Effect.scoped,
       Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provideService(HostProcess.IsExecutable, true),
       Effect.provideService(HostProcess.Environment, { PATH: "" }),
     ),
   );

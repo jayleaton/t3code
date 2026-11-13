@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   desktopCliCommandStateAtom,
   getDesktopCliCommandBridge,
+  installedCliCommand,
   refreshDesktopCliCommandState,
 } from "~/state/desktopCliCommand";
 import { useEnvironmentQuery } from "~/state/query";
@@ -53,15 +54,19 @@ export function CliCommandSettingsRow() {
 
   if (!state?.supported) return null;
   const installed = state.installedPath !== null;
+  const command = installedCliCommand(state);
+  const blocked = state.aliasBlockedBy
+    ? ` Another ${CLI_COMMAND} at ${state.aliasBlockedBy} was left in place.`
+    : "";
   const description = state.shadowedBy
     ? `Another t3 at ${state.shadowedBy} runs first in a new terminal. Remove it to use ${APP_NAME}'s.`
     : !installed
       ? `Run ${APP_NAME}'s CLI as \`${CLI_COMMAND}\` from any terminal.`
       : state.onPath
-        ? `Installed at ${state.installedPath}. Open a new terminal to use it.`
+        ? `Installed at ${state.installedPath}.${blocked} Open a new terminal and run \`${command}\`.`
         : state.pathSetup?.added
-          ? `Installed at ${state.installedPath} and added to PATH in ${state.pathSetup.file}. Open a new terminal to use it.`
-          : `Installed at ${state.installedPath}, which is not on your PATH yet.${state.pathSetup ? "" : ` Add its folder to your PATH to run \`${CLI_COMMAND}\`.`}`;
+          ? `Installed at ${state.installedPath} and added to PATH in ${state.pathSetup.file}.${blocked} Open a new terminal and run \`${command}\`.`
+          : `Installed at ${state.installedPath}, which is not on your PATH yet.${blocked}${state.pathSetup ? "" : ` Add its folder to your PATH to run \`${command}\`.`}`;
 
   return (
     <SettingsRow

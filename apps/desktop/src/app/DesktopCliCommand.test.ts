@@ -121,7 +121,28 @@ it.layer(NodeServices.layer)("DesktopCliCommand", (it) => {
       expect(yield* fs.readFileString(path.join(home, ".t3", "bin", "ada"))).toContain(
         `T3CODE_CLI_PATH='${path.join(home, ".t3", "bin", "ada")}'`,
       );
+      expect(installed.command).toBe("ada");
+      expect(installed.aliasBlockedBy).toBeUndefined();
       expect((yield* command.install).installedPath).toBe(link);
+
+      // Another ada first on PATH runs instead of ours, so t3 is the name that works.
+      const otherBin = path.join(home, "other-bin");
+      yield* fs.makeDirectory(otherBin);
+      yield* fs.writeFileString(path.join(otherBin, "ada"), "#!/bin/sh\n", { mode: 0o755 });
+      env.PATH = otherBin;
+      expect(yield* command.state).toMatchObject({
+        command: "t3",
+        aliasBlockedBy: path.join(otherBin, "ada"),
+      });
+      env.PATH = "";
+
+      // An install from before the alias has only t3.
+      yield* fs.remove(alias);
+      const legacy = yield* command.state;
+      expect(legacy.command).toBe("t3");
+      expect(legacy.aliasBlockedBy).toBeUndefined();
+      yield* command.install;
+      expect((yield* command.state).command).toBe("ada");
 
       // Add to PATH appends one line, once, and keeps a final line with no newline intact.
       const zshrc = path.join(home, ".zshrc");
@@ -202,9 +223,11 @@ it.layer(NodeServices.layer)("DesktopCliCommand", (it) => {
       yield* fs.makeDirectory(path.dirname(theirAdaLauncher), { recursive: true });
       yield* fs.writeFileString(theirAdaLauncher, "their ada launcher\n");
       const adaCommand = yield* commandIn({ home: adaHome });
-      expect((yield* adaCommand.install).installedPath).toBe(
-        path.join(adaHome, ".local", "bin", "t3"),
-      );
+      expect(yield* adaCommand.install).toMatchObject({
+        installedPath: path.join(adaHome, ".local", "bin", "t3"),
+        command: "t3",
+        aliasBlockedBy: theirAda,
+      });
       yield* adaCommand.uninstall;
       expect(yield* fs.readFileString(theirAda)).toBe("their ada\n");
       expect(yield* fs.readFileString(theirAdaLauncher)).toBe("their ada launcher\n");

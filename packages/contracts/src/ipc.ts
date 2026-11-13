@@ -347,6 +347,10 @@ export const DesktopCliCommandStateSchema = Schema.Struct({
   shadowedBy: Schema.optionalKey(Schema.String),
   /** For an installed `t3` that is off PATH: the shell startup file that adds it, and whether it has. */
   pathSetup: Schema.optionalKey(Schema.Struct({ file: Schema.String, added: Schema.Boolean })),
+  /** The installed name that runs it: `ada`, or `t3` when the `ada` alias is missing or blocked. */
+  command: Schema.optionalKey(Schema.String),
+  /** Another program's `ada`, in the alias's place or first on PATH, that the alias left alone. */
+  aliasBlockedBy: Schema.optionalKey(Schema.String),
   /** The app's bundled `t3` launcher, which runs without Node or a PATH entry. */
   launcherPath: Schema.NullOr(Schema.String),
 });

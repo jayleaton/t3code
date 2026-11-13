@@ -2,7 +2,7 @@
 import * as NodeFSP from "node:fs/promises";
 
 import type { DesktopCliCommandState } from "@t3tools/contracts";
-import { APP_NAME, CLI_COMMAND } from "@t3tools/shared/branding";
+import { APP_NAME, CLI_COMMAND, LEGACY_CLI_COMMAND } from "@t3tools/shared/branding";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -172,9 +172,9 @@ export const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => false),
   );
 
-  const firstOnPath = Effect.gen(function* () {
+  const firstOnPath = Effect.fn("DesktopCliCommand.firstOnPath")(function* (name: string) {
     for (const directory of pathEntries(env.PATH, ":")) {
-      const candidate = path.join(directory, "t3");
+      const candidate = path.join(directory, name);
       if (yield* isExecutableFile(candidate)) return Option.some(candidate);
     }
     return Option.none<string>();
@@ -182,7 +182,7 @@ export const make = Effect.gen(function* () {
 
   const foreignFirstOnPath = Effect.gen(function* () {
     if (windows) return Option.none<string>();
-    const first = yield* firstOnPath;
+    const first = yield* firstOnPath(LEGACY_CLI_COMMAND);
     if (Option.isNone(first) || (yield* runsOurLauncher(first.value))) return Option.none<string>();
     return first;
   });
@@ -207,6 +207,34 @@ export const make = Effect.gen(function* () {
       if (yield* isOurLink(link)) return Option.some(link);
     }
     return Option.none<string>();
+  });
+
+  /** The name that runs the install: our `ada` beside it, unless another `ada` has its place or runs first. */
+  const aliasState = Effect.fn("DesktopCliCommand.aliasState")(function* (installedPath: string) {
+    const link = windows ? aliasLauncher : path.join(path.dirname(installedPath), CLI_COMMAND);
+    const ours = windows
+      ? yield* fs.readFileString(link).pipe(
+          Effect.map(DesktopCliShim.isOwnShim),
+          Effect.orElseSucceed(() => false),
+        )
+      : (yield* fs.readLink(link).pipe(
+          Effect.map((target) => target === aliasLauncher),
+          Effect.orElseSucceed(() => false),
+        )) && (yield* isOurLink(link));
+    if (!ours) {
+      const present =
+        (yield* exists(link)) || Option.isSome(yield* fs.readLink(link).pipe(Effect.option));
+      return { command: LEGACY_CLI_COMMAND, ...(present ? { aliasBlockedBy: link } : {}) };
+    }
+    const first = windows ? Option.none<string>() : yield* firstOnPath(CLI_COMMAND);
+    if (Option.isNone(first)) return { command: CLI_COMMAND };
+    const runsOurs = yield* Effect.all([fs.realPath(first.value), fs.realPath(aliasLauncher)]).pipe(
+      Effect.map(([resolved, alias]) => resolved === alias),
+      Effect.orElseSucceed(() => false),
+    );
+    return runsOurs
+      ? { command: CLI_COMMAND }
+      : { command: LEGACY_CLI_COMMAND, aliasBlockedBy: first.value };
   });
 
   const startupLine = (installedPath: string) => {
@@ -251,7 +279,7 @@ export const make = Effect.gen(function* () {
       Option.filter((first) => first !== Option.getOrUndefined(found)),
     );
     const shadow = Option.isSome(shadowedBy) ? { shadowedBy: shadowedBy.value } : {};
-    const first = yield* firstOnPath;
+    const first = yield* firstOnPath(LEGACY_CLI_COMMAND);
     const onPath = windows
       ? Option.isSome(installed)
       : Option.isSome(first) && (yield* runsOurLauncher(first.value));
@@ -270,6 +298,7 @@ export const make = Effect.gen(function* () {
       onPath,
       launcherPath,
       ...shadow,
+      ...(Option.isSome(installed) ? yield* aliasState(installed.value) : {}),
       ...(setup === undefined
         ? {}
         : { pathSetup: { file: setup.file, added: yield* hasLine(setup) } }),
