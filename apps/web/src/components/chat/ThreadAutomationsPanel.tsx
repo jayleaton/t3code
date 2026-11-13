@@ -85,10 +85,7 @@ export function ThreadAutomationsPanel(props: {
     (task) => task.threadId === props.threadId && !isScheduledTaskArchived(task),
   );
 
-  // With nothing bound the section only offers New, so viewers who can't create don't see it.
-  if (tasksQuery.error === null && boundTasks.length === 0 && (!canCreate || !tasksQuery.data)) {
-    return null;
-  }
+  if (tasksQuery.error === null && boundTasks.length === 0) return null;
 
   const reportFailure = (title: string, error: unknown) => {
     toastManager.add(
@@ -187,11 +184,6 @@ export function ThreadAutomationsPanel(props: {
         </>
       }
     >
-      {boundTasks.length === 0 && tasksQuery.error === null ? (
-        <p className="px-2.5 py-1.5 text-2xs text-muted-foreground">
-          Nothing scheduled for this thread.
-        </p>
-      ) : null}
       <ul className="m-0 max-h-[13.5rem] list-none overflow-y-auto p-0">
         {boundTasks.map((task) => (
           <li
