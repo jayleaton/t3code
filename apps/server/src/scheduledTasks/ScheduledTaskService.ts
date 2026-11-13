@@ -2821,29 +2821,24 @@ export const layer = Layer.effect(
               });
             }
           } else if (decision._tag === "delete") {
-            // Holding the run reservation keeps a run from starting mid-delete; the updated_at
-            // and status guards drop the decision if a run or edit landed since the read.
-            const deleted = yield* Effect.acquireUseRelease(
-              reserveRun(task.id),
-              (reserved) =>
-                reserved
-                  ? sql.withTransaction(
-                      Effect.gen(function* () {
-                        const removed = yield* sql`
-                          DELETE FROM scheduled_tasks
-                          WHERE task_id = ${row.task_id} AND archived_at = ${row.archived_at}
-                            AND updated_at = ${row.updated_at} AND last_run_status <> 'running'
-                          RETURNING task_id
-                        `;
-                        if (removed.length > 0) {
-                          yield* sql`DELETE FROM scheduled_task_webhook_deliveries WHERE task_id = ${row.task_id}`;
-                        }
-                        return removed.length > 0;
-                      }),
-                    )
-                  : Effect.succeed(false),
-              (reserved) => (reserved ? releaseRun(task.id) : Effect.void),
-            );
+            // The updated_at and status guards drop the decision if a run, restore or edit landed
+            // since the read. Cleanup never reserves the task, so it cannot turn away a run.
+            const deleted = (yield* Ref.get(activeRuns)).has(task.id)
+              ? false
+              : yield* sql.withTransaction(
+                  Effect.gen(function* () {
+                    const removed = yield* sql`
+                      DELETE FROM scheduled_tasks
+                      WHERE task_id = ${row.task_id} AND archived_at = ${row.archived_at}
+                        AND updated_at = ${row.updated_at} AND last_run_status <> 'running'
+                      RETURNING task_id
+                    `;
+                    if (removed.length > 0) {
+                      yield* sql`DELETE FROM scheduled_task_webhook_deliveries WHERE task_id = ${row.task_id}`;
+                    }
+                    return removed.length > 0;
+                  }),
+                );
             if (deleted) {
               changed = true;
               yield* forgetWebhookTask(task.id);
