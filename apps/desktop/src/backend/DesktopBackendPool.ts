@@ -27,7 +27,8 @@ import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
-import { APP_NAME } from "@t3tools/shared/branding";
+import { APP_NAME, CLI_COMMAND, LEGACY_CLI_COMMAND } from "@t3tools/shared/branding";
+import { powerShellOnly } from "@t3tools/shared/shell";
 
 const { logWarning: logBackendPoolWarning } =
   DesktopObservability.makeComponentLogger("desktop-backend-pool");
@@ -105,8 +106,17 @@ type UnregisterAction =
   | { readonly _tag: "Close"; readonly entry: ActiveRegisteredInstance };
 
 /** What to do when another server holds this home; `command` is one that runs this app's CLI. */
-const stateDirOwnedDetail = (command: string, platform: NodeJS.Platform) =>
-  `Another ${APP_NAME} server, such as the background service, is using this data directory, or an older background service is set up for it. Stop that server or try \`${command} update\`. If the older launcher cannot update, run \`${command} service uninstall\` and optionally reinstall with \`${command} service install\` from a current CLI. If \`${command}\` is missing or outdated, install it with \`${cliInstallCommand(platform === "win32" ? "win32" : "posix")}\`, and pass \`--base-dir\` with the service's ${APP_NAME} home to each command. Then reopen ${APP_NAME}. You can also set a separate T3CODE_HOME and pair with the running server.`;
+const stateDirOwnedDetail = (command: string | undefined, platform: NodeJS.Platform) => {
+  const run = (subcommand: string) =>
+    command === undefined ? `\`${subcommand}\`` : `\`${command} ${subcommand}\``;
+  const where =
+    command === undefined
+      ? ` Run these commands with your ${APP_NAME} CLI (\`${CLI_COMMAND}\`, or legacy \`${LEGACY_CLI_COMMAND}\`).`
+      : powerShellOnly(command)
+        ? " Run these commands in PowerShell."
+        : "";
+  return `Another ${APP_NAME} server, such as the background service, is using this data directory, or an older background service is set up for it.${where} Stop that server or try ${run("update")}. If the older launcher cannot update, run ${run("service uninstall")} and optionally reinstall with ${run("service install")} from a current CLI. If the CLI is missing or outdated, install it with \`${cliInstallCommand(platform === "win32" ? "win32" : "posix")}\`, and pass \`--base-dir\` with the service's ${APP_NAME} home to each command. Then reopen ${APP_NAME}. You can also set a separate T3CODE_HOME and pair with the running server.`;
+};
 
 export const layer = Layer.effect(
   DesktopBackendPool,

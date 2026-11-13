@@ -51,20 +51,20 @@ describe("resolveTriageCommand", () => {
     ).resolves.toBe("& 'C:\\Users\\Jo O''Neil\\.t3\\bin\\t3.cmd' triage");
   });
 
-  it("falls back to t3, which every install has, without a usable desktop launcher", async () => {
+  it("offers no command without a usable desktop launcher, since either name may be foreign", async () => {
     using _warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    await expect(resolveTriageCommand(undefined)).resolves.toBe("t3 triage");
-    await expect(resolveTriageCommand({} as DesktopBridge)).resolves.toBe("t3 triage");
-    await expect(resolveTriageCommand(desktopWith(async () => notOnPath(null)))).resolves.toBe(
-      "t3 triage",
-    );
+    await expect(resolveTriageCommand(undefined)).resolves.toBeUndefined();
+    await expect(resolveTriageCommand({} as DesktopBridge)).resolves.toBeUndefined();
+    await expect(
+      resolveTriageCommand(desktopWith(async () => notOnPath(null))),
+    ).resolves.toBeUndefined();
     const staleWindowsPathEntry = { ...notOnPath(null), supported: true, onPath: true };
     await expect(
       resolveTriageCommand(desktopWith(async () => staleWindowsPathEntry)),
-    ).resolves.toBe("t3 triage");
+    ).resolves.toBeUndefined();
     await expect(
       resolveTriageCommand(desktopWith(() => Promise.reject(new Error("ipc closed")))),
-    ).resolves.toBe("t3 triage");
+    ).resolves.toBeUndefined();
   });
 });
 

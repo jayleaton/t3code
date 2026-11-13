@@ -1,6 +1,6 @@
 import { APP_NAME, CLI_COMMAND, LEGACY_CLI_COMMAND } from "@t3tools/shared/branding";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { shellCommandPath } from "@t3tools/shared/shell";
+import { powerShellOnly, shellCommandPath } from "@t3tools/shared/shell";
 import {
   CLI_RELEASE_BASE_URL_ENV,
   CLI_RELEASE_CHANNELS,
@@ -148,7 +148,7 @@ const ownedLaunchers = Effect.fn("cli.update.owned_launchers")(function* (input:
  * one that starts that runtime. A foreign program of either name earlier on PATH would run instead,
  * and older installs have only `t3`, so owning a launcher file is not enough.
  */
-const ownedCommandOnPath = Effect.fn("cli.update.owned_command_on_path")(function* (input: {
+export const ownedCommandOnPath = Effect.fn("cli.update.owned_command_on_path")(function* (input: {
   readonly baseDir: string;
   readonly runs?: string;
 }) {
@@ -170,17 +170,30 @@ const ownedCommandOnPath = Effect.fn("cli.update.owned_command_on_path")(functio
           Effect.map((target) => path.resolve(path.dirname(launcher), target)),
           Effect.orElseSucceed(() => undefined),
         );
+  const cwd = yield* HostProcess.WorkingDirectory;
+  // POSIX shells search an empty entry (`:dir`, `dir::`) as the working directory.
   const directories = (environment["PATH"] ?? environment["Path"] ?? "")
     .split(windows ? ";" : ":")
-    .filter((directory) => directory.length > 0);
-  // PATHEXT runs an .exe before a .cmd; only a .cmd can be one of our shims.
-  const extensions = windows ? [".exe", ".cmd"] : [""];
+    .flatMap((directory) => (directory.length > 0 ? [directory] : windows ? [] : [cwd]));
+  // Windows tries each PATHEXT extension in order; only a .cmd can be one of our shims.
+  const extensions = windows
+    ? (environment["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD")
+        .split(";")
+        .filter((extension) => extension.startsWith("."))
+        .map((extension) => extension.toLowerCase())
+    : [""];
+  // A shell skips a file it cannot execute; Windows runs any PATHEXT match.
+  const runnable = (candidate: string) =>
+    fs.stat(candidate).pipe(
+      Effect.map((info) => info.type === "File" && (windows || (Number(info.mode) & 0o111) !== 0)),
+      Effect.orElseSucceed(() => false),
+    );
   for (const name of [CLI_COMMAND, LEGACY_CLI_COMMAND]) {
     let first: string | undefined;
     search: for (const directory of directories) {
       for (const extension of extensions) {
         const candidate = path.join(directory, `${name}${extension}`);
-        if (yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {
+        if (yield* runnable(candidate)) {
           first = candidate;
           break search;
         }
@@ -198,6 +211,9 @@ const ownedCommandOnPath = Effect.fn("cli.update.owned_command_on_path")(functio
   }
   return undefined;
 });
+
+/** Where a pasted command must run, for the Windows path form cmd.exe cannot read. */
+const inShell = (command: string) => (powerShellOnly(command) ? " in PowerShell" : "");
 
 /**
  * Repoints the launchers {@link ownedLaunchers} finds. Each is recorded before it moves, so
@@ -469,7 +485,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
         `t3@${targetVersion} is a preview build.`,
         "  Preview builds are cut by maintainers from unreleased branches to exercise the release",
         "  pipeline. They can be broken, receive no fixes, and are never offered as updates; you",
-        `  will have to switch back to ${currentChannel} yourself with \`${command} update --channel ${currentChannel} --allow-downgrade\`.`,
+        `  will have to switch back to ${currentChannel} yourself with \`${command} update --channel ${currentChannel} --allow-downgrade\`${inShell(command)}.`,
       ].join("\n"),
     );
     if (!(process.stdin.isTTY && process.stdout.isTTY)) {
@@ -512,8 +528,8 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   if (executableCurrent && serviceCurrent) {
     yield* Console.log(
       serviceVersion !== undefined
-        ? `${command} and its background service are already on ${targetVersion} (${targetChannel}).`
-        : `${command} is already on ${targetVersion} (${targetChannel}).`,
+        ? `${APP_NAME} and its background service are already on ${targetVersion} (${targetChannel}).`
+        : `${APP_NAME} is already on ${targetVersion} (${targetChannel}).`,
     );
     return;
   }
@@ -558,7 +574,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       ).pipe(Effect.catchTags({ QuitError: () => Effect.succeed(false) }));
     } else {
       yield* Console.log(
-        `  Not a terminal, so the service keeps running its current version. Rerun with --yes to restart it now, or run \`${command} service restart\` later.`,
+        `  Not a terminal, so the service keeps running its current version. Rerun with --yes to restart it now, or run \`${command} service restart\`${inShell(command)} later.`,
       );
     }
   }
@@ -666,7 +682,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   progress.success(`Installed ${APP_NAME} ${targetVersion}`);
   yield* Console.log(
     commandOnPath === undefined
-      ? `  Run ${installedCommand}\n`
+      ? `  Run ${installedCommand}${inShell(installedCommand)}\n`
       : `  Run ${installedCommand} to get started.\n`,
   );
   if (servicePlan?.handedOff === true) {
@@ -686,7 +702,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
           ? `the version before ${serviceVersion}`
           : serviceVersion;
     yield* Console.log(
-      `  Background service still running ${running}. Run \`${installedCommand} service restart\` when you are ready to switch it to ${targetVersion}.`,
+      `  Background service still running ${running}. Run \`${installedCommand} service restart\`${inShell(installedCommand)} when you are ready to switch it to ${targetVersion}.`,
     );
   } else if (status.installed && !servesThisHome) {
     yield* Console.log(

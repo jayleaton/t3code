@@ -15,7 +15,7 @@ import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWslEnvironment from "./DesktopWslEnvironment.ts";
-import { APP_NAME, LEGACY_CLI_COMMAND } from "@t3tools/shared/branding";
+import { APP_NAME, CLI_COMMAND, LEGACY_CLI_COMMAND } from "@t3tools/shared/branding";
 
 export const WSL_INSTANCE_ID_PREFIX = "wsl:";
 const WSL_DEFAULT_DISTRO_ID = `${WSL_INSTANCE_ID_PREFIX}default`;
@@ -130,7 +130,7 @@ export const layer = Layer.effect(
             Ref.set(preflightErrorRef, Option.some(failure.reason)).pipe(Effect.as(false)),
           onStateDirOwned: () =>
             refuse(
-              `Another ${APP_NAME} server is using this distro's ${APP_NAME} home, or an older background service is set up for it. Stop that server or pair with it, or try \`${LEGACY_CLI_COMMAND} update\` in the distro. If the older launcher cannot update, run \`${LEGACY_CLI_COMMAND} service uninstall\` and optionally reinstall with \`${LEGACY_CLI_COMMAND} service install\` from a current CLI in the distro. If \`${LEGACY_CLI_COMMAND}\` is missing or outdated, install it in the distro with \`${cliInstallCommand("posix")}\`, and pass \`--base-dir\` with the service's ${APP_NAME} home to each command.`,
+              `Another ${APP_NAME} server is using this distro's ${APP_NAME} home, or an older background service is set up for it. Run these commands with the distro's ${APP_NAME} CLI (\`${CLI_COMMAND}\`, or legacy \`${LEGACY_CLI_COMMAND}\`). Stop that server or pair with it, or try \`update\` in the distro. If the older launcher cannot update, run \`service uninstall\` and optionally reinstall with \`service install\` from a current CLI in the distro. If the CLI is missing or outdated, install it in the distro with \`${cliInstallCommand("posix")}\`, and pass \`--base-dir\` with the service's ${APP_NAME} home to each command.`,
             ),
           onDatabaseRefused: () =>
             refuse(

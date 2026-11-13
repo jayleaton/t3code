@@ -67,14 +67,17 @@ if ($env:T3_SET -eq '1') {
 
 /**
  * A command to paste that runs this app's CLI: the name PATH runs as ours, else the bundled
- * launcher, else `t3`, the one name every install has had.
+ * launcher. Undefined when neither is verified, since either name may be another program's.
  */
-export const runnableCliCommand = (state: DesktopCliCommandState, platform: NodeJS.Platform) =>
+export const runnableCliCommand = (
+  state: DesktopCliCommandState,
+  platform: NodeJS.Platform,
+): string | undefined =>
   state.onPath
     ? (state.command ?? LEGACY_CLI_COMMAND)
     : state.launcherPath !== null
       ? shellCommandPath(state.launcherPath, platform)
-      : LEGACY_CLI_COMMAND;
+      : undefined;
 
 export class DesktopCliCommand extends Context.Service<
   DesktopCliCommand,

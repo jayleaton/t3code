@@ -1,10 +1,10 @@
 import type { DesktopBridge, DesktopUpdateState } from "@t3tools/contracts";
 
-// Boot code loads before any package resolves, so it repeats APP_NAME and CLI_RELEASE_REPOSITORY from @t3tools/shared.
+// Boot code loads before any package resolves, so it repeats APP_NAME, the CLI names and CLI_RELEASE_REPOSITORY from @t3tools/shared.
 const APP_NAME = "Ada";
 const REPOSITORY_URL = "https://github.com/jayleaton/ada";
-// `t3` is the one name every install has; `ada` may be missing or another program.
-const FALLBACK_TRIAGE_COMMAND = "t3 triage";
+const CLI_COMMAND = "ada";
+const LEGACY_CLI_COMMAND = "t3";
 const DOWNLOAD_URL = `${REPOSITORY_URL}/releases`;
 const ISSUE_URL = `${REPOSITORY_URL}/issues/new`;
 const LAST_FAILURE_KEY = "t3code:boot-failed-at";
@@ -27,21 +27,26 @@ function launcherCommand(launcherPath: string) {
     : `'${launcherPath.replaceAll("'", `'"'"'`)}'`;
 }
 
-/** Desktop names the command PATH runs as its own, else its launcher; everything else gets `t3`. */
-export async function resolveTriageCommand(bridge: DesktopBridge | undefined) {
+/**
+ * Desktop names the command PATH runs as its own, else its launcher. Undefined elsewhere: either
+ * name may be another program's there, so no command is offered to copy.
+ */
+export async function resolveTriageCommand(
+  bridge: DesktopBridge | undefined,
+): Promise<string | undefined> {
   try {
     const state = await bridge?.cliCommand.getState();
     // Windows reports onPath from its PATH entry alone; only an existing launcher proves it runs.
     if (state?.launcherPath) {
       // `command` is absent from desktop builds that link only `t3`.
       return state.onPath
-        ? `${state.command ?? "t3"} triage`
+        ? `${state.command ?? LEGACY_CLI_COMMAND} triage`
         : `${launcherCommand(state.launcherPath)} triage`;
     }
   } catch (error) {
     console.warn("Could not read the desktop CLI state.", error);
   }
-  return FALLBACK_TRIAGE_COMMAND;
+  return undefined;
 }
 
 /** The update button only appears when the desktop updater has a newer build to offer. */
@@ -300,7 +305,7 @@ export function showBootError(error: unknown) {
   const updateNote = element("p", { id: "boot-error-update-note", hidden: true });
   if (bridge) mountUpdateButton(bridge, update, updateNote, announce);
 
-  const command = element("code", { textContent: FALLBACK_TRIAGE_COMMAND });
+  const command = element("code");
   const copyCommand = element("button", {
     className: "boot-error-icon",
     type: "button",
@@ -325,7 +330,25 @@ export function showBootError(error: unknown) {
       },
     ),
   );
-  void resolveTriageCommand(bridge).then((value) => (command.textContent = value));
+  const where = `on the computer that runs ${APP_NAME}. Your agent can check the local logs and help you file a bug report.`;
+  const commandIntro = element("p", {}, [
+    "Run ",
+    element("code", { textContent: "triage" }),
+    ` with your ${APP_NAME} CLI (`,
+    element("code", { textContent: CLI_COMMAND }),
+    ", or legacy ",
+    element("code", { textContent: LEGACY_CLI_COMMAND }),
+    `) ${where}`,
+  ]);
+  const commandBox = element("div", { id: "boot-error-command" }, [command, copyCommand]);
+  // #boot-error-command sets display, which would override the hidden attribute.
+  commandBox.style.display = "none";
+  void resolveTriageCommand(bridge).then((value) => {
+    if (value === undefined) return;
+    command.textContent = value;
+    commandIntro.textContent = `Run this${value.startsWith("& '") ? " in PowerShell" : ""} ${where}`;
+    commandBox.style.removeProperty("display");
+  });
 
   let report = "(no error message)";
   try {
@@ -371,12 +394,7 @@ export function showBootError(error: unknown) {
           ),
         ]
       : []),
-    element("div", {}, [
-      element("p", {
-        textContent: `Run this on the computer that runs ${APP_NAME}. Your agent can check the local logs and help you file a bug report.`,
-      }),
-      element("div", { id: "boot-error-command" }, [command, copyCommand]),
-    ]),
+    element("div", {}, [commandIntro, commandBox]),
     element("div", {}, [
       details,
       element("p", {

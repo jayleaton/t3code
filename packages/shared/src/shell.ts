@@ -1114,3 +1114,6 @@ export function shellCommandPath(path: string, platform: NodeJS.Platform): strin
   }
   return /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path.replaceAll("'", `'"'"'`)}'`;
 }
+
+/** Whether {@link shellCommandPath} wrote PowerShell's `& '...'`, which cmd.exe cannot run. */
+export const powerShellOnly = (command: string) => command.startsWith("& '");

@@ -521,7 +521,7 @@ describe("runnableCliCommand", () => {
     {
       name: "no launcher",
       state: { ...state, onPath: false, installedPath: null, launcherPath: null },
-      expected: "t3",
+      expected: undefined,
     },
   ])("names $name", ({ state, expected }) => {
     expect(DesktopCliCommand.runnableCliCommand(state, "linux")).toBe(expected);

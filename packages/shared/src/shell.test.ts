@@ -41,6 +41,7 @@ import {
   type WindowsShellEnvironmentReader,
   XcodeGitLocation,
   shellCommandPath,
+  powerShellOnly,
 } from "./shell.ts";
 
 const decodeDesktopHostMessage = Schema.decodeUnknownSync(DesktopHostTelemetryMessage);
@@ -1263,6 +1264,8 @@ describe("shellCommandPath", () => {
     ["C:\\Users\\Jo\u2019s `t3`\\t3.exe", "win32", "& 'C:\\Users\\Jo\u2019\u2019s `t3`\\t3.exe'"],
   ] as const)("writes %s as a literal for %s", (path, platform, expected) => {
     expect(shellCommandPath(path, platform)).toBe(expected);
+    // Only the quoted Windows form needs PowerShell; a bare path also runs in cmd.exe.
+    expect(powerShellOnly(expected)).toBe(expected.startsWith("& "));
   });
 
   it("round-trips through a POSIX shell without expansion", () => {

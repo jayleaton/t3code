@@ -21,6 +21,7 @@ import { pinnedRuntimePaths, prunePinnedRuntimes } from "../service/pinnedRuntim
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import {
+  ownedCommandOnPath,
   repointLauncher,
   resolveLauncherPath,
   resolveMirrorVersion,
@@ -475,7 +476,11 @@ it.layer(NodeServices.layer)("t3 update with a background service", (it) => {
     { name: "another program owns ada", ada: "foreign", expected: "t3" },
     { name: "ada and t3 are both installed", ada: "owned", expected: "ada" },
     // Owning ada is not enough when PATH runs another program's ada first.
-    { name: "another ada runs first on PATH", ada: "owned", shadowed: true, expected: "t3" },
+    { name: "another ada runs first on PATH", ada: "owned", shadowed: "earlier", expected: "t3" },
+    // An empty PATH entry is the working directory to a POSIX shell.
+    { name: "an empty PATH entry runs another ada", ada: "owned", shadowed: "cwd", expected: "t3" },
+    // A shell skips a file it cannot execute.
+    { name: "a non-executable ada comes first", ada: "owned", shadowed: "inert", expected: "ada" },
     { name: "the launchers are off PATH", ada: "owned", offPath: true, expected: "runtime" },
     { name: "no launcher is installed", ada: "missing", t3: "missing", expected: "runtime" },
   ] as const)("names the command and version a pending restart needs when $name", (row) =>
@@ -490,7 +495,7 @@ it.layer(NodeServices.layer)("t3 update with a background service", (it) => {
       const version = packageJson.version;
       const runtime = pinnedRuntimePaths(path, baseDir, version, "linux");
       yield* fs.makeDirectory(runtime.versionDir, { recursive: true });
-      yield* fs.writeFileString(runtime.entryPath, "");
+      yield* fs.writeFileString(runtime.entryPath, "", { mode: 0o755 });
       yield* fs.writeFileString(runtime.sentinelPath, `${version}\n`);
       const unitPath = path.join(baseDir, "t3code.service");
       const logPath = path.join(baseDir, "boot-service.log");
@@ -514,12 +519,19 @@ it.layer(NodeServices.layer)("t3 update with a background service", (it) => {
       const launchers = { t3: "t3" in row ? row.t3 : "owned", ada: row.ada };
       for (const [name, kind] of Object.entries(launchers)) {
         if (kind === "owned") yield* fs.symlink(runtime.entryPath, path.join(bin, name));
-        if (kind === "foreign") yield* fs.writeFileString(path.join(bin, name), "#!/bin/sh\n");
+        if (kind === "foreign") {
+          yield* fs.writeFileString(path.join(bin, name), "#!/bin/sh\n", { mode: 0o755 });
+        }
       }
       const earlier = path.join(baseDir, "earlier");
       yield* fs.makeDirectory(earlier);
-      if ("shadowed" in row) yield* fs.writeFileString(path.join(earlier, "ada"), "#!/bin/sh\n");
-      const PATH = "offPath" in row ? earlier : [earlier, bin].join(":");
+      const shadowed = "shadowed" in row ? row.shadowed : undefined;
+      if (shadowed !== undefined) {
+        const mode = shadowed === "inert" ? 0o644 : 0o755;
+        yield* fs.writeFileString(path.join(earlier, "ada"), "#!/bin/sh\n", { mode });
+      }
+      const PATH =
+        "offPath" in row ? earlier : shadowed === "cwd" ? `:${bin}` : [earlier, bin].join(":");
       const runner = ProcessRunner.ProcessRunner.of({
         run: (input) =>
           input.args?.includes("--version") === true
@@ -540,6 +552,7 @@ it.layer(NodeServices.layer)("t3 update with a background service", (it) => {
       }).pipe(
         Effect.provideService(HostProcess.InvokedAs, path.join(bin, "t3")),
         Effect.provideService(HostProcess.Environment, { PATH }),
+        Effect.provideService(HostProcess.WorkingDirectory, earlier),
         Effect.andThen(TestConsole.logLines),
         Effect.map((lines) => lines.join("\n")),
         Effect.provide(
@@ -570,5 +583,55 @@ it.layer(NodeServices.layer)("t3 update with a background service", (it) => {
       Effect.provideService(HostProcess.IsExecutable, true),
       Effect.provideService(HostProcess.Environment, { PATH: "" }),
     ),
+  );
+});
+
+it.layer(NodeServices.layer)("t3 update on Windows PATH", (it) => {
+  it.effect.each([
+    // PATHEXT runs ada.bat before ada.cmd, so another program's ada.bat in an earlier folder wins.
+    {
+      name: "another ada.bat earlier on PATH",
+      pathExt: undefined,
+      foreign: "ada.bat",
+      expected: "t3",
+    },
+    {
+      name: "PATHEXT that lists .cmd first",
+      pathExt: ".CMD;.BAT",
+      foreign: "ada.bat",
+      expected: "ada",
+    },
+    {
+      name: "an extension PATHEXT leaves out",
+      pathExt: ".EXE;.CMD",
+      foreign: "ada.bat",
+      expected: "ada",
+    },
+  ])("names the command PATH runs with $name", ({ pathExt, foreign, expected }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-win-" });
+      const target = path.join(baseDir, "runtime/versions/1.0.0/t3.exe");
+      const earlier = path.join(baseDir, "earlier");
+      const bin = path.join(baseDir, "bin");
+      yield* fs.makeDirectory(earlier);
+      yield* fs.makeDirectory(bin);
+      // In one folder, so PATHEXT order alone decides which ada runs there.
+      const folder = pathExt === undefined ? earlier : bin;
+      yield* fs.writeFileString(path.join(folder, foreign), "@echo off\r\nother.exe %*");
+      for (const name of ["ada", "t3"]) {
+        yield* fs.writeFileString(path.join(bin, `${name}.cmd`), `@echo off\r\n"${target}" %*`);
+      }
+
+      const command = yield* ownedCommandOnPath({ baseDir }).pipe(
+        Effect.provideService(HostProcess.Platform, "win32"),
+        Effect.provideService(HostProcess.Environment, {
+          Path: [earlier, bin].join(";"),
+          ...(pathExt === undefined ? {} : { PATHEXT: pathExt }),
+        }),
+      );
+      assert.equal(command, expected);
+    }).pipe(Effect.scoped),
   );
 });
