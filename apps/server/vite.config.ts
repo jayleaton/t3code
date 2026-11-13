@@ -5,6 +5,7 @@ import { defineConfig, mergeConfig } from "vite-plus";
 
 import baseConfig from "../../vite.config.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+import { readAgentPresetSkillFiles } from "../../packages/shared/src/agentPresets/agentPresetSkillFiles.ts";
 import rootPackageJson from "../../package.json" with { type: "json" };
 import packageJson from "./package.json" with { type: "json" };
 import { WeightedShardSequencer } from "./src/testUtils/weightedShardSequencer.ts";
@@ -128,6 +129,7 @@ export default mergeConfig(
       define: {
         __T3CODE_BUILD_VERSION__: JSON.stringify(buildVersion),
         __T3CODE_TELEMETRY_CHANNEL__: JSON.stringify(telemetryChannel),
+        __T3CODE_AGENT_PRESET_SKILL_FILES__: JSON.stringify(readAgentPresetSkillFiles()),
       },
     },
     test: {

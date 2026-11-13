@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  GATEWAY_SCOPE_VALUES,
   McpGatewayRelayEvent,
   type McpGatewayRelayGrants,
   ThreadId,
@@ -10,6 +11,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -19,6 +21,7 @@ import {
   CODE_PAIRED_SUBJECT,
   DESKTOP_APP_SUBJECT,
   layerDependencies,
+  storedLink,
 } from "./McpGatewayBroker.testkit.ts";
 
 type Broker = Effect.Success<typeof make>;
@@ -463,10 +466,54 @@ it.effect(
     ).pipe(Effect.provide(layerDependencies())),
 );
 
+it.effect("reaches a linked environment no app relays, within the link's access", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* make;
+      const membership = yield* Membership.Membership;
+      const cut = EnvironmentId.make("cut");
+      yield* membership.put({ environmentId: cut, label: "cut", nodeId: null, access: "revoked" });
+      expect(broker.available()).toBe(false);
+      const linked = (yield* broker.access).linked;
+      // A limited link only reads: no lifecycle, no control, nothing that writes.
+      expect(linked).toEqual({ full: GATEWAY_SCOPE_VALUES, limited: ["read"] });
+      expect(Option.map(yield* broker.linkRoute("limited"), (route) => route.scopes)).toEqual(
+        Option.some(["read"]),
+      );
+      expect(Option.isNone(yield* broker.linkRoute("cut"))).toBe(true);
+      expect(
+        (yield* broker.forward("listEnvironments", [], [])) as ReadonlyArray<{
+          environmentId: string;
+          targetKind: string;
+        }>,
+      ).toMatchObject([
+        { environmentId: "full", targetKind: "linked" },
+        { environmentId: "limited", targetKind: "linked" },
+      ]);
+      // An app that relays the environment owns its route again.
+      yield* serve(broker, "desktop", { full: ["read"] }, (method) => ({ result: method }));
+      expect((yield* broker.access).linked).toEqual({ limited: ["read"] });
+      expect(Option.isNone(yield* broker.linkRoute("full"))).toBe(true);
+    }),
+  ).pipe(
+    Effect.provide(
+      layerDependencies({
+        links: [
+          storedLink("full", "full-access"),
+          storedLink("limited", "approval-required"),
+          storedLink("cut", "full-access"),
+          storedLink("here", "full-access"),
+        ],
+      }),
+    ),
+  ),
+);
+
 it.effect("relays nothing while linked environments is off", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const broker = yield* make;
+      expect((yield* broker.access).linked).toEqual({});
       yield* serve(broker, "desktop", { remote: ["read"] }, (method) => ({ result: method }));
       expect(
         yield* failureMessage(broker.forward("listProjects", ["remote"], ["remote"])),
@@ -475,7 +522,11 @@ it.effect("relays nothing while linked environments is off", () =>
         "Linked environments is off",
       );
     }),
-  ).pipe(Effect.provide(layerDependencies({ linksOff: true }))),
+  ).pipe(
+    Effect.provide(
+      layerDependencies({ linksOff: true, links: [storedLink("remote", "full-access")] }),
+    ),
+  ),
 );
 
 it.effect(

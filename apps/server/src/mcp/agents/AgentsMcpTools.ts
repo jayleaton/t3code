@@ -25,7 +25,8 @@ import * as McpInvocationContext from "../McpInvocationContext.ts";
 import * as McpToolAccess from "../McpToolAccess.ts";
 import { loadCaller } from "../threadAccess.ts";
 import { LocalGatewayPort } from "./LocalGatewayPort.ts";
-import { assignRemoteChild, gatewayToolContext } from "./remoteThreads.ts";
+import { assertNotLinked } from "../linkOrigin.ts";
+import { assignRemoteChild, gatewayToolContext, READ_TOOL } from "./remoteThreads.ts";
 
 type ToolResult = {
   readonly isError?: boolean;
@@ -55,9 +56,6 @@ const CREATE_TOOLS: ReadonlySet<string> = new Set([
 
 /** Tools that deliver text to another chat; managed workers report through their task instead. */
 const MESSAGE_TOOLS: ReadonlySet<string> = new Set(["t3_send_message", "t3_answer_question"]);
-
-/** Gateway tools that only read. Every other tool changes something and is declared a write. */
-const READ_TOOL = /^t3_(?:list|get|summarize)_|^t3_(?:git_status|task_read|task_watch|task_board)$/;
 
 const specOf = (name: string) => (TOOL_SPECS as Record<string, ToolSpec>)[name]!;
 
@@ -136,6 +134,28 @@ export const layer = McpToolAccess.toLayer(
                 new Error("This chat's MCP credential cannot use T3 Agents tools."),
                 requestContext(args),
               ),
+            );
+          }
+          // With no app relaying it, an environment this server links to runs the tool there.
+          const target = args.environmentId;
+          const linked =
+            typeof target === "string" && target !== local.environmentId
+              ? Option.getOrUndefined(yield* local.linkRoute(target))
+              : undefined;
+          if (typeof target === "string" && linked !== undefined) {
+            const loaded = yield* loadCaller();
+            const fenced = yield* assertNotLinked(loaded, "use this environment's links").pipe(
+              Effect.flip,
+              Effect.option,
+            );
+            if (Option.isSome(fenced)) return agentsToolRefusal(fenced.value, args);
+            const outcome = yield* local
+              .overLink(target, linked, name, args, loaded.limits)
+              .pipe(Effect.result);
+            return toCallToolResult(
+              outcome._tag === "Success"
+                ? success(outcome.success, args)
+                : failure(outcome.failure, requestContext(args)),
             );
           }
           // An OAuth client has no calling thread; the gateway then needs explicit targets.

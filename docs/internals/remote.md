@@ -215,7 +215,8 @@ re-scoped in place, so it pairs again; an invitation naming `replacesAppId`
 revokes and hides the old app when it is redeemed, in the same roster write. App sessions carry no agent mode
 ceiling, so anything below full access opens read-only. One table in contracts,
 `NETWORK_ACCESS_CEILING`, sets this and also caps member MCP sessions and agent
-calls relayed through a connected app (`McpGatewayBroker`). A relayed call is
+calls relayed through a connected app (`McpGatewayBroker`), or sent over this
+server's own stored link when no app relays that environment. A relayed call is
 capped on every call by this machine's own roster access. A member is relayed
 only by this machine's own desktop app (its `desktop-bootstrap` session) or a
 network app's session, within that app's access; a code-paired session cannot

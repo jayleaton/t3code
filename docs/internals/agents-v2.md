@@ -104,7 +104,10 @@ gateway catalog (`packages/mcp-gateway/src/catalog.ts`) and run through the same
 handlers (`apps/server/src/mcp/agents`). A new tool added to the catalog appears in both
 places, and a new RPC either stream adds is reachable through the port. Calls for other
 environments route to a connected app over `mcpGateway.connect`; the app only answers for
-environments its user granted, and the server applies those grants' scopes. Keep tools that
+environments its user granted, and the server applies those grants' scopes. An environment no
+app relays is reached over this server's own stored link instead (`PeerMcpClient`), capped by
+the link's access: reads at any access, settle and unsettle only at full access, nothing else,
+so a headless server needs no app for that. Keep tools that
 need the gateway's event store in `GATEWAY_ONLY_TOOLS`.
 
 ### Children and subagents
@@ -200,6 +203,6 @@ installed T3 Code, so these calls may use only runtime-port methods it already r
 maps onto `createThread` (a project, a root or new-worktree checkout, no scratch folder, existing
 worktree, branch name, or attachments), a read returns messages rather than the timeline, a send
 cannot steer or restart, and a wait re-reads the thread with backoff because the relay streams
-nothing. Whatever a remote call cannot honor is refused rather than dropped, and a named child
+nothing. With no app connected they go over a stored link instead (`McpToolAccess.routed`). Whatever a remote call cannot honor is refused rather than dropped, and a named child
 created there, by either launch tool, is assigned as a remote task at once so the owner's sweep
 lists it.

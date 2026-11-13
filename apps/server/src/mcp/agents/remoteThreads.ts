@@ -32,6 +32,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { DispatchModeLimit } from "../../orchestration-v2/DispatchModeLimit.ts";
+import * as PeerMcpClient from "../../peer/PeerMcpClient.ts";
 import {
   isTerminalRunStatus,
   type ThreadManagementService,
@@ -41,12 +42,40 @@ import { McpGatewayBroker, type McpGatewayAccess } from "../McpGatewayBroker.ts"
 import type { McpInvocationContext, McpInvocationScope } from "../McpInvocationContext.ts";
 import { clampWaitTimeoutMs } from "../OrchestratorMcpService.ts";
 import { resolveInteractionMode, resolveRuntimeMode } from "../delegatedTaskModes.ts";
+import { assertNotLinked } from "../linkOrigin.ts";
 import { loadCaller, newCommandId } from "../threadAccess.ts";
 import { LocalGatewayPort } from "./LocalGatewayPort.ts";
 
 // Agents in a thread act with every scope on their own machine; other machines apply the
 // grants the user set on the T3 app relaying the call.
 const LOCAL_GRANTS = [...GATEWAY_SCOPE_VALUES];
+
+/** Gateway tools that only read. Every other tool changes something and is declared a write. */
+export const READ_TOOL =
+  /^t3_(?:list|get|summarize)_|^t3_(?:git_status|task_read|task_watch|task_board)$/;
+
+/** Lifecycle a link carries, as the thread tool a peer lets a full-access link run. */
+const LINK_LIFECYCLE: Readonly<Record<string, "settle" | "unsettle">> = {
+  t3_settle_thread: "settle",
+  t3_unsettle_thread: "unsettle",
+};
+
+const ToolData = Schema.Struct({ data: Schema.Unknown });
+
+/** A peer's refusal as the gateway reports it, keeping why. */
+const fromPeerFailure = (failure: OrchestratorMcpFailure) =>
+  new GatewayError({
+    code:
+      failure.code === "capability_denied"
+        ? "scope_required"
+        : failure.code === "thread_not_found"
+          ? "thread_not_found"
+          : failure.code === "invalid_request"
+            ? "invalid_input"
+            : "upstream_failure",
+    message: failure.message,
+    retryable: failure.code === "orchestration_error",
+  });
 
 /**
  * The gateway tool context for this server's agents: this environment in process, every other
@@ -56,6 +85,7 @@ export const gatewayToolContext = Effect.gen(function* () {
   const local = Option.getOrUndefined(yield* Effect.serviceOption(LocalGatewayPort));
   if (local === undefined) return undefined;
   const broker = Option.getOrUndefined(yield* Effect.serviceOption(McpGatewayBroker));
+  const peers = Option.getOrUndefined(yield* Effect.serviceOption(PeerMcpClient.PeerMcpClient));
   // The tool catalog is promise-based; its relayed calls still run under this server's services.
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
   /** Relayed calls carry the calling chat's modes, so the app answering applies them too. */
@@ -67,6 +97,7 @@ export const gatewayToolContext = Effect.gen(function* () {
   // The catalog reads grants synchronously, so it is shown the last roster-bounded view;
   // every relayed call is still checked live by the broker.
   const grants = (): Record<string, ReadonlyArray<GatewayScope>> => ({
+    ...broker?.view().linked,
     ...broker?.view().grants,
     [local.environmentId]: LOCAL_GRANTS,
   });
@@ -75,20 +106,84 @@ export const gatewayToolContext = Effect.gen(function* () {
   ).pipe(
     Effect.map((bounded) => ({
       ...bounded,
-      grants: { ...bounded.grants, [local.environmentId]: LOCAL_GRANTS },
+      grants: { ...bounded.linked, ...bounded.grants, [local.environmentId]: LOCAL_GRANTS },
     })),
   );
+  // The broker decides every call live, links included, so it is asked even with no app.
   const contextFor = (modeCeiling?: ModeLimit): GatewayToolContext => {
     const relay = relayFor(modeCeiling);
     return {
-      port: createRoutedGatewayPort(local.environmentId, local.port, () =>
-        broker?.available() === true ? relay : undefined,
-      ),
+      port: createRoutedGatewayPort(local.environmentId, local.port, () => relay),
       grants,
     };
   };
   const context = contextFor();
-  return { environmentId: local.environmentId, context, contextFor, grants, access };
+  /** The link that reaches `environmentId` when no app relays it, with the scopes it allows. */
+  const linkRoute = (environmentId: string) =>
+    broker === undefined
+      ? Effect.succeedNone
+      : broker.linkRoute(environmentId).pipe(Effect.map(Option.map((route) => route.scopes)));
+  /**
+   * Runs a T3 Agents tool there over this server's own link. The peer holds every call to the
+   * link's access and its fences; here a link short of full access only reads, and settling is
+   * the one change a full-access link carries.
+   */
+  const overLink = Effect.fn("remoteThreads.overLink")(function* (
+    environmentId: string,
+    scopes: ReadonlyArray<GatewayScope>,
+    name: string,
+    args: Record<string, unknown>,
+    limits: ModeLimit,
+  ) {
+    if (peers === undefined) {
+      return yield* Effect.fail(
+        new GatewayError({
+          code: "environment_unavailable",
+          message: "This server cannot reach linked environments.",
+          retryable: false,
+        }),
+      );
+    }
+    const { environmentId: _target, ...rest } = args;
+    const target = EnvironmentId.make(environmentId);
+    if (READ_TOOL.test(name)) {
+      const read = yield* peers
+        .call({ environmentId: target, tool: name, arguments: rest, limits, success: ToolData })
+        .pipe(Effect.mapError(fromPeerFailure));
+      return read.data;
+    }
+    const action = LINK_LIFECYCLE[name];
+    if (action !== undefined && scopes.includes("lifecycle")) {
+      yield* peers
+        .call({
+          environmentId: target,
+          tool: "t3_thread_organize",
+          arguments: { threadId: rest.threadId, action },
+          limits,
+          success: Schema.Unknown,
+        })
+        .pipe(Effect.mapError(fromPeerFailure));
+      return { status: "succeeded" as const };
+    }
+    return yield* Effect.fail(
+      new GatewayError({
+        code: "scope_required",
+        message: scopes.includes("lifecycle")
+          ? `${name} is not carried over this server's link to ${environmentId}: agents here may read there and settle chats. Use t3_thread_send, t3_thread_launch or t3_thread_interrupt with environmentId for work this machine started there.`
+          : `This server's link to ${environmentId} is short of full access, so agents here may only read there.`,
+        retryable: false,
+      }),
+    );
+  });
+  return {
+    environmentId: local.environmentId,
+    context,
+    contextFor,
+    grants,
+    access,
+    linkRoute,
+    overLink,
+  };
 });
 
 export type Gateway = NonNullable<Effect.Success<typeof gatewayToolContext>>;
@@ -102,6 +197,8 @@ export interface RemoteEnvironment {
   readonly limit?: string | undefined;
   /** The calling chat's modes, which the app answering each call applies there. */
   readonly modeCeiling?: ModeLimit | undefined;
+  /** The scopes this server's own link allows there, when no app relays it. */
+  readonly linked?: ReadonlyArray<GatewayScope> | undefined;
 }
 
 const invalid = (message: string) =>
@@ -147,11 +244,19 @@ export const resolveEnvironment = Effect.fn("remoteThreads.resolveEnvironment")(
       }. To reach another machine, open T3 Code on a device connected to it and grant it T3 Agents access.`,
     );
   }
+  const loaded = yield* loadCaller();
+  const linked = (yield* gateway.linkRoute(environmentId)).pipe(Option.getOrUndefined);
+  // Work a link started never uses this environment's links: the peer would see this one's
+  // session instead of that link, and its fence could not hold.
+  if (linked !== undefined) {
+    yield* assertNotLinked(loaded, "use this environment's links");
+  }
   return {
     gateway,
     environmentId,
     limit,
-    modeCeiling: (yield* loadCaller()).limits,
+    linked,
+    modeCeiling: loaded.limits,
     caller:
       scope.thread === undefined
         ? undefined
@@ -182,6 +287,19 @@ const gatewayFailure = (environmentId: EnvironmentId, error: unknown, limit?: st
 
 /** Runs one gateway tool on the remote environment as the calling chat. */
 const callRemote = (remote: RemoteEnvironment, name: string, args: Record<string, unknown>) =>
+  remote.linked !== undefined
+    ? remote.gateway
+        .overLink(
+          remote.environmentId,
+          remote.linked,
+          name,
+          args,
+          remote.modeCeiling ?? { runtimeMode: "full-access", interactionMode: "default" },
+        )
+        .pipe(Effect.mapError((error) => gatewayFailure(remote.environmentId, error, remote.limit)))
+    : callRelayed(remote, name, args);
+
+const callRelayed = (remote: RemoteEnvironment, name: string, args: Record<string, unknown>) =>
   Effect.promise(() =>
     runGatewayTool(
       remote.gateway.contextFor(remote.modeCeiling),
@@ -326,6 +444,10 @@ const decodeSummaries = Schema.decodeUnknownEffect(McpGatewayRelayThreadList);
 
 /** Whether the environment's thread list still shows this run active: a small read per poll. */
 const stillActive = (remote: RemoteEnvironment, threadId: ThreadId, runId: RunId) =>
+  // Over a link each poll reads the thread itself.
+  remote.linked !== undefined ? Effect.succeed(false) : stillActiveRelayed(remote, threadId, runId);
+
+const stillActiveRelayed = (remote: RemoteEnvironment, threadId: ThreadId, runId: RunId) =>
   Effect.tryPromise({
     try: () => remote.gateway.contextFor(remote.modeCeiling).port.listThreads(remote.environmentId),
     catch: (cause) => new RemoteThreadListError({ cause }),

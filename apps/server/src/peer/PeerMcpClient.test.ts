@@ -20,6 +20,11 @@ import * as PeerMcpClient from "./PeerMcpClient.ts";
 import { descriptorOf, layerLinkingEnvironment, linkTo, servePeer } from "./PeerLinks.testkit.ts";
 
 const Result = Schema.Struct({ modes: Schema.String });
+/** A T3 Agents tool's refusal: the gateway's error envelope. */
+const AgentsRefusal = Schema.Struct({
+  schemaVersion: Schema.String,
+  error: Schema.Struct({ code: Schema.String, message: Schema.String }),
+});
 const toolkit = Toolkit.make(
   Tool.make("probe", {
     description: "Returns this request's mode limits.",
@@ -37,7 +42,18 @@ const toolkit = Toolkit.make(
     failure: OrchestratorMcpFailure,
     failureMode: "return",
   }),
+  Tool.make("refuseAsAgents", {
+    description: "Refuses the call the way a T3 Agents tool does, in the gateway's envelope.",
+    success: Result,
+    failure: AgentsRefusal,
+    failureMode: "return",
+  }),
 );
+
+const agentsRefusal = {
+  schemaVersion: "3",
+  error: { code: "thread_not_found", message: "Thread thread-gone was not found." },
+};
 
 const refusal = new OrchestratorMcpFailure({
   code: "thread_not_found",
@@ -60,6 +76,7 @@ it.effect.each([false, true])(
         const handlers = McpToolAccess.toLayer(toolkit, {
           probe: McpToolAccess.reads(() => modes),
           refuse: McpToolAccess.reads(() => Effect.fail(refusal)),
+          refuseAsAgents: McpToolAccess.reads(() => Effect.fail(agentsRefusal)),
           hold: McpToolAccess.reads(() =>
             Deferred.succeed(entered, undefined).pipe(
               Effect.andThen(Deferred.await(release)),
@@ -111,6 +128,7 @@ it.effect("keeps a link healthy when the peer refuses a call", () =>
         probe: McpToolAccess.reads(() => Effect.succeed({ modes: "" })),
         hold: McpToolAccess.reads(() => Effect.succeed({ modes: "" })),
         refuse: McpToolAccess.reads(() => Effect.fail(refusal)),
+        refuseAsAgents: McpToolAccess.reads(() => Effect.fail(agentsRefusal)),
       });
       const box = descriptorOf("environment-box", "Box");
       const b = yield* servePeer(box, McpHttpServer.toolkitRegistration(toolkit, handlers));
@@ -132,6 +150,16 @@ it.effect("keeps a link healthy when the peer refuses a call", () =>
         .pipe(Effect.flip);
       // The agent hears the peer's own refusal; the link answered, so it is not failing.
       expect(refused).toMatchObject({ code: refusal.code, message: refusal.message });
+      const agentsRefused = yield* client
+        .call({
+          environmentId: box.environmentId,
+          tool: "refuseAsAgents",
+          arguments: {},
+          limits: { runtimeMode: "full-access", interactionMode: "default" },
+          success: Result,
+        })
+        .pipe(Effect.flip);
+      expect(agentsRefused).toMatchObject({ code: refusal.code, message: refusal.message });
       const link = yield* links.get(box.environmentId);
       expect(link._tag === "Some" ? link.value.lastError : "missing").toBeNull();
     }),

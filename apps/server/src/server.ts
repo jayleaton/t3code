@@ -77,6 +77,7 @@ import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import * as SecretResolver from "./secrets/SecretResolver.ts";
 import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceRegistryHydration.ts";
 import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
+import * as DefaultAgentSkills from "./defaultAgentSkills.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as PeerForwarding from "./peer/PeerForwarding.ts";
@@ -515,12 +516,15 @@ const layerPeerLinks = PeerMcpClient.layer.pipe(
   Layer.provideMerge(PeerLinks.layer),
 );
 
+// Reaches other environments through connected apps, else over this server's own links.
+const layerMcpGatewayBroker = McpGatewayBroker.layer.pipe(Layer.provide(layerPeerLinks));
+
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   // Tasks split across machines reach the other environment through the same
   // broker the WebSocket routes serve (one memoized instance).
-  Layer.provide(ThreadTaskTransport.layerFromBroker.pipe(Layer.provide(McpGatewayBroker.layer))),
+  Layer.provide(ThreadTaskTransport.layerFromBroker.pipe(Layer.provide(layerMcpGatewayBroker))),
   // RemoteParentSettlement asks other environments through the same broker.
-  Layer.provide(McpGatewayBroker.layer),
+  Layer.provide(layerMcpGatewayBroker),
   // Remote settlement settles children over this server's own links first.
   Layer.provide(layerPeerLinks),
   Layer.provide(layerScheduledTaskWebhookOrigin),
@@ -652,6 +656,8 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ProviderInstallation.layer,
   ReplayMarkers.layer,
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
+  // Waits for the settings runtime, which starts after these layers build.
+  Layer.effectDiscard(Effect.forkScoped(DefaultAgentSkills.seed())),
 ).pipe(
   Layer.provideMerge(layerOrchestrationApplication),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
@@ -807,7 +813,7 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(layerServerSettings),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ClientFocusBroker.layer),
-  Layer.provide(McpGatewayBroker.layer),
+  Layer.provide(layerMcpGatewayBroker),
   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(layerDesktopAppUpdate))),
   Layer.provide(layerCommandReadiness),
   Layer.provide(ServerHttp.layerBrowserApiCors),

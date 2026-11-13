@@ -19,6 +19,7 @@ import {
   type McpGatewayRelayMethod,
   type McpGatewayRelayResponse,
   type McpGatewayRelayResult,
+  type PeerLink,
   type TailnetDeviceAccess,
   THREAD_TASK_WATCH_MAX_MS,
   ThreadTaskError,
@@ -37,6 +38,7 @@ import * as Stream from "effect/Stream";
 
 import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
 import * as Membership from "../peer/Membership.ts";
+import * as PeerLinks from "../peer/PeerLinks.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { DESKTOP_APP_SUBJECT } from "../auth/PairingGrantStore.ts";
 
@@ -62,6 +64,11 @@ export interface McpGatewayAccess {
   readonly refusals: Readonly<Record<string, string>>;
   /** Why every relay is capped at reading, when this machine's network access is below full. */
   readonly limit?: string | undefined;
+  /**
+   * Environments no app relays that this server reaches over its own link, with the scopes the
+   * link's access allows: everything at full access, otherwise only reading.
+   */
+  readonly linked?: Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
 }
 
 const SERVER_MODES = { runtimeMode: "full-access", interactionMode: "default" } as const;
@@ -73,6 +80,13 @@ interface Evaluated {
   readonly hosts: ReadonlyMap<Host, { readonly grants: HostGrants; readonly uncapped: HostGrants }>;
   readonly refusals: Readonly<Record<string, string>>;
   readonly ceilingNote: string | undefined;
+  /** Links that reach an environment no app relays, by environment. */
+  readonly links: ReadonlyMap<string, LinkRoute>;
+}
+
+interface LinkRoute {
+  readonly link: PeerLink;
+  readonly scopes: ReadonlyArray<GatewayScope>;
 }
 
 interface RelayCodec {
@@ -142,6 +156,7 @@ export const make = Effect.gen(function* () {
   const membership = yield* Membership.Membership;
   const settings = yield* ServerSettingsService;
   const identity = yield* ServerEnvironmentIdentity;
+  const peerLinks = yield* PeerLinks.PeerLinks;
   const hosts = new Map<string, Host>();
   const pending = new Map<string, Pending>();
   /** Apps that last failed to carry a call to an environment, by connection and environment. */
@@ -230,13 +245,14 @@ export const make = Effect.gen(function* () {
         : undefined;
     const refusals: Record<string, string> = {};
     const bound = new Map<Host, { grants: HostGrants; uncapped: HostGrants }>();
+    const links = new Map<string, LinkRoute>();
     if (blocked !== undefined) {
       for (const host of over) {
         for (const environmentId of Object.keys(host.grants)) {
           refusals[environmentId] = blocked.message;
         }
       }
-      return { blocked, hosts: bound, refusals, ceilingNote } satisfies Evaluated;
+      return { blocked, hosts: bound, refusals, ceilingNote, links } satisfies Evaluated;
     }
     const targets = new Map<string, Option.Option<TailnetDeviceAccess>>();
     for (const host of over) {
@@ -291,15 +307,40 @@ export const make = Effect.gen(function* () {
       }
       bound.set(host, { grants, uncapped });
     }
+    const relayed = new Set<string>();
     for (const { grants } of bound.values()) {
-      for (const environmentId of Object.keys(grants)) delete refusals[environmentId];
+      for (const environmentId of Object.keys(grants)) {
+        relayed.add(environmentId);
+        delete refusals[environmentId];
+      }
     }
-    return { blocked, hosts: bound, refusals, ceilingNote } satisfies Evaluated;
+    // With no app relaying it, an environment this server links to is reached over that link,
+    // within the link's own access; the peer holds the link to it again on every call.
+    const self = yield* identity.getEnvironmentId;
+    const stored = yield* peerLinks.stored.pipe(Effect.orElseSucceed(() => []));
+    for (const link of stored) {
+      const environmentId: string = link.environmentId;
+      if (environmentId === self || relayed.has(environmentId)) continue;
+      if (only !== undefined && !only.has(environmentId)) continue;
+      let target = targets.get(environmentId);
+      if (target === undefined) {
+        target = yield* membership.accessOf(link.environmentId);
+        targets.set(environmentId, target);
+      }
+      if (Option.isSome(target) && target.value === "revoked") continue;
+      const scopes = NETWORK_ACCESS_CEILING[link.access].gateway.filter(
+        (scope) => ceiling === undefined || ceiling.includes(scope),
+      );
+      if (scopes.length === 0) continue;
+      links.set(environmentId, { link, scopes });
+      delete refusals[environmentId];
+    }
+    return { blocked, hosts: bound, refusals, ceilingNote, links } satisfies Evaluated;
   });
   let snapshot: McpGatewayAccess = { grants: {}, refusals: {} };
   /** Every scope some app may run now, per environment, merged: what agents may try. */
   const access = evaluate().pipe(
-    Effect.map(({ hosts: bound, refusals, ceilingNote }): McpGatewayAccess => {
+    Effect.map(({ hosts: bound, refusals, ceilingNote, links }): McpGatewayAccess => {
       const merged: Record<string, Set<GatewayScope>> = {};
       for (const { grants } of bound.values()) {
         for (const [environmentId, scopes] of Object.entries(grants)) {
@@ -311,6 +352,7 @@ export const make = Effect.gen(function* () {
         grants: Object.fromEntries(Object.entries(merged).map(([id, scopes]) => [id, [...scopes]])),
         refusals,
         limit: ceilingNote,
+        linked: Object.fromEntries([...links].map(([id, route]) => [id, route.scopes])),
       };
     }),
     Effect.tap((current) =>
@@ -388,9 +430,10 @@ export const make = Effect.gen(function* () {
    * Each app sees the environments its own device reaches, so the listing merges every app's
    * answer; following one app would swap the agent's world whenever another app connects.
    */
-  const listEnvironments = Effect.fn("McpGatewayBroker.listEnvironments")(function* (
-    bound: Evaluated["hosts"],
-  ) {
+  const listEnvironments = Effect.fn("McpGatewayBroker.listEnvironments")(function* ({
+    hosts: bound,
+    links,
+  }: Evaluated) {
     const answers = yield* Effect.forEach(
       [...bound.keys()].toReversed(),
       (host) =>
@@ -418,6 +461,16 @@ export const make = Effect.gen(function* () {
         }
       }
     }
+    for (const [environmentId, { link, scopes }] of links) {
+      if (merged.has(environmentId)) continue;
+      merged.set(environmentId, {
+        environmentId,
+        label: link.label,
+        targetKind: "linked",
+        connectionState: link.lastError === null ? "connected" : "disconnected",
+        grantedScopes: scopes,
+      });
+    }
     return [...merged.values()];
   });
   const invoke = Effect.fn("McpGatewayBroker.invoke")(function* (
@@ -428,9 +481,12 @@ export const make = Effect.gen(function* () {
     modeCeiling?: McpGatewayRelayEvent["modeCeiling"],
   ): Effect.fn.Return<unknown, AppFailure> {
     if (method === "listEnvironments") {
+      // Agents see grants as last read, so a listing reads them again: a link made by the CLI
+      // reaches no stream here.
+      yield* refresh;
       const evaluated = yield* evaluate();
       if (evaluated.blocked !== undefined) return yield* evaluated.blocked;
-      return yield* listEnvironments(evaluated.hosts);
+      return yield* listEnvironments(evaluated);
     }
     const requirements = gatewayPortCallScopes(method, args);
     if (requirements === undefined) {
@@ -579,12 +635,15 @@ export const make = Effect.gen(function* () {
     }
     yield* Deferred.succeed(call.deferred, input.result);
   });
-  // Roster and switch changes refresh what agents are shown; calls are checked live regardless.
+  // Roster, link and switch changes refresh what agents are shown; calls are checked live.
   const rosterChanges = yield* membership.subscribeChanges;
-  yield* Stream.merge(rosterChanges, settings.streamChanges).pipe(
+  const linkChanges = yield* peerLinks.subscribeChanges;
+  yield* Stream.merge(Stream.merge(rosterChanges, linkChanges), settings.streamChanges).pipe(
     Stream.runForEach(() => refresh),
     Effect.forkScoped,
   );
+  // Links route with no app connected, so agents are shown them from the start.
+  yield* refresh;
   return {
     connect,
     /** Roster-bounded, read now. */
@@ -599,6 +658,12 @@ export const make = Effect.gen(function* () {
     forward: invoke,
     respond,
     preview,
+    /** The link that reaches `environmentId` when no app relays it, read now. */
+    linkRoute: (environmentId: string) =>
+      evaluate(new Set([environmentId])).pipe(
+        Effect.map((evaluated) => Option.fromNullishOr(evaluated.links.get(environmentId))),
+      ),
+    /** Whether an app is connected; links route without one. */
     available: () => hosts.size > 0,
     hostConnected: Stream.fromPubSub(connected),
   };

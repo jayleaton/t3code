@@ -268,6 +268,9 @@ export function addPresetSkills(
 /** Shipped skills a new user's library starts with. Each must be listed by a bundled preset. */
 export const DEFAULT_AGENT_SKILL_NAMES = ["t3-agents", "new-pattern-project"] as const;
 
+// Older than any edit or deletion, so a seeded copy never wins a merge against the user's library.
+const DEFAULT_AGENT_SKILL_TIME = "1970-01-01T00:00:00.000Z";
+
 interface AgentLibraryState {
   readonly agentSkills: ReadonlyArray<AgentSkill>;
   readonly agentSkillDeletedAt: Readonly<Record<string, string>>;
@@ -280,22 +283,23 @@ interface AgentLibraryState {
  * the user has a library already, so an upgrade or a newly linked machine never re-adds a deleted
  * skill, overwrites an edit, or adds a second copy.
  */
-export const isNewAgentLibrary = (library: AgentLibraryState) =>
+const isNewAgentLibrary = (library: AgentLibraryState) =>
   library.agentSkills.length === 0 &&
   library.mcpGatewayProfiles.length === 0 &&
   Object.keys(library.agentSkillDeletedAt).length === 0 &&
   Object.keys(library.mcpGatewayProfileDeletedAt).length === 0;
 
-/** The default skills to seed into a new library. Fixed ids let machines seeding at once converge. */
+/**
+ * The default skills to seed into a new library, decoded from the `skills/<name>/…` pool. Fixed ids
+ * and timestamps let machines seeding at once converge.
+ */
 export function defaultAgentSkills(
   library: AgentLibraryState,
-  presets: ReadonlyArray<AgentPreset>,
-  now: string,
+  skillFiles: Readonly<Record<string, string>>,
 ): ReadonlyArray<AgentSkill> {
   if (!isNewAgentLibrary(library)) return [];
   return DEFAULT_AGENT_SKILL_NAMES.map((name): AgentSkill => {
-    const skill = presets.flatMap((preset) => preset.skills).find((item) => item.name === name);
-    if (!skill) throw new Error(`Default skill "${name}" is not in any preset.`);
+    const skill = decodeSkill(name, skillFiles);
     return {
       skillId: `t3-default-${name}`,
       name: skill.name,
@@ -303,8 +307,8 @@ export function defaultAgentSkills(
       content: skill.content,
       ...(skill.resources.length ? { resources: skill.resources } : {}),
       revision: 1,
-      createdAt: now,
-      updatedAt: now,
+      createdAt: DEFAULT_AGENT_SKILL_TIME,
+      updatedAt: DEFAULT_AGENT_SKILL_TIME,
     };
   });
 }
