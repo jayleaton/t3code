@@ -217,6 +217,8 @@ const sharedGatewayRuntime: GatewayRuntime = ({ config, scopes, local }) =>
           await owner?.close();
         }),
       );
+      // Owner first, so the bridge's first connect finds it instead of waiting out a retry.
+      yield* holdOwner;
       yield* Effect.acquireRelease(
         Effect.sync(() =>
           connectGatewayBridge({
@@ -356,6 +358,15 @@ export const make = Effect.fn("HeadlessGatewayHost.make")(function* (runtime: Ga
         Effect.orElseSucceed(() => null),
       );
       const setting = effectiveGatewaySetting(current, env);
+      const file = yield* readEnvFile;
+      const configuredPort = Number.parseInt(
+        { ...file, ...stripUndefined(env) }.T3_MCP_BRIDGE_PORT ?? "",
+        10,
+      );
+      const port =
+        Number.isInteger(configuredPort) && configuredPort >= 1 && configuredPort <= 65_535
+          ? configuredPort
+          : DEFAULT_PORT;
       const stop = Effect.gen(function* () {
         yield* FiberHandle.clear(running);
         runningKey = undefined;
@@ -372,7 +383,7 @@ export const make = Effect.fn("HeadlessGatewayHost.make")(function* (runtime: Ga
           scopes: setting.scopes,
           state: problem === undefined ? ("disabled" as const) : ("degraded" as const),
           ...(problem === undefined ? {} : { problem }),
-          port: (yield* SubscriptionRef.get(statusRef)).port,
+          port,
         });
         return;
       }
@@ -399,7 +410,7 @@ export const make = Effect.fn("HeadlessGatewayHost.make")(function* (runtime: Ga
           ...base,
           state: "degraded",
           problem: resolved.problem,
-          port: (yield* SubscriptionRef.get(statusRef)).port,
+          port,
         });
         return;
       }

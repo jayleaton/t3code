@@ -57,7 +57,7 @@ export const AgentGatewayStatus = Schema.Struct({
   enabled: Schema.Boolean,
   scopes: Schema.Array(GatewayScope),
   /** The server's runtime connection to the gateway on its machine. */
-  state: Schema.Literals(["disabled", "connecting", "running", "degraded"]),
+  state: Schema.Literals(["disabled", "connecting", "running", "standby", "degraded"]),
   /** Why an enabled gateway is not running. */
   problem: Schema.optionalKey(Schema.String),
   /** The loopback port MCP launchers on the server's machine use. */

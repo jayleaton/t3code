@@ -9,6 +9,8 @@ export function agentGatewayStatusLabel(status: AgentGatewayStatus): string {
       return "Connected";
     case "connecting":
       return "Connecting…";
+    case "standby":
+      return "Standing by while the desktop app serves it";
     default:
       return status.problem === undefined ? "Disconnected" : "Failed";
   }

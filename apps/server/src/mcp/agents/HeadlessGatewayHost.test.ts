@@ -244,7 +244,7 @@ describe("HeadlessGatewayHost", () => {
     ),
   );
 
-  it.effect("restarts the owner on a rotated token so the old one stops working", () =>
+  it.effect("follows the file's port and restarts the owner on a rotated token", () =>
     provide(
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -255,6 +255,10 @@ describe("HeadlessGatewayHost", () => {
           `T3_MCP_BRIDGE_PORT=47700\nT3_MCP_BRIDGE_TOKEN=${TOKEN}\n`,
           { mode: 0o600 },
         );
+        expect(yield* host.update({ enabled: false })).toMatchObject({
+          state: "disabled",
+          port: 47700,
+        });
 
         yield* host.update({ enabled: true });
         expect(yield* Queue.take(events)).toMatchObject({ type: "start", token: TOKEN });
