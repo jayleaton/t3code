@@ -66,9 +66,7 @@ export function AppBar(props: AppBarProps) {
   const rootBack =
     !layout.usesSplitView && props.onBackToList && navigation?.canGoBack() === false
       ? props.onBackToList
-      : props.guardBack && props.onBack
-        ? props.onBack
-        : null;
+      : null;
   const compose =
     layout.usesSplitView && !(usesNativeWorkspaceColumns && isDuoDevice(deviceType))
       ? props.onCompose
@@ -100,9 +98,7 @@ export function AppBar(props: AppBarProps) {
           headerBackVisible:
             props.onClose === undefined &&
             splitBack === null &&
-            !(layout.usesSplitView && props.onBackToList) &&
-            !(props.guardBack && props.onBack),
-          ...(props.guardBack ? { gestureEnabled: false } : undefined),
+            !(layout.usesSplitView && props.onBackToList),
           title: props.title,
           unstable_headerSubtitle: props.subtitle || undefined,
           ...(props.matchSearchSurface

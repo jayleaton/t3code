@@ -728,11 +728,7 @@ function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }
     ]);
   });
   return (
-    <SettingsScreen
-      title={title}
-      // Native Back pops before removal guards; a bar action lets the guard run first.
-      guardBack={preventRemove}
-    >
+    <SettingsScreen title={title}>
       <ScrollView
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
@@ -1232,7 +1228,7 @@ function TaskForm({
 
         <SettingsSection title="Schedule">
           <SelectRow
-            label="Runs"
+            label="Type"
             value={SCHEDULE_MODE_LABELS[draft.schedule.mode]}
             actions={[
               "fixed_time" as const,
