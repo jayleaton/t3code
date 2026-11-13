@@ -62,6 +62,7 @@ import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as DueHint from "../scheduling/DueHint.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import { cleanupDecision } from "./cleanup.ts";
 import { importLegacyScheduledTasks } from "./LegacyScheduledTasks.ts";
 import {
   isMissedFixedTimeRun,
@@ -101,6 +102,7 @@ const WEBHOOK_DELIVERY_LOG_PROMPT_LIMIT = 64 * 1024;
 const WEBHOOK_MAX_QUEUED_PER_TASK = 20;
 // Webhook URLs are reachable by anyone who can reach this machine's address.
 const WEBHOOK_RATE_LIMIT_PER_MINUTE = 60;
+const CLEANUP_INTERVAL_MS = 3_600_000;
 const LEGACY_DELIVERY_OUTCOMES: ReadonlySet<string> = new Set([
   "accepted",
   "dispatch_failed",
@@ -243,6 +245,10 @@ interface ScheduledTaskRow {
   readonly run_count: number;
   readonly webhook_token: string | null;
   readonly webhook_secret: string | null;
+  readonly archived_at: string | null;
+  readonly archive_reason: string | null;
+  readonly failing_since: string | null;
+  readonly consecutive_failures: number;
 }
 
 interface WebhookDeliveryRow {
@@ -306,6 +312,8 @@ export class ScheduledTaskService extends Context.Service<
     ) => Effect.Effect<WebhookTriggerResult, ScheduledTaskError>;
     /** Waits until every accepted webhook delivery has reached an outcome. */
     readonly awaitWebhookDeliveries: Effect.Effect<void>;
+    /** Archives stale tasks and deletes those archived past retention; runs hourly on the scheduler. */
+    readonly cleanupStale: () => Effect.Effect<void, ScheduledTaskError>;
   }
 >()("t3/scheduledTasks/ScheduledTaskService") {}
 
@@ -425,6 +433,8 @@ const decodeRow = Effect.fnUntraced(
       lastRunError: row.last_run_error,
       runCount: row.run_count,
       ...(webhook === undefined ? {} : { webhook }),
+      ...(row.archived_at === null ? {} : { archivedAt: row.archived_at }),
+      ...(row.archive_reason === null ? {} : { archiveReason: row.archive_reason }),
     });
   },
   (effect, row, _origin?) =>
@@ -555,7 +565,11 @@ export const layer = Layer.effect(
         last_run_error,
         run_count,
         webhook_token,
-        webhook_secret
+        webhook_secret,
+        archived_at,
+        archive_reason,
+        failing_since,
+        consecutive_failures
       FROM scheduled_tasks
       -- Not updated_at: toggles, runs and edits rewrite it, and clients render
       -- this order as-is, so rows would move under the pointer.
@@ -598,7 +612,11 @@ export const layer = Layer.effect(
         last_run_error,
         run_count,
         webhook_token,
-        webhook_secret
+        webhook_secret,
+        archived_at,
+        archive_reason,
+        failing_since,
+        consecutive_failures
       FROM scheduled_tasks
       WHERE task_id = ${id}
     `.pipe(NodeSqliteClient.readOnly);
@@ -750,7 +768,18 @@ export const layer = Layer.effect(
           webhook_secret = CASE
             WHEN ${webhook.secretChanged ? 1 : 0} = 1 THEN excluded.webhook_secret
             ELSE scheduled_tasks.webhook_secret
-          END
+          END,
+          -- Saving restores an archived task; its old failures no longer count against it.
+          consecutive_failures = CASE
+            WHEN scheduled_tasks.archived_at IS NULL THEN scheduled_tasks.consecutive_failures
+            ELSE 0
+          END,
+          failing_since = CASE
+            WHEN scheduled_tasks.archived_at IS NULL THEN scheduled_tasks.failing_since
+            ELSE NULL
+          END,
+          archived_at = NULL,
+          archive_reason = NULL
         RETURNING task_id
       `.pipe(
         Effect.mapError((cause) =>
@@ -811,7 +840,12 @@ export const layer = Layer.effect(
             next_run_at = ${input.nextRunAtIso},
             last_run_status = ${input.status},
             last_run_error = ${input.error},
-            run_count = run_count + 1
+            run_count = run_count + 1,
+            consecutive_failures = CASE WHEN ${input.status} = 'failed' THEN consecutive_failures + 1 ELSE 0 END,
+            failing_since = CASE
+              WHEN ${input.status} = 'failed' THEN COALESCE(failing_since, ${input.startedAtIso})
+              ELSE NULL
+            END
         WHERE task_id = ${input.id}
           AND last_run_status = 'running'
           AND last_run_at = ${input.startedAtIso}
@@ -844,6 +878,8 @@ export const layer = Layer.effect(
               enabled = CASE WHEN ${usedUpOneTime(source, nextRunAfterRun({ ...source, lastRunAt: startedAtIso }, now)) ? 1 : 0} = 1 THEN 0 ELSE enabled END,
               next_run_at = ${nextRunAfterRun({ ...source, lastRunAt: startedAtIso }, now)},
               updated_at = ${iso(now)},
+              consecutive_failures = consecutive_failures + 1,
+              failing_since = COALESCE(failing_since, ${startedAtIso}),
               run_count = run_count + CASE WHEN EXISTS (
                 SELECT 1 FROM scheduled_task_webhook_pending
                 WHERE delivery_id = ${pendingDeliveryId ?? null} AND state = 'running'
@@ -1306,6 +1342,8 @@ export const layer = Layer.effect(
                     enabled = CASE WHEN ${usedUpOneTime(decoded.success, nextRunAfterRun(decoded.success, now)) ? 1 : 0} = 1 THEN 0 ELSE enabled END,
                     next_run_at = ${nextRunAfterRun(decoded.success, now)},
                     updated_at = ${iso(now)},
+                    consecutive_failures = consecutive_failures + 1,
+                    failing_since = COALESCE(failing_since, last_run_at, ${iso(now)}),
                     run_count = run_count + CASE WHEN EXISTS (
                       SELECT 1 FROM scheduled_task_webhook_pending
                       WHERE task_id IS ${row.task_id} AND state = 'running'
@@ -1324,6 +1362,8 @@ export const layer = Layer.effect(
               SET last_run_status = 'failed',
                   last_run_error = 'Run was interrupted by a server restart.',
                   updated_at = ${iso(now)},
+                  consecutive_failures = consecutive_failures + 1,
+                  failing_since = COALESCE(failing_since, last_run_at, ${iso(now)}),
                   run_count = run_count + CASE WHEN EXISTS (
                     SELECT 1 FROM scheduled_task_webhook_pending
                     WHERE task_id IS ${row.task_id} AND state = 'running'
@@ -1633,7 +1673,17 @@ export const layer = Layer.effect(
           UPDATE scheduled_tasks
           SET enabled = ${input.enabled ? 1 : 0},
               next_run_at = ${next},
-              updated_at = ${iso(now)}
+              updated_at = ${iso(now)},
+              consecutive_failures = CASE
+                WHEN ${input.enabled ? 1 : 0} = 1 AND archived_at IS NOT NULL THEN 0
+                ELSE consecutive_failures
+              END,
+              failing_since = CASE
+                WHEN ${input.enabled ? 1 : 0} = 1 AND archived_at IS NOT NULL THEN NULL
+                ELSE failing_since
+              END,
+              archived_at = CASE WHEN ${input.enabled ? 1 : 0} = 1 THEN NULL ELSE archived_at END,
+              archive_reason = CASE WHEN ${input.enabled ? 1 : 0} = 1 THEN NULL ELSE archive_reason END
           WHERE task_id = ${input.id}
           RETURNING task_id
         `.pipe(
@@ -1645,8 +1695,14 @@ export const layer = Layer.effect(
         return yield* taskError("Schedule task not found.", { taskId: input.id });
       }
       yield* notifyChanged;
+      const { archivedAt: _archivedAt, archiveReason: _archiveReason, ...unarchived } = existing;
       return {
-        task: { ...existing, enabled: input.enabled, nextRunAt: next, updatedAt: iso(now) },
+        task: {
+          ...(input.enabled ? unarchived : existing),
+          enabled: input.enabled,
+          nextRunAt: next,
+          updatedAt: iso(now),
+        },
       };
     });
 
@@ -2710,6 +2766,100 @@ export const layer = Layer.effect(
     });
     yield* scheduler.register("webhook-coalescing", dispatchPending());
 
+    const cleanupStale = Effect.fn("ScheduledTaskService.cleanupStale")(
+      function* () {
+        const now = yield* localNow;
+        const nowIso = iso(now);
+        const rows = yield* selectAllRows();
+        const deliveries = yield* sql<{ task_id: string; received_at: string }>`
+          SELECT task_id, MAX(received_at) AS received_at
+          FROM scheduled_task_webhook_deliveries GROUP BY task_id
+        `.pipe(NodeSqliteClient.readOnly);
+        const latestDeliveryAt = new Map(deliveries.map((row) => [row.task_id, row.received_at]));
+        const running = yield* Ref.get(activeRuns);
+        let changed = false;
+        for (const row of rows) {
+          const decoded = yield* Effect.result(decodeRow(row));
+          if (Result.isFailure(decoded)) continue;
+          const task = decoded.success;
+          const shell =
+            task.threadId === null || task.profileId !== undefined || row.archived_at !== null
+              ? null
+              : yield* threadManagement
+                  .getThreadShell(ThreadId.make(task.threadId))
+                  .pipe(Effect.orElseSucceed(() => null));
+          const decision = cleanupDecision(
+            {
+              ...task,
+              archivedAt: row.archived_at,
+              failingSince: row.failing_since,
+              consecutiveFailures: row.consecutive_failures,
+            },
+            {
+              nowMs: DateTime.toEpochMillis(now),
+              running: running.has(task.id),
+              threadArchivedAt: shell?.archivedAt == null ? null : iso(shell.archivedAt),
+              latestDeliveryAt: latestDeliveryAt.get(row.task_id) ?? null,
+            },
+          );
+          if (decision._tag === "archive") {
+            // The updated_at guard drops the decision if an edit or a run landed since the read.
+            const archived = yield* sql`
+              UPDATE scheduled_tasks
+              SET enabled = 0, next_run_at = NULL,
+                  archived_at = ${nowIso}, archive_reason = ${decision.reason}
+              WHERE task_id = ${row.task_id} AND updated_at = ${row.updated_at}
+                AND archived_at IS NULL AND last_run_status <> 'running'
+              RETURNING task_id
+            `;
+            if (archived.length > 0) {
+              changed = true;
+              yield* Effect.logInfo("Archived stale scheduled task", {
+                taskId: task.id,
+                reason: decision.reason,
+              });
+            }
+          } else if (decision._tag === "delete") {
+            const deleted = yield* sql.withTransaction(
+              Effect.gen(function* () {
+                const removed = yield* sql`
+                  DELETE FROM scheduled_tasks
+                  WHERE task_id = ${row.task_id} AND archived_at = ${row.archived_at}
+                  RETURNING task_id
+                `;
+                if (removed.length > 0) {
+                  yield* sql`DELETE FROM scheduled_task_webhook_deliveries WHERE task_id = ${row.task_id}`;
+                }
+                return removed.length > 0;
+              }),
+            );
+            if (deleted) {
+              changed = true;
+              yield* forgetWebhookTask(task.id);
+              yield* Effect.logInfo("Deleted archived scheduled task", { taskId: task.id });
+            }
+          }
+        }
+        if (changed) yield* notifyChanged;
+      },
+      Effect.mapError((cause) =>
+        isScheduledTaskError(cause)
+          ? cause
+          : taskError("Could not clean up stale schedule tasks.", { cause }),
+      ),
+    );
+
+    const nextCleanupAt = yield* Ref.make(0);
+    yield* scheduler.register(
+      "scheduled-task-cleanup",
+      Effect.gen(function* () {
+        const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+        if (nowMs < (yield* Ref.get(nextCleanupAt))) return;
+        yield* Ref.set(nextCleanupAt, nowMs + CLEANUP_INTERVAL_MS);
+        yield* cleanupStale();
+      }),
+    );
+
     return ScheduledTaskService.of({
       list,
       subscribeList,
@@ -2724,6 +2874,7 @@ export const layer = Layer.effect(
       getWebhookDelivery,
       triggerWebhook,
       awaitWebhookDeliveries: FiberSet.awaitEmpty(webhookDeliveries),
+      cleanupStale,
     });
   }),
 );

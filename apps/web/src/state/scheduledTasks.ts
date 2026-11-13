@@ -22,7 +22,10 @@ const agentScheduledTasksAtom = Atom.make((get): ReadonlyArray<EnvironmentSchedu
     const result = get(serverEnvironment.scheduledTasksLive({ environmentId, input: {} }));
     const snapshot = Option.getOrUndefined(AsyncResult.value(result));
     for (const task of snapshot?.tasks ?? []) {
-      if (task.profileId !== undefined) tasks.push({ environmentId, task });
+      // Archived tasks are listed in Settings only.
+      if (task.profileId !== undefined && task.archivedAt == null) {
+        tasks.push({ environmentId, task });
+      }
     }
   }
   return tasks;

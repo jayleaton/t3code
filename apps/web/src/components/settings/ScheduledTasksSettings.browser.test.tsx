@@ -47,7 +47,22 @@ const threadFamilyRead = {
   threads: [{ id: task.threadId, title: "Fix login bug" }],
 };
 
-const state = vi.hoisted(() => ({ connected: true, tasksLoaded: true, secondary: false }));
+const archivedTask: ScheduledTask = {
+  ...task,
+  id: ScheduledTaskId.make("stale"),
+  title: "Stale sweep",
+  enabled: false,
+  archivedAt: "2026-11-01T12:00:00.000Z",
+  archiveReason: "paused",
+};
+
+const state = vi.hoisted(() => ({
+  connected: true,
+  tasksLoaded: true,
+  secondary: false,
+  archived: false,
+  commands: [] as unknown[],
+}));
 const secondaryId = EnvironmentId.make("secondary");
 const permissions = new Map<string, Atom.Writable<boolean>>();
 
@@ -55,6 +70,8 @@ function setup() {
   state.connected = true;
   state.tasksLoaded = true;
   state.secondary = false;
+  state.archived = false;
+  state.commands = [];
   permissions.clear();
   permissions.set(environmentId, Atom.make(true));
   permissions.set(secondaryId, Atom.make(true));
@@ -125,11 +142,22 @@ vi.mock(import("../../state/query"), async (original) => ({
     data:
       request === null || request === threadFamilyRead
         ? request
-        : { tasks: state.tasksLoaded ? [task] : [] },
+        : { tasks: state.tasksLoaded ? (state.archived ? [task, archivedTask] : [task]) : [] },
     error: null,
     isPending: false,
     refresh: vi.fn(),
   })) as never,
+}));
+vi.mock(import("~/state/session"), async (original) => ({
+  ...(await original()),
+  readEnvironmentScope: () => true,
+}));
+vi.mock(import("../../state/use-atom-command"), async (original) => ({
+  ...(await original()),
+  useAtomCommand: (() => async (value: unknown) => {
+    state.commands.push(value);
+    return { _tag: "Success", value: undefined };
+  }) as never,
 }));
 vi.mock(import("../../state/environments"), async (original) => ({
   ...(await original()),
@@ -180,6 +208,28 @@ describe("ScheduledTasksSettings", () => {
     state.connected = false;
     await using screen = await render(<ScheduledTasksSettings />);
     await expect.element(screen.getByRole("button", { name: "New task" })).toBeDisabled();
+  });
+
+  it("lists an archived task only under Archived and restores it", async () => {
+    setup();
+    state.archived = true;
+    await using screen = await render(<ScheduledTasksSettings />);
+    await expect.element(screen.getByText("Review issues")).toBeVisible();
+    await expect.element(screen.getByText("Stale sweep")).not.toBeInTheDocument();
+
+    await screen.getByRole("button", { name: /^Archived/ }).click();
+    await expect.element(screen.getByText("Stale sweep")).toBeVisible();
+    await expect.element(screen.getByText("Review issues")).not.toBeInTheDocument();
+    await expect
+      .element(screen.getByText(/Archived: paused for 10 days · Deletes on/))
+      .toBeVisible();
+
+    await screen.getByRole("button", { name: "Restore" }).click();
+    await vi.waitFor(() =>
+      expect(state.commands).toEqual([
+        { environmentId, input: { id: archivedTask.id, enabled: true } },
+      ]),
+    );
   });
 
   it("keeps a linked task's unsaved edits across a disconnect and reconnect", async () => {

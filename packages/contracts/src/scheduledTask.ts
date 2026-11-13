@@ -1,3 +1,5 @@
+import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import {
@@ -262,6 +264,30 @@ export function scheduledTaskThreadMode(
   return task.threadMode ?? (task.threadId === null ? "new_thread" : "continue");
 }
 
+/** Why the server archived a task. Any string, so a reason added later still decodes. */
+export const ScheduledTaskArchiveReason = Schema.Union([
+  Schema.Literals(["completed", "paused", "failing", "thread_archived", "webhook_unused"]),
+  Schema.String,
+]);
+export type ScheduledTaskArchiveReason = typeof ScheduledTaskArchiveReason.Type;
+
+/** Stale tasks are archived after this many days (never-triggered webhooks after the longer window). */
+export const SCHEDULED_TASK_ARCHIVE_AFTER_DAYS = 10;
+export const SCHEDULED_TASK_UNUSED_WEBHOOK_ARCHIVE_AFTER_DAYS = 30;
+/** Archived tasks are deleted this many days after they were archived. */
+export const SCHEDULED_TASK_ARCHIVE_RETENTION_DAYS = 30;
+
+/** When the server deletes an archived task, or null for one that is not archived. */
+export function scheduledTaskDeletesAt(task: Pick<ScheduledTask, "archivedAt">): string | null {
+  if (task.archivedAt == null) return null;
+  return DateTime.make(task.archivedAt).pipe(
+    Option.map((archivedAt) =>
+      DateTime.formatIso(DateTime.add(archivedAt, { days: SCHEDULED_TASK_ARCHIVE_RETENTION_DAYS })),
+    ),
+    Option.getOrNull,
+  );
+}
+
 export const ScheduledTask = Schema.Struct({
   id: ScheduledTaskId,
   title: TrimmedNonEmptyString,
@@ -287,6 +313,9 @@ export const ScheduledTask = Schema.Struct({
   lastRunError: Schema.NullOr(Schema.String),
   runCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   webhook: Schema.optional(ScheduledTaskWebhookEndpoint),
+  /** Set when the server archived the stale task; it is disabled and deleted after the retention window. */
+  archivedAt: Schema.optional(IsoDateTime),
+  archiveReason: Schema.optional(ScheduledTaskArchiveReason),
   /** Why the task cannot run regardless of `enabled`, such as a managed policy refusing webhooks. */
   blockedByPolicy: Schema.optionalKey(Schema.String),
 });

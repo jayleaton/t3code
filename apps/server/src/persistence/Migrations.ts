@@ -109,6 +109,7 @@ import ForkMigration019 from "./Migrations/fork/019_NetworkAppReplacement.ts";
 import ForkMigration020 from "./Migrations/fork/020_RepairStringifiedModelSelectionOptions.ts";
 import ForkMigration021 from "./Migrations/fork/021_UpstreamScheduledTaskProfile.ts";
 import ForkMigration022 from "./Migrations/fork/022_NetworkContinuity.ts";
+import ForkMigration023 from "./Migrations/fork/023_ScheduledTaskCleanup.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -221,6 +222,7 @@ const forkMigrationEntries = [
   [20, "RepairStringifiedModelSelectionOptions", ForkMigration020, 81],
   [21, "UpstreamScheduledTaskProfile", ForkMigration021, 81],
   [22, "NetworkContinuity", ForkMigration022, 81],
+  [23, "ScheduledTaskCleanup", ForkMigration023, 81],
 ] as const;
 
 export const forkMigrationManifest = forkMigrationEntries.map(

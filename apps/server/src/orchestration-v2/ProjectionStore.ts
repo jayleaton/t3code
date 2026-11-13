@@ -7207,6 +7207,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               AND COALESCE(json_extract(t.payload_json, '$.lineage.relationshipToParent'), '') != 'subagent'
               AND COALESCE(json_extract(t.payload_json, '$.lineage.sideChat'), 0) = 0
               AND ${noBlockingWork}
+              -- Archiving would make every later run of a task bound here fail.
+              AND NOT EXISTS (
+                SELECT 1 FROM scheduled_tasks task
+                WHERE task.thread_id = t.thread_id AND task.enabled = 1
+              )
               AND NOT EXISTS (
                 SELECT 1 FROM orchestration_v2_projection_threads child
                 -- Unary + drops thread_id's TEXT affinity so the parent expression index applies.

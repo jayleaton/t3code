@@ -102,6 +102,21 @@ Webhook tasks only run when their URL is called, so they can't be run
 immediately.
 Leaving an edited form asks before discarding unsaved changes.
 
+### Stale tasks are archived
+
+Tasks that stop doing anything are archived after 10 days: a one-time task after
+its run, a task paused or left off for 10 days, a task whose runs have failed at
+least three times in a row for 10 days, and a task whose thread has been
+archived for 10 days. A webhook task is archived only if its URL received no
+request for 30 days since you created or last edited it; a webhook that has run
+is never archived for being quiet. Archiving turns the task off.
+
+Choose **Archived** at the top of the list to see these tasks, why each was
+archived, and the date it will be deleted, 30 days after archiving. **Restore**
+turns a task back on; a one-time task whose time passed opens the editor so you
+can pick a new time. Saving an archived task also restores it. A restored
+webhook keeps its URL. The 10-day and 30-day windows can't be changed.
+
 ## Webhook automations
 
 In **Settings → Scheduled tasks**, choose **On webhook**

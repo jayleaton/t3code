@@ -107,6 +107,8 @@ export const importLegacyScheduledTasks = Effect.fn("importLegacyScheduledTasks"
             project_id: row.project_id,
             thread_id: row.thread_id,
             profile_id: row.profile_id,
+            // Every fork V1 task runs as an agent, which reuses the thread its first run launched.
+            thread_mode: "continue",
             workspace_strategy_json: encodeWorkspaceStrategy({ type: "root" }),
             model_selection_json: encodeModelSelection(profile?.modelSelection ?? fallbackModel),
             runtime_mode: runtimeMode,
