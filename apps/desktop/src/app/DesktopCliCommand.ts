@@ -16,7 +16,7 @@ import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
-import { pathSetup, readUserLoginShell } from "@t3tools/shared/shell";
+import { pathSetup, readUserLoginShell, shellCommandPath } from "@t3tools/shared/shell";
 
 import * as DesktopCliShim from "./DesktopCliShim.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
@@ -64,6 +64,17 @@ if ($env:T3_SET -eq '1') {
   [Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$value)))
 }
 `;
+
+/**
+ * A command to paste that runs this app's CLI: the name PATH runs as ours, else the bundled
+ * launcher, else `t3`, the one name every install has had.
+ */
+export const runnableCliCommand = (state: DesktopCliCommandState, platform: NodeJS.Platform) =>
+  state.onPath
+    ? (state.command ?? LEGACY_CLI_COMMAND)
+    : state.launcherPath !== null
+      ? shellCommandPath(state.launcherPath, platform)
+      : LEGACY_CLI_COMMAND;
 
 export class DesktopCliCommand extends Context.Service<
   DesktopCliCommand,

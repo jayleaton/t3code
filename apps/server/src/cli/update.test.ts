@@ -474,13 +474,19 @@ it.layer(NodeServices.layer)("t3 update with a background service", (it) => {
     { name: "only t3 is installed", ada: "missing", expected: "t3" },
     { name: "another program owns ada", ada: "foreign", expected: "t3" },
     { name: "ada and t3 are both installed", ada: "owned", expected: "ada" },
+    // Owning ada is not enough when PATH runs another program's ada first.
+    { name: "another ada runs first on PATH", ada: "owned", shadowed: true, expected: "t3" },
+    { name: "the launchers are off PATH", ada: "owned", offPath: true, expected: "runtime" },
     { name: "no launcher is installed", ada: "missing", t3: "missing", expected: "runtime" },
   ] as const)("names the command and version a pending restart needs when $name", (row) =>
     Effect.gen(function* () {
       yield* withoutTerminals;
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
+      // A shell would expand or split a runtime path like this one unless it is a literal.
+      const baseDir = yield* fs.makeTempDirectoryScoped({
+        prefix: 't3 update $workspace "q" `x`-',
+      });
       const version = packageJson.version;
       const runtime = pinnedRuntimePaths(path, baseDir, version, "linux");
       yield* fs.makeDirectory(runtime.versionDir, { recursive: true });
@@ -510,6 +516,10 @@ it.layer(NodeServices.layer)("t3 update with a background service", (it) => {
         if (kind === "owned") yield* fs.symlink(runtime.entryPath, path.join(bin, name));
         if (kind === "foreign") yield* fs.writeFileString(path.join(bin, name), "#!/bin/sh\n");
       }
+      const earlier = path.join(baseDir, "earlier");
+      yield* fs.makeDirectory(earlier);
+      if ("shadowed" in row) yield* fs.writeFileString(path.join(earlier, "ada"), "#!/bin/sh\n");
+      const PATH = "offPath" in row ? earlier : [earlier, bin].join(":");
       const runner = ProcessRunner.ProcessRunner.of({
         run: (input) =>
           input.args?.includes("--version") === true
@@ -529,6 +539,7 @@ it.layer(NodeServices.layer)("t3 update with a background service", (it) => {
         assumeYes: false,
       }).pipe(
         Effect.provideService(HostProcess.InvokedAs, path.join(bin, "t3")),
+        Effect.provideService(HostProcess.Environment, { PATH }),
         Effect.andThen(TestConsole.logLines),
         Effect.map((lines) => lines.join("\n")),
         Effect.provide(
@@ -545,7 +556,7 @@ it.layer(NodeServices.layer)("t3 update with a background service", (it) => {
         ),
       );
 
-      const command = row.expected === "runtime" ? runtime.entryPath : row.expected;
+      const command = row.expected === "runtime" ? `'${runtime.entryPath}'` : row.expected;
       assert.include(
         output,
         `Background service still running the version before ${version}. Run \`${command} service restart\` when you are ready to switch it to ${version}.`,

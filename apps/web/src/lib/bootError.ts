@@ -3,7 +3,8 @@ import type { DesktopBridge, DesktopUpdateState } from "@t3tools/contracts";
 // Boot code loads before any package resolves, so it repeats APP_NAME and CLI_RELEASE_REPOSITORY from @t3tools/shared.
 const APP_NAME = "Ada";
 const REPOSITORY_URL = "https://github.com/jayleaton/ada";
-const FALLBACK_TRIAGE_COMMAND = "ada triage";
+// `t3` is the one name every install has; `ada` may be missing or another program.
+const FALLBACK_TRIAGE_COMMAND = "t3 triage";
 const DOWNLOAD_URL = `${REPOSITORY_URL}/releases`;
 const ISSUE_URL = `${REPOSITORY_URL}/issues/new`;
 const LAST_FAILURE_KEY = "t3code:boot-failed-at";
@@ -26,14 +27,16 @@ function launcherCommand(launcherPath: string) {
     : `'${launcherPath.replaceAll("'", `'"'"'`)}'`;
 }
 
-/** Desktop can run its bundled launcher; everything else falls back to `ada` on PATH. */
+/** Desktop names the command PATH runs as its own, else its launcher; everything else gets `t3`. */
 export async function resolveTriageCommand(bridge: DesktopBridge | undefined) {
   try {
     const state = await bridge?.cliCommand.getState();
     // Windows reports onPath from its PATH entry alone; only an existing launcher proves it runs.
     if (state?.launcherPath) {
-      // onPath reports the `t3` link; `ada` beside it is a best-effort alias.
-      return state.onPath ? "t3 triage" : `${launcherCommand(state.launcherPath)} triage`;
+      // `command` is absent from desktop builds that link only `t3`.
+      return state.onPath
+        ? `${state.command ?? "t3"} triage`
+        : `${launcherCommand(state.launcherPath)} triage`;
     }
   } catch (error) {
     console.warn("Could not read the desktop CLI state.", error);

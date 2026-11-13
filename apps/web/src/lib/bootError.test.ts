@@ -19,9 +19,19 @@ const notOnPath = (launcherPath: string | null): DesktopCliCommandState => ({
 });
 
 describe("resolveTriageCommand", () => {
-  it("prefers t3 on PATH, then the desktop launcher", async () => {
+  it("prefers the command PATH runs as ours, then the desktop launcher", async () => {
     const onPath = { ...notOnPath("/home/me/.t3/bin/t3"), onPath: true };
+    // A desktop build that predates `command` links only t3.
     await expect(resolveTriageCommand(desktopWith(async () => onPath))).resolves.toBe("t3 triage");
+    await expect(
+      resolveTriageCommand(desktopWith(async () => ({ ...onPath, command: "ada" }))),
+    ).resolves.toBe("ada triage");
+    // Another program's ada blocked the alias.
+    await expect(
+      resolveTriageCommand(
+        desktopWith(async () => ({ ...onPath, command: "t3", aliasBlockedBy: "/usr/bin/ada" })),
+      ),
+    ).resolves.toBe("t3 triage");
     await expect(
       resolveTriageCommand(desktopWith(async () => notOnPath("/home/me/.t3/bin/t3"))),
     ).resolves.toBe("/home/me/.t3/bin/t3 triage");
@@ -41,20 +51,20 @@ describe("resolveTriageCommand", () => {
     ).resolves.toBe("& 'C:\\Users\\Jo O''Neil\\.t3\\bin\\t3.cmd' triage");
   });
 
-  it("falls back to npx without a usable desktop launcher", async () => {
+  it("falls back to t3, which every install has, without a usable desktop launcher", async () => {
     using _warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    await expect(resolveTriageCommand(undefined)).resolves.toBe("ada triage");
-    await expect(resolveTriageCommand({} as DesktopBridge)).resolves.toBe("ada triage");
+    await expect(resolveTriageCommand(undefined)).resolves.toBe("t3 triage");
+    await expect(resolveTriageCommand({} as DesktopBridge)).resolves.toBe("t3 triage");
     await expect(resolveTriageCommand(desktopWith(async () => notOnPath(null)))).resolves.toBe(
-      "ada triage",
+      "t3 triage",
     );
     const staleWindowsPathEntry = { ...notOnPath(null), supported: true, onPath: true };
     await expect(
       resolveTriageCommand(desktopWith(async () => staleWindowsPathEntry)),
-    ).resolves.toBe("ada triage");
+    ).resolves.toBe("t3 triage");
     await expect(
       resolveTriageCommand(desktopWith(() => Promise.reject(new Error("ipc closed")))),
-    ).resolves.toBe("ada triage");
+    ).resolves.toBe("t3 triage");
   });
 });
 

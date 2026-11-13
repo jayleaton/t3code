@@ -74,7 +74,7 @@ import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { ThreadTitleInstructionsSettings } from "./ThreadTitleInstructionsSettings";
 import { SnoozePresetsRow } from "./SnoozePresetsSettings";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
-import { usageDataNotice, usePrimaryManagedPolicy } from "../../state/managedPolicy";
+import { usePrimaryManagedPolicy, useUsageDataNotice } from "../../state/managedPolicy";
 import {
   getCustomModelOptionsByInstance,
   resolveAppModelSelectionState,
@@ -2343,6 +2343,7 @@ export function AboutSettingsPanel() {
   const primaryPolicy = usePrimaryManagedPolicy();
   // The Welcome page sets up this computer, so it needs one.
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const usageDataNotice = useUsageDataNotice(primaryEnvironmentId);
   return (
     <SettingsPageContainer>
       <SettingsSection id="about" title={APP_NAME}>
@@ -2395,10 +2396,7 @@ export function AboutSettingsPanel() {
       </SettingsSection>
 
       <SettingsSection id="legal" title="Legal">
-        <SettingsRow
-          {...searchableSetting("usage-data")}
-          description={usageDataNotice(primaryPolicy)}
-        />
+        <SettingsRow {...searchableSetting("usage-data")} description={usageDataNotice} />
         <SettingsRow
           {...searchableSetting("license")}
           description={`The license ${APP_NAME}'s source code is released under.`}

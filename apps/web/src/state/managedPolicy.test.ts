@@ -1,7 +1,7 @@
 import { ProviderDriverKind, type ManagedPolicySummary } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { managedInstanceLocks } from "./managedPolicy";
+import { managedInstanceLocks, usageDataNotice } from "./managedPolicy";
 
 const codex = ProviderDriverKind.make("codex");
 const claude = ProviderDriverKind.make("claudeAgent");
@@ -41,5 +41,37 @@ describe("managedInstanceLocks", () => {
   it("locks nothing for drivers the policy does not pin, or without a policy", () => {
     expect(managedInstanceLocks(policy, claude)).toBeUndefined();
     expect(managedInstanceLocks(undefined, codex)).toBeUndefined();
+  });
+});
+
+describe("usageDataNotice", () => {
+  it.each([
+    {
+      name: "a server that reports usage data off",
+      config: { telemetryEnabled: false },
+      notice: "Ada doesn't collect usage data unless you turn it on with T3CODE_TELEMETRY_ENABLED.",
+    },
+    {
+      name: "a server that opted in",
+      config: { telemetryEnabled: true },
+      notice: "This server sends anonymous usage data because T3CODE_TELEMETRY_ENABLED is on.",
+    },
+    // Older servers do not report it and send by default, so opt-in is not promised for them.
+    {
+      name: "an older server",
+      config: {},
+      notice:
+        "This server may send anonymous usage data. Update it, or set T3CODE_TELEMETRY_ENABLED=false on it.",
+    },
+    {
+      name: "a policy that turns it off",
+      config: {
+        telemetryEnabled: true,
+        managedPolicy: { ...policy, limits: { telemetry: false } },
+      },
+      notice: "Example Corp turned off anonymous usage data.",
+    },
+  ])("describes $name", ({ config, notice }) => {
+    expect(usageDataNotice(config)).toBe(notice);
   });
 });

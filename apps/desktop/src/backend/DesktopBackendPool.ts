@@ -17,6 +17,7 @@ import { ChildProcessSpawner } from "effect/process";
 
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
+import * as DesktopCliCommand from "../app/DesktopCliCommand.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
@@ -26,7 +27,7 @@ import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
-import { APP_NAME, CLI_COMMAND } from "@t3tools/shared/branding";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const { logWarning: logBackendPoolWarning } =
   DesktopObservability.makeComponentLogger("desktop-backend-pool");
@@ -103,10 +104,15 @@ type UnregisterAction =
   | { readonly _tag: "Wait"; readonly done: Deferred.Deferred<void> }
   | { readonly _tag: "Close"; readonly entry: ActiveRegisteredInstance };
 
+/** What to do when another server holds this home; `command` is one that runs this app's CLI. */
+const stateDirOwnedDetail = (command: string, platform: NodeJS.Platform) =>
+  `Another ${APP_NAME} server, such as the background service, is using this data directory, or an older background service is set up for it. Stop that server or try \`${command} update\`. If the older launcher cannot update, run \`${command} service uninstall\` and optionally reinstall with \`${command} service install\` from a current CLI. If \`${command}\` is missing or outdated, install it with \`${cliInstallCommand(platform === "win32" ? "win32" : "posix")}\`, and pass \`--base-dir\` with the service's ${APP_NAME} home to each command. Then reopen ${APP_NAME}. You can also set a separate T3CODE_HOME and pair with the running server.`;
+
 export const layer = Layer.effect(
   DesktopBackendPool,
   Effect.gen(function* () {
     const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+    const cliCommand = yield* DesktopCliCommand.DesktopCliCommand;
     const desktopWindow = yield* DesktopWindow.DesktopWindow;
     const electronDialog = yield* ElectronDialog.ElectronDialog;
     const electronApp = yield* ElectronApp.ElectronApp;
@@ -176,13 +182,15 @@ export const layer = Layer.effect(
         SubscriptionRef.set(primaryBackendStartup, { _tag: "Failing", ...failure }),
       onShutdown: () => desktopWindow.handleBackendNotReady,
       onPreflightFailed: handlePrimaryPreflightFailure,
-      onStateDirOwned: () =>
-        Effect.flatMap(HostProcess.Platform, (platform) =>
-          electronDialog.showErrorBox(
-            `This ${APP_NAME} home is unavailable`,
-            `Another ${APP_NAME} server, such as the background service, is using this data directory, or an older background service is set up for it. Stop that server or try \`${CLI_COMMAND} update\`. If the older launcher cannot update, run \`${CLI_COMMAND} service uninstall\` and optionally reinstall with \`${CLI_COMMAND} service install\` from a current CLI. If \`${CLI_COMMAND}\` is missing or outdated, install it with \`${cliInstallCommand(platform === "win32" ? "win32" : "posix")}\`, and pass \`--base-dir\` with the service's ${APP_NAME} home to each command. Then reopen ${APP_NAME}. You can also set a separate T3CODE_HOME and pair with the running server.`,
-          ),
-        ).pipe(Effect.andThen(electronApp.quit)),
+      onStateDirOwned: Effect.fn("DesktopBackendPool.onStateDirOwned")(function* () {
+        const platform = yield* HostProcess.Platform;
+        const command = DesktopCliCommand.runnableCliCommand(yield* cliCommand.state, platform);
+        yield* electronDialog.showErrorBox(
+          `This ${APP_NAME} home is unavailable`,
+          stateDirOwnedDetail(command, platform),
+        );
+        yield* electronApp.quit;
+      }),
       onDatabaseRefused: () =>
         electronDialog
           .showErrorBox(

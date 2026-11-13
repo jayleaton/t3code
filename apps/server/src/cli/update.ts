@@ -1,5 +1,6 @@
 import { APP_NAME, CLI_COMMAND, LEGACY_CLI_COMMAND } from "@t3tools/shared/branding";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { shellCommandPath } from "@t3tools/shared/shell";
 import {
   CLI_RELEASE_BASE_URL_ENV,
   CLI_RELEASE_CHANNELS,
@@ -143,15 +144,60 @@ const ownedLaunchers = Effect.fn("cli.update.owned_launchers")(function* (input:
 });
 
 /**
- * The command to tell the user to run: `ada` when this install owns it, else `t3`, else
- * `fallback`. A collision can leave either name to another program, and older installs have only `t3`.
+ * The first of `ada` then `t3` that PATH runs as one of this home's launchers, and, with `runs`,
+ * one that starts that runtime. A foreign program of either name earlier on PATH would run instead,
+ * and older installs have only `t3`, so owning a launcher file is not enough.
  */
-const launcherCommand = (path: Path.Path, owned: ReadonlyArray<string>, fallback: string) => {
-  const names = owned.map((launcher) => path.basename(launcher, path.extname(launcher)));
-  return [CLI_COMMAND, LEGACY_CLI_COMMAND].find((name) => names.includes(name)) ?? fallback;
-};
-
-const quoted = (file: string) => (/[\s"'$`]/.test(file) ? `"${file}"` : file);
+const ownedCommandOnPath = Effect.fn("cli.update.owned_command_on_path")(function* (input: {
+  readonly baseDir: string;
+  readonly runs?: string;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const platform = yield* HostProcess.Platform;
+  const environment = yield* HostProcess.Environment;
+  const windows = platform === "win32";
+  const versionsDir = pinnedRuntimeVersionsDir(path, input.baseDir);
+  const normalize = (file: string) =>
+    windows ? path.resolve(file).toLowerCase() : path.resolve(file);
+  const targetOf = (launcher: string) =>
+    windows
+      ? fs.readFileString(launcher).pipe(
+          Effect.map(windowsShimTarget),
+          Effect.orElseSucceed(() => undefined),
+        )
+      : fs.readLink(launcher).pipe(
+          Effect.map((target) => path.resolve(path.dirname(launcher), target)),
+          Effect.orElseSucceed(() => undefined),
+        );
+  const directories = (environment["PATH"] ?? environment["Path"] ?? "")
+    .split(windows ? ";" : ":")
+    .filter((directory) => directory.length > 0);
+  // PATHEXT runs an .exe before a .cmd; only a .cmd can be one of our shims.
+  const extensions = windows ? [".exe", ".cmd"] : [""];
+  for (const name of [CLI_COMMAND, LEGACY_CLI_COMMAND]) {
+    let first: string | undefined;
+    search: for (const directory of directories) {
+      for (const extension of extensions) {
+        const candidate = path.join(directory, `${name}${extension}`);
+        if (yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {
+          first = candidate;
+          break search;
+        }
+      }
+    }
+    if (first === undefined) continue;
+    const target = yield* targetOf(first);
+    if (
+      target !== undefined &&
+      launcherOwnsVersionsDir(path, versionsDir, target) &&
+      (input.runs === undefined || normalize(target) === normalize(input.runs))
+    ) {
+      return name;
+    }
+  }
+  return undefined;
+});
 
 /**
  * Repoints the launchers {@link ownedLaunchers} finds. Each is recorded before it moves, so
@@ -411,9 +457,10 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   const targetChannel = cliReleaseChannelOf(targetVersion);
 
   const launchedAs = (yield* HostProcess.IsExecutable) ? yield* resolveLauncherPath : undefined;
-  const owned = yield* ownedLaunchers({ launchedAs, baseDir: input.baseDir });
-  // Before the new runtime is on disk, `t3` is the one name every install of ours has had.
-  const command = launcherCommand(path, owned, LEGACY_CLI_COMMAND);
+  // What the user just ran runs this program, so it is the fallback before the new runtime exists.
+  const command =
+    (yield* ownedCommandOnPath({ baseDir: input.baseDir })) ??
+    (launchedAs === undefined ? LEGACY_CLI_COMMAND : shellCommandPath(launchedAs, platform));
 
   const currentChannel = cliReleaseChannelOf(currentVersion);
   if (targetChannel === "preview" && currentChannel !== "preview") {
@@ -565,7 +612,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     ),
   );
 
-  const repointed = yield* repointLauncher({
+  yield* repointLauncher({
     launchedAs,
     baseDir: input.baseDir,
     targetEntryPath: runtime.entryPath,
@@ -611,17 +658,16 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     });
   }
 
-  // The repointed launchers are the ones owned before, so they name the command that now works.
-  const installedCommand = launcherCommand(
-    path,
-    Option.isSome(repointed) ? owned : [],
-    quoted(runtime.entryPath),
-  );
+  const commandOnPath = yield* ownedCommandOnPath({
+    baseDir: input.baseDir,
+    runs: runtime.entryPath,
+  });
+  const installedCommand = commandOnPath ?? shellCommandPath(runtime.entryPath, platform);
   progress.success(`Installed ${APP_NAME} ${targetVersion}`);
   yield* Console.log(
-    Option.isSome(repointed)
-      ? `  Run ${installedCommand} to get started.\n`
-      : `  Run ${installedCommand}\n`,
+    commandOnPath === undefined
+      ? `  Run ${installedCommand}\n`
+      : `  Run ${installedCommand} to get started.\n`,
   );
   if (servicePlan?.handedOff === true) {
     yield* Console.log(

@@ -15,9 +15,10 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { writeTextToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { useScratchProject } from "./useScratchProject";
-import { APP_NAME } from "@t3tools/shared/branding";
+import { APP_NAME, LEGACY_CLI_COMMAND } from "@t3tools/shared/branding";
 
-export const TRIAGE_CLI_COMMAND = "ada triage";
+// Runs on a machine whose install this client cannot see; `t3` is the one name every install has.
+export const TRIAGE_CLI_COMMAND = `${LEGACY_CLI_COMMAND} triage`;
 
 const copyTriageCliCommand = () =>
   writeTextToClipboard(TRIAGE_CLI_COMMAND, "command").catch(() =>
