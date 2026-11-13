@@ -36,7 +36,12 @@ import { createModelSelection } from "@t3tools/shared/model";
 import { resolvePastedPath } from "@t3tools/shared/path";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
-import { APP_VERSION, HOSTED_APP_CHANNEL, HOSTED_APP_CHANNEL_LABEL } from "../../branding";
+import {
+  APP_VERSION,
+  HOSTED_APP_CHANNEL,
+  HOSTED_APP_CHANNEL_LABEL,
+  MOBILE_APP_STORES,
+} from "../../branding";
 import { AboutVersionTitle } from "./AboutVersionTitle";
 import { CliCommandSettingsRow } from "./CliCommandSettingsRow";
 import { MobileAppSettingsRow } from "./MobileAppSettingsRow";
@@ -2377,7 +2382,11 @@ export function AboutSettingsPanel() {
         {primaryEnvironmentId === null ? null : (
           <SettingsRow
             {...searchableSetting("welcome-page")}
-            description="See your agents, import projects, and set up your phone."
+            description={
+              MOBILE_APP_STORES.length > 0
+                ? "See your agents, import projects, and set up your phone."
+                : "See your agents and import projects."
+            }
             control={
               <Button size="sm" variant="outline" render={<Link to="/welcome" />}>
                 Open
