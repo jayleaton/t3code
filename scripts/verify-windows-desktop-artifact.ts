@@ -12,9 +12,9 @@ import { Command, Flag } from "effect/cli";
 
 import {
   resolveDesktopProductName,
-  resolveWindowsExecutableName,
   verifyWindowsPackagedRuntime,
 } from "./build-desktop-artifact.ts";
+import { resolveWindowsExecutableName } from "./lib/windows-package-names.ts";
 
 const verifyWindowsDesktopArtifactCli = Command.make("verify-windows-desktop-artifact", {
   appDir: Flag.String("app-dir").pipe(

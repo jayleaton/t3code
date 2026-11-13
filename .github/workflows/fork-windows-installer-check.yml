@@ -1,0 +1,131 @@
+name: Fork Windows installer check
+
+# Builds an unsigned Ada installer for Windows x64 through the nightly's own release-desktop.yml
+# and runs its "Verify Agents installer isolation" step, so installer changes are proven on the PR
+# instead of on the next nightly. Product name Ada exercises the renamed product with the exe
+# pinned to its old name; the nightly's FORK_PRODUCT_NAME may still lag behind.
+
+on:
+  pull_request:
+    paths:
+      - apps/desktop/resources/*installer.nsh
+      - scripts/test-agents-windows-installer.ps1
+      - scripts/lib/windows-package-names.ts
+      - scripts/build-desktop-artifact.ts
+      - .github/workflows/release-desktop.yml
+      - .github/workflows/fork-windows-installer-check.yml
+  workflow_dispatch:
+
+permissions:
+  # release-desktop.yml's Windows build reads this run's artifacts to wait for the Linux CLI archive.
+  actions: read
+  contents: read
+
+concurrency:
+  group: fork-windows-installer-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    if: github.repository == 'jayleaton/ada'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      ref: ${{ steps.version.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - id: version
+        env:
+          REF: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          base=$(node -p 'JSON.parse(require("fs").readFileSync("apps/desktop/package.json", "utf8")).version.split("-")[0]')
+          echo "version=$base-nightly.$(date -u +%Y%m%d).$((GITHUB_RUN_NUMBER * 1000 + GITHUB_RUN_ATTEMPT))" >> "$GITHUB_OUTPUT"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+
+  build_bundle:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    env:
+      NODE_ENV: production
+      T3CODE_DESKTOP_BRAND: agents
+      APP_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          run-install: false
+      - name: Install build dependencies
+        env:
+          NODE_ENV: development
+        run: vp install --frozen-lockfile
+      - run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+      - run: node scripts/update-release-package-versions.ts "$APP_VERSION"
+      - run: vp run build:desktop
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: js-bundle
+          path: |
+            apps/server/dist
+            apps/desktop/dist-electron
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: mcp-gateway-bundle
+          path: packages/mcp-gateway/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  # The Windows build embeds this job's CLI archive as its WSL runtime.
+  desktop_linux_x64:
+    name: Desktop Linux x64
+    needs: [prepare, build_bundle]
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      ref: ${{ needs.prepare.outputs.ref }}
+      release_channel: nightly
+      brand: agents
+      app_id: ${{ vars.FORK_APP_ID || 'com.jayleaton.t3agents' }}
+      product_name: Ada
+      update_repository: ${{ github.repository }}
+      label: Linux x64
+      runner: ubuntu-24.04
+      platform: linux
+      target: AppImage
+      arch: x64
+      rust_target: x86_64-unknown-linux-gnu
+      resource_key: linux-x64
+      cli_archive: true
+
+  # No secrets: the installer is unsigned, which the installer check does not depend on.
+  desktop_win_x64:
+    name: Desktop Windows x64
+    needs: [prepare, build_bundle, desktop_linux_x64]
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      ref: ${{ needs.prepare.outputs.ref }}
+      release_channel: nightly
+      brand: agents
+      app_id: ${{ vars.FORK_APP_ID || 'com.jayleaton.t3agents' }}
+      product_name: Ada
+      update_repository: ${{ github.repository }}
+      label: Windows x64
+      runner: ubuntu-24.04
+      verify_runner: windows-2025
+      platform: win
+      target: nsis
+      arch: x64
+      rust_target: x86_64-pc-windows-msvc
+      resource_key: win32-x64
+      cli_archive: true

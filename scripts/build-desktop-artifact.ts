@@ -43,6 +43,7 @@ import {
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { selectDesktopRuntimeExternalDependencies } from "./lib/desktop-external-packages.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import { resolveWindowsExecutableName } from "./lib/windows-package-names.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -2578,13 +2579,6 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
   }
 
   return `${trimmed.slice(0, versionSeparator)}/${trimmed.slice(versionSeparator + 1)}`;
-}
-
-const LEGACY_FORK_WINDOWS_EXECUTABLE_NAME = "T3 Agents";
-
-/** The packaged Windows exe's base name; the agents brand pins it across product renames. */
-export function resolveWindowsExecutableName(productName: string, brand?: string): string {
-  return brand === "agents" ? LEGACY_FORK_WINDOWS_EXECUTABLE_NAME : productName;
 }
 
 export function resolveDesktopProductName(version: string): string {
