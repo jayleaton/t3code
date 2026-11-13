@@ -50,7 +50,7 @@ const makeService = Effect.fnUntraced(function* (
   return { service, urls };
 });
 
-const releasePath = (file: string) => `/jayleaton/t3code/releases/download/v${version}/${file}`;
+const releasePath = (file: string) => `/jayleaton/ada/releases/download/v${version}/${file}`;
 const published = {
   [releasePath("SHA256SUMS")]:
     `${sha256(manifest)}  t3-release.json\n${"a".repeat(64)}  t3-${version}-linux-x64.tar.gz\n`,
@@ -78,7 +78,7 @@ it.effect("reads release assets from the configured release mirror", () =>
   Effect.gen(function* () {
     const mirrored = Object.fromEntries(
       Object.entries(published).map(([path, body]) => [
-        path.replace("/jayleaton/t3code/releases/download", "/mirror"),
+        path.replace("/jayleaton/ada/releases/download", "/mirror"),
         body,
       ]),
     );

@@ -7,7 +7,7 @@ import { Alert, AlertDescription } from "../ui/alert";
 import { APP_NAME } from "@t3tools/shared/branding";
 
 const MULTIPLE_ACCOUNTS_FAQ_URL =
-  "https://github.com/jayleaton/t3code/blob/main/docs/user/faq.md#can-i-add-a-bunch-of-accounts-for-one-provider";
+  "https://github.com/jayleaton/ada/blob/main/docs/user/faq.md#can-i-add-a-bunch-of-accounts-for-one-provider";
 
 const PROVIDER_NAMES = new Map<string, string>([
   ["codex", "Codex"],

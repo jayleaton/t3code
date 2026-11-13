@@ -13,7 +13,7 @@ import { APP_NAME } from "@t3tools/shared/branding";
 // Separate keys so a count written by another tab can never undo a dismissal.
 const SENT_KEY = "t3code:github-star-prompt:sent";
 const DISMISSED_KEY = "t3code:github-star-prompt:dismissed";
-const REPOSITORY = "jayleaton/t3code";
+const REPOSITORY = "jayleaton/ada";
 const PROMPTS_BEFORE_ASKING = 5;
 const IDLE_MS = 30_000;
 // User-driven actions (send, navigate, type, scroll) start with one of these; touch fires pointerdown.

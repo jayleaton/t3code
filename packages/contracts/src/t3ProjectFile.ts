@@ -112,7 +112,7 @@ export const T3ProjectFile = Schema.Struct({
 }).annotate({
   title: "Ada project file",
   description:
-    "Checked-in project configuration for Ada (t3.json at the repository root). See https://github.com/jayleaton/t3code for documentation.",
+    "Checked-in project configuration for Ada (t3.json at the repository root). See https://github.com/jayleaton/ada for documentation.",
 });
 export type T3ProjectFile = typeof T3ProjectFile.Type;
 

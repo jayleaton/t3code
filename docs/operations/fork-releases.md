@@ -8,7 +8,7 @@ The fork ships the desktop client and its bundled per-machine server, including 
 
 `main` requires a pull request and resolution of review conversations, including for administrators. Force-pushes and branch deletion are blocked. Only the owner and explicitly invited write-access collaborators can merge. Automatic merging is disabled. Approve a contributor by granting repository collaborator access; do not grant write access merely so someone can submit a PR.
 
-The workflows are restricted to `jayleaton/t3code` and stay inactive until `FORK_RELEASE_ENABLED=true`. Before enabling, configure the following GitHub repository variables:
+The workflows are restricted to `jayleaton/ada` and stay inactive until `FORK_RELEASE_ENABLED=true`. Before enabling, configure the following GitHub repository variables:
 
 | Variable              | Value                                                                           |
 | --------------------- | ------------------------------------------------------------------------------- |

@@ -206,7 +206,7 @@
     "protects": "t3 update and server self-update install fork builds, never upstream's",
     "test": "apps/server/src/cli/update.test.ts",
     "title": "authenticates each release page until the requested channel is found",
-    "sha256": "27087ffcad39c66a702a1d45e6758a96a762a75fbcf0c659e5deb8874b7f9842",
+    "sha256": "15b618326a073faebce72146eab7b2c3a4583674f48c54f6b7aa692c92d88550",
     "sources": ["packages/shared/src/cliRelease.ts"]
   },
   {

@@ -855,20 +855,20 @@ it.effect("a pull request watch counts only while its thread is live", () =>
       yield* f.create("worker", "captain");
       yield* f.send("worker", 1);
       yield* tasks.assign(owner, { threadId: worker.threadId, summary: "Wait for CI" });
-      const pullRequest = { host: "github.com", repository: "jayleaton/t3code", number: 7 };
+      const pullRequest = { host: "github.com", repository: "jayleaton/ada", number: 7 };
       yield* f.orchestrator.dispatch({
         type: "thread.pull-request.watch",
         commandId: CommandId.make("watch:captain"),
         threadId: owner.threadId,
         ...pullRequest,
         watching: true,
-        link: { url: "https://github.com/jayleaton/t3code/pull/7", source: "manual" },
+        link: { url: "https://github.com/jayleaton/ada/pull/7", source: "manual" },
       });
       const waitOnPullRequest = (expectedRevision: number) =>
         tasks.update(worker, {
           expectedRevision,
           status: "WAITING",
-          waitingOn: { kind: "pull_request", repository: "jayleaton/t3code", number: 7 },
+          waitingOn: { kind: "pull_request", repository: "jayleaton/ada", number: 7 },
         });
 
       // The owner's watch is registered but parked while the owner is settled.

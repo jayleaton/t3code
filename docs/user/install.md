@@ -11,13 +11,13 @@ launch Ada and configure providers afterwards.
 ## Command line
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jayleaton/t3code/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/jayleaton/ada/main/scripts/install.sh | sh
 ```
 
 On Windows, in PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/jayleaton/t3code/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/jayleaton/ada/main/scripts/install.ps1 | iex
 ```
 
 This installs the `ada` command, and `t3` beside it for existing scripts, to `~/.local/bin`. If that folder is not on your
@@ -31,14 +31,14 @@ Every Ada release is a nightly, so the installer follows the nightly
 channel. To pin an exact version, set `T3CODE_VERSION`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jayleaton/t3code/main/scripts/install.sh | T3CODE_VERSION=<version> sh
+curl -fsSL https://raw.githubusercontent.com/jayleaton/ada/main/scripts/install.sh | T3CODE_VERSION=<version> sh
 ```
 
 ```powershell
-$env:T3CODE_VERSION="<version>"; irm https://raw.githubusercontent.com/jayleaton/t3code/main/scripts/install.ps1 | iex
+$env:T3CODE_VERSION="<version>"; irm https://raw.githubusercontent.com/jayleaton/ada/main/scripts/install.ps1 | iex
 ```
 
-Each [release](https://github.com/jayleaton/t3code/releases) also carries
+Each [release](https://github.com/jayleaton/ada/releases) also carries
 `install.sh` and `install.ps1`. Use only these scripts: T3 Code's
 installers and its npm package install T3 Code's server and replace Ada's.
 
@@ -70,11 +70,11 @@ for an independent server.
 
 There is no `ada` executable for Intel Macs (the desktop app is available). To
 run a server there, build it from source with `vp`, which provides the Node version it needs
-([Install vp](https://github.com/jayleaton/t3code#install-vp)):
+([Install vp](https://github.com/jayleaton/ada#install-vp)):
 
 ```bash
-git clone https://github.com/jayleaton/t3code
-cd t3code && vp i && vp run build:desktop
+git clone https://github.com/jayleaton/ada
+cd ada && vp i && vp run build:desktop
 node apps/server/dist/bin.mjs
 ```
 
@@ -83,7 +83,7 @@ update it with `git pull` and a rebuild.
 
 ## Desktop app
 
-Download a release from [GitHub Releases](https://github.com/jayleaton/t3code/releases):
+Download a release from [GitHub Releases](https://github.com/jayleaton/ada/releases):
 a `.dmg` for macOS, an `.exe` for Windows, and an AppImage or `.deb` for Linux.
 On Debian or Ubuntu, install the `.deb` with `sudo apt install ./T3-Agents-*.deb`.
 Package managers such as winget, Homebrew, the AUR, and Nix install T3 Code,

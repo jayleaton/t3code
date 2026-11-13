@@ -13,7 +13,7 @@ set -euo pipefail
 
 root="${T3_HEADLESS_ROOT:-$HOME/.local/opt/t3code-headless}"
 unit="${T3_HEADLESS_UNIT:-t3code-headless.service}"
-repo="${T3_HEADLESS_REPO:-jayleaton/t3code}"
+repo="${T3_HEADLESS_REPO:-jayleaton/ada}"
 feed="${T3_HEADLESS_FEED:-nightly-linux.yml}"
 ready_seconds="${T3_HEADLESS_READY_SECONDS:-90}"
 # Other units that run from $root/current (e.g. t3-mcp-gateway.service), restarted

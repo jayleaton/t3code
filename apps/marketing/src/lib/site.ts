@@ -1,10 +1,10 @@
-export const GITHUB_REPOSITORY_URL = "https://github.com/jayleaton/t3code";
+export const GITHUB_REPOSITORY_URL = "https://github.com/jayleaton/ada";
 
 // Runs at build time, so each deploy picks up the current count.
 async function fetchGithubStars(): Promise<string> {
   const token = process.env.GITHUB_TOKEN;
   try {
-    const response = await fetch("https://api.github.com/repos/jayleaton/t3code", {
+    const response = await fetch("https://api.github.com/repos/jayleaton/ada", {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!response.ok) throw new Error(`GitHub API responded ${response.status}`);

@@ -17,7 +17,7 @@ concurrency:
 jobs:
   validate:
     name: Validate release
-    if: github.repository == 'jayleaton/t3code'
+    if: github.repository == 'jayleaton/ada'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:

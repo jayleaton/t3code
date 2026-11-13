@@ -3734,7 +3734,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     packageManager: rootPackageJson.packageManager,
     description: `${APP_NAME} is an open-source desktop app for coding agents. Work with your existing agent subscriptions, review code changes, and run commands in your projects. Connect from desktop, web, or mobile to continue working remotely.`,
     license: "MIT",
-    homepage: "https://github.com/jayleaton/t3code",
+    homepage: "https://github.com/jayleaton/ada",
     author: "T3 Tools",
     main: "apps/desktop/dist-electron/boot.cjs",
     build: yield* createBuildConfig(

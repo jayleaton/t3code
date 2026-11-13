@@ -20,10 +20,10 @@ describe("cliRelease", () => {
 
   it("installs the CLI from the fork's install scripts", () => {
     expect(cliInstallCommand("posix", "1.2.3")).toBe(
-      "curl -fsSL https://raw.githubusercontent.com/jayleaton/t3code/main/scripts/install.sh | T3CODE_VERSION=1.2.3 sh",
+      "curl -fsSL https://raw.githubusercontent.com/jayleaton/ada/main/scripts/install.sh | T3CODE_VERSION=1.2.3 sh",
     );
     expect(cliInstallCommand("win32")).toBe(
-      "irm https://raw.githubusercontent.com/jayleaton/t3code/main/scripts/install.ps1 | iex",
+      "irm https://raw.githubusercontent.com/jayleaton/ada/main/scripts/install.ps1 | iex",
     );
   });
 

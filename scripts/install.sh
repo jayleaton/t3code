@@ -2,7 +2,7 @@
 # Installs the Ada CLI from a GitHub Release archive. Needs only sh, tar,
 # sha256sum or shasum, and curl or wget; no Node, npm, or compiler.
 #
-#   curl -fsSL https://raw.githubusercontent.com/jayleaton/t3code/main/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/jayleaton/ada/main/scripts/install.sh | sh
 #
 # Environment:
 #   T3CODE_CHANNEL           release train to follow: stable, nightly, or preview
@@ -19,7 +19,7 @@
 set -eu
 
 # CLI_RELEASE_REPOSITORY in packages/shared/src/cliRelease.ts; install.test.ts keeps them equal.
-repo="jayleaton/t3code"
+repo="jayleaton/ada"
 base_url="${T3CODE_RELEASE_BASE_URL:-https://github.com/${repo}/releases/download}"
 t3_home="${T3CODE_HOME:-$HOME/.t3}"
 case "$t3_home" in

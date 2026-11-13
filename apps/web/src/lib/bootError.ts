@@ -2,7 +2,7 @@ import type { DesktopBridge, DesktopUpdateState } from "@t3tools/contracts";
 
 // Boot code loads before any package resolves, so it repeats APP_NAME and CLI_RELEASE_REPOSITORY from @t3tools/shared.
 const APP_NAME = "Ada";
-const REPOSITORY_URL = "https://github.com/jayleaton/t3code";
+const REPOSITORY_URL = "https://github.com/jayleaton/ada";
 const FALLBACK_TRIAGE_COMMAND = "ada triage";
 const DOWNLOAD_URL = `${REPOSITORY_URL}/releases`;
 const ISSUE_URL = `${REPOSITORY_URL}/issues/new`;

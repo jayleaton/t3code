@@ -32,6 +32,7 @@ function makePort(input?: {
   readonly staleApprovalPlan?: boolean;
   readonly threadActivities?: ReadonlyArray<Record<string, unknown>>;
   readonly projectOwner?: string;
+  readonly projectName?: string;
 }): GatewayRuntimePort {
   const environments = ["local", "remote"] as const;
   const threads = new Map<string, Array<Record<string, unknown>>>(
@@ -68,7 +69,10 @@ function makePort(input?: {
           id: `${environmentId}-project`,
           title: "Project",
           workspaceRoot: "/repo",
-          repositoryIdentity: { owner: input?.projectOwner ?? "jayleaton", name: "t3code" },
+          repositoryIdentity: {
+            owner: input?.projectOwner ?? "jayleaton",
+            name: input?.projectName ?? "ada",
+          },
         },
       ],
     }),
@@ -1991,7 +1995,10 @@ describe("gateway v3 event delivery tools", () => {
     const operations: Array<{ operation: string; payload: Readonly<Record<string, unknown>> }> = [];
     await expect(
       callGatewayTool(
-        { port: makePort({ operations, projectOwner: "pingdotgg" }), grants },
+        {
+          port: makePort({ operations, projectOwner: "pingdotgg", projectName: "t3code" }),
+          grants,
+        },
         "t3_create_pr",
         {
           environmentId: "local",
@@ -2030,7 +2037,7 @@ describe("gateway v3 event delivery tools", () => {
     const input = {
       environmentId: "local",
       projectId: "local-project",
-      repository: "jayleaton/t3code",
+      repository: "jayleaton/ada",
       number: 12,
       title: "Updated",
       idempotencyKey: "update-pr-1",
@@ -2041,6 +2048,27 @@ describe("gateway v3 event delivery tools", () => {
 
     expect(first).toEqual(second);
     expect(first).toMatchObject({ requestId: expect.stringMatching(/^mcp-operation-v2-/u) });
+    expect(operations).toEqual([{ operation: "pr.update", payload: input }]);
+  });
+  it("still allows the repository's pre-rename name that existing clones use", async () => {
+    const operations: Array<{ operation: string; payload: Readonly<Record<string, unknown>> }> = [];
+    const input = {
+      environmentId: "local",
+      projectId: "local-project",
+      repository: "jayleaton/t3code",
+      number: 12,
+      title: "Updated",
+      idempotencyKey: "update-pr-old-name",
+    };
+    await callGatewayTool(
+      {
+        port: makePort({ operations, projectName: "t3code" }),
+        grants,
+        events: createGatewayEventStore(),
+      },
+      "t3_update_pr",
+      input,
+    );
     expect(operations).toEqual([{ operation: "pr.update", payload: input }]);
   });
 });
