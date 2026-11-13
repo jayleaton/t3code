@@ -111,6 +111,27 @@ describe("environment release checks", () => {
     );
   });
 
+  it("finds stable releases from the release list, since /releases/latest never resolves on a prerelease-only repo", async () => {
+    const nightlies = ["v1.0.1-nightly.20261113.2", "v1.0.1-nightly.20261113.1"];
+    const releases = vi.fn(async (url: string) => {
+      if (url === "https://github.com/jayleaton/t3code/releases.atom") return feed(...nightlies);
+      if (url === "https://api.github.com/repos/jayleaton/t3code/releases?per_page=100&page=1") {
+        return Response.json(nightlies.map((tag_name) => ({ tag_name })));
+      }
+      throw new Error(`Unexpected release request: ${url}`);
+    });
+    vi.stubGlobal("fetch", releases);
+    await expect(findEnvironmentUpdate("1.0.0", signal)).rejects.toThrow("No stable release");
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.endsWith(".atom") ? feed(nightlies[0]!, "v1.0.1") : releases(url),
+      ),
+    );
+    expect(await findEnvironmentUpdate("1.0.0", signal)).toBe("1.0.1");
+  });
+
   it("reports failed checks instead of claiming the server is current", async () => {
     for (const status of [403, 429]) {
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status })));
@@ -125,7 +146,14 @@ describe("environment release checks", () => {
     await expect(findEnvironmentUpdate("1.0.0-nightly.20260923.1", signal)).rejects.toThrow(
       "No nightly release",
     );
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ error: "invalid" })));
-    await expect(findEnvironmentUpdate("1.0.0", signal)).rejects.toThrow();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.endsWith(".atom") ? feed() : Response.json({ message: "API rate limit exceeded" }),
+      ),
+    );
+    await expect(findEnvironmentUpdate("1.0.0", signal)).rejects.toThrow(
+      "Could not read the release list. Try again.",
+    );
   });
 });
