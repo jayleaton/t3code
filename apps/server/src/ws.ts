@@ -8,6 +8,7 @@ import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
 import * as PeerLinks from "./peer/PeerLinks.ts";
 import * as TailnetDevices from "./peer/TailnetDevices.ts";
+import * as PushRegistrations from "./push/PushRegistrations.ts";
 
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -1581,6 +1582,7 @@ export const layerWsRpc = (
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const triage = yield* TriageService.TriageService;
+      const pushRegistrations = yield* PushRegistrations.PushRegistrations;
       const hostResources = yield* HostResources.HostResources;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
@@ -2709,6 +2711,10 @@ export const layerWsRpc = (
         [WS_METHODS.tailnetDevicesLeave]: () =>
           tailnetDevices.leave({ sessionId: currentSession.sessionId }),
         [WS_METHODS.tailnetDevicesAllowJoin]: () => tailnetDevices.allowJoin,
+        [WS_METHODS.pushRegistrationsRegister]: (input) =>
+          pushRegistrations.register(currentSessionId, input),
+        [WS_METHODS.pushRegistrationsUnregister]: (input) =>
+          pushRegistrations.unregister(input.installId),
         [WS_METHODS.tailnetDevicesOpenDevice]: (input) =>
           tailnetDevices.openDevice(input.environmentId, {
             scopes: currentSession.scopes,
@@ -3581,6 +3587,7 @@ const provideWsRpcDependencies = <A, E, R>(
     // mutation invalidates the HTTP diff cache that every client reads from.
     Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
     Layer.provide(OtlpEndpointCheck.layer),
+    Layer.provide(PushRegistrations.layer),
     Layer.provide(
       Layer.succeed(PullRequestReviewGuideService.PullRequestReviewGuideService, reviewGuides),
     ),

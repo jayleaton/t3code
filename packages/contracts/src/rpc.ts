@@ -480,6 +480,11 @@ import {
   SourceControlSignInResult,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
+import {
+  PushRegistrationError,
+  PushRegistrationsRegisterInput,
+  PushRegistrationsUnregisterInput,
+} from "./pushRegistrations.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 
 export const WS_METHODS = {
@@ -609,6 +614,8 @@ export const WS_METHODS = {
   tailnetDevicesForgetApp: "tailnetDevices.forgetApp",
   tailnetDevicesSetLimit: "tailnetDevices.setLimit",
   tailnetDevicesLeave: "tailnetDevices.leave",
+  pushRegistrationsRegister: "pushRegistrations.register",
+  pushRegistrationsUnregister: "pushRegistrations.unregister",
   tailnetDevicesAllowJoin: "tailnetDevices.allowJoin",
   subscribeTailnetDevices: "subscribeTailnetDevices",
   serverUpdateSettings: "server.updateSettings",
@@ -1043,6 +1050,17 @@ const WsTailnetDevicesSetLimitRpc = Rpc.make(WS_METHODS.tailnetDevicesSetLimit, 
 const WsTailnetDevicesLeaveRpc = Rpc.make(WS_METHODS.tailnetDevicesLeave, {
   payload: Schema.Struct({}),
   error: Schema.Union([TailnetDevicesError, EnvironmentAuthorizationError]),
+});
+
+/** This phone's Expo push token, bound to the calling session; sending again replaces it. */
+const WsPushRegistrationsRegisterRpc = Rpc.make(WS_METHODS.pushRegistrationsRegister, {
+  payload: PushRegistrationsRegisterInput,
+  error: Schema.Union([PushRegistrationError, EnvironmentAuthorizationError]),
+});
+
+const WsPushRegistrationsUnregisterRpc = Rpc.make(WS_METHODS.pushRegistrationsUnregister, {
+  payload: PushRegistrationsUnregisterInput,
+  error: Schema.Union([PushRegistrationError, EnvironmentAuthorizationError]),
 });
 
 const WsTailnetDevicesAllowJoinRpc = Rpc.make(WS_METHODS.tailnetDevicesAllowJoin, {
@@ -2481,6 +2499,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsTailnetDevicesForgetAppRpc,
   WsTailnetDevicesSetLimitRpc,
   WsTailnetDevicesLeaveRpc,
+  WsPushRegistrationsRegisterRpc,
+  WsPushRegistrationsUnregisterRpc,
   WsTailnetDevicesAllowJoinRpc,
   WsSubscribeTailnetDevicesRpc,
   WsPeerLinksLinkRpc,
