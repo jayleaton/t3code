@@ -47,15 +47,19 @@ export function pipCanvasSvg(
     readonly fraction: number;
     readonly fill: string;
     readonly background?: string;
+    /** Rounds the background's corners by this fraction of the canvas. */
+    readonly cornerRadius?: number;
     readonly lift?: number;
   },
 ): string {
-  const { size, fraction, fill, background, lift = 0 } = options;
+  const { size, fraction, fill, background, cornerRadius = 0, lift = 0 } = options;
   const scale = (size * fraction) / pip.width;
   const tx = (size - pip.width * scale) / 2 - pip.x * scale;
   const ty = (size - pip.height * scale) / 2 - pip.y * scale - lift * size;
   const backdrop =
-    background === undefined ? "" : `<rect width="${size}" height="${size}" fill="${background}"/>`;
+    background === undefined
+      ? ""
+      : `<rect width="${size}" height="${size}" rx="${cornerRadius * size}" fill="${background}"/>`;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${backdrop}<g transform="translate(${tx.toFixed(3)} ${ty.toFixed(3)}) scale(${scale.toFixed(5)})">${path(pip, fill)}</g></svg>`;
 }
 

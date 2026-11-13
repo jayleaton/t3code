@@ -16,7 +16,15 @@ import sharp from "sharp";
 
 import { BRAND_ASSET_PATHS, DEVELOPMENT_PUBLIC_ICON_OVERRIDES } from "./lib/brand-assets.ts";
 import { encodePngIco, readPngDimensions, WINDOWS_ICON_SIZES } from "./lib/icon-export.ts";
-import { parsePip, PIP_COLORS, PIP_SOURCE, pipGlyphSvg } from "./lib/pip.ts";
+import {
+  parsePip,
+  PIP_COLORS,
+  PIP_ICON_LIFT,
+  PIP_SOURCE,
+  pipCanvasSvg,
+  pipGlyphSvg,
+  type Pip,
+} from "./lib/pip.ts";
 
 const DESIGN_GENERATION = 26;
 const ICON_COMPOSER_EXECUTABLE_PARTS = [
@@ -267,7 +275,6 @@ const ICON_COMPOSER_GLYPHS = [
 // Byte copies of rendered assets. The fork ships the production render as its agents brand.
 const GENERATED_COPIES = [
   [BRAND_ASSET_PATHS.productionMacIconPng, BRAND_ASSET_PATHS.agentsDesktopIconPng],
-  [BRAND_ASSET_PATHS.productionWindowsIconIco, BRAND_ASSET_PATHS.agentsWindowsIconIco],
   [BRAND_ASSET_PATHS.productionWebFaviconIco, BRAND_ASSET_PATHS.agentsWebFaviconIco],
   [BRAND_ASSET_PATHS.productionWebFavicon16Png, BRAND_ASSET_PATHS.agentsWebFavicon16Png],
   [BRAND_ASSET_PATHS.productionWebFavicon32Png, BRAND_ASSET_PATHS.agentsWebFavicon32Png],
@@ -280,6 +287,18 @@ const GENERATED_COPIES = [
   [BRAND_ASSET_PATHS.productionWebFavicon32Png, "apps/marketing/public/favicon-32x32.png"],
   [BRAND_ASSET_PATHS.productionWebAppleTouchIconPng, "apps/marketing/public/apple-touch-icon.png"],
 ] as const;
+
+// Windows shows icons unmasked and small, so Ada's is a full-bleed tile with Pip filling most of it.
+const ADA_WINDOWS_ICON_SIZES = [16, 20, 24, 32, 40, 48, 64, 256] as const;
+const adaWindowsTileSvg = (pip: Pip, size: number) =>
+  pipCanvasSvg(pip, {
+    size,
+    fraction: 0.72,
+    fill: PIP_COLORS.lavender,
+    background: PIP_COLORS.navy,
+    cornerRadius: 0.1875,
+    lift: PIP_ICON_LIFT,
+  });
 
 const MARKETING_ICONS = [
   [BRAND_ASSET_PATHS.productionIosIconPng, "apps/marketing/src/assets/icon.webp"],
@@ -823,6 +842,21 @@ export const exportBrandIcons = Effect.fn("exportBrandIcons")(function* (checkOn
       generated.set(relativePath, contents);
     }
   }
+
+  const windowsTiles = yield* Effect.forEach(ADA_WINDOWS_ICON_SIZES, (size) =>
+    encodeWith(`ada-windows-${size}`, () =>
+      sharp(Buffer.from(adaWindowsTileSvg(pip, size)))
+        .png()
+        .toBuffer(),
+    ).pipe(Effect.map((contents) => ({ size, contents }))),
+  );
+  generated.set(
+    BRAND_ASSET_PATHS.agentsWindowsIconIco,
+    yield* Effect.try({
+      try: () => encodePngIco(windowsTiles),
+      catch: (cause) => new IconExportEncodingError({ variant: "ada-windows", cause }),
+    }),
+  );
 
   const copies = [
     ...DEVELOPMENT_PUBLIC_ICON_OVERRIDES.map(
