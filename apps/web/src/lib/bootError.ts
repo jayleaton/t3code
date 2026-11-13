@@ -1,9 +1,10 @@
 import type { DesktopBridge, DesktopUpdateState } from "@t3tools/contracts";
-import { CLI_RELEASES_PAGE_URL } from "@t3tools/shared/cliRelease";
 
+// Boot code loads before any package resolves, so it repeats CLI_RELEASE_REPOSITORY from cliRelease.ts.
+const REPOSITORY_URL = "https://github.com/jayleaton/t3code";
 const FALLBACK_TRIAGE_COMMAND = "t3 triage";
-const DOWNLOAD_URL = CLI_RELEASES_PAGE_URL;
-const ISSUE_URL = `${CLI_RELEASES_PAGE_URL.replace(/\/releases$/, "")}/issues/new`;
+const DOWNLOAD_URL = `${REPOSITORY_URL}/releases`;
+const ISSUE_URL = `${REPOSITORY_URL}/issues/new`;
 const LAST_FAILURE_KEY = "t3code:boot-failed-at";
 const REPEAT_FAILURE_MS = 5 * 60_000;
 const MAX_CAUSES = 3;
