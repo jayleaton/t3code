@@ -73,6 +73,7 @@ export function describeSchedule(
   schedule: ScheduledTaskSchedule,
   formatInstant: (iso: string) => string,
   viewerTimeZone: string = localTimeZone(),
+  formatTimeOfDay: (time: string) => string = (time) => time,
 ): string {
   switch (schedule.type) {
     case "once":
@@ -89,7 +90,7 @@ export function describeSchedule(
         days.length === 0 || days.length === 7
           ? "Every day"
           : days.map((day) => WEEKDAY_NAMES[day]).join(", ");
-      return `${on} at ${schedule.timeOfDay}`;
+      return `${on} at ${formatTimeOfDay(schedule.timeOfDay)}`;
     }
     case "webhook":
       return "On webhook";
@@ -100,11 +101,11 @@ export function describeSchedule(
   const zone = schedule.timezone === viewerTimeZone ? "" : ` (${schedule.timezone})`;
   switch (form.preset) {
     case "daily":
-      return `Every day at ${form.time}${zone}`;
+      return `Every day at ${formatTimeOfDay(form.time)}${zone}`;
     case "weekdays":
-      return `Weekdays at ${form.time}${zone}`;
+      return `Weekdays at ${formatTimeOfDay(form.time)}${zone}`;
     case "weekly":
-      return `Every ${WEEKDAY_NAMES[form.weekday]} at ${form.time}${zone}`;
+      return `Every ${WEEKDAY_NAMES[form.weekday]} at ${formatTimeOfDay(form.time)}${zone}`;
     case "hourly":
       return `Every hour at :${form.time.slice(3)}${zone}`;
     case "custom":

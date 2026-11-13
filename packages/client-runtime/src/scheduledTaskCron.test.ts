@@ -39,6 +39,15 @@ describe("scheduled task repeat presets", () => {
     expect(
       describeSchedule({ type: "cron", expression: "0 7 * * 1-5", timezone: "UTC" }, at, "UTC"),
     ).toBe("Weekdays at 07:00");
+    const twelveHour = (time: string) => `${Number(time.slice(0, 2)) % 12 || 12}:${time.slice(3)}`;
+    expect(
+      describeSchedule(
+        { type: "cron", expression: "30 14 * * 1-5", timezone: "UTC" },
+        at,
+        "UTC",
+        twelveHour,
+      ),
+    ).toBe("Weekdays at 2:30");
     expect(
       describeSchedule(
         { type: "cron", expression: "30 6 * * 0", timezone: "Asia/Bangkok" },
