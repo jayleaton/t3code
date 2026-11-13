@@ -525,6 +525,19 @@ export const layer = Layer.effect(
       ReadonlyMap<ScheduledTaskId, ReadonlyArray<number>>
     >(new Map());
     const activeRuns = yield* Ref.make<ReadonlySet<ScheduledTaskId>>(new Set());
+    const reserveRun = (id: ScheduledTaskId) =>
+      Ref.modify(activeRuns, (active) => {
+        if (active.has(id)) return [false, active] as const;
+        const next = new Set(active);
+        next.add(id);
+        return [true, next] as const;
+      });
+    const releaseRun = (id: ScheduledTaskId) =>
+      Ref.update(activeRuns, (active) => {
+        const next = new Set(active);
+        next.delete(id);
+        return next;
+      });
     /** Caller-key claims this process is still carrying from request to finished run. */
     const keyedInFlight = yield* Ref.make<ReadonlySet<string>>(new Set());
     // Sliding(1) coalesces the dirty-signal: every notification triggers a
@@ -1220,26 +1233,14 @@ export const layer = Layer.effect(
 
       // Reserve and release as one bracket so an interrupt cannot leave the task marked busy.
       return yield* Effect.acquireUseRelease(
-        Ref.modify(activeRuns, (active) => {
-          if (active.has(task.id)) return [false, active] as const;
-          const next = new Set(active);
-          next.add(task.id);
-          return [true, next] as const;
-        }),
+        reserveRun(task.id),
         (reserved) =>
           reserved
             ? run
             : trigger !== "scheduled"
               ? Effect.fail(taskError("Schedule task is already running.", { taskId: task.id }))
               : Effect.succeed({ task, threadId: null, dispatchFailed: false }),
-        (reserved) =>
-          reserved
-            ? Ref.update(activeRuns, (active) => {
-                const next = new Set(active);
-                next.delete(task.id);
-                return next;
-              })
-            : Effect.void,
+        (reserved) => (reserved ? releaseRun(task.id) : Effect.void),
       );
     });
 
@@ -2820,18 +2821,28 @@ export const layer = Layer.effect(
               });
             }
           } else if (decision._tag === "delete") {
-            const deleted = yield* sql.withTransaction(
-              Effect.gen(function* () {
-                const removed = yield* sql`
-                  DELETE FROM scheduled_tasks
-                  WHERE task_id = ${row.task_id} AND archived_at = ${row.archived_at}
-                  RETURNING task_id
-                `;
-                if (removed.length > 0) {
-                  yield* sql`DELETE FROM scheduled_task_webhook_deliveries WHERE task_id = ${row.task_id}`;
-                }
-                return removed.length > 0;
-              }),
+            // Holding the run reservation keeps a run from starting mid-delete; the updated_at
+            // and status guards drop the decision if a run or edit landed since the read.
+            const deleted = yield* Effect.acquireUseRelease(
+              reserveRun(task.id),
+              (reserved) =>
+                reserved
+                  ? sql.withTransaction(
+                      Effect.gen(function* () {
+                        const removed = yield* sql`
+                          DELETE FROM scheduled_tasks
+                          WHERE task_id = ${row.task_id} AND archived_at = ${row.archived_at}
+                            AND updated_at = ${row.updated_at} AND last_run_status <> 'running'
+                          RETURNING task_id
+                        `;
+                        if (removed.length > 0) {
+                          yield* sql`DELETE FROM scheduled_task_webhook_deliveries WHERE task_id = ${row.task_id}`;
+                        }
+                        return removed.length > 0;
+                      }),
+                    )
+                  : Effect.succeed(false),
+              (reserved) => (reserved ? releaseRun(task.id) : Effect.void),
             );
             if (deleted) {
               changed = true;

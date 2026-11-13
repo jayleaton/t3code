@@ -1127,3 +1127,51 @@ it.effect("the sweep skips a task while it runs", () =>
     }).pipe(Effect.provide(layer));
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
+
+it.effect("the sweep keeps an archived task whose run starts after the sweep read it", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(CLEANUP_T0);
+    const sweepPaused = yield* Deferred.make<void>();
+    const resumeSweep = yield* Deferred.make<void>();
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const pauseSweep = yield* Ref.make(false);
+    const layer = cleanupLayer({
+      getThreadShell: () =>
+        Effect.gen(function* () {
+          if (yield* Ref.get(pauseSweep)) {
+            yield* Deferred.succeed(sweepPaused, undefined);
+            yield* Deferred.await(resumeSweep);
+          }
+          return threadShell(cleanupProject);
+        }),
+      launch: () =>
+        Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as({ threadId: ThreadId.make("thread:manual"), resumed: false } as never),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      const id = ScheduledTaskId.make("task:archived");
+      yield* service.upsert(cleanupInput(id, { enabled: false }));
+      yield* TestClock.setTime(CLEANUP_T0 + 10 * DAY_MS);
+      yield* service.cleanupStale();
+      yield* TestClock.setTime(CLEANUP_T0 + 41 * DAY_MS);
+      // A bound task read after the archived one pauses the sweep on its thread lookup.
+      yield* service.upsert(
+        cleanupInput("task:bound", { threadId: ThreadId.make("thread:bound") }),
+      );
+      yield* Ref.set(pauseSweep, true);
+      const sweep = yield* service.cleanupStale().pipe(Effect.forkChild);
+      yield* Deferred.await(sweepPaused);
+      const run = yield* service.runNow({ id }).pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* Deferred.succeed(resumeSweep, undefined);
+      yield* Fiber.join(sweep);
+      assert.isDefined((yield* service.list()).tasks.find((task) => task.id === id));
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(run);
+    }).pipe(Effect.provide(layer));
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
