@@ -16,13 +16,14 @@ import { isSqlError } from "effect/sql/SqlError";
 
 import * as ProjectionMaintenance from "../orchestration-v2/ProjectionMaintenance.ts";
 import { rebuildMessageSearch } from "../orchestration-v2/messageSearchIndex.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 export class DatabaseMissingError extends Schema.TaggedError<DatabaseMissingError>()(
   "DatabaseMissingError",
   { path: Schema.String },
 ) {
   override get message() {
-    return "No existing T3 Code database was found in this data directory.";
+    return `No existing ${APP_NAME} database was found in this data directory.`;
   }
 }
 
@@ -31,7 +32,7 @@ export class DatabaseInUseError extends Schema.TaggedError<DatabaseInUseError>()
   { path: Schema.String, cause: Schema.Defect() },
 ) {
   override get message() {
-    return "Stop the T3 Code server and desktop app, including any version before 0.1.0, before repairing the database.";
+    return `Stop the ${APP_NAME} server and desktop app, including any version before 0.1.0, before repairing the database.`;
   }
 }
 
@@ -278,7 +279,7 @@ export const runRequestedReclaim = Effect.fn("DatabaseMaintenance.runRequestedRe
             .writeFileString(
               files.failure,
               error._tag === "DatabaseInUseError"
-                ? "Another program kept the database open. Close other T3 Code apps and t3 commands on this machine, then try again."
+                ? `Another program kept the database open. Close other ${APP_NAME} apps and t3 commands on this machine, then try again.`
                 : error.message,
             )
             .pipe(

@@ -48,6 +48,7 @@ import {
   timingSafeEqualBase64Url,
 } from "./utils.ts";
 import { requestUrl } from "../requestUrl.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 // Request-derived origins support loopback, Tailscale and tunnels.
 // Signed client metadata keeps unauthenticated registration stateless.
@@ -84,7 +85,7 @@ export const protectedResourceMetadata = (
   authorization_servers: [urls.issuer],
   scopes_supported: MCP_OAUTH_SCOPES,
   bearer_methods_supported: ["header"],
-  resource_name: "T3 Code",
+  resource_name: APP_NAME,
 });
 
 export const authorizationServerMetadata = (

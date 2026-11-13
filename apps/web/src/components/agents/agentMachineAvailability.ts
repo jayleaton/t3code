@@ -1,6 +1,7 @@
 import { resolveGatewayProfileModelSelection } from "@t3tools/client-runtime/gateway";
 import type { McpGatewayProfile, ServerProvider } from "@t3tools/contracts";
 import type { EnvironmentPresentation } from "../../state/environments";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 export function agentMachineUnavailableReason(
   profile: McpGatewayProfile,
@@ -24,7 +25,7 @@ export function agentMachineUnavailableReason(
     profile.skillIds?.length &&
     !environment.serverConfig.environment.capabilities.agentSkillsSync
   ) {
-    return "Update T3 on this machine to use shared agent skills";
+    return `Update ${APP_NAME} on this machine to use shared agent skills`;
   }
   if (resolveGatewayProfileModelSelection(profile, providers)) return undefined;
   const hasLabels = profile.providerLabel !== undefined && profile.modelLabel !== undefined;

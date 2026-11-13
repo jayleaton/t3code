@@ -1,14 +1,14 @@
+import { APP_NAME } from "@t3tools/shared/branding";
 import type { Messages } from "./en";
 
 export const ru: Messages = {
   layout: {
-    defaultTitle: "T3 Code",
-    defaultDescription: "T3 Code. Открытый пульт управления ИИ-агентами для программирования.",
-    socialImageAlt:
-      "T3 Code: открытый пульт управления ИИ-агентами для программирования. Claude Code, Codex, Cursor, OpenCode, Grok и Antigravity.",
-    homeLabel: "Главная страница T3 Code",
+    defaultTitle: APP_NAME,
+    defaultDescription: `${APP_NAME}. Открытый пульт управления ИИ-агентами для программирования.`,
+    socialImageAlt: `${APP_NAME}: открытый пульт управления ИИ-агентами для программирования. Claude Code, Codex, Cursor, OpenCode, Grok и Antigravity.`,
+    homeLabel: `Главная страница ${APP_NAME}`,
     download: "Скачать",
-    starsLabel: "Поставить звезду T3 Code на GitHub, звёзд: {stars}",
+    starsLabel: `Поставить звезду ${APP_NAME} на GitHub, звёзд: {stars}`,
     githubStars: "{stars} звёзд на GitHub",
     language: "Язык",
     mitLicensed: "Лицензия MIT",
@@ -19,8 +19,8 @@ export const ru: Messages = {
     security: "Безопасность",
   },
   home: {
-    title: "T3 Code | Открытый пульт управления ИИ-агентами для программирования",
-    description: "T3 Code. Открытый пульт управления ИИ-агентами для программирования.",
+    title: `${APP_NAME} | Открытый пульт управления ИИ-агентами для программирования`,
+    description: `${APP_NAME}. Открытый пульт управления ИИ-агентами для программирования.`,
     heroTitle: ["Открытый пульт", "управления", "ИИ-агентами для кода."],
     heroSub:
       "Управляйте Claude Code, Codex, Antigravity, OpenCode, Cursor и Grok из одного окна. Пользуйтесь своей подпиской. Форкайте всё целиком.",
@@ -29,22 +29,20 @@ export const ru: Messages = {
     downloadForLinux: "Скачать для Linux",
     sourceLink: "Украдите наш код (легально)",
     alsoOnPhone: "Есть и для телефона:",
-    screenshotAlt: "T3 Code запускает субагентов Claude, Codex, Muse и Gemini в одном треде",
+    screenshotAlt: `${APP_NAME} запускает субагентов Claude, Codex, Muse и Gemini в одном треде`,
     endorsementsTitle: "Нас терпят более {users} разработчиков",
     endorsementsSub: "Некоторые даже написали об этом в X.",
     endorsementsLabel: "Отзывы разработчиков",
     readPost: "Читать пост {handle} в X",
     harnessTitle: "Со своей подпиской",
-    harnessBody:
-      "T3 Code не перепродаёт токены. Подключайте Claude Code, Codex, Antigravity, OpenCode, Cursor или Grok с учётными данными, которые у вас уже есть. Мы управляем агентами, тариф остаётся вашим.",
+    harnessBody: `${APP_NAME} не перепродаёт токены. Подключайте Claude Code, Codex, Antigravity, OpenCode, Cursor или Grok с учётными данными, которые у вас уже есть. Мы управляем агентами, тариф остаётся вашим.`,
     googleSignIn: "Вход через Google",
     harnessPoints: [
       "Никакой перепродажи ключей. Никаких лимитов.",
       "Меняйте модель прямо посреди треда.",
       "Новые агенты каждую неделю.",
     ],
-    gitVisualLabel:
-      "Схема работы с Git в T3 Code: просмотр диффа, коммит и пуш изменений, создание пул-реквеста.",
+    gitVisualLabel: `Схема работы с Git в ${APP_NAME}: просмотр диффа, коммит и пуш изменений, создание пул-реквеста.`,
     prReady: "Готово",
     prCommits: "3 коммита",
     viewDiff: "Открыть дифф",
@@ -69,16 +67,14 @@ export const ru: Messages = {
     forkOnGithub: "Форкнуть на GitHub",
     browseSource: "Исходный код",
     ctaTitle: "Ваши агенты заслуживают лучшего, чем терминал.",
-    ctaSub:
-      "T3 Code бесплатный, открытый и быстрый. Установите его, подключите подписку, за которую уже платите, и дайте агентам поработать.",
+    ctaSub: `${APP_NAME} бесплатный, открытый и быстрый. Установите его, подключите подписку, за которую уже платите, и дайте агентам поработать.`,
     otherPlatforms: "Другие платформы",
   },
   download: {
-    title: "Скачать T3 Code для macOS, Windows и Linux | T3 Code",
-    description:
-      "Скачайте официальное десктопное приложение T3 Code для macOS, Windows или Linux либо приложения для iOS и Android. Единственный официальный сайт для загрузки: t3.codes.",
+    title: `Скачать ${APP_NAME} для macOS, Windows и Linux | ${APP_NAME}`,
+    description: `Скачайте официальное десктопное приложение ${APP_NAME} для macOS, Windows или Linux либо приложения для iOS и Android.`,
     breadcrumb: "Скачать",
-    heading: "Скачать T3 Code",
+    heading: `Скачать ${APP_NAME}`,
     channelLabel: "Канал релизов",
     stable: "Стабильный",
     nightly: "Nightly",
@@ -88,7 +84,6 @@ export const ru: Messages = {
     mobile: "Телефон",
     iphoneIpad: "iPhone и iPad",
     terminal: "Терминал",
-    tryOnce: "Или попробуйте без установки:",
     allBuilds: "Все сборки на {link}",
     releasesPage: "странице релизов GitHub",
     builtAgo: "Собрано {age}",

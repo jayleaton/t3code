@@ -21,6 +21,7 @@ import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import { serverEnvironment } from "../state/server";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useUpdateEnvironmentSettings } from "./useSettings";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 function useAgentLibraryIo(label: string): AgentLibrarySyncIo {
   const getSkills = useAtomCommand(serverEnvironment.getAgentSkills, `${label}: load skills`);
@@ -69,7 +70,7 @@ export function useAgentLibrary() {
       library.agentSkills.some(agentSkillHasResources) &&
       capabilities?.agentSkillResources !== true
     )
-      throw new Error("Update T3 on this machine to edit skills with resources.");
+      throw new Error(`Update ${APP_NAME} on this machine to edit skills with resources.`);
     const plan = planAgentLibrarySync(sources, { targets: [target.environmentId] });
     const available = new Set(
       [

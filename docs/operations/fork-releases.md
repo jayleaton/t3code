@@ -14,7 +14,7 @@ The workflows are restricted to `jayleaton/t3code` and stay inactive until `FORK
 | --------------------- | ------------------------------------------------------------------------------- |
 | `FORK_RELEASE_BRANCH` | Maintained release branch, normally `main`                                      |
 | `FORK_APP_ID`         | Your permanent registered Apple bundle ID, for example `com.jayleaton.t3agents` |
-| `FORK_PRODUCT_NAME`   | A distinct permanent name, for example `T3 Agents`                              |
+| `FORK_PRODUCT_NAME`   | The display name, `Ada`                                                         |
 | `APPLE_TEAM_ID`       | Your Apple Developer team ID                                                    |
 
 ## Mac signing
@@ -29,7 +29,7 @@ Use your own Apple Developer account to create a **Developer ID Application** ce
 
 Do not substitute T3's signing identity.
 
-Keep the bundle ID, product name, signing identity, and install location consistent between releases. Ad-hoc signing ties the designated requirement to a particular build and can cause macOS to forget privacy grants. Old background processes from previous ad-hoc installations can also continue requesting access; after saving active work, a one-time Mac restart clears those processes. This does not guarantee a single prompt across all permission categories.
+Keep the bundle ID, signing identity, and install location consistent between releases. The product name can change, as it did from T3 Agents to Ada, because nothing that locates an install derives from it: the bundle ID, app ID, data directories and install directory stay, a Mac update keeps the existing app path, and the Windows exe stays `T3 Agents.exe` (`resolveWindowsExecutableName` in `scripts/build-desktop-artifact.ts`) so taskbar pins, CLI shims and service units keep working. Ad-hoc signing ties the designated requirement to a particular build and can cause macOS to forget privacy grants. Old background processes from previous ad-hoc installations can also continue requesting access; after saving active work, a one-time Mac restart clears those processes. This does not guarantee a single prompt across all permission categories.
 
 Windows builds use upstream's optional Azure Trusted Signing secrets when supplied. Without them, the installer is unsigned and Windows may show a reputation warning. Linux AppImage updates use the existing updater; other package formats are not published by this workflow.
 

@@ -60,6 +60,7 @@ import {
   setMcpGatewayToken,
   subscribeMcpGatewayConfiguration,
 } from "../../mcpGatewayState";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const ADVANCED_SCOPES = MCP_GATEWAY_CONFIGURABLE_SCOPES.filter(
   (scope) => !MCP_GATEWAY_BASELINE_SCOPES.includes(scope),
@@ -677,7 +678,7 @@ function DesktopMcpGatewaySettings() {
       <SettingsRow
         id="enable-mcp-gateway"
         title="Enable MCP Gateway"
-        description="Start the desktop gateway and make it available to new T3-managed agent sessions on granted local and remote environments. Restart existing agent sessions to attach the gateway."
+        description={`Start the desktop gateway and make it available to new ${APP_NAME}-managed agent sessions on granted local and remote environments. Restart existing agent sessions to attach the gateway.`}
         status={`Status: ${status}`}
         control={
           <Switch
@@ -815,7 +816,7 @@ function DesktopMcpGatewaySettings() {
       <McpGatewayAgentsRow />
       <SettingsRow
         title="External MCP hosts"
-        description="Merge this into the MCP settings of assistants outside T3 Code on this computer, keeping existing servers, then reconnect. OpenCode uses ~/.config/opencode/opencode.jsonc. Includes your bridge token."
+        description={`Merge this into the MCP settings of assistants outside ${APP_NAME} on this computer, keeping existing servers, then reconnect. OpenCode uses ~/.config/opencode/opencode.jsonc. Includes your bridge token.`}
         status={
           launch === null
             ? "Available in the installed desktop app."
@@ -850,7 +851,7 @@ function DesktopMcpGatewaySettings() {
       </SettingsRow>
       <SettingsRow
         title="Companion endpoint"
-        description="The desktop starts the companion when enabled. Managed agents reach it through their T3 environment connection, including remote connections. External MCP hosts can use the configuration above."
+        description={`The desktop starts the companion when enabled. Managed agents reach it through their ${APP_NAME} environment connection, including remote connections. External MCP hosts can use the configuration above.`}
         status={`ws://127.0.0.1:${getMcpGatewayPort()}`}
       />
     </>

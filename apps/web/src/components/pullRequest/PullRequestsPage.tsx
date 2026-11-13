@@ -120,6 +120,7 @@ import {
   resetPullRequestHosts,
   type PullRequestHostRead,
 } from "./pullRequestProjectAssignment.logic";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 function getShortcutContext() {
   return {
@@ -1183,7 +1184,7 @@ export function PullRequestsPage() {
       ) : !pullRequestsSupported ? (
         <PullRequestsUnavailableState
           title="Pull requests unavailable"
-          error="Update your T3 Agents servers to browse pull requests."
+          error={`Update your ${APP_NAME} servers to browse pull requests.`}
         />
       ) : firstLoad ? (
         <PullRequestListGhost rows={7} caption="Loading pull requests…" />

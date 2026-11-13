@@ -55,6 +55,7 @@ import {
 } from "./codexUsageLimits.ts";
 import { serverBuildVersion } from "../buildVersion.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { APP_NAME } from "@t3tools/shared/branding";
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
 const RATE_LIMITS_PROBE_TIMEOUT_MS = 3_000;
 
@@ -739,7 +740,7 @@ const makePendingCodexProvider = Effect.fn("CodexProvider.makePendingCodexProvid
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Codex is disabled in T3 Code settings.",
+        message: `Codex is disabled in ${APP_NAME} settings.`,
       },
     });
   }
@@ -832,7 +833,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Codex is disabled in T3 Code settings.",
+        message: `Codex is disabled in ${APP_NAME} settings.`,
       },
     });
   }

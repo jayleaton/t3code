@@ -38,6 +38,7 @@ import {
   sanitizePrTitle,
   toJsonSchemaObject,
 } from "@t3tools/provider-core/server/textGenerationUtils";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const SessionStarted = Schema.Struct({ session: Schema.Struct({ sessionId: Schema.String }) });
 const ItemNotification = Schema.Struct({
@@ -276,8 +277,7 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
         (cause) =>
           new TextGenerationError({
             operation,
-            detail:
-              "Muse Code text generation failed. Check Muse login and availability on this T3 server host.",
+            detail: `Muse Code text generation failed. Check Muse login and availability on this ${APP_NAME} server host.`,
             cause,
           }),
       ),

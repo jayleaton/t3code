@@ -1,14 +1,14 @@
+import { APP_NAME } from "@t3tools/shared/branding";
 import type { Messages } from "./en";
 
 export const de: Messages = {
   layout: {
-    defaultTitle: "T3 Code",
-    defaultDescription: "T3 Code. Die Open-Source-Steuerzentrale für Coding-Agents.",
-    socialImageAlt:
-      "T3 Code: die Open-Source-Steuerzentrale für Coding-Agents, mit Claude Code, Codex, Cursor, OpenCode, Grok und Antigravity.",
-    homeLabel: "Startseite von T3 Code",
+    defaultTitle: APP_NAME,
+    defaultDescription: `${APP_NAME}. Die Open-Source-Steuerzentrale für Coding-Agents.`,
+    socialImageAlt: `${APP_NAME}: die Open-Source-Steuerzentrale für Coding-Agents, mit Claude Code, Codex, Cursor, OpenCode, Grok und Antigravity.`,
+    homeLabel: `Startseite von ${APP_NAME}`,
     download: "Download",
-    starsLabel: "T3 Code auf GitHub einen Stern geben, {stars} Sterne",
+    starsLabel: `${APP_NAME} auf GitHub einen Stern geben, {stars} Sterne`,
     githubStars: "{stars} GitHub-Sterne",
     language: "Sprache",
     mitLicensed: "MIT-lizenziert",
@@ -19,8 +19,8 @@ export const de: Messages = {
     security: "Sicherheit",
   },
   home: {
-    title: "T3 Code | Die Open-Source-Steuerzentrale für Coding-Agents",
-    description: "T3 Code. Die Open-Source-Steuerzentrale für Coding-Agents.",
+    title: `${APP_NAME} | Die Open-Source-Steuerzentrale für Coding-Agents`,
+    description: `${APP_NAME}. Die Open-Source-Steuerzentrale für Coding-Agents.`,
     heroTitle: ["Die Open-Source-", "Steuerzentrale", "für Coding-Agents."],
     heroSub:
       "Steuere Claude Code, Codex, Antigravity, OpenCode, Cursor und Grok von einer Oberfläche aus. Nutze dein eigenes Abo. Forke das ganze Ding.",
@@ -29,22 +29,20 @@ export const de: Messages = {
     downloadForLinux: "Für Linux herunterladen",
     sourceLink: "Klau unseren Code (legal)",
     alsoOnPhone: "Auch auf deinem Handy:",
-    screenshotAlt: "T3 Code führt Subagents von Claude, Codex, Muse und Gemini in einem Thread aus",
+    screenshotAlt: `${APP_NAME} führt Subagents von Claude, Codex, Muse und Gemini in einem Thread aus`,
     endorsementsTitle: "Toleriert von über {users} Devs",
     endorsementsSub: "Manche haben sogar darüber getwittert.",
     endorsementsLabel: "Stimmen von Entwicklern",
     readPost: "Beitrag von {handle} auf X lesen",
     harnessTitle: "Bring dein eigenes Abo mit",
-    harnessBody:
-      "T3 Code verkauft keine Tokens weiter. Verbinde Claude Code, Codex, Antigravity, OpenCode, Cursor oder Grok mit den Zugangsdaten, die du schon hast. Wir orchestrieren sie, du behältst dein Abo.",
+    harnessBody: `${APP_NAME} verkauft keine Tokens weiter. Verbinde Claude Code, Codex, Antigravity, OpenCode, Cursor oder Grok mit den Zugangsdaten, die du schon hast. Wir orchestrieren sie, du behältst dein Abo.`,
     googleSignIn: "Google-Anmeldung",
     harnessPoints: [
       "Keine weiterverkauften Keys. Keine Kontingentgrenzen.",
       "Modell mitten im Thread wechseln.",
       "Jede Woche neue Agents.",
     ],
-    gitVisualLabel:
-      "Illustration des Git-Workflows in T3 Code: Diff prüfen, Änderungen committen und pushen, Pull Request öffnen.",
+    gitVisualLabel: `Illustration des Git-Workflows in ${APP_NAME}: Diff prüfen, Änderungen committen und pushen, Pull Request öffnen.`,
     prReady: "Bereit",
     prCommits: "3 Commits",
     viewDiff: "Diff ansehen",
@@ -72,16 +70,14 @@ export const de: Messages = {
     forkOnGithub: "Auf GitHub forken",
     browseSource: "Quellcode ansehen",
     ctaTitle: "Deine Agents verdienen Besseres als ein Terminal.",
-    ctaSub:
-      "T3 Code ist kostenlos, Open Source und schnell. Installier es, verbinde das Abo, für das du schon zahlst, und lass deine Agents loslegen.",
+    ctaSub: `${APP_NAME} ist kostenlos, Open Source und schnell. Installier es, verbinde das Abo, für das du schon zahlst, und lass deine Agents loslegen.`,
     otherPlatforms: "Andere Plattformen",
   },
   download: {
-    title: "T3 Code für macOS, Windows und Linux herunterladen | T3 Code",
-    description:
-      "Lade die offizielle Desktop-App von T3 Code für macOS, Windows oder Linux herunter, oder hol dir die Apps für iOS und Android. t3.codes ist die einzige offizielle Download-Seite.",
+    title: `${APP_NAME} für macOS, Windows und Linux herunterladen | ${APP_NAME}`,
+    description: `Lade die offizielle Desktop-App von ${APP_NAME} für macOS, Windows oder Linux herunter, oder hol dir die Apps für iOS und Android.`,
     breadcrumb: "Download",
-    heading: "T3 Code herunterladen",
+    heading: `${APP_NAME} herunterladen`,
     channelLabel: "Release-Kanal",
     stable: "Stable",
     nightly: "Nightly",
@@ -91,7 +87,6 @@ export const de: Messages = {
     mobile: "Mobil",
     iphoneIpad: "iPhone & iPad",
     terminal: "Terminal",
-    tryOnce: "Oder einmal ohne Installation ausprobieren:",
     allBuilds: "Alle Builds findest du auf der {link}",
     releasesPage: "GitHub-Releases-Seite",
     builtAgo: "Erstellt {age}",

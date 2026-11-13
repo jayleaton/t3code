@@ -8,6 +8,7 @@ import { Atom } from "effect/reactivity";
 import { environmentSummaries } from "./presentation";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
 import { serverEnvironment } from "./server";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const isServerNpmReleaseError = Schema.is(ServerNpmReleaseError);
 
@@ -26,7 +27,7 @@ export function npmReleaseFailureMessage(cause: Cause.Cause<unknown>): string {
   const error = Option.getOrUndefined(Cause.findErrorOption(cause));
   return isServerNpmReleaseError(error)
     ? error.message
-    : "Could not check T3 releases from this environment. Check its connection.";
+    : `Could not check ${APP_NAME} releases from this environment. Check its connection.`;
 }
 
 export const npmReleaseAtom = Atom.family((spec: string) =>

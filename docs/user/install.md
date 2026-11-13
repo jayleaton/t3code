@@ -1,12 +1,12 @@
-# Install T3 Code
+# Install Ada
 
-T3 Code runs coding agents on your computer and lets you control them from its
+Ada runs coding agents on your computer and lets you control them from its
 desktop, web, or mobile app. Set up the machine where the agents will work first.
 
 ## Requirements
 
 You need an installed, authenticated provider before starting a thread. You can
-launch T3 Code and configure providers afterwards.
+launch Ada and configure providers afterwards.
 
 ## Command line
 
@@ -27,7 +27,7 @@ away; add the folder to your `PATH` for new windows. If a `t3` that the
 installer or the desktop app did not create is already there, it leaves that
 one alone and stops.
 
-Every release of this fork is a nightly, so the installer follows the nightly
+Every Ada release is a nightly, so the installer follows the nightly
 channel. To pin an exact version, set `T3CODE_VERSION`:
 
 ```bash
@@ -39,9 +39,8 @@ $env:T3CODE_VERSION="<version>"; irm https://raw.githubusercontent.com/jayleaton
 ```
 
 Each [release](https://github.com/jayleaton/t3code/releases) also carries
-`install.sh` and `install.ps1`. Use only these scripts: upstream T3 Code's
-installers and its npm package install the upstream server and replace this
-one.
+`install.sh` and `install.ps1`. Use only these scripts: T3 Code's
+installers and its npm package install T3 Code's server and replace Ada's.
 
 For a headless host, run the installer and then `t3 service install`. The
 background service is the only headless setup that the app's **Update** button
@@ -87,8 +86,8 @@ update it with `git pull` and a rebuild.
 Download a release from [GitHub Releases](https://github.com/jayleaton/t3code/releases):
 a `.dmg` for macOS, an `.exe` for Windows, and an AppImage or `.deb` for Linux.
 On Debian or Ubuntu, install the `.deb` with `sudo apt install ./T3-Agents-*.deb`.
-Package managers such as winget, Homebrew, the AUR, and Nix install the upstream
-T3 Code app, not this fork.
+Package managers such as winget, Homebrew, the AUR, and Nix install T3 Code,
+not Ada.
 
 ### Linux
 
@@ -123,7 +122,7 @@ add it again. If you already have another `t3`, it stays as it is.
 ### Windows Subsystem for Linux
 
 Choose a WSL distro in **Settings → Environments** to run agents and projects
-there. Install the provider CLIs inside that distro. T3 Code installs its own
+there. Install the provider CLIs inside that distro. Ada installs its own
 server runtime there automatically; the first launch after an app update can
 take longer.
 
@@ -142,10 +141,10 @@ command cannot reach the app, start or update the desktop app and try again.
 
 ## Mobile app
 
-Install T3 Code from the
+Ada has no store listing yet. The T3 Code mobile app on the
 [App Store](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824) or
-[Google Play](https://play.google.com/store/apps/details?id=com.t3tools.t3code).
-The phone connects to a server on another machine. Follow
+[Google Play](https://play.google.com/store/apps/details?id=com.t3tools.t3code)
+pairs with an Ada server. The phone connects to a server on another machine. Follow
 [remote access](./remote-access.md) to pair it with a pairing URL or QR code.
 
 Store links and QR codes are also available in **Settings → About → Mobile app**
@@ -153,7 +152,7 @@ on web and desktop. The store apps work with both stable and Nightly servers. Te
 
 - **iPhone and iPad:** TestFlight is invite-only.
 - **Android:** download an APK from the
-  [Android beta releases](https://github.com/pingdotgg/t3code/releases?q=android-beta-).
+  [Android beta releases](https://github.com/jayleaton/t3code/releases?q=android-beta-).
 
 If the app crashes during launch, open Settings → Diagnostics on the next launch
 that succeeds. It lists startup crashes from the last 7 days with the error and
@@ -176,18 +175,18 @@ computer.
 | Grok Build  | Install [Grok Build CLI](https://x.ai/cli), then run `grok login`.                                                                                        |
 | Kiro        | Install [Kiro CLI](https://kiro.dev/docs/cli/), then run `kiro-cli login`.                                                                                |
 | OpenCode    | Install [OpenCode](https://opencode.ai), then run `opencode auth login`.                                                                                  |
-| Antigravity | Install and sign in with Google from T3 Code's provider settings.                                                                                         |
+| Antigravity | Install and sign in with Google from Ada's provider settings.                                                                                             |
 | Pi          | Install [Pi](./providers-pi.md#set-up-pi) with Node.js 22.19 or newer, then run `pi` and `/login`.                                                        |
 | Muse Code   | Install [Muse Code](https://dev.meta.ai/docs/muse-code) on the server, run `muse login`, then enable it in Settings → Providers.                          |
 | fx          | Install [fx](https://fx.sh) with `curl -fsSL https://fx.sh/setup.sh \| bash`, then run `fx login`.                                                        |
 
-Provider CLIs must be on the server's `PATH`. If T3 Code cannot find one, set its
+Provider CLIs must be on the server's `PATH`. If Ada cannot find one, set its
 **Binary path** in provider settings, especially when using a version manager.
 Cursor's executable is `cursor-agent`, although its login command is
 `agent login`. Codex connected through ChatGPT and Antigravity can use their
 managed runtimes without a `PATH` entry.
 
-T3 Code warns when a provider version has known compatibility problems with your
+Ada warns when a provider version has known compatibility problems with your
 release. Check **Settings → Providers** on that environment for the recommended
 version or range. When its package manager supports installing a specific version,
 you can install the recommendation there. Otherwise use the provider's installer
@@ -196,19 +195,19 @@ on the environment's machine. An unlisted version is unverified.
 When a provider CLI is behind its latest release, its provider card shows the
 available version. **Update now** runs the installer that owns the CLI
 (Homebrew, mise, or a global npm, pnpm, Yarn, Bun, Volta, or Vite+ install), or
-the CLI's own update command when T3 Code cannot tell. Claude, Codex, and
-OpenCode installs T3 Code cannot identify stay manual: update them through the
-installer you used. T3 Code runs `mise upgrade`
+the CLI's own update command when Ada cannot tell. Claude, Codex, and
+OpenCode installs Ada cannot identify stay manual: update them through the
+installer you used. Ada runs `mise upgrade`
 only for a tool your mise config requests as `latest` when the provider's binary
 path is a mise shim or under the tool's `installs/<tool>/latest` link; update a
 pinned version, or a path into one version's directory, through mise yourself.
-Cursor and Antigravity update with T3 Code. Homebrew and Chocolatey installs
+Cursor and Antigravity update with Ada. Homebrew and Chocolatey installs
 compare against the version their package manager offers, which can trail the
 npm release; update Claude installed with Chocolatey through Chocolatey.
 
 Add another provider instance for a separate account or configuration. Each
 instance can have its own environment variables, such as API keys or a custom
-base URL. Mark secret values as sensitive; after saving, T3 Code does not display
+base URL. Mark secret values as sensitive; after saving, Ada does not display
 their original values.
 
 For provider-specific setup and accounts, see [Codex](./providers-codex.md),
@@ -222,5 +221,5 @@ For provider-specific setup and accounts, see [Codex](./providers-codex.md),
 - [Permission modes](./permission-modes.md): choose when agents ask before acting.
 - [Remote access](./remote-access.md): connect from another device.
 - [Running in the background](./background-service.md): keep a Linux or macOS host available.
-- [Updating T3 Code](./updating.md): update the app and connected servers.
-- [Managed policy](./managed-policy.md): configure T3 Code for everyone on a machine.
+- [Updating Ada](./updating.md): update the app and connected servers.
+- [Managed policy](./managed-policy.md): configure Ada for everyone on a machine.

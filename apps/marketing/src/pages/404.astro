@@ -1,17 +1,17 @@
 ---
+import { APP_NAME } from "@t3tools/shared/branding";
 import Layout from "../layouts/Layout.astro";
 ---
 
-<Layout title="Page not found | T3 Code" description="This page does not exist on t3.codes." noindex>
+<Layout title={`Page not found | ${APP_NAME}`} description="This page does not exist." noindex>
   <section class="not-found container">
     <p class="eyebrow">404</p>
     <h1 class="display">This page does not exist.</h1>
     <p class="not-found-lede">
-      t3.codes is the only official T3 Code website. Download builds from this site, GitHub releases,
-      or the app stores.
+      Download {APP_NAME} builds from this site, GitHub releases, or the app stores.
     </p>
     <div class="not-found-actions">
-      <a class="btn btn-primary btn-lg" href="/download">Download T3 Code</a>
+      <a class="btn btn-primary btn-lg" href="/download">Download {APP_NAME}</a>
       <a class="btn btn-ghost btn-lg" href="/">Home</a>
     </div>
   </section>

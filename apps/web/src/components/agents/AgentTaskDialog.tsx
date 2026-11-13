@@ -40,6 +40,7 @@ import {
   sortProfilesByNewChatPick,
   sortProjectsByNewChatPick,
 } from "./agentNewChat.logic";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const NEW_CHAT_HISTORY_KEY = "t3code:agents:new-chat-history";
 const COLLAPSED_CHOICES = 4;
@@ -450,7 +451,7 @@ function AgentTaskForm({
       </div>
       {target && !supportsAgentDrafts && (
         <p role="status">
-          Update this machine’s T3 Agents server to send from this dialog. You can still create an
+          Update this machine’s {APP_NAME} server to send from this dialog. You can still create an
           empty chat.
         </p>
       )}

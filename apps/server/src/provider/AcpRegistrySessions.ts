@@ -24,6 +24,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 export const importedThreadId = (input: {
   readonly driver: ProviderDriverKind;
@@ -206,7 +207,7 @@ const make = Effect.gen(function* () {
       if (racedImport !== null) return { threadId, imported: false } as const;
       return yield* new AcpRegistryOperationError({
         reason: "session_import_failed",
-        message: "Could not create a T3 thread for the ACP session.",
+        message: `Could not create an ${APP_NAME} thread for the ACP session.`,
         cause: launched.failure,
       });
     }

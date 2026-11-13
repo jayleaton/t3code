@@ -1,4 +1,5 @@
 import type { DesktopBridge, DesktopUpdateState } from "@t3tools/contracts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 // Boot code loads before any package resolves, so it repeats CLI_RELEASE_REPOSITORY from cliRelease.ts.
 const REPOSITORY_URL = "https://github.com/jayleaton/t3code";
@@ -237,7 +238,7 @@ function mountUpdateButton(
           : undefined;
     run?.then(
       (result) => render(result.state),
-      (error: unknown) => console.warn("Could not update T3 Agents.", error),
+      (error: unknown) => console.warn(`Could not update ${APP_NAME}.`, error),
     );
   });
   // A pushed state is newer than the initial read, so the read must not overwrite it.
@@ -257,7 +258,7 @@ function mountUpdateButton(
 }
 
 export function showBootError(error: unknown) {
-  console.error("T3 Agents failed to start.", error);
+  console.error(`${APP_NAME} failed to start.`, error);
   const bootShell = document.getElementById("boot-shell");
   if (!bootShell) return;
 
@@ -276,7 +277,7 @@ export function showBootError(error: unknown) {
   };
 
   const message = element("div", {}, [
-    element("h1", { textContent: "T3 Agents failed to start" }),
+    element("h1", { textContent: `${APP_NAME} failed to start` }),
     element("p", {
       textContent: offline
         ? "This browser appears to be offline. Check the connection, then reload."
@@ -346,7 +347,7 @@ export function showBootError(error: unknown) {
 
   const issue = new URL(ISSUE_URL);
   issue.searchParams.set("template", "bug_report.yml");
-  issue.searchParams.set("title", "T3 Agents failed to start");
+  issue.searchParams.set("title", `${APP_NAME} failed to start`);
   issue.searchParams.set("area", "apps/web");
   issue.searchParams.set("version", `${environment.version} (${environment.channel})`);
   issue.searchParams.set("environment", `${environment.surface}, ${environment.platform}`);
@@ -362,14 +363,13 @@ export function showBootError(error: unknown) {
             nightly ? `${DOWNLOAD_URL}?channel=nightly` : DOWNLOAD_URL,
             nightly
               ? "Download and reinstall the latest nightly build"
-              : "Download and reinstall T3 Agents",
+              : `Download and reinstall ${APP_NAME}`,
           ),
         ]
       : []),
     element("div", {}, [
       element("p", {
-        textContent:
-          "Run this on the computer that runs T3 Agents. Your agent can check the local logs and help you file a bug report.",
+        textContent: `Run this on the computer that runs ${APP_NAME}. Your agent can check the local logs and help you file a bug report.`,
       }),
       element("div", { id: "boot-error-command" }, [command, copyCommand]),
     ]),

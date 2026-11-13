@@ -176,7 +176,7 @@ always replace the persisted payload. Coalesced updates count toward a separate
 60-per-minute validation limit; exceeding it receives HTTP 429.
 
 A script that may retry a request can send an `Idempotency-Key` header, 1 to
-200 printable characters with no spaces. T3 Code runs the task once per key
+200 printable characters with no spaces. Ada runs the task once per key
 for 48 hours; a retry with the same key is accepted as a duplicate and answers
 with the first delivery's id. A malformed key gets a 400 and nothing runs.
 
@@ -232,7 +232,7 @@ Commands run directly, without a shell. The webhook URL can be the direct or
 Tailscale URL. Failed deliveries retry, and a still-undelivered
 event is re-sent with the same `Idempotency-Key` on the next run.
 
-Use the `t3` command from the same T3 Code release as your server. Earlier
+Use the `t3` command from the same Ada release as your server. Earlier
 releases and the `t3` package on npm don't include `watch`, so if `t3 watch`
 reports an unknown command, that `t3` is too old.
 
@@ -309,7 +309,7 @@ are, and cleanup covers both the default folder and the custom one.
 ## Fast worktree checkout on macOS
 
 Fast worktree checkout is a beta. Turn it on for each Mac in **Settings → Labs → Fast worktree
-checkout**. T3 Code then keeps a few recent checkouts of each repository in the `caches` folder of
+checkout**. Ada then keeps a few recent checkouts of each repository in the `caches` folder of
 the T3 home directory. A new worktree is cloned from one of them with APFS copy-on-write, which is
 about twice as fast as writing every file and makes the first `git status` in it fast as well.
 Turning it off deletes the cache.
@@ -334,7 +334,7 @@ Worktrees can be removed after a chosen number of inactive days, after a thread 
 merging, or when they have no commits beyond the default branch. Set settled retention to 0 days
 to remove a worktree at the next cleanup after settlement. In repositories without remotes,
 unchanged-worktree cleanup compares against the branch checked out in the project workspace;
-if that checkout has a detached HEAD, the worktree is kept. Only T3-managed worktrees are eligible.
+if that checkout has a detached HEAD, the worktree is kept. Only Ada-managed worktrees are eligible.
 Active sessions and shared worktrees prevent removal. **Keep worktrees with local changes** defaults
 to **Uncommitted changes**, which protects tracked edits and untracked files but deletes ignored
 files such as `.env` and build output. **Any local files** also protects ignored files other than
@@ -354,7 +354,7 @@ worktrees were removed or kept and why, plus any failures.
 Results also list folders in the worktree folder that no thread uses, with their sizes; cleanup never removes them, so remove them manually if you want.
 
 To free a finished thread's worktree without enabling a policy, ask an agent connected through
-T3's MCP tools to reclaim it (`t3_reclaim_worktree`; a dry run only reports). The thread keeps
+Ada's MCP tools to reclaim it (`t3_reclaim_worktree`; a dry run only reports). The thread keeps
 its history and branch, and its next turn recreates the checkout. Reclaiming also requires the
 latest commit to be included in the remote default branch, so squash-merged branches are kept;
 dependency installs and build output may be removed, other ignored files are kept. Every reason a checkout is kept is reported.
@@ -366,7 +366,7 @@ working. Current logs, message attachments, and browser profiles are kept.
 
 Select the project and open Project to choose an icon, emoji, monogram, or image. The choice applies to
 every checkout in the project group and appears on connected clients. Choose **Automatic** to let
-T3 Code detect an icon again.
+Ada detect an icon again.
 
 Choose **Monogram** in the icon picker to set one or two letters or numbers and a color.
 
@@ -380,6 +380,6 @@ In Source control, enable **Automatically pull** to keep the default-branch chec
 with its configured upstream. Choose an environment to set the default or a project to override it.
 On mobile, use **Settings → Source control** to change selected environment defaults or project overrides.
 
-T3 Code only pulls when it can fast-forward and the checkout has no changed files, untracked files,
+Ada only pulls when it can fast-forward and the checkout has no changed files, untracked files,
 or local commits. It skips checkouts on another branch or without an upstream. If a checkout has
 local work, resolve it yourself before automatic pulls can resume.

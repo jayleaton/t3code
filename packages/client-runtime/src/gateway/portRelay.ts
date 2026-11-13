@@ -20,6 +20,7 @@ import { GATEWAY_PORT_METHODS, type GatewayGrants, wireTaskError } from "./bridg
 import type { GatewayEnvironmentSummary, GatewayRuntimePort } from "./port.ts";
 import { type ModeLimit, withinModes } from "./portModes.ts";
 import { describeGatewayScopes, gatewayPortCallScopes, unmetGatewayScopes } from "./portScopes.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 /** How a target's roster push is followed again after it fails; tests step it by hand. */
 export const RosterRetrySchedule = Context.Reference<Schedule.Schedule<unknown>>(
@@ -140,7 +141,7 @@ export async function answerGatewayPortCall(
 export function relayGrantsProblem(grants: GatewayGrants): string | undefined {
   const count = Object.keys(grants).length;
   return count > MCP_GATEWAY_RELAY_GRANTS_MAX
-    ? `T3 Agents relays at most ${MCP_GATEWAY_RELAY_GRANTS_MAX} environments, and ${count} are granted, so this app relays none. Turn some off in Settings > MCP Gateway.`
+    ? `${APP_NAME} relays at most ${MCP_GATEWAY_RELAY_GRANTS_MAX} environments, and ${count} are granted, so this app relays none. Turn some off in Settings > MCP Gateway.`
     : undefined;
 }
 

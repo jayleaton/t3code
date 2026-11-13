@@ -7,6 +7,7 @@ import * as Schema from "effect/Schema";
 import type { DesktopCaptureExtensionState } from "@t3tools/contracts";
 
 import { GNOME_CAPTURE_FILES, GNOME_CAPTURE_UUID } from "./gnomeCaptureBundle.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const SHELL = "org.gnome.Shell";
 const SHELL_PATH = "/org/gnome/Shell";
@@ -54,7 +55,9 @@ export async function installGnomeCaptureBundle({ bundle, dataHome }: SetupPaths
       await NodeFSP.readFile(NodePath.join(target, "metadata.json"), "utf8"),
     );
     if (installed.version > metadata.version)
-      throw new Error("A newer extension is installed. Update T3 Agents instead of replacing it.");
+      throw new Error(
+        `A newer extension is installed. Update ${APP_NAME} instead of replacing it.`,
+      );
   }
   const staged = await NodeFSP.mkdtemp(NodePath.join(parent, ".t3-capture-install-"));
   let backup: string | undefined;
@@ -180,8 +183,7 @@ export class GnomeCaptureSetup {
       if (installed && (!info.state || (info.version && installed.version > info.version.value)))
         return {
           status: "restart-required",
-          message:
-            "Installed. Save your work, sign out of GNOME and sign back in, then return here to enable the extension. Restarting T3 Agents alone is not enough.",
+          message: `Installed. Save your work, sign out of GNOME and sign back in, then return here to enable the extension. Restarting ${APP_NAME} alone is not enough.`,
         };
       if ((installed?.version ?? info.version?.value ?? 0) < bundled.version)
         return {
@@ -192,13 +194,12 @@ export class GnomeCaptureSetup {
       if (!properties.UserExtensionsEnabled.value)
         return {
           status: "extensions-disabled",
-          message:
-            "GNOME has disabled user extensions. Turn on Extensions in the GNOME Extensions app, then check again. T3 Agents will not enable your other extensions for you.",
+          message: `GNOME has disabled user extensions. Turn on Extensions in the GNOME Extensions app, then check again. ${APP_NAME} will not enable your other extensions for you.`,
         };
       if (info.state?.value === 1)
         return {
           status: "enabled",
-          message: "The T3 Agents extension is running. Active-window snapshots are available.",
+          message: `The ${APP_NAME} extension is running. Active-window snapshots are available.`,
         };
       if (info.state?.value === 3 || info.state?.value === 4)
         return {
@@ -209,8 +210,7 @@ export class GnomeCaptureSetup {
         };
       return {
         status: "disabled",
-        message:
-          "Enable the T3 Agents extension to allow active-window snapshots. You can disable it here at any time.",
+        message: `Enable the ${APP_NAME} extension to allow active-window snapshots. You can disable it here at any time.`,
       };
     } catch (error) {
       return {

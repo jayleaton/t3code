@@ -6,6 +6,7 @@ import iconNightly from "../../assets/icon-nightly.webp";
 import Layout from "../../layouts/Layout.astro";
 import { RELEASES_URL } from "../../lib/releases";
 import { ANDROID_PLAY_STORE_URL, IOS_APP_STORE_URL } from "../../lib/site";
+import { APP_NAME } from "@t3tools/shared/branding";
 import { breadcrumbJsonLd, softwareJsonLd } from "../../lib/seo";
 import { messagesFor } from "../../i18n";
 import { localeStaticPaths, localizedHref, templateParts } from "../../i18n/locales";
@@ -30,7 +31,7 @@ const imageProps = {
   jsonLd={[
     softwareJsonLd(),
     breadcrumbJsonLd([
-      { name: "T3 Code", path: localizedHref(locale, "/") },
+      { name: APP_NAME, path: localizedHref(locale, "/") },
       { name: t.breadcrumb, path: localizedHref(locale, "/download") },
     ]),
   ]}
@@ -172,13 +173,10 @@ const imageProps = {
           <svg class="platform-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7l5 5-5 5M12 17h7"/></svg>
           <h2 class="platform-name">{t.terminal}</h2>
         </div>
-        <code class="cli-line cli-line--stable">curl -fsSL https://t3.codes/install.sh | sh</code>
-        <code class="cli-line cli-line--stable">irm https://t3.codes/install.ps1 | iex</code>
-        <code class="cli-line cli-line--nightly">curl -fsSL https://t3.codes/install.sh | T3CODE_CHANNEL=nightly sh</code>
-        <code class="cli-line cli-line--nightly">$env:T3CODE_CHANNEL="nightly"; irm https://t3.codes/install.ps1 | iex</code>
-        <p class="cli-note">{t.tryOnce}</p>
-        <code class="cli-line cli-line--stable">npx t3@latest</code>
-        <code class="cli-line cli-line--nightly">npx t3@nightly</code>
+        <code class="cli-line cli-line--stable">curl -fsSL https://raw.githubusercontent.com/jayleaton/t3code/main/scripts/install.sh | T3CODE_CHANNEL=stable sh</code>
+        <code class="cli-line cli-line--stable">$env:T3CODE_CHANNEL="stable"; irm https://raw.githubusercontent.com/jayleaton/t3code/main/scripts/install.ps1 | iex</code>
+        <code class="cli-line cli-line--nightly">curl -fsSL https://raw.githubusercontent.com/jayleaton/t3code/main/scripts/install.sh | sh</code>
+        <code class="cli-line cli-line--nightly">irm https://raw.githubusercontent.com/jayleaton/t3code/main/scripts/install.ps1 | iex</code>
       </section>
     </div>
 
@@ -479,14 +477,10 @@ const imageProps = {
     letter-spacing: -0.01em;
   }
 
-  .cli-note {
-    color: var(--fg-muted);
-    font-size: 0.85rem;
-    margin-top: 0.5rem;
-  }
-
   .cli-line {
     align-self: flex-start;
+    max-width: 100%;
+    overflow-wrap: anywhere;
     font-family: var(--font-mono);
     font-size: 0.85rem;
     padding: 0.6rem 0.9rem;

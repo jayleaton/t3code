@@ -16,6 +16,7 @@ import { useEnvironmentShellHasSnapshot } from "../../state/shell";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { reportProjectFailure } from "../../hooks/useProjectGroupUpdate";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 export function DesktopAppActivationCoordinator() {
   const primaryEnvironment = usePrimaryEnvironment();
@@ -68,7 +69,9 @@ export function DesktopAppActivationCoordinator() {
         });
         if (result._tag === "Failure") {
           const error = squashAtomCommandFailure(result);
-          throw error instanceof Error ? error : new Error("T3 Agents could not add the project.");
+          throw error instanceof Error
+            ? error
+            : new Error(`${APP_NAME} could not add the project.`);
         }
         return projectId;
       },

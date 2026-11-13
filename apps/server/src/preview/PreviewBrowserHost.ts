@@ -4,6 +4,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 export const SETUP_SUBCOMMAND = "browser setup";
 
@@ -17,7 +18,7 @@ const USERNS_RESTRICTION = "/proc/sys/kernel/apparmor_restrict_unprivileged_user
 export const APPARMOR_PROFILE_PATH = "/etc/apparmor.d/t3-chrome-headless-shell";
 
 /** Match Ubuntu's Chrome profile; unconfined adds nothing beyond userns. */
-export const APPARMOR_PROFILE = `# Written by \`t3 browser setup\`: lets T3 Code's headless browser use Chrome's sandbox.
+export const APPARMOR_PROFILE = `# Written by \`t3 browser setup\`: lets ${APP_NAME}'s headless browser use Chrome's sandbox.
 abi <abi/4.0>,
 include <tunables/global>
 
@@ -73,7 +74,7 @@ export class PreviewBrowserRootError extends Schema.TaggedError<PreviewBrowserRo
   {},
 ) {
   override get message(): string {
-    return "T3 server is running as root; Chrome's sandbox cannot start. Run T3 as a nonroot user. Otherwise set `T3CODE_SERVER_BROWSER_SANDBOX=0` in the T3 server's environment and restart the server; this disables Chrome's sandbox. Manual: `T3CODE_SERVER_BROWSER_SANDBOX=0 t3 serve`. Systemd: add `Environment=T3CODE_SERVER_BROWSER_SANDBOX=0` under `[Service]`, reload systemd, then restart the service. `t3 browser setup` cannot fix root sandboxing.";
+    return `${APP_NAME} server is running as root; Chrome's sandbox cannot start. Run ${APP_NAME} as a nonroot user. Otherwise set \`T3CODE_SERVER_BROWSER_SANDBOX=0\` in the ${APP_NAME} server's environment and restart the server; this disables Chrome's sandbox. Manual: \`T3CODE_SERVER_BROWSER_SANDBOX=0 t3 serve\`. Systemd: add \`Environment=T3CODE_SERVER_BROWSER_SANDBOX=0\` under \`[Service]\`, reload systemd, then restart the service. \`t3 browser setup\` cannot fix root sandboxing.`;
   }
 }
 

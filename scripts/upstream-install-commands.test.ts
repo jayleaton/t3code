@@ -66,21 +66,172 @@ const BRAND_SCANNED = [
 ];
 
 const BRAND_EXCLUDED = [
-  /\.test\.tsx?$/,
+  /\.test\.[cm]?[jt]sx?$/,
+  /\.testkit\.ts$/,
   /\/test\//,
   /\/testkit\//,
   /\/fixtures?\//,
   /\.fixture\.ts$/,
 ];
 
+type BrandAllowance = { file: RegExp; text?: string; why: string };
+
 /**
  * What may keep an upstream name, and why. Everything else a user can see says Ada.
- * `text` narrows an entry to lines containing it; without it the whole file is allowed.
+ * With `text`, only that substring is allowed: the rest of the line is still checked.
  */
-const BRAND_ALLOWLIST: ReadonlyArray<{ file: RegExp; text?: string; why: string }> = [
+const BRAND_ALLOWLIST: ReadonlyArray<BrandAllowance> = [
   {
     file: /^packages\/shared\/src\/branding\.ts$/,
     why: "Names the upstream app the fork installs beside, so copy about it can say so.",
+  },
+  // Functional endpoints the fork still uses. Renaming them would break the feature, not rebrand it.
+  { file: /./, text: "app.t3.codes", why: "Hosted web client and its thread links." },
+  { file: /./, text: "ingest.t3.codes", why: "Telemetry endpoint the server reports to." },
+  { file: /./, text: "t3.codes/schema/t3.json", why: "Published t3.json schema URL." },
+  {
+    file: /^apps\/server\/src\/provider\/ModelManifest\.ts$/,
+    text: "raw.githubusercontent.com/pingdotgg/t3code",
+    why: "Model manifest the server downloads.",
+  },
+  // Legal: the privacy policy and terms cover the upstream telemetry the fork still sends.
+  {
+    file: /^apps\/marketing\/src\/pages\/(?:privacy-policy|terms-of-service|security-policy|legal)\.astro$/,
+    why: "Legal text is not ours to rewrite.",
+  },
+  {
+    file: /^apps\/marketing\/src\/pages\/\.well-known\/security\.txt\.ts$/,
+    why: "Security contact belongs with the security policy.",
+  },
+  { file: /^apps\/web\/src\/legalLinks\.ts$/, why: "Privacy policy link." },
+  {
+    file: /^apps\/mobile\/src\/features\/settings\/lib\/legal-document-url\.ts$/,
+    why: "Legal documents host.",
+  },
+  // Model-facing text changes only with its evals (evals/README.md); users never read it directly.
+  {
+    file: /^packages\/provider-core\/src\/server\/(?:orchestrationInstructions|runtimeInstructions|textGenerationPrompts)\.ts$/,
+    why: "Agent instructions and prompts.",
+  },
+  { file: /^apps\/server\/src\/triage\//, why: "Triage agent prompt and its issue target." },
+  { file: /^apps\/server\/src\/mcp\//, why: "MCP tool descriptions and results for agents." },
+  { file: /^packages\/mcp-gateway\/src\/catalog\.ts$/, why: "MCP tool descriptions." },
+  {
+    file: /^apps\/server\/src\/orchestration-v2\/ContextHandoffService\.ts$/,
+    why: "Handoff preamble for the agent.",
+  },
+  {
+    file: /^packages\/provider-pi\/src\/server\/mcpExtensionSource\.ts$/,
+    why: "Tool text injected into Pi.",
+  },
+  {
+    file: /^apps\/server\/src\/device\/AgentDeviceShim\.ts$/,
+    why: "Errors from a command the agent runs.",
+  },
+  {
+    file: /^packages\/provider-acp\/src\/server\/mcpOverAcpBridge\.ts$/,
+    why: "Bridge errors returned to the provider.",
+  },
+  {
+    file: /^packages\/provider-muse\/src\/server\/textGeneration\.ts$/,
+    why: "Decline reasons returned to the provider.",
+  },
+  {
+    file: /^packages\/client-runtime\/src\/gateway\/(?:portRelay|routedPort)\.ts$/,
+    why: "Gateway errors returned to the MCP caller.",
+  },
+  {
+    file: /^packages\/shared\/src\/agentPresets\/skills\//,
+    why: "Skill descriptions read by agents.",
+  },
+  // Identities other systems already know: providers, git history, peers, installed helpers.
+  {
+    file: /^(?:apps\/server\/src\/provider\/(?:CodexProvider|CodexChatGptAuth|acp\/AntigravityAcpSupport)|packages\/provider-muse\/src\/server\/sdk)\.ts$/,
+    text: "T3 Code",
+    why: "Client name sent to providers.",
+  },
+  {
+    file: /^(?:apps\/server\/src\/vcs\/GitVcsDriver|packages\/source-control-github\/src\/server\/githubStackRebase|packages\/provider-testing\/src\/replayWorkspace)\.ts$/,
+    why: "Git author identity on commits the app makes.",
+  },
+  {
+    file: /^apps\/server\/src\/peer\//,
+    text: "T3 Code · ",
+    why: "Peer session label prefix that other environments, upstream included, strip.",
+  },
+  {
+    file: /^packages\/provider-opencode\/src\/server\/(?:OpenCodeServerLedger|v2\/adapter)\.ts$/,
+    why: "Maintainer log lines.",
+  },
+  {
+    file: /^apps\/desktop\/gnome-extension\/(?:metadata|bundle)\.json$/,
+    text: "snap-shot@t3.codes",
+    why: "UUID of the installed GNOME extension.",
+  },
+  {
+    file: /^scripts\/build-desktop-artifact\.ts$/,
+    text: "hello@t3.codes",
+    why: "Deb maintainer email.",
+  },
+  // Legacy names that find or migrate existing installs, so updates land in place.
+  {
+    file: /^apps\/desktop\/src\/app\/(?:DesktopUserData|DesktopLegacyLocalStorage|WindowsSharedProfile)\.ts$/,
+    why: "Legacy profile directories and the pre-rename profile owner.",
+  },
+  {
+    file: /^apps\/desktop\/resources\/installer\.nsh$/,
+    why: "Legacy exe names of a running app.",
+  },
+  {
+    file: /^scripts\/build-desktop-artifact\.ts$/,
+    text: '"T3 Agents"',
+    why: "Pinned Windows exe name: taskbar pins, CLI shims and service units point at it.",
+  },
+  // Copy about the separate upstream product, which the fork installs beside.
+  {
+    file: /^apps\/desktop\/resources\/agents-installer\.nsh$/,
+    text: "T3 Code",
+    why: "Installer guards that protect T3 Code's folder.",
+  },
+  {
+    file: /^packages\/source-control-github\/src\/shared\/definition\.ts$/,
+    text: "T3 Code for GitHub",
+    why: "Upstream's GitHub App name.",
+  },
+  {
+    file: /^README\.md$/,
+    text: "T3 Code",
+    why: "Switching from T3 Code, which installs beside Ada.",
+  },
+  {
+    file: /^docs\/user\/(?:install|updating)\.md$/,
+    text: "T3 Code",
+    why: "Warnings that T3 Code's installers replace Ada's server.",
+  },
+  {
+    file: /^docs\/user\/(?:install|faq)\.md$/,
+    text: "T3 Code mobile app",
+    why: "Ada has no store listing; the T3 Code app pairs with it.",
+  },
+  { file: /^docs\/user\/faq\.md$/, text: "Get the T3 Code", why: "Same store listing." },
+  {
+    file: /^apps\/web\/src\/branding\.ts$/,
+    text: "t3.codes/mobile",
+    why: "Store redirect for the T3 Code app, until Ada has its own listing.",
+  },
+  {
+    file: /^apps\/marketing\/src\/lib\/tweets\.ts$/,
+    why: "Real people's posts; rewriting them would invent endorsements.",
+  },
+  {
+    file: /^apps\/marketing\/src\/(?:lib\/seo\.ts|pages\/95\.astro)$/,
+    text: "https://t3.codes",
+    why: "Site origin, until the fork has its own domain.",
+  },
+  // Renamed by the CLI alias change stacked on this one, which removes this entry.
+  {
+    file: /^(?:apps\/server\/src\/(?:cli\/|service\/|serviceLauncher\.ts)|apps\/desktop\/src\/app\/DesktopCli(?:Command|Shim)\.ts|scripts\/install\.(?:sh|ps1)$)/,
+    why: "CLI copy, renamed with the ada command.",
   },
 ];
 
@@ -101,13 +252,13 @@ it("keeps upstream brand names out of user-facing fork code and docs", () => {
   const hits = trackedFiles(BRAND_SCANNED, BRAND_EXCLUDED).flatMap((file) =>
     readLines(file).flatMap((line, index) => {
       if (isCommentLine(file, line)) return [];
-      const visible = line.replace(/\s\/\/\s.*$/, "");
-      if (!UPSTREAM_BRAND.test(visible)) return [];
-      const allowed = BRAND_ALLOWLIST.some(
-        (entry) =>
-          entry.file.test(file) && (entry.text === undefined || visible.includes(entry.text)),
-      );
-      return allowed ? [] : [`${file}:${index + 1}`];
+      let visible = line.replace(/\s\/\/\s.*$/, "");
+      for (const entry of BRAND_ALLOWLIST) {
+        if (!entry.file.test(file)) continue;
+        if (entry.text === undefined) return [];
+        visible = visible.replaceAll(entry.text, "");
+      }
+      return UPSTREAM_BRAND.test(visible) ? [`${file}:${index + 1}`] : [];
     }),
   );
   expect(hits).toEqual([]);

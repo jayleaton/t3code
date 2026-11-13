@@ -27,6 +27,7 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { toastManager } from "../ui/toast";
 import { SettingsRow } from "./settingsLayout";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 interface AcpSessionProject {
   readonly id: ProjectId;
@@ -395,7 +396,7 @@ function InstanceSessionManagement(
     <div className="grid gap-3">
       <SettingsRow
         title="Native sessions"
-        description="Resume agent-owned conversations as T3 threads."
+        description={`Resume agent-owned conversations as ${APP_NAME} threads.`}
         status={
           canList && props.projects.length === 0
             ? "Add a project before importing sessions."

@@ -1,5 +1,6 @@
 import type { ExpoConfig } from "expo/config";
 
+import { APP_NAME } from "../../packages/shared/src/branding.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
 type AppVariant = "development" | "preview" | "production";
@@ -52,21 +53,21 @@ const AGENTS_ASSETS = {
 
 const VARIANT_CONFIG = {
   development: {
-    appName: "T3 Agents Dev",
+    appName: `${APP_NAME} Dev`,
     scheme: "t3code-personal-dev",
     iosBundleIdentifier: "com.jayleaton.t3code.dev",
     androidPackage: "com.jayleaton.t3code.dev",
     assets: AGENTS_ASSETS,
   },
   preview: {
-    appName: "T3 Agents Preview",
+    appName: `${APP_NAME} Preview`,
     scheme: "t3code-personal-preview",
     iosBundleIdentifier: "com.jayleaton.t3code.preview",
     androidPackage: "com.jayleaton.t3code.preview",
     assets: AGENTS_ASSETS,
   },
   production: {
-    appName: "T3 Agents",
+    appName: APP_NAME,
     scheme: "t3code-personal",
     iosBundleIdentifier: "com.jayleaton.t3code",
     androidPackage: "com.jayleaton.t3code",
@@ -227,9 +228,8 @@ const config: ExpoConfig = {
       NSAppTransportSecurity: {
         NSAllowsArbitraryLoads: true,
       },
-      NSLocalNetworkUsageDescription:
-        "Allow T3 Agents to connect to your environments on your local network or tailnet.",
-      NSPhotoLibraryAddUsageDescription: "Allow T3 Agents to save images to your photo library.",
+      NSLocalNetworkUsageDescription: `Allow ${APP_NAME} to connect to your environments on your local network or tailnet.`,
+      NSPhotoLibraryAddUsageDescription: `Allow ${APP_NAME} to save images to your photo library.`,
       // System picture in picture needs background audio outside the app.
       UIBackgroundModes: ["audio"],
       ITSAppUsesNonExemptEncryption: false,
@@ -322,7 +322,7 @@ const config: ExpoConfig = {
     [
       "expo-audio",
       {
-        microphonePermission: "Allow T3 Agents to use your microphone for voice input.",
+        microphonePermission: `Allow ${APP_NAME} to use your microphone for voice input.`,
         recordAudioAndroid: true,
         enableBackgroundPlayback: false,
         enableBackgroundRecording: false,
@@ -331,7 +331,7 @@ const config: ExpoConfig = {
     [
       "expo-camera",
       {
-        cameraPermission: "Allow T3 Agents to access your camera so you can scan pairing QR codes.",
+        cameraPermission: `Allow ${APP_NAME} to access your camera so you can scan pairing QR codes.`,
         microphonePermission: false,
         barcodeScannerEnabled: true,
         recordAudioAndroid: false,
@@ -342,7 +342,7 @@ const config: ExpoConfig = {
       {
         photosPermission: false,
         // `false` makes this plugin add RECORD_AUDIO to blockedPermissions, breaking Android dictation.
-        microphonePermission: "Allow T3 Agents to use your microphone for voice input.",
+        microphonePermission: `Allow ${APP_NAME} to use your microphone for voice input.`,
       },
     ],
     [

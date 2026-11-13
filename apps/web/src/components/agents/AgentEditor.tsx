@@ -52,6 +52,7 @@ import {
   type AgentPreset,
   type AgentPresetSkill,
 } from "@t3tools/shared/agentPresets";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const emptySkills: ReadonlyArray<AgentSkill> = [];
 const PROVIDER_DEFAULT = "";
@@ -310,7 +311,7 @@ export function AgentEditor({
                     )}
                     {!skillsAvailable && preset.skills.length > 0 && (
                       <p className="mt-1">
-                        Update T3 Code on this machine to add this preset’s skills.
+                        Update {APP_NAME} on this machine to add this preset’s skills.
                       </p>
                     )}
                   </AlertDescription>

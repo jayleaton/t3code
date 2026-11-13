@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Synchronous hashing keeps env values out of cache keys.
 import * as NodeCrypto from "node:crypto";
+import { APP_NAME } from "@t3tools/shared/branding";
 export type {
   ProviderMaintenanceCapabilities,
   ProviderMaintenanceCommandAction,
@@ -1043,7 +1044,7 @@ export const makeCachedProviderMaintenanceResolution = Effect.fn(
 
 function manualUpdateMessage(latestVersion: string, installPath: string | undefined): string {
   return installPath
-    ? `Version ${latestVersion} is out. T3 Code runs ${installPath}; update it with the app or tool that installed it.`
+    ? `Version ${latestVersion} is out. ${APP_NAME} runs ${installPath}; update it with the app or tool that installed it.`
     : `Version ${latestVersion} is out. Update it with the app or tool that installed it.`;
 }
 

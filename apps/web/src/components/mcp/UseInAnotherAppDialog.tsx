@@ -36,6 +36,7 @@ import { toastManager } from "../ui/toast";
 import { WizardFooter, WizardHeader, WizardPanel, WizardPopup, WizardSteps } from "../ui/wizard";
 import { type McpGate, resolveMcpGate } from "./mcpGate";
 import { MCP_APPS, type McpApp, OTHER_MCP_APP_STEPS } from "./mcpApps";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const requestAtom = Atom.make<{ readonly environmentId: EnvironmentId | null } | null>(null).pipe(
   Atom.keepAlive,
@@ -57,7 +58,7 @@ export function UseInAnotherAppDialogHost() {
 
 function UseInAnotherAppDialog({ requested }: { readonly requested: EnvironmentId | null }) {
   const { environment, label } = useAccessEnvironment(requested);
-  const title = `Use T3 Code in another app (MCP) · ${label ?? "T3 Code"}`;
+  const title = `Use ${APP_NAME} in another app (MCP) · ${label ?? APP_NAME}`;
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : close())}>
       <WizardPopup>
@@ -222,14 +223,14 @@ function GateScreen({
     case "disconnected":
       return <GateMessage title={`Connect to ${name} first.`} />;
     case "update":
-      return <GateMessage title={`Update T3 Code on ${name}`} />;
+      return <GateMessage title={`Update ${APP_NAME} on ${name}`} />;
     case "no-tailnet-https":
       return (
         <GateMessage
           title={`${name} has no tailnet HTTPS address`}
           lines={[
-            "Apps on your tailnet reach T3 Code at https://<machine>.<tailnet>.ts.net/mcp.",
-            `Turn on HTTPS for your tailnet and serve T3 Code with Tailscale Serve on ${name}. This page updates once it reports the address.`,
+            `Apps on your tailnet reach ${APP_NAME} at https://<machine>.<tailnet>.ts.net/mcp.`,
+            `Turn on HTTPS for your tailnet and serve ${APP_NAME} with Tailscale Serve on ${name}. This page updates once it reports the address.`,
           ]}
         />
       );

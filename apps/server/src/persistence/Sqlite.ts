@@ -13,6 +13,7 @@ import { hasPendingMigrations, runMigrations } from "./Migrations.ts";
 import { initializeV2Database } from "./initializeV2Database.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerOwnership from "../serverOwnership.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const WAL_SIZE_LIMIT_BYTES = 128 * 1024 * 1024;
 
@@ -36,7 +37,7 @@ export class DatabaseRefusedError extends Schema.TaggedError<DatabaseRefusedErro
   override readonly [Runtime.errorExitCode] = SERVER_EXIT_CODE_DATABASE_REFUSED;
 
   override get message(): string {
-    return `T3 Code did not open its database, and left it unchanged: ${this.detail}`;
+    return `${APP_NAME} did not open its database, and left it unchanged: ${this.detail}`;
   }
 }
 
@@ -45,7 +46,7 @@ export class ServerOwnsDatabaseError extends Schema.TaggedError<ServerOwnsDataba
   { stateDir: Schema.String },
 ) {
   override get message(): string {
-    return `Another T3 Code process, usually a running server, owns ${this.stateDir}, and this CLI would change its database schema. Use the \`t3\` that matches the running server, or stop that server, then retry. The database was not changed.`;
+    return `Another ${APP_NAME} process, usually a running server, owns ${this.stateDir}, and this CLI would change its database schema. Use the \`t3\` that matches the running server, or stop that server, then retry. The database was not changed.`;
   }
 }
 

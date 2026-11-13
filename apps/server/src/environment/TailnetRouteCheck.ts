@@ -8,6 +8,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { HttpClient, HttpClientResponse } from "effect/http";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 // A route is only re-pointed by something else on this machine (a second
 // server, a hand-run `tailscale serve`), so a slow recheck is enough to name
@@ -78,7 +79,7 @@ const checkTailnetRoute = Effect.fn("TailnetRouteCheck.check")(function* (input:
 });
 
 const OBSERVED_TEXT = {
-  "other-environment": "a different T3 environment answers there",
+  "other-environment": `a different ${APP_NAME} environment answers there`,
   "not-a-t3-server": "something other than T3 answers there",
   unreachable: "nothing answers there (remote clients get 502 or time out)",
 } as const;

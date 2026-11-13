@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 
 import { APP_VERSION } from "./branding";
 import { getLocalStorageItem, setLocalStorageItem } from "./hooks/useLocalStorage";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 export interface VersionMismatch {
   readonly clientVersion: string;
@@ -68,7 +69,7 @@ export function resolveVersionMismatch(
   return {
     clientVersion: normalizedClientVersion,
     serverVersion: normalizedServerVersion,
-    hint: "Version mismatch. Try syncing the client and server to the same T3 Agents version.",
+    hint: `Version mismatch. Try syncing the client and server to the same ${APP_NAME} version.`,
   };
 }
 

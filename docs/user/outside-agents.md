@@ -1,14 +1,14 @@
 # Outside agents
 
-Agents that T3 Code did not start can work with an environment through its MCP
+Agents that Ada did not start can work with an environment through its MCP
 server. They can read projects and threads, start and message threads, and
 check which providers and models are available. This covers Claude Code or
 Codex in your own terminal, and other MCP agents running on your own devices. Each agent signs
 in once, and you choose what it may do.
 
-## Add T3 Code to an assistant app
+## Add Ada to an assistant app
 
-Open the command palette (`Cmd/Ctrl+K`) and choose **Use T3 Code in another
+Open the command palette (`Cmd/Ctrl+K`) and choose **Use Ada in another
 app (MCP)**, or use the button in **Settings → Sharing & access**. Pick the
 app, choose what it may do, and follow the step for that app. The dialog shows
 the environment's Tailscale `/mcp` address, which only devices on your tailnet can
@@ -47,7 +47,7 @@ same device can reach it.
 - **A hosted agent**, such as ChatGPT or a bot running in the cloud, cannot reach
   the environment. A Tailscale address works only from devices on your own
   tailnet. Exposing it to the internet, for example with Tailscale Funnel, is
-  your own setup and is not supported by T3 Code.
+  your own setup and is not supported by Ada.
 
 ## Approve a sign-in
 
@@ -60,11 +60,11 @@ The page names the agent and where its access goes:
   Anyone who runs that service gets the access.
 
 Only approve a sign-in you just started. To approve, enter a code from
-**Use T3 Code in another app (MCP)**, **Settings → Environments**, or
+**Use Ada in another app (MCP)**, **Settings → Environments**, or
 `t3 auth pairing create` on the host. A browser already signed in to the
 environment with permission to manage access can approve without a code.
 
-A code from **Use T3 Code in another app (MCP)** already carries the level you
+A code from **Use Ada in another app (MCP)** already carries the level you
 picked there. With another code, choose what the agent may do here: **Auto** is
 selected by default, or the closest lower mode allowed by your organization’s
 policy. Approving without a code starts at **Read only**:
@@ -77,11 +77,11 @@ policy. Approving without a code starts at **Read only**:
 
 ## What outside agents can call
 
-Some tools only work for an agent running inside a T3 thread, because they act
+Some tools only work for an agent running inside an Ada thread, because they act
 as that thread: subagents, secret requests, rendered HTML, the browser preview,
 devices, and worktree handoff. They still appear in an outside agent's tool
 list, but calling one returns an error saying it needs an agent running inside
-T3 Code.
+Ada.
 
 - To hand off work, start a thread with `t3_thread_launch`, then follow it with
   `t3_thread_wait` or `t3_thread_read`, instead of `create_threads` or

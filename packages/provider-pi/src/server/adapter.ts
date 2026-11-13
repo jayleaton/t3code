@@ -76,6 +76,7 @@ import {
 } from "./mcpInjection.ts";
 import { PI_FILE_CHANGE_TOOLS, PI_T3_SERVICE_TIER_COMMAND } from "./mcpExtensionSource.ts";
 import { PI_STANDARD_SERVICE_TIER } from "./modelCapabilities.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
 const PI_DRIVER_KIND = PI_PROVIDER;
@@ -2666,7 +2667,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           // Pi before 0.99 acknowledges a handled extension command without a disposition.
           const disposition = recordString(result, "disposition");
           if (disposition !== undefined && disposition !== "handled") {
-            return yield* protocolError("T3 Code's Pi extension did not apply the service tier");
+            return yield* protocolError(
+              `${APP_NAME}'s Pi extension did not apply the service tier`,
+            );
           }
           serviceTierMayBeSet = serviceTier !== null;
         }
