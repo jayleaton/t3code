@@ -688,10 +688,14 @@ cards, and a chat left pointing at a missing parent is detached when the server 
 
 ### Schedule prompts for an agent
 
-Open **Scheduled** on the Agents board, or choose **Schedule task** from an agent's details card, to send
+Open **Scheduled** on the Agents board, or choose **Schedule** from an agent's menu, to send
 an agent a prompt at a set time (for example a deploy tonight) or on repeat (for example pulling
-the latest changes every weekday at 7:00). Each task has one thread: the first run creates it and
-every later run posts into it. Pause, resume, run now, edit, or delete a task from the same list.
+the latest changes every weekday at 7:00). Set **Destination** to **An agent's thread** and pick
+the agent. Each task has one thread: the first run creates it and every later run posts into it.
+This is the same list as **Settings → Scheduled tasks**, opened on **Agents**; choose **All**,
+**Threads**, **New thread** or **Archived** to see the rest. To schedule a prompt into the chat
+you are in, choose **+** under **Automations** in its details. Pause, resume, run now, edit, or
+delete a task from the list.
 
 A task is kept on, and runs on, the machine that hosts its project. When you ask an agent in a chat
 to schedule something, that is the chat's machine, not the device you are typing on, so the task

@@ -288,6 +288,16 @@ export function scheduledTaskDeletesAt(task: Pick<ScheduledTask, "archivedAt">):
   );
 }
 
+/** Where a task's runs go: an agent's own thread, one bound thread, or a new thread each run. */
+export type ScheduledTaskTarget = "agent" | "thread" | "new_thread";
+
+export function scheduledTaskTarget(
+  task: Pick<ScheduledTask, "profileId" | "threadId" | "threadMode">,
+): ScheduledTaskTarget {
+  if (task.profileId !== undefined) return "agent";
+  return scheduledTaskThreadMode(task) === "new_thread" ? "new_thread" : "thread";
+}
+
 export const ScheduledTask = Schema.Struct({
   id: ScheduledTaskId,
   title: TrimmedNonEmptyString,

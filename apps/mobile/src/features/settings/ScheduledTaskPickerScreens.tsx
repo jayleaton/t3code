@@ -24,7 +24,13 @@ import {
   useScheduledTaskDestinationLabel,
   useScheduledTaskEditor,
 } from "./scheduled-task-editor";
-import { moveDraftToThread, unbindDraftFromThread } from "./scheduledTaskDraft";
+import { agentModelLabel, useEnvironmentAgents } from "../../state/agents";
+import {
+  moveDraftToAgent,
+  moveDraftToThread,
+  schedulableAgentProfiles,
+  unbindDraftFromThread,
+} from "./scheduledTaskDraft";
 
 function MissingTaskDraft() {
   return (
@@ -270,6 +276,65 @@ export function ScheduledTaskThreadPickerRouteScreen() {
                           ? moveDraftToThread(current.draft, item.thread)
                           : { ...unbindDraftFromThread(current.draft), threadMode: "new_thread" },
                       }
+                    : current,
+                );
+              }
+              navigation.goBack();
+            }}
+          />
+        )}
+      />
+    </SettingsScreen>
+  );
+}
+
+export function ScheduledTaskAgentPickerRouteScreen() {
+  const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
+  const { editor, setEditor } = useScheduledTaskEditor();
+  const agents = useEnvironmentAgents(editor?.environmentId ?? null);
+
+  if (!editor) return <MissingTaskDraft />;
+
+  const profiles =
+    agents.status === "ready"
+      ? schedulableAgentProfiles(agents.profiles, editor.environmentId)
+      : [];
+  const selectedId = editor.draft.profileId;
+
+  return (
+    <SettingsScreen title="Agent">
+      <FlatList
+        data={profiles}
+        keyExtractor={(profile) => profile.profileId}
+        className="flex-1"
+        contentInsetAdjustmentBehavior="automatic"
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{
+          paddingHorizontal: 16,
+          paddingTop: 16,
+          paddingBottom: Math.max(insets.bottom, 16) + 16,
+        }}
+        ListEmptyComponent={
+          <Text className="p-5 text-center text-sm text-foreground-muted">
+            {agents.status === "loading"
+              ? "Loading agents…"
+              : "No agents on this environment can run scheduled tasks."}
+          </Text>
+        }
+        renderItem={({ item, index }) => (
+          <SelectionRow
+            title={item.name}
+            subtitle={agentModelLabel(item) ?? undefined}
+            selected={item.profileId === selectedId}
+            isFirst={index === 0}
+            isLast={index === profiles.length - 1}
+            onPress={() => {
+              void Haptics.selectionAsync();
+              if (item.profileId !== selectedId) {
+                setEditor((current) =>
+                  current
+                    ? { ...current, draft: moveDraftToAgent(current.draft, item.profileId) }
                     : current,
                 );
               }

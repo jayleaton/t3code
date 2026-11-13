@@ -91,6 +91,10 @@
       "types": "./src/scheduledTaskDestinations.ts",
       "default": "./src/scheduledTaskDestinations.ts"
     },
+    "./scheduled-task-cron": {
+      "types": "./src/scheduledTaskCron.ts",
+      "default": "./src/scheduledTaskCron.ts"
+    },
     "./scheduled-task-archive": {
       "types": "./src/scheduledTaskArchive.ts",
       "default": "./src/scheduledTaskArchive.ts"

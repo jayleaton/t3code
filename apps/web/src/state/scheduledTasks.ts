@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId, ScheduledTask } from "@t3tools/contracts";
+import { scheduledTaskTarget, type EnvironmentId, type ScheduledTask } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { selectScheduledWakeThreadKeys } from "@t3tools/client-runtime/state/agents";
@@ -12,8 +12,8 @@ export interface EnvironmentScheduledTask {
 }
 
 /**
- * Agent scheduled tasks across connected environments. Tasks without a profile are managed in
- * Settings. Reuses the shared per-environment subscription, which opens only while read.
+ * Unarchived agent scheduled tasks across connected environments, for the Agents board's count.
+ * Reuses the shared per-environment subscription, which opens only while read.
  */
 const agentScheduledTasksAtom = Atom.make((get): ReadonlyArray<EnvironmentScheduledTask> => {
   const tasks: EnvironmentScheduledTask[] = [];
@@ -22,8 +22,7 @@ const agentScheduledTasksAtom = Atom.make((get): ReadonlyArray<EnvironmentSchedu
     const result = get(serverEnvironment.scheduledTasksLive({ environmentId, input: {} }));
     const snapshot = Option.getOrUndefined(AsyncResult.value(result));
     for (const task of snapshot?.tasks ?? []) {
-      // Archived tasks are listed in Settings only.
-      if (task.profileId !== undefined && task.archivedAt == null) {
+      if (scheduledTaskTarget(task) === "agent" && task.archivedAt == null) {
         tasks.push({ environmentId, task });
       }
     }

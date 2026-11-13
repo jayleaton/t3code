@@ -1,16 +1,28 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   DEFAULT_SERVER_SETTINGS,
+  type McpGatewayProfile,
+  type ScheduledTask,
   type ServerConfig,
+  type ServerProvider,
+  EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
   ProjectId,
+  ThreadId,
 } from "@t3tools/contracts";
 import {
   scheduledTaskDefaultModel,
   DEFAULT_SCHEDULE,
+  editDraft,
+  hasScheduledTaskDraftChanges,
+  moveDraftOffAgent,
+  moveDraftToAgent,
+  schedulableAgentProfiles,
+  scheduledTaskDraftRouting,
   scheduleDraftForTask,
   scheduleFromDraft,
+  unbindDraftFromThread,
 } from "./scheduledTaskDraft";
 
 describe("scheduleDraftForTask", () => {
@@ -83,6 +95,45 @@ describe("scheduleDraftForTask", () => {
 });
 
 describe("scheduleFromDraft", () => {
+  it.each([
+    ["0 7 * * 1-5", "weekdays"],
+    ["30 * * * *", "hourly"],
+    ["15 9 * * 3", "weekly"],
+    ["*/5 1-3 * * *", "custom"],
+  ])("reopens cron %s on its %s preset and saves it unchanged", (expression, preset) => {
+    const schedule = { type: "cron" as const, expression, timezone: "Europe/London" };
+    const draft = scheduleDraftForTask({ schedule });
+    expect(draft).toMatchObject({ mode: "cron", repeat: { preset }, timezone: "Europe/London" });
+    expect(scheduleFromDraft(draft)).toEqual(schedule);
+  });
+
+  it("saves an edited cron preset and refuses a malformed one", () => {
+    const draft = scheduleDraftForTask({
+      schedule: { type: "cron", expression: "0 7 * * *", timezone: "UTC" },
+    });
+    expect(
+      scheduleFromDraft({ ...draft, repeat: { ...draft.repeat, preset: "weekly", weekday: 2 } }),
+    ).toEqual({ type: "cron", expression: "0 7 * * 2", timezone: "UTC" });
+    const taskDraft = editDraft(
+      task({ schedule: { type: "cron", expression: "0 7 * * *", timezone: "UTC" } }),
+    );
+    expect(
+      hasScheduledTaskDraftChanges(taskDraft, {
+        ...taskDraft,
+        schedule: { ...taskDraft.schedule, timezone: "Europe/Paris" },
+      }),
+    ).toBe(true);
+    expect(
+      scheduleFromDraft({ ...draft, repeat: { ...draft.repeat, preset: "hourly", time: "00:75" } }),
+    ).toBeNull();
+    expect(
+      scheduleFromDraft({
+        ...draft,
+        repeat: { ...draft.repeat, preset: "custom", expression: "0 7" },
+      }),
+    ).toBeNull();
+  });
+
   it("rejects an empty day selection rather than silently scheduling every day", () => {
     expect(scheduleFromDraft({ ...DEFAULT_SCHEDULE, weekdays: [] })).toBeNull();
   });
@@ -206,4 +257,123 @@ it("rejects dedupe keys without valid request placeholders", () => {
   expect(
     scheduleFromDraft({ ...DEFAULT_SCHEDULE, mode: "webhook", coalesceKey: "{{body.bad" }),
   ).toBeNull();
+});
+
+const environmentId = EnvironmentId.make("environment");
+const codex = ProviderInstanceId.make("codex");
+const providers = [
+  {
+    instanceId: codex,
+    driver: "codex",
+    enabled: true,
+    installed: true,
+    status: "ready",
+    auth: { status: "authenticated" },
+    models: [{ slug: "agent-model", name: "Agent", isCustom: false, capabilities: null }],
+  },
+] as unknown as ReadonlyArray<ServerProvider>;
+const profile = (fields: Partial<McpGatewayProfile>) =>
+  ({
+    profileId: "reviewer",
+    name: "Reviewer",
+    runtimeMode: "approval-required",
+    interactionMode: "plan",
+    modelSelection: { instanceId: codex, model: "agent-model" },
+    ...fields,
+  }) as McpGatewayProfile;
+const profiles = [
+  profile({}),
+  profile({ profileId: "reader", runtimeMode: "read-only" }),
+  profile({ profileId: "elsewhere", environmentIds: [EnvironmentId.make("other")] }),
+];
+const taskModel = { instanceId: codex, model: "task-model" };
+const task = (fields: Partial<ScheduledTask>) =>
+  ({
+    id: "task",
+    title: "Task",
+    prompt: "Do it",
+    enabled: true,
+    schedule: { type: "interval", everyMs: 60_000 },
+    projectId: ProjectId.make("project"),
+    threadId: null,
+    workspaceStrategy: { type: "root" },
+    modelSelection: taskModel,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    ...fields,
+  }) as ScheduledTask;
+const context = { profiles, providers, offersThreadModes: true };
+
+describe("scheduled task agent routing", () => {
+  it("offers only agents that can run tasks on this environment", () => {
+    expect(schedulableAgentProfiles(profiles, environmentId).map((p) => p.profileId)).toEqual([
+      "reviewer",
+    ]);
+  });
+
+  it("routes a new agent task through the agent's model and modes", () => {
+    const draft = moveDraftToAgent(editDraft(task({})), "reviewer");
+    expect(scheduledTaskDraftRouting(draft, context)).toEqual({
+      profileId: "reviewer",
+      threadId: null,
+      modelSelection: { instanceId: codex, model: "agent-model" },
+      runtimeMode: "approval-required",
+      interactionMode: "plan",
+    });
+    expect(scheduledTaskDraftRouting(moveDraftToAgent(draft, "reader"), context)).toBe(
+      "Agent Reviewer is read-only and cannot run scheduled tasks.",
+    );
+  });
+
+  it("keeps an agent task's own thread and stored model until the agent changes", () => {
+    const own = ThreadId.make("own");
+    const draft = editDraft(
+      task({ profileId: "reviewer", threadId: own, runtimeMode: "auto-accept-edits" }),
+    );
+    expect(draft.profileId).toBe("reviewer");
+    expect(scheduledTaskDraftRouting(unbindDraftFromThread(draft), context)).toMatchObject({
+      threadId: null,
+    });
+    expect(scheduledTaskDraftRouting(draft, context)).toEqual({
+      profileId: "reviewer",
+      threadId: own,
+      modelSelection: taskModel,
+      runtimeMode: "auto-accept-edits",
+      interactionMode: "default",
+    });
+    const other = moveDraftToAgent(draft, "missing");
+    expect(hasScheduledTaskDraftChanges(draft, other)).toBe(true);
+    expect(other.threadId).toBeNull();
+    expect(scheduledTaskDraftRouting(other, context)).toBe("Agent missing was not found.");
+    expect(moveDraftToAgent(other, "reviewer").threadId).toBe(own);
+  });
+
+  it("clears the agent only on a task that had one", () => {
+    const agentTask = editDraft(
+      task({ profileId: "reviewer", threadId: ThreadId.make("own"), interactionMode: "plan" }),
+    );
+    expect(
+      scheduledTaskDraftRouting(
+        { ...moveDraftOffAgent(agentTask), threadMode: "new_thread" },
+        context,
+      ),
+    ).toEqual({
+      profileId: null,
+      threadId: null,
+      threadMode: "new_thread",
+      modelSelection: taskModel,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+    });
+    const threadTask = scheduledTaskDraftRouting(
+      editDraft(task({ threadId: ThreadId.make("bound"), interactionMode: "plan" })),
+      { ...context, offersThreadModes: false },
+    );
+    expect(threadTask).toEqual({
+      threadId: ThreadId.make("bound"),
+      modelSelection: taskModel,
+      runtimeMode: "full-access",
+      interactionMode: "plan",
+    });
+  });
 });

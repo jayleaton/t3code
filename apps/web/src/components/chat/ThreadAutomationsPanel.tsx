@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { useNavigate } from "@tanstack/react-router";
-import { CalendarClockIcon, PencilIcon, PlayIcon, Settings2Icon } from "lucide-react";
+import { CalendarClockIcon, PencilIcon, PlayIcon, PlusIcon, Settings2Icon } from "lucide-react";
 import { useState } from "react";
 import {
   AuthOrchestrationOperateScope,
@@ -66,6 +66,9 @@ export function ThreadAutomationsPanel(props: {
   const canOperate = useAtomValue(
     serverEnvironment.runScheduledTaskNow.permissionAtom(props.environmentId),
   );
+  const canCreate = useAtomValue(
+    serverEnvironment.upsertScheduledTask.permissionAtom(props.environmentId),
+  );
   const tasksQuery = useEnvironmentQuery(
     serverEnvironment.scheduledTasksLive({ environmentId: props.environmentId, input: {} }),
   );
@@ -82,7 +85,10 @@ export function ThreadAutomationsPanel(props: {
     (task) => task.threadId === props.threadId && !isScheduledTaskArchived(task),
   );
 
-  if (tasksQuery.error === null && boundTasks.length === 0) return null;
+  // With nothing bound the section only offers New, so viewers who can't create don't see it.
+  if (tasksQuery.error === null && boundTasks.length === 0 && (!canCreate || !tasksQuery.data)) {
+    return null;
+  }
 
   const reportFailure = (title: string, error: unknown) => {
     toastManager.add(
@@ -134,29 +140,58 @@ export function ThreadAutomationsPanel(props: {
       title="Automations"
       data-thread-automations-panel
       actions={
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <ThreadDetailsControl
-                size="icon-xs"
-                variant="ghost"
-                part="icon"
-                aria-label="Manage scheduled tasks"
-                onClick={() =>
-                  void navigate({
-                    to: "/settings/scheduled-tasks",
-                    search: { environmentId: props.environmentId },
-                  })
-                }
-              >
-                <Settings2Icon className="size-3.5" />
-              </ThreadDetailsControl>
-            }
-          />
-          <TooltipPopup>Manage scheduled tasks</TooltipPopup>
-        </Tooltip>
+        <>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <ThreadDetailsControl
+                  size="icon-xs"
+                  variant="ghost"
+                  part="icon"
+                  aria-label="New automation"
+                  disabled={!canCreate}
+                  onClick={() =>
+                    void navigate({
+                      to: "/settings/scheduled-tasks",
+                      search: { environmentId: props.environmentId, threadId: props.threadId },
+                    })
+                  }
+                >
+                  <PlusIcon className="size-3.5" />
+                </ThreadDetailsControl>
+              }
+            />
+            <TooltipPopup>New automation for this thread</TooltipPopup>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <ThreadDetailsControl
+                  size="icon-xs"
+                  variant="ghost"
+                  part="icon"
+                  aria-label="Manage scheduled tasks"
+                  onClick={() =>
+                    void navigate({
+                      to: "/settings/scheduled-tasks",
+                      search: { environmentId: props.environmentId },
+                    })
+                  }
+                >
+                  <Settings2Icon className="size-3.5" />
+                </ThreadDetailsControl>
+              }
+            />
+            <TooltipPopup>Manage scheduled tasks</TooltipPopup>
+          </Tooltip>
+        </>
       }
     >
+      {boundTasks.length === 0 && tasksQuery.error === null ? (
+        <p className="px-2.5 py-1.5 text-2xs text-muted-foreground">
+          Nothing scheduled for this thread.
+        </p>
+      ) : null}
       <ul className="m-0 max-h-[13.5rem] list-none overflow-y-auto p-0">
         {boundTasks.map((task) => (
           <li
