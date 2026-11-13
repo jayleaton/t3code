@@ -61,7 +61,6 @@ import {
 import { Menu } from "../../components/ui/Menu";
 import type { ComposerEditorSelection } from "../../components/ComposerEditor";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
-import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { ListFilterMenu } from "../layout/workspace/ListFilterMenu";
 import { agentModelLabel, useEnvironmentAgents } from "../../state/agents";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
@@ -90,6 +89,7 @@ import {
   scheduledTaskDraftRouting,
   scheduleFromDraft,
   unbindDraftFromThread,
+  type ScheduleDraft,
   type ScheduledTaskDraft as Draft,
 } from "./scheduledTaskDraft";
 import { settingsTargetsForProject } from "./settings-environment-filter.logic";
@@ -138,6 +138,15 @@ const THREAD_MODE_LABELS: Record<ScheduledTaskThreadMode, string> = {
 };
 const AGENT_DESTINATION_LABEL = "An agent's own thread";
 
+const SCHEDULE_MODE_LABELS: Record<ScheduleDraft["mode"], string> = {
+  fixed_time: "At a time",
+  once: "Once",
+  interval: "Interval",
+  cron: "Cron",
+  webhook: "On webhook",
+};
+const SCHEDULE_MODES = Object.keys(SCHEDULE_MODE_LABELS) as ReadonlyArray<ScheduleDraft["mode"]>;
+
 const REPEAT_PRESET_LABELS: Record<RepeatPreset, string> = {
   daily: "Every day",
   weekdays: "Weekdays",
@@ -151,7 +160,7 @@ function describeSchedule(
   timeZone?: string,
 ): string {
   if (task.schedule.type === "cron") {
-    return describeRepeatSchedule(task.schedule, (iso) => iso, localTimeZone());
+    return describeRepeatSchedule(task.schedule, (iso) => iso, localTimeZone(), formatTime);
   }
   if (task.schedule.type === "webhook") return "On webhook";
   if (task.schedule.type === "once") {
@@ -1222,43 +1231,45 @@ function TaskForm({
         </SettingsSection>
 
         <SettingsSection title="Schedule">
-          <View className="px-4 py-3">
-            <SegmentedControl
-              variant="card"
-              options={[
-                { value: "fixed_time" as const, label: "At a time" },
-                // Older servers reject one-time schedules on save.
-                ...(offersOnce || draft.schedule.mode === "once"
-                  ? [{ value: "once" as const, label: "Once" }]
-                  : []),
-                { value: "interval" as const, label: "Interval" },
-                { value: "cron" as const, label: "Cron" },
-                ...(webhookDenial === undefined || draft.schedule.mode === "webhook"
-                  ? [{ value: "webhook" as const, label: "On webhook" }]
-                  : []),
-              ]}
-              selected={draft.schedule.mode}
-              onSelect={(mode) => {
-                setTimePickerOpen(false);
-                setRunAtPicker(null);
-                setDraft({
-                  ...draft,
-                  prompt:
-                    mode === "webhook" && !draft.prompt.trim()
-                      ? DEFAULT_WEBHOOK_PROMPT
-                      : draft.prompt,
-                  schedule: {
-                    ...draft.schedule,
-                    mode,
-                    runAt:
-                      mode === "once" && !draft.schedule.runAt
-                        ? new Date(Math.ceil(Date.now() / 3_600_000) * 3_600_000).toISOString()
-                        : draft.schedule.runAt,
-                  },
-                });
-              }}
-            />
-          </View>
+          <SelectRow
+            label="Runs"
+            value={SCHEDULE_MODE_LABELS[draft.schedule.mode]}
+            actions={[
+              "fixed_time" as const,
+              // Older servers reject one-time schedules on save.
+              ...(offersOnce || draft.schedule.mode === "once" ? ["once" as const] : []),
+              "interval" as const,
+              "cron" as const,
+              ...(webhookDenial === undefined || draft.schedule.mode === "webhook"
+                ? ["webhook" as const]
+                : []),
+            ].map((mode) => ({
+              id: mode,
+              title: SCHEDULE_MODE_LABELS[mode],
+              state: draft.schedule.mode === mode ? ("on" as const) : undefined,
+            }))}
+            onSelect={(id) => {
+              const mode = SCHEDULE_MODES.find((entry) => entry === id);
+              if (mode === undefined) return;
+              setTimePickerOpen(false);
+              setRunAtPicker(null);
+              setDraft({
+                ...draft,
+                prompt:
+                  mode === "webhook" && !draft.prompt.trim()
+                    ? DEFAULT_WEBHOOK_PROMPT
+                    : draft.prompt,
+                schedule: {
+                  ...draft.schedule,
+                  mode,
+                  runAt:
+                    mode === "once" && !draft.schedule.runAt
+                      ? new Date(Math.ceil(Date.now() / 3_600_000) * 3_600_000).toISOString()
+                      : draft.schedule.runAt,
+                },
+              });
+            }}
+          />
           {draft.schedule.mode === "cron" ? (
             <CronScheduleFields
               repeat={draft.schedule.repeat}
