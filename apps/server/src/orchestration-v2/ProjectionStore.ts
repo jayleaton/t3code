@@ -1145,6 +1145,8 @@ export type AgentAwarenessThread = ProjectThreadAwarenessV2Input["thread"] &
     | "activeRunId"
     | "latestRunId"
     | "hasActionableProposedPlan"
+    | "snoozedUntil"
+    | "delegatedFrom"
   >;
 
 type ShellThreadRow = {
@@ -7779,6 +7781,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               hasActionableProposedPlan: state.hasActionableProposedPlan,
               title: state.thread.title,
               lineage: state.thread.lineage,
+              ...(state.thread.snoozedUntil == null
+                ? {}
+                : { snoozedUntil: state.thread.snoozedUntil }),
+              ...(state.thread.delegatedFrom == null
+                ? {}
+                : { delegatedFrom: state.thread.delegatedFrom }),
               ...(state.thread.parentThreadId === undefined
                 ? {}
                 : { parentThreadId: state.thread.parentThreadId }),
