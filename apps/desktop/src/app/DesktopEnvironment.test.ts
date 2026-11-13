@@ -44,7 +44,8 @@ describe("DesktopEnvironment", () => {
       const agents = yield* makeEnvironment({ platform: "win32", brand: "agents" });
       assert.equal(agents.appUserModelId, "com.jayleaton.t3agents");
       assert.notEqual(agents.appUserModelId, official.appUserModelId);
-      assert.equal(agents.branding.baseName, "T3 Agents");
+      assert.equal(agents.branding.baseName, "Ada");
+      assert.equal(official.branding.baseName, "Ada");
       assert.equal(agents.stateDir, official.stateDir);
       assert.equal(agents.savedEnvironmentRegistryPath, official.savedEnvironmentRegistryPath);
     }),

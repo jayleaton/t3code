@@ -26,6 +26,7 @@ import {
   RemoteSettlementRelay,
   type RemoteSettlementRequest,
 } from "./SettlementCascade.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 /**
  * A child on another environment settles with its card over this server's own full-access link
@@ -241,7 +242,7 @@ export const make = Effect.gen(function* () {
         message:
           waitingOn ??
           access.refusals[environmentId] ??
-          `No connected T3 app or link lets this machine settle chats on ${environmentId} yet.`,
+          `No connected ${APP_NAME} app or link lets this machine settle chats on ${environmentId} yet.`,
       });
     }
     const listed = yield* broker
@@ -293,7 +294,7 @@ export const make = Effect.gen(function* () {
       );
       if (handled) return;
       // An older peer cannot list its remote parents, so its children wait for an app.
-      linkFailure ??= `${environmentId} runs an older T3 Code; a connected T3 app settles its chats.`;
+      linkFailure ??= `${environmentId} runs an older ${APP_NAME}; a connected ${APP_NAME} app settles its chats.`;
     }
     yield* throughApp(request, environmentId, linkFailure);
   });

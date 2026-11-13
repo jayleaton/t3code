@@ -90,7 +90,7 @@ describe("gateway bridge", () => {
     await opened(unauthenticated);
     await challenged;
     await closed(unauthenticated);
-    await expect(bridge.port.listEnvironments()).rejects.toThrow("No configured T3 client");
+    await expect(bridge.port.listEnvironments()).rejects.toThrow("No configured Ada client");
 
     const client = new WebSocket(`ws://127.0.0.1:${port}`);
     const authenticated = authenticate(client, (message) => {
@@ -319,13 +319,13 @@ describe("gateway bridge", () => {
     await opened(client);
     await authenticated;
 
-    await expect(bridge.port.listEnvironments()).rejects.toThrow("No configured T3 client");
+    await expect(bridge.port.listEnvironments()).rejects.toThrow("No configured Ada client");
     expect(onRequest).not.toHaveBeenCalled();
 
     const closedClient = closed(client);
     client.send(JSON.stringify({ type: "configure", grants: { stale: ["unknown-scope"] } }));
     await closedClient;
-    await expect(bridge.port.listEnvironments()).rejects.toThrow("No configured T3 client");
+    await expect(bridge.port.listEnvironments()).rejects.toThrow("No configured Ada client");
     await bridge.close();
   });
 

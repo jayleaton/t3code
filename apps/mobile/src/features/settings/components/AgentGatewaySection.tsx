@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { agentGatewayStatusLabel } from "@t3tools/client-runtime/gateway";
+import { APP_NAME } from "@t3tools/shared/branding";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -23,7 +24,7 @@ export function AgentGatewaySection({ targets }: { readonly targets: readonly Se
   return (
     <SettingsSection
       title="Agent gateway"
-      footer="Lets MCP hosts on the server's machine drive it with the access set in web or desktop Settings, and keeps T3 Agents webhooks running without the desktop app."
+      footer={`Lets MCP hosts on the server's machine drive it with the access set in web or desktop Settings, and keeps ${APP_NAME} webhooks running without the desktop app.`}
     >
       {supported.map((target, index) => (
         <View

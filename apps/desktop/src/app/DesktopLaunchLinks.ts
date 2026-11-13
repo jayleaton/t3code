@@ -61,6 +61,7 @@ export const make = Effect.gen(function* () {
     const holder = DesktopUserData.otherProfileOwner({
       recorded: yield* DesktopUserData.readProfileOwner(userDataPath),
       app,
+      sharesProfileWithUpstream: environment.sharesProfileWithUpstream,
       isAlive: isProcessAlive,
     });
     // Otherwise the other app only raises its own window, and this one seems not to open.

@@ -62,6 +62,7 @@ import { BrandMark } from "../BrandMark";
 import { openCommandPalette } from "../../commandPaletteBus";
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialog";
 import { Button } from "../ui/button";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const agentFilterSchema = Schema.NullOr(Schema.String);
 const agentOrderSchema = Schema.Array(Schema.String);
@@ -267,7 +268,7 @@ export function AgentsBoard() {
       <header className="agents-topbar">
         <Link to="/" className="agents-brand">
           <BrandMark className="size-4" />
-          <strong>T3</strong>
+          <strong>{APP_NAME}</strong>
           <span>/ agents</span>
         </Link>
         <nav aria-label="Workspace view">
@@ -544,7 +545,9 @@ export function AgentsBoard() {
             if (presetSkills.length === 0)
               return updateSettings({ mcpGatewayProfiles: [...profiles, profile] });
             if (presetSkills.some((skill) => skill.resources.length) && !skillResourcesAvailable)
-              throw new Error("Update T3 Code on this machine to add this preset’s skill files.");
+              throw new Error(
+                `Update ${APP_NAME} on this machine to add this preset’s skill files.`,
+              );
             const added = addPresetSkills(skills, presetSkills, {
               now: profile.createdAt,
               makeId: randomUUID,

@@ -79,7 +79,7 @@ Verify the prior-results comparison and reconcile duplicate, pending or conflict
 
 ## Attribution and license
 
-Adapted from Matt Pocock's `retro` and relevant `writing-for-agents` guidance at commit `4588b32ecab9ecc9fc8cc6b6c5e7d675b6004b0d`. T3 adaptation replaces the external Skill-tool dependency with inline guidance, makes review conditional on explicit request, and limits the workflow to evidence-backed recommendations. Source links are provenance, not runtime dependencies. Retain this notice when redistributing this adaptation.
+Adapted from Matt Pocock's `retro` and relevant `writing-for-agents` guidance at commit `4588b32ecab9ecc9fc8cc6b6c5e7d675b6004b0d`. Ada adaptation replaces the external Skill-tool dependency with inline guidance, makes review conditional on explicit request, and limits the workflow to evidence-backed recommendations. Source links are provenance, not runtime dependencies. Retain this notice when redistributing this adaptation.
 
 MIT License
 

@@ -117,6 +117,7 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { resolveMcpProfileSelection } from "./agentProfileSelection.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 import {
   clientModeCeiling,
   type McpInvocationScope,
@@ -1265,7 +1266,7 @@ const make = Effect.gen(function* () {
   const resolveProjectTarget = (
     parent: Pick<OrchestrationV2ThreadProjection, "thread"> | undefined,
     projectId: ProjectId | undefined,
-    missingMessage = "Pass projectId: this MCP client is not running inside a T3 thread.",
+    missingMessage = `Pass projectId: this MCP client is not running inside an ${APP_NAME} thread.`,
   ) =>
     projectId !== undefined
       ? Effect.succeed(projectId)
@@ -2133,7 +2134,7 @@ const make = Effect.gen(function* () {
         return yield* failure(
           "invalid_request",
           parent === undefined
-            ? "bindToCurrentThread needs an agent running inside a T3 thread."
+            ? `bindToCurrentThread needs an agent running inside an ${APP_NAME} thread.`
             : "bindToCurrentThread binds to this thread, which belongs to a different project.",
         );
       }
@@ -2227,7 +2228,7 @@ const make = Effect.gen(function* () {
           return yield* failure(
             "invalid_request",
             parent === undefined
-              ? "bindToCurrentThread needs an agent running inside a T3 thread."
+              ? `bindToCurrentThread needs an agent running inside an ${APP_NAME} thread.`
               : "bindToCurrentThread binds to this thread, which belongs to a different project.",
           );
         }
@@ -3181,7 +3182,7 @@ const make = Effect.gen(function* () {
         : yield* resolveProjectTarget(
             parent,
             input.projectId,
-            "Pass projectId, or allProjects: true for every project. This MCP client is not running inside a T3 thread.",
+            `Pass projectId, or allProjects: true for every project. This MCP client is not running inside an ${APP_NAME} thread.`,
           );
       const projectThreads = yield* threadManagement
         .listProjectThreads({

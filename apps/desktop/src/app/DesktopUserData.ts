@@ -4,6 +4,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
+import { UPSTREAM_APP_NAME } from "@t3tools/shared/branding";
 
 export class DesktopUserDataInitializationError extends Schema.TaggedError<DesktopUserDataInitializationError>()(
   "DesktopUserDataInitializationError",
@@ -142,9 +143,11 @@ const ProfileOwnerJson = Schema.fromJsonString(
   Schema.Struct({ app: Schema.String, pid: Schema.Int }),
 );
 const decodeProfileOwner = Schema.decodeUnknownOption(ProfileOwnerJson);
+// Fork builds before the Ada rename recorded this name; an in-place update must not see itself as another app.
+const LEGACY_FORK_APP_NAME = "T3 Agents";
 const encodeProfileOwner = Schema.encodeSync(ProfileOwnerJson);
 
-/** T3 Code and T3 Agents share this profile, so its single-instance lock admits only one of them. */
+/** T3 Code and Ada share this profile, so its single-instance lock admits only one of them. */
 export const recordProfileOwner = Effect.fn("desktop.userData.recordProfileOwner")(
   function* (input: { readonly userDataPath: string; readonly app: string; readonly pid: number }) {
     const fs = yield* FileSystem.FileSystem;
@@ -165,18 +168,19 @@ export const recordProfileOwner = Effect.fn("desktop.userData.recordProfileOwner
 
 /**
  * The other app holding the profile lock, or null when it is another window of this app.
- * T3 Code records no owner, so an unrecorded holder is T3 Code when this app is T3 Agents.
+ * T3 Code records no owner, so an unrecorded holder is T3 Code when this build shares its profile.
  */
 export function otherProfileOwner(input: {
   readonly recorded: string | undefined;
   readonly app: string;
+  readonly sharesProfileWithUpstream: boolean;
   readonly isAlive: (pid: number) => boolean;
 }): string | null {
   const owner = Option.getOrUndefined(decodeProfileOwner(input.recorded));
   if (owner !== undefined && input.isAlive(owner.pid)) {
-    return owner.app === input.app ? null : owner.app;
+    return owner.app === input.app || owner.app === LEGACY_FORK_APP_NAME ? null : owner.app;
   }
-  return input.app === "T3 Agents" ? "T3 Code" : null;
+  return input.sharesProfileWithUpstream ? UPSTREAM_APP_NAME : null;
 }
 
 export const readProfileOwner = Effect.fn("desktop.userData.readProfileOwner")(function* (

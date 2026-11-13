@@ -6,6 +6,7 @@ import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsL
 import { searchableSetting } from "./settingsSearch";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 import { useSettingsScope } from "./SettingsScopeContext";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 /** Features still settling in. */
 export function LabsSettingsPanel() {
@@ -112,7 +113,7 @@ function SimlockHostsRow() {
           <Link to="/settings/devices" className="underline underline-offset-2">
             Devices
           </Link>
-          . An alpha that may change or break. T3 Code never installs Simlock.
+          . An alpha that may change or break. {APP_NAME} never installs Simlock.
         </>
       }
       control={

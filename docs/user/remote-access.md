@@ -1,6 +1,6 @@
 # Remote access
 
-Connect a phone, browser, or another desktop app to T3 Code running on a different
+Connect a phone, browser, or another desktop app to Ada running on a different
 machine. That machine must stay running and reachable while you work.
 
 In **Settings → Environments**, open a machine’s **More actions** menu to rename it or
@@ -44,14 +44,14 @@ For a command-line host, run `t3 up` and choose the local network, or run:
 t3 up --lan
 ```
 
-On Linux and macOS, `t3 up` then runs T3 Code as a
+On Linux and macOS, `t3 up` then runs Ada as a
 [background service](./background-service.md). The background service is not
 available on Windows, so there `t3 up` prints the `t3 serve` command to keep
 running in a terminal. Run `t3 up` again to change your choice, and `t3 status`
 to see it. `t3 up` asks nothing when you pass `--lan` or `--no-lan`, and `--yes`
 takes the defaults; `t3 up --help` lists every flag.
 
-For a server in a terminal, run `t3 serve --lan`. Either way, T3 Code then
+For a server in a terminal, run `t3 serve --lan`. Either way, Ada then
 accepts connections from your local network and tailnet, so a pairing code is
 all that keeps other devices on them out.
 
@@ -92,7 +92,7 @@ that machine does not have yet; add that address with **Add route** instead.
 Pairing again over an address the machine already has still works. A new route
 is placed by speed, in that order, and you can reorder routes at any time.
 
-While connected through a paired address, T3 Code also learns the machine's
+While connected through a paired address, Ada also learns the machine's
 current LAN and Tailscale addresses and adds them as routes. When the
 machine's LAN address changes, for example after it joins another Wi-Fi network,
 the learned route follows it. The machine must allow network access for its LAN
@@ -102,10 +102,10 @@ You can reorder a learned route, but not remove it; it
 goes away with the route it was learned through, or when the machine stops
 reporting that address.
 
-T3 Code connects over the first route that answers. Away from home, a LAN
+Ada connects over the first route that answers. Away from home, a LAN
 address that does not answer is checked briefly and skipped. It is only tried
 again, after the other routes, if none of them connect. While connected over a
-later route, T3 Code checks earlier routes on a faster kind of network (LAN
+later route, Ada checks earlier routes on a faster kind of network (LAN
 before Tailscale, Tailscale before a public address) when your network changes, when
 you return to the app, and every minute, and moves as soon as one works. It
 does not drop a working connection for an earlier route of the same kind, such
@@ -185,13 +185,13 @@ scheme uses HTTP, so include `https://` when your server uses HTTPS.
 ## Desktop-managed SSH
 
 In the desktop app, open **Settings → Environments → Add machine**, choose
-**SSH**, and enter a host or SSH alias such as `user@example.com`. T3 Code starts
+**SSH**, and enter a host or SSH alias such as `user@example.com`. Ada starts
 or reuses a server there and opens the port forward for you. Projects, provider
 credentials, and agent work stay on the remote machine.
 
 The remote host must be Linux or an Apple Silicon Mac with `curl` or `wget`,
 `tar`, `sha256sum` or `shasum`, and [provider setup](./install.md#providers).
-The first launch downloads T3 Code's server to `~/.t3/runtime` on the host, so
+The first launch downloads Ada's server to `~/.t3/runtime` on the host, so
 it takes longer than later ones.
 Provider CLIs must be on the `PATH` of a non-interactive login shell there;
 check with:
@@ -201,7 +201,7 @@ ssh user@example.com 'sh -lc "command -v claude codex"'
 ```
 
 If SSH reconnecting fails after an app update, retry the launch once. Removing
-the connection stops a server that T3 Code launched; a server that was already
+the connection stops a server that Ada launched; a server that was already
 running is left alone.
 
 Each desktop app keeps one session on the host for its SSH connection and reuses
@@ -243,13 +243,13 @@ apps.
 ### Local servers
 
 The browser lists ports held by processes your terminals and agents started.
-T3 Code reads which process holds each port and never connects to it, so a
+Ada reads which process holds each port and never connects to it, so a
 listed port opens as `http://localhost:<port>` and might not be a web page. For
 an HTTPS server or a specific path, set the **Preview URL** on the project
-script that starts it; T3 Code checks that address and opens it as written.
+script that starts it; Ada checks that address and opens it as written.
 
 To stop listing ports, set `T3CODE_PORT_DISCOVERY=0` in the environment that
-starts the T3 Code server, such as
+starts the Ada server, such as
 [`service.env`](./background-service.md#configure-the-service-environment) for
 the background service, and restart it. Script preview URLs still appear.
 
@@ -273,11 +273,11 @@ can mean the host has no fonts. It is safe to run again. Without `sudo`, it only
 reports what it would change.
 
 The browser runs in Chrome's sandbox by default. Chrome cannot start that sandbox
-as root. If your T3 server runs as root, run it as a nonroot user to keep
+as root. If your Ada server runs as root, run it as a nonroot user to keep
 sandboxing enabled. `t3 browser setup` does not fix this root restriction.
 
 If you need to run as root, or cannot enable the sandbox on your host, set
-`T3CODE_SERVER_BROWSER_SANDBOX=0` in the **T3 server's environment** and restart
+`T3CODE_SERVER_BROWSER_SANDBOX=0` in the **Ada server's environment** and restart
 the server. This disables Chrome's sandbox. For a manual launch:
 
 ```sh
@@ -286,12 +286,12 @@ T3CODE_SERVER_BROWSER_SANDBOX=0 t3 serve
 
 For a systemd service, add `Environment=T3CODE_SERVER_BROWSER_SANDBOX=0` under
 `[Service]` in its configuration, run `sudo systemctl daemon-reload`, then restart
-your T3 service. Setting the variable in an agent's terminal does not change the
-environment of an already running T3 server.
+your Ada service. Setting the variable in an agent's terminal does not change the
+environment of an already running Ada server.
 
 ## Connect an outside agent
 
-Claude Code, Codex, ChatGPT and other agents T3 Code did not start can drive
+Claude Code, Codex, ChatGPT and other agents Ada did not start can drive
 threads on an environment through its MCP server. See
 [outside agents](./outside-agents.md) for setup.
 
@@ -332,7 +332,7 @@ or use Tailscale HTTPS.
 
 ### Your device network
 
-Machines running T3 Code on your Tailscale account show up in **Machines** on
+Machines running Ada on your Tailscale account show up in **Machines** on
 your other machines. Being on the same account is not permission: a machine
 joins only when you add it and pick what it may do. Adding the first one starts
 your network, with the machine you added from at full access. Tagged nodes and
@@ -492,13 +492,13 @@ screenshots, logs, or bug reports.
 
 ## Use MCP with connected environments
 
-Agents in T3 Code chats always have the T3 Agents tools for the machine they run on. To let
+Agents in Ada chats always have the Ada tools for the machine they run on. To let
 them act on your other machines too, enable **Settings → Environments → MCP Gateway** in the desktop app and
 grant access to each environment involved, including the one the chat runs on. Keep this
 desktop connected while agents use it; calls for other machines go through it, under the
 grants you set. Disabling the gateway stops those calls immediately.
 
-For assistants outside T3 Code, copy the external MCP host configuration from the same page.
+For assistants outside Ada, copy the external MCP host configuration from the same page.
 For standalone OpenCode, merge **Copy OpenCode config** into `~/.config/opencode/opencode.jsonc`
 on the desktop's machine, preserving existing servers, then reconnect OpenCode. Other hosts
 using `mcpServers` can use **Copy MCP config**. The copied configuration includes the bridge
@@ -508,7 +508,7 @@ A server can also host its own gateway, without the desktop app: in the browser,
 app for a connected server, or in mobile Settings → Maintenance → **Agent gateway**, turn on
 **Server gateway** for that environment. It covers only that environment, with the capabilities
 you choose in its access menu (read is always on), for MCP hosts on the server's machine and for
-T3 Agents webhooks. **Show token** gives the bridge token those hosts need; **Rotate token**
+Ada webhooks. **Show token** gives the bridge token those hosts need; **Rotate token**
 replaces it and disconnects hosts using the old one. Changing these needs access management
 permission. A server run by the desktop app leaves its gateway to the app's own settings above.
 
@@ -581,12 +581,12 @@ chat does not start or stop its agent. The desktop app must already be running a
 ### Show a chat on another device
 
 Your assistant can also put a chat on a different screen, for example when you talk to an assistant
-on your laptop but watch T3 Code on your desktop. `t3_list_devices` lists the desktop, web, and
+on your laptop but watch Ada on your desktop. `t3_list_devices` lists the desktop, web, and
 mobile apps connected to an environment, and shows which one you are looking at. `t3_focus_device`
 then opens a chat on one of them by device ID or name. It can also open a file from that chat's
 workspace beside the chat, such as a screenshot, video, PDF, or source file, or open the Agents board.
 Desktop apps come to the front. Browser tabs switch to the chat but stay behind other windows. Phones
-must have T3 Code open. On mobile, that request opens Home’s Agents tab.
+must have Ada open. On mobile, that request opens Home’s Agents tab.
 
 A device appears once it connects to the environment directly, over your network or Tailscale. Desktop apps use the computer's name; browsers show as the browser and OS, such as "Chrome
 on Windows".
@@ -699,13 +699,13 @@ delete a task from the list.
 
 A task is kept on, and runs on, the machine that hosts its project. When you ask an agent in a chat
 to schedule something, that is the chat's machine, not the device you are typing on, so the task
-still runs after that device shuts down. Tasks run only while that machine's T3 server is up and it is awake;
-T3 does not wake a sleeping machine or keep it awake. A run missed while it was off or asleep
-happens once when it is back. For unattended runs, set the machine not to sleep and keep T3 running
+still runs after that device shuts down. Tasks run only while that machine's Ada server is up and it is awake;
+Ada does not wake a sleeping machine or keep it awake. A run missed while it was off or asleep
+happens once when it is back. For unattended runs, set the machine not to sleep and keep Ada running
 with the desktop app open or as a [background service](./background-service.md). Runs use the agent's permission mode, so an agent that
 asks for approvals waits for you. Changing a task's agent or project starts a new thread on the next
-run. Agents in T3 chats schedule work for an agent with `schedule_task` and its `profileId`.
-MCP assistants outside T3 can manage tasks with `t3_list_scheduled_tasks`, `t3_create_scheduled_task`,
+run. Agents in Ada chats schedule work for an agent with `schedule_task` and its `profileId`.
+MCP assistants outside Ada can manage tasks with `t3_list_scheduled_tasks`, `t3_create_scheduled_task`,
 `t3_update_scheduled_task`, and `t3_delete_scheduled_task` (create or admin access), and run one
 immediately with `t3_run_scheduled_task` (send access). Pass `runAt` for a single run, or `cron`
 with an optional IANA `timezone` for a repeating one, and an `idempotencyKey` to make a retried
@@ -723,7 +723,7 @@ skill you already have with identical content. If a preset's provider or model i
 your machines, choose an available one before saving. Some presets list software they need for
 full compatibility, such as a signed-in CLI.
 
-Ask an assistant connected to the **T3 Agents MCP** to create a shared skill and assign it to
+Ask an assistant connected to the **Ada MCP** to create a shared skill and assign it to
 an agent. For example: “Create a shared skill for reviewing pull requests and assign it to Randy.”
 The MCP can list skills with read access and create, update, or delete them with create or admin
 access. Only a chat running in full access with default mode can change skills or agents, since every
@@ -738,7 +738,7 @@ skill folder; references are read only when needed. Each skill supports up to 25
 file and 2 MiB of resources; the shared library supports 8 MiB of resources. On update, omitting
 `resources` preserves the files, while supplying a list replaces them (`[]` removes them).
 
-Update the T3 gateway, clients, and connected environments before using resource bundles. Older
+Update the Ada gateway, clients, and connected environments before using resource bundles. Older
 environments cannot synchronize them. New chats receive the updated bundle; existing chats retain
 their starting copy, including files. Deleting a skill excludes it from new chats.
 
@@ -746,13 +746,13 @@ To migrate previously imported skills that still refer to local folders, use the
 [resource import utility](../operations/skill-resource-import.md). It verifies uploaded resources
 before removing the local-folder workaround and preserves skill IDs and agent assignments.
 
-Before creating an agent chat, T3 synchronizes its library from environments available to the client.
+Before creating an agent chat, Ada synchronizes its library from environments available to the client.
 Keep both machines connected to a client at least once after an edit so the destination can
 receive it. Offline machines catch up when they reconnect; a disconnected source that this
 client has never seen cannot supply updates.
 
 Each chat has generated instructions and assigned skill files under `.agents/t3/` in its workspace.
-T3 creates these from the configuration saved when the chat was created and clears them when
+Ada creates these from the configuration saved when the chat was created and clears them when
 the chat is settled. Continuing or resuming restores that same configuration, even if the agent
 or shared skills have since been edited or deleted. Deleting an agent keeps its existing chats
 and their saved instructions and skills.
@@ -775,7 +775,7 @@ the destination; settlement needs lifecycle access.
 
 If a computer should only drive work running elsewhere, turn off its local environment. In the
 desktop app, open **Settings → Environments** and switch off **Local
-environment**. T3 Code restarts without a local server: no local agents or terminals run, WSL
+environment**. Ada restarts without a local server: no local agents or terminals run, WSL
 backends stay off, and other devices can no longer connect to this computer. Your projects,
 history, and saved connections are kept, and you keep working through pairing or SSH.
 If a [background service](./background-service.md) on this computer uses the same T3 home, the

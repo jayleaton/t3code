@@ -140,17 +140,23 @@ it.effect("retries on the next launch when a GPU cache cannot be removed", () =>
 );
 
 it.each([
-  ["T3 Code running, never recorded", undefined, "T3 Agents", null, "T3 Code"],
-  ["a live T3 Agents window", '{"app":"T3 Agents","pid":7}', "T3 Agents", 7, null],
-  [
-    "T3 Code after a T3 Agents that exited",
-    '{"app":"T3 Agents","pid":7}',
-    "T3 Agents",
-    null,
-    "T3 Code",
-  ],
-  ["a live T3 Agents, seen from T3 Code", '{"app":"T3 Agents","pid":7}', "T3 Code", 7, "T3 Agents"],
-  ["an older T3 Code window", undefined, "T3 Code", null, null],
-] as const)("names the app holding the shared profile: %s", (_, recorded, app, alive, expected) => {
-  assert.equal(otherProfileOwner({ recorded, app, isAlive: (pid) => pid === alive }), expected);
-});
+  ["T3 Code running, never recorded", undefined, true, null, "T3 Code"],
+  ["another window of an unshared build", undefined, false, null, null],
+  ["a live Ada window", '{"app":"Ada","pid":7}', true, 7, null],
+  ["a live pre-rename fork window", '{"app":"T3 Agents","pid":7}', true, 7, null],
+  ["T3 Code after an Ada that exited", '{"app":"Ada","pid":7}', true, null, "T3 Code"],
+  ["another recorded app", '{"app":"Other","pid":7}', true, 7, "Other"],
+] as const)(
+  "names the app holding the shared profile: %s",
+  (_, recorded, sharesProfileWithUpstream, alive, expected) => {
+    assert.equal(
+      otherProfileOwner({
+        recorded,
+        app: "Ada",
+        sharesProfileWithUpstream,
+        isAlive: (pid) => pid === alive,
+      }),
+      expected,
+    );
+  },
+);

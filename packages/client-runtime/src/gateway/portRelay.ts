@@ -20,6 +20,7 @@ import { GATEWAY_PORT_METHODS, type GatewayGrants, wireTaskError } from "./bridg
 import type { GatewayEnvironmentSummary, GatewayRuntimePort } from "./port.ts";
 import { type ModeLimit, withinModes } from "./portModes.ts";
 import { describeGatewayScopes, gatewayPortCallScopes, unmetGatewayScopes } from "./portScopes.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 /** How a target's roster push is followed again after it fails; tests step it by hand. */
 export const RosterRetrySchedule = Context.Reference<Schedule.Schedule<unknown>>(
@@ -72,7 +73,7 @@ export async function answerGatewayPortCall(
   rosterCap?: (environmentId: string) => Promise<RosterCap | undefined>,
 ): Promise<unknown> {
   if (!GATEWAY_PORT_METHODS.has(method as keyof GatewayRuntimePort)) {
-    throw new Error(`Unknown T3 Agents call ${method}.`);
+    throw new Error(`Unknown ${APP_NAME} gateway call ${method}.`);
   }
   if (method === "listEnvironments") {
     const environments = await port.listEnvironments();
@@ -82,14 +83,14 @@ export async function answerGatewayPortCall(
   }
   const requirements = gatewayPortCallScopes(method as keyof GatewayRuntimePort, args);
   if (requirements === undefined) {
-    throw new Error("T3 Agents access is not granted for this call on this device.");
+    throw new Error(`${APP_NAME} gateway access is not granted for this call on this device.`);
   }
   const ungranted = (environmentId: string, unmet: (typeof requirements)[number]) =>
     new GatewayRelayUnreachable({
       message:
         grants[environmentId] === undefined
-          ? `T3 Agents access is not granted for ${environmentId} on this device.`
-          : `T3 Agents access to ${environmentId} on this device does not include ${describeGatewayScopes(unmet)}.`,
+          ? `${APP_NAME} gateway access is not granted for ${environmentId} on this device.`
+          : `${APP_NAME} gateway access to ${environmentId} on this device does not include ${describeGatewayScopes(unmet)}.`,
     });
   // Lifecycle may still come from a target's roster below, so only what no roster adds fails here.
   const ownUnmet = unmetGatewayScopes(
@@ -105,7 +106,7 @@ export async function answerGatewayPortCall(
   const offline = requirements.find(({ environmentId }) => !connected.has(environmentId));
   if (offline !== undefined) {
     throw new GatewayRelayUnreachable({
-      message: `This T3 app is not connected to ${offline.environmentId} right now.`,
+      message: `This ${APP_NAME} app is not connected to ${offline.environmentId} right now.`,
     });
   }
   for (const requirement of rosterCap === undefined ? [] : requirements) {
@@ -140,7 +141,7 @@ export async function answerGatewayPortCall(
 export function relayGrantsProblem(grants: GatewayGrants): string | undefined {
   const count = Object.keys(grants).length;
   return count > MCP_GATEWAY_RELAY_GRANTS_MAX
-    ? `T3 Agents relays at most ${MCP_GATEWAY_RELAY_GRANTS_MAX} environments, and ${count} are granted, so this app relays none. Turn some off in Settings > MCP Gateway.`
+    ? `${APP_NAME} relays at most ${MCP_GATEWAY_RELAY_GRANTS_MAX} environments, and ${count} are granted, so this app relays none. Turn some off in Settings > MCP Gateway.`
     : undefined;
 }
 

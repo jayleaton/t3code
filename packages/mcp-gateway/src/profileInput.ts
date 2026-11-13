@@ -1,5 +1,6 @@
 import { AGENT_ICON_IDS, type AgentIconId } from "@t3tools/shared/agentIcons";
 import { z } from "zod";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 export const profileFields = {
   name: z.string().trim().min(1).max(200),
@@ -13,7 +14,7 @@ export const profileFields = {
   icon: z
     .enum(["orb", "bot", "code", "pen", "search", "shield", "sparkles", "terminal"])
     .optional()
-    .describe("Legacy icon older T3 builds show. Set from iconId when omitted."),
+    .describe(`Legacy icon older ${APP_NAME} builds show. Set from iconId when omitted.`),
   iconId: z
     .enum(AGENT_ICON_IDS as [AgentIconId, ...AgentIconId[]])
     .optional()

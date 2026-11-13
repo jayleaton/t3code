@@ -42,6 +42,7 @@ import { isLocalLoopbackHost, isTailnetHost } from "@t3tools/shared/hostClassifi
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const PeerHttpApi = HttpApi.make(EnvironmentHttpApi.identifier)
   .add(EnvironmentHttpApi.groups.metadata)
@@ -506,7 +507,7 @@ const make = Effect.gen(function* () {
     if (Result.isFailure(probed)) {
       return yield* new PeerLinkError({
         reason: "not_a_t3_environment",
-        message: `Nothing at ${primary} answered as a T3 Code environment (${probed.failure}).`,
+        message: `Nothing at ${primary} answered as an ${APP_NAME} environment (${probed.failure}).`,
       });
     }
     return { primary, peer: probed.success, origins };
@@ -553,7 +554,7 @@ const make = Effect.gen(function* () {
     if (!linkLimitsHold(peer)) {
       return yield* new PeerLinkError({
         reason: "incompatible",
-        message: `${peer.label} runs a T3 Code version that cannot keep a linked agent's limits. Update it, then link again.`,
+        message: `${peer.label} runs an ${APP_NAME} version that cannot keep a linked agent's limits. Update it, then link again.`,
       });
     }
     const issued = yield* signIn(primary, input, `T3 Code · ${self.label}`, self.environmentId);
@@ -730,7 +731,7 @@ const make = Effect.gen(function* () {
       if (!fenced) {
         return yield* new PeerLinkError({
           reason: "incompatible",
-          message: `${link.label} runs a T3 Code version that cannot keep a linked agent's limits. Update it, then link again.`,
+          message: `${link.label} runs an ${APP_NAME} version that cannot keep a linked agent's limits. Update it, then link again.`,
         });
       }
       return {

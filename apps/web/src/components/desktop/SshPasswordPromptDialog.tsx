@@ -18,6 +18,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 function describeSshTarget(request: DesktopSshPasswordPromptRequest): string {
   return request.username ? `${request.username}@${request.destination}` : request.destination;
@@ -165,9 +166,9 @@ function ActiveSshPasswordPrompt({
         <DialogHeader>
           <DialogTitle>SSH verification required</DialogTitle>
           <DialogDescription>
-            Enter the password or verification code required by <code>{target}</code>. T3 Agents
+            Enter the password or verification code required by <code>{target}</code>. {APP_NAME}
             passes your response to the local SSH process and keeps it in memory to reuse for this
-            host. T3 Agents does not write it to disk.
+            host. {APP_NAME} does not write it to disk.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel scrollFade={false}>

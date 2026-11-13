@@ -90,7 +90,7 @@ checks again. `rollback` does that on request. Each run writes a report to
 `~/.local/state/t3-captain/cutover-<timestamp>.txt`. Unit names, port, T3 home, and URL are
 `CUTOVER_*` variables at the top of the script.
 
-The headless server hosts the T3 Agents gateway runtime the desktop app used to provide: the
+The headless server hosts the Ada gateway runtime the desktop app used to provide: the
 cutover adds `T3_MCP_HEADLESS_GATEWAY=1` to the unit, which the server follows until its
 **Server gateway** setting is saved from a client, and the server reads the bridge token from
 `~/.config/t3code/mcp-gateway.env`. Agents in chats keep their own `t3-code` MCP, which their

@@ -1185,7 +1185,7 @@ effectIt.effect("reminds the agent of instructions the native conversation alrea
     yield* harness.start;
 
     expect(harness.startRootRun.mock.calls[0]?.[0].message.text).toBe(
-      '<agent_profile_reminder>You are running as the T3 agent "Reviewer". Your agent_profile_instructions from the start of this conversation still apply; re-read a skill\'s SKILL.md when its trigger applies.</agent_profile_reminder>\n\nContinue',
+      '<agent_profile_reminder>You are running as the Ada agent "Reviewer". Your agent_profile_instructions from the start of this conversation still apply; re-read a skill\'s SKILL.md when its trigger applies.</agent_profile_reminder>\n\nContinue',
     );
     expect(
       harness.projection().attempts.find((attempt) => attempt.id === harness.attemptId),

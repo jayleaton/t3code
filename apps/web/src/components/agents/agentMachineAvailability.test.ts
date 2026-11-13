@@ -116,5 +116,5 @@ it("requires a skills-capable environment for assigned skills", () => {
         },
       },
     }),
-  ).toContain("Update T3");
+  ).toContain("Update Ada");
 });

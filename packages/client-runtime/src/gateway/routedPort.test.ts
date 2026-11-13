@@ -133,7 +133,7 @@ describe("answerGatewayPortCall", () => {
       ]),
     ).rejects.toThrow("not granted for c");
     await expect(answerGatewayPortCall(port, granted, "toString", ["a"])).rejects.toThrow(
-      "Unknown T3 Agents call",
+      "Unknown Ada gateway call",
     );
     expect(calls).toEqual(["app:listProjects:a"]);
   });

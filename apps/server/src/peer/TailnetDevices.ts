@@ -69,6 +69,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as Membership from "./Membership.ts";
 import * as PeerLinks from "./PeerLinks.ts";
 import * as TailnetIdentity from "./TailnetIdentity.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 /** How long a requester waits for the issuer it asked to dial back. */
 const CHALLENGE_TTL = Duration.minutes(2);
@@ -757,7 +758,7 @@ const make = Effect.gen(function* () {
     );
     if (!PeerLinks.linkLimitsHold(issuer.descriptor)) {
       return yield* unreachable(
-        `${issuer.descriptor.label} runs a T3 Code version that cannot link automatically. Update it.`,
+        `${issuer.descriptor.label} runs an ${APP_NAME} version that cannot link automatically. Update it.`,
       );
     }
     if (self.urls.length === 0) {

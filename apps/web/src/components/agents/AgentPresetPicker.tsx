@@ -27,6 +27,7 @@ import { Button } from "../ui/button";
 import { Label } from "../ui/label";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { AgentIcon } from "./AgentIcon";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const loadAgentPresets = () => import("./agentPresetBundle");
 
@@ -245,7 +246,7 @@ export function AgentPresetPicker({
               )}
               {presets?.length === 0 && (
                 <p className="text-sm text-muted-foreground">
-                  This version of T3 Code has no preconfigured agents.
+                  This version of {APP_NAME} has no preconfigured agents.
                 </p>
               )}
               {presets?.map((preset) => (

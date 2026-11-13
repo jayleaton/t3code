@@ -92,6 +92,7 @@ it("gives NSIS different default folders for official T3 and T3 Agents", () => {
     );
   assert.equal(folder("t3", "T3 Code (Nightly)", "com.t3tools.t3code"), "t3code");
   assert.equal(folder("agents", "T3 Agents", "com.jayleaton.t3agents"), "t3agents");
+  assert.equal(folder("agents", "Ada (Nightly)", "com.jayleaton.t3agents"), "t3agents");
 });
 
 const encodeModuleUrl = Schema.encodeEffect(Schema.fromJsonString(Schema.String));
@@ -691,15 +692,25 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
   it.effect("chains the shared NSIS customizations into the Agents installer", () =>
     Effect.gen(function* () {
-      const nsisInclude = (brand: string) =>
+      const winConfig = (brand: string) =>
         createBuildConfig("win", "nsis", "1.2.3", false, false, undefined, undefined).pipe(
-          Effect.map((config) => (config.nsis as { include: string }).include),
+          Effect.map((config) => ({
+            include: (config.nsis as { include: string }).include,
+            executableName: (config.win as { executableName?: string }).executableName,
+          })),
           Effect.provide(
             ConfigProvider.layer(ConfigProvider.fromEnv({ env: { T3CODE_DESKTOP_BRAND: brand } })),
           ),
         );
-      assert.equal(yield* nsisInclude("t3"), "apps/desktop/resources/installer.nsh");
-      assert.equal(yield* nsisInclude("agents"), "apps/desktop/resources/agents-installer.nsh");
+      // The pre-rename fork exe path survives the productName change; official keeps its own.
+      assert.deepStrictEqual(yield* winConfig("t3"), {
+        include: "apps/desktop/resources/installer.nsh",
+        executableName: undefined,
+      });
+      assert.deepStrictEqual(yield* winConfig("agents"), {
+        include: "apps/desktop/resources/agents-installer.nsh",
+        executableName: "T3 Agents",
+      });
       const fs = yield* FileSystem.FileSystem;
       const agentsInstaller = yield* fs.readFileString(
         NodePath.join(import.meta.dirname, "../apps/desktop/resources/agents-installer.nsh"),

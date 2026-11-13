@@ -38,7 +38,7 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "../../appearanceFonts";
-import { MOBILE_APP_URL } from "../../branding";
+import { MOBILE_APP_STORES } from "../../branding";
 import { isElectron } from "../../env";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { usePersistEnvironmentProviderInstanceMutation } from "../../hooks/useSettings";
@@ -108,6 +108,7 @@ import { toastManager } from "../ui/toast";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { cn } from "../../lib/utils";
 import { formatRelativeTime } from "../../timestampFormat";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const AGENT_ONBOARDING_THREAD_ID = ThreadId.make("onboarding-agent-setup");
 const SCAN_LIMIT_MESSAGE = "Scan limit reached. Some projects or conversations may be missing.";
@@ -132,6 +133,7 @@ export function WelcomePage({
   const isPrimary = usePrimaryEnvironmentId() === environmentId;
   // The same access Settings → Sharing & access checks.
   const showPhone = welcomeOffersPhone({
+    hasStoreListing: MOBILE_APP_STORES.length > 0,
     isPrimary,
     canPair: useEnvironmentScope(environmentId, AuthAccessWriteScope),
     policy: useManagedPolicy(environmentId),
@@ -263,7 +265,7 @@ export function WelcomePage({
         <div className="min-h-0 flex-1 overflow-y-auto scrollbar-gutter-both">
           <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col px-6 pt-12 pb-8 sm:pt-20">
             <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-              Welcome to T3 Agents
+              Welcome to {APP_NAME}
             </h1>
             <p className="mt-1.5 text-sm text-muted-foreground">
               Setting up <span className="text-foreground">{label}</span>.
@@ -319,7 +321,7 @@ function TelemetryNotice({ environmentId }: { readonly environmentId: Environmen
   const telemetryOff = managedTelemetryOffMessage(useManagedPolicy(environmentId));
   return (
     <p className="mt-auto pt-12 text-2xs leading-relaxed text-muted-foreground/70">
-      {telemetryOff ?? "T3 Code collects anonymous usage data to improve the app."}{" "}
+      {telemetryOff ?? `${APP_NAME} collects anonymous usage data to improve the app.`}{" "}
       {telemetryOff === undefined ? "To opt out, see the" : "See the"}{" "}
       <a
         className="underline decoration-current/40 underline-offset-2 hover:text-muted-foreground"
@@ -908,7 +910,7 @@ function PhoneSection() {
             <SmartphoneIcon className="size-4" />
           </RowIcon>
           <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
-            Use T3 Code on your phone
+            Use {APP_NAME} on your phone
           </span>
           <CollapsibleTrigger render={<Button variant="ghost-muted" size="xs" />}>
             {open ? "Hide" : "Set up"}
@@ -925,16 +927,17 @@ function PhoneSection() {
                 <PhoneConnectLink />
               </PhoneStep>
             </ol>
-            {/* One code for both stores: the link opens the store that matches the phone. */}
-            <div className="shrink-0 rounded-lg bg-white p-1.5">
-              <QRCodeSvg
-                value={MOBILE_APP_URL}
-                size={124}
-                level="M"
-                marginSize={2}
-                title="T3 Code app for iPhone and Android"
-              />
-            </div>
+            {MOBILE_APP_STORES.map(({ store, url }) => (
+              <div key={store} className="shrink-0 rounded-lg bg-white p-1.5">
+                <QRCodeSvg
+                  value={url}
+                  size={124}
+                  level="M"
+                  marginSize={2}
+                  title={`${APP_NAME} on ${store}`}
+                />
+              </div>
+            ))}
           </div>
         </CollapsiblePanel>
       </Collapsible>

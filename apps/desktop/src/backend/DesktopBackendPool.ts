@@ -26,6 +26,7 @@ import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const { logWarning: logBackendPoolWarning } =
   DesktopObservability.makeComponentLogger("desktop-backend-pool");
@@ -126,7 +127,7 @@ export const layer = Layer.effect(
           );
           yield* electronDialog.showErrorBox(
             "WSL backend is still unavailable",
-            `${reason}\n\nT3 Agents will use the Windows backend for this launch and retry WSL the next time the app starts.`,
+            `${reason}\n\n${APP_NAME} will use the Windows backend for this launch and retry WSL the next time the app starts.`,
           );
           yield* appSettings.applyWslWindowsFallbackInMemory;
           return true;
@@ -137,7 +138,7 @@ export const layer = Layer.effect(
         });
         yield* electronDialog.showErrorBox(
           "WSL backend couldn't start",
-          `${reason}\n\nFalling back to the Windows backend so T3 Agents can open. Re-enable the WSL backend from Settings > Environments once the WSL distro is fixed.`,
+          `${reason}\n\nFalling back to the Windows backend so ${APP_NAME} can open. Re-enable the WSL backend from Settings > Environments once the WSL distro is fixed.`,
         );
         // Clear wslOnly too so enabling WSL cannot restore a failed mode.
         // Keep the in-memory fallback if persistence fails.
@@ -179,14 +180,14 @@ export const layer = Layer.effect(
         Effect.flatMap(HostProcess.Platform, (platform) =>
           electronDialog.showErrorBox(
             "This T3 home is unavailable",
-            `Another T3 Code server, such as the background service, is using this data directory, or an older background service is set up for it. Stop that server or try \`t3 update\`. If the older launcher cannot update, run \`t3 service uninstall\` and optionally reinstall with \`t3 service install\` from a current CLI. If \`t3\` is missing or outdated, install it with \`${cliInstallCommand(platform === "win32" ? "win32" : "posix")}\`, and pass \`--base-dir\` with the service's T3 home to each command. Then reopen T3 Code. You can also set a separate T3CODE_HOME and pair with the running server.`,
+            `Another ${APP_NAME} server, such as the background service, is using this data directory, or an older background service is set up for it. Stop that server or try \`t3 update\`. If the older launcher cannot update, run \`t3 service uninstall\` and optionally reinstall with \`t3 service install\` from a current CLI. If \`t3\` is missing or outdated, install it with \`${cliInstallCommand(platform === "win32" ? "win32" : "posix")}\`, and pass \`--base-dir\` with the service's T3 home to each command. Then reopen ${APP_NAME}. You can also set a separate T3CODE_HOME and pair with the running server.`,
           ),
         ).pipe(Effect.andThen(electronApp.quit)),
       onDatabaseRefused: () =>
         electronDialog
           .showErrorBox(
-            "T3 Code could not open its database",
-            "This database's migration history comes from a T3 Code build that this version does not recognise, so T3 Code left the database unchanged. The server log lists the migration rows it refused. To continue, install the build that last opened this database, or report the server log so the history can be supported.",
+            `${APP_NAME} could not open its database`,
+            `This database's migration history comes from a ${APP_NAME} build that this version does not recognise, so ${APP_NAME} left the database unchanged. The server log lists the migration rows it refused. To continue, install the build that last opened this database, or report the server log so the history can be supported.`,
           )
           .pipe(Effect.andThen(electronApp.quit)),
     });

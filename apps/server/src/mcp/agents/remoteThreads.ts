@@ -45,6 +45,7 @@ import { resolveInteractionMode, resolveRuntimeMode } from "../delegatedTaskMode
 import { assertNotLinked } from "../linkOrigin.ts";
 import { loadCaller, newCommandId } from "../threadAccess.ts";
 import { LocalGatewayPort } from "./LocalGatewayPort.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 // Agents in a thread act with every scope on their own machine; other machines apply the
 // grants the user set on the T3 app relaying the call.
@@ -241,7 +242,7 @@ export const resolveEnvironment = Effect.fn("remoteThreads.resolveEnvironment")(
     return yield* invalid(
       `Environment ${environmentId} is unknown or not connected to this chat. Reachable environments: ${
         reachable.length === 0 ? `${scope.environmentId} (this environment)` : reachable.join(", ")
-      }. To reach another machine, open T3 Code on a device connected to it and grant it T3 Agents access.`,
+      }. To reach another machine, open ${APP_NAME} on a device connected to it and grant it ${APP_NAME} gateway access.`,
     );
   }
   const loaded = yield* loadCaller();
@@ -550,7 +551,7 @@ export const sendToThread = Effect.fn("remoteThreads.sendToThread")(function* (
     if (thread.runtimeMode === undefined || thread.interactionMode === undefined) {
       return yield* new OrchestratorMcpFailure({
         code: "capability_denied",
-        message: `The T3 app relaying ${remote.environmentId} does not report thread ${input.threadId}'s modes, so this send cannot be checked against yours. Update that app, or use t3_send_message.`,
+        message: `The ${APP_NAME} app relaying ${remote.environmentId} does not report thread ${input.threadId}'s modes, so this send cannot be checked against yours. Update that app, or use t3_send_message.`,
       });
     }
     yield* resolveRuntimeMode(limit.runtimeMode, thread.runtimeMode);

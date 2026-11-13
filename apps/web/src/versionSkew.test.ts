@@ -16,7 +16,7 @@ import {
 } from "./versionSkew";
 
 const MISMATCH_HINT =
-  "Version mismatch. Try syncing the client and server to the same T3 Agents version.";
+  "Version mismatch. Try syncing the client and server to the same Ada version.";
 
 describe("versionSkew", () => {
   beforeEach(() => {

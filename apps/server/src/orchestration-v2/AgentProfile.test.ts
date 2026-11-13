@@ -66,7 +66,7 @@ describe("V2 profile association", () => {
         skills: [skill("captain-event-loop"), skill("pr")],
       }),
     ).toBe(
-      '<agent_profile_reminder>You are running as the T3 agent "Captain". Your agent_profile_instructions and assigned skills (captain-event-loop, pr) from the start of this conversation still apply; re-read a skill\'s SKILL.md when its trigger applies.</agent_profile_reminder>\n\nWake',
+      '<agent_profile_reminder>You are running as the Ada agent "Captain". Your agent_profile_instructions and assigned skills (captain-event-loop, pr) from the start of this conversation still apply; re-read a skill\'s SKILL.md when its trigger applies.</agent_profile_reminder>\n\nWake',
     );
     expect(agentProfileReminder("Wake", "Captain", { systemPrompt: "  ", skills: [] })).toBe(
       "Wake",

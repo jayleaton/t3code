@@ -10,6 +10,7 @@ import {
   GatewayRetiringError,
   GatewayUnavailableError,
 } from "./sharedTransport.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 export function launchSharedOwner(
   entryPoint: string,
@@ -170,7 +171,7 @@ export async function proxyMcpStdio(
           id,
           error: {
             code: -32603,
-            message: "The T3 gateway restarted during this call. Retry it.",
+            message: `The ${APP_NAME} gateway restarted during this call. Retry it.`,
           },
         })
         .catch(() => undefined);

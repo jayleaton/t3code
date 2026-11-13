@@ -112,7 +112,7 @@ describe("collectServerUpdateTargets", () => {
         entry.label,
         entry.reason,
       ]),
-    ).toEqual([["off", "Example Corp manages T3 Code updates."]]);
+    ).toEqual([["off", "Example Corp manages Ada updates."]]);
     expect(
       collectServerUpdateTargets(
         machines.map((entry) => ({
@@ -240,10 +240,7 @@ describe("collectChannelSwitchTargets", () => {
         `its database has changes ${NIGHTLY} does not support yet; stay on Stable until Nightly has them`,
       ],
       ["old-desktop", "needs a newer desktop app"],
-      [
-        "no-nightly",
-        "Example Corp manages T3 Code updates. Only stable releases can be installed.",
-      ],
+      ["no-nightly", "Example Corp manages Ada updates. Only stable releases can be installed."],
     ]);
   });
 });

@@ -906,7 +906,7 @@ export class ServerNpmReleaseError extends Schema.TaggedError<ServerNpmReleaseEr
   { reason: Schema.String },
 ) {
   override get message(): string {
-    return `Could not check T3 releases: ${this.reason}`;
+    return `Could not check Ada releases: ${this.reason}`;
   }
 }
 

@@ -20,6 +20,7 @@ import {
 } from "./port.ts";
 import type { GatewayEvent, GatewayEventStore } from "./events.ts";
 import type { ScheduledTaskSchedule } from "@t3tools/contracts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 export type GatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
 export type GatewayGrantSource = GatewayGrants | (() => GatewayGrants);
@@ -1429,7 +1430,7 @@ export async function callGatewayTool(
     case "t3_get_presence": {
       const environmentId = environmentWithScope(context, input, "read");
       if (context.port.getPresence === undefined) {
-        throw new Error("Presence is unavailable from this T3 host.");
+        throw new Error(`Presence is unavailable from this ${APP_NAME} host.`);
       }
       return context.port.getPresence(environmentId);
     }

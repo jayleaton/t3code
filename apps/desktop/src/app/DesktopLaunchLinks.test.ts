@@ -49,12 +49,14 @@ const layerLaunchLinks = (
     copyText: () => Effect.void,
   },
   listeners = new Map<string, (...args: unknown[]) => void>(),
-  app = "T3 Code",
+  app = "Ada",
+  sharesProfileWithUpstream = false,
 ) => {
   const environment = DesktopEnvironment.DesktopEnvironment.of({
     stateDir,
     isDevelopment,
     branding: { baseName: app },
+    sharesProfileWithUpstream,
     appDataDirectory: "/tmp/app-data",
     platform,
   } as unknown as DesktopEnvironment.DesktopEnvironment["Service"]);
@@ -246,18 +248,19 @@ describe("DesktopLaunchLinks", () => {
   });
 
   it.effect.each([
-    { platform: "darwin", app: "T3 Code", explained: [] },
-    { platform: "win32", app: "T3 Code", explained: [] },
-    { platform: "linux", app: "T3 Code", explained: [] },
+    { platform: "darwin", app: "Ada", shares: false, explained: [] },
+    { platform: "win32", app: "Ada", shares: false, explained: [] },
+    { platform: "linux", app: "Ada", shares: false, explained: [] },
     // T3 Code shares the profile and only raises its own window, so say why this one did not open.
     {
       platform: "darwin",
-      app: "T3 Agents",
-      explained: ["whenReady", "dialog:Quit T3 Code to open T3 Agents"],
+      app: "Ada",
+      shares: true,
+      explained: ["whenReady", "dialog:Quit T3 Code to open Ada"],
     },
   ] as const)(
-    "quits a second launch of $app before initializing the application runtime on $platform",
-    ({ platform, app, explained }) =>
+    "quits a second launch of $app (shares: $shares) before initializing the application runtime on $platform",
+    ({ platform, app, shares, explained }) =>
       Effect.gen(function* () {
         requestSingleInstanceLockMock.mockReturnValueOnce(false);
         const events: string[] = [];
@@ -269,6 +272,7 @@ describe("DesktopLaunchLinks", () => {
           undefined,
           undefined,
           app,
+          shares,
         ).pipe(
           Layer.flatMap(() =>
             Layer.effectDiscard(

@@ -18,6 +18,7 @@ import {
 import { fromYaml } from "@t3tools/shared/schemaYaml";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import { APP_NAME } from "@t3tools/shared/branding";
 import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import gnomeCaptureBundle from "../apps/desktop/gnome-extension/bundle.json" with { type: "json" };
@@ -2579,10 +2580,17 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
   return `${trimmed.slice(0, versionSeparator)}/${trimmed.slice(versionSeparator + 1)}`;
 }
 
+const LEGACY_FORK_WINDOWS_EXECUTABLE_NAME = "T3 Agents";
+
+/** The packaged Windows exe's base name; the agents brand pins it across product renames. */
+export function resolveWindowsExecutableName(productName: string, brand?: string): string {
+  return brand === "agents" ? LEGACY_FORK_WINDOWS_EXECUTABLE_NAME : productName;
+}
+
 export function resolveDesktopProductName(version: string): string {
   return resolveDesktopUpdateChannel(version) === "nightly"
-    ? "T3 Code (Nightly)"
-    : (desktopPackageJson.productName ?? "T3 Code");
+    ? `${APP_NAME} (Nightly)`
+    : (desktopPackageJson.productName ?? APP_NAME);
 }
 
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
@@ -2668,20 +2676,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       extendInfo: {
         // macOS 26 offers Messages/Mail codes in every text field unless opted out.
         NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac: true,
-        NSLocalNetworkUsageDescription:
-          "T3 Code connects to devices on your local network for remote environments and commands run by terminals and coding agents.",
-        NSCalendarsUsageDescription:
-          "Commands you run in T3 Code may need access to your calendars.",
-        NSCalendarsFullAccessUsageDescription:
-          "Commands you run in T3 Code may need to read and write your calendar events.",
-        NSCalendarsWriteOnlyAccessUsageDescription:
-          "Commands you run in T3 Code may need to add events to your calendars.",
-        NSScreenCaptureUsageDescription:
-          "T3 Code captures the active window when you use the window capture shortcut.",
-        NSCameraUsageDescription:
-          "T3 Code lets commands run by terminals and coding agents use the camera.",
-        NSMicrophoneUsageDescription:
-          "T3 Code lets commands run by terminals and coding agents use the microphone.",
+        NSLocalNetworkUsageDescription: `${APP_NAME} connects to devices on your local network for remote environments and commands run by terminals and coding agents.`,
+        NSCalendarsUsageDescription: `Commands you run in ${APP_NAME} may need access to your calendars.`,
+        NSCalendarsFullAccessUsageDescription: `Commands you run in ${APP_NAME} may need to read and write your calendar events.`,
+        NSCalendarsWriteOnlyAccessUsageDescription: `Commands you run in ${APP_NAME} may need to add events to your calendars.`,
+        NSScreenCaptureUsageDescription: `${APP_NAME} captures the active window when you use the window capture shortcut.`,
+        NSCameraUsageDescription: `${APP_NAME} lets commands run by terminals and coding agents use the camera.`,
+        NSMicrophoneUsageDescription: `${APP_NAME} lets commands run by terminals and coding agents use the microphone.`,
         // macOS lists an app under Default web browser only when it opens web
         // pages as documents as well as http and https links (see protocols).
         CFBundleDocumentTypes: [
@@ -2695,7 +2696,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       },
       protocols: [
         {
-          name: "T3 Code",
+          name: APP_NAME,
           schemes: ["t3code", "t3code-dev"],
         },
         {
@@ -2752,10 +2753,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       icon: "icons",
       category: "Development",
       synopsis: "Desktop GUI for coding agents",
-      maintainer: "T3 Tools <hello@t3.codes>",
+      maintainer: `${APP_NAME} <hello@t3.codes>`,
       protocols: [
         {
-          name: "T3 Code",
+          name: APP_NAME,
           schemes: ["t3code", "t3code-dev"],
         },
       ],
@@ -2805,6 +2806,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       signExts: [".node", ".dll"],
       // Resource editing sets product icons even when code signing is disabled.
       signAndEditExecutable: true,
+      // Taskbar pins, CLI shims and service units point at the exe path the fork shipped before the rename.
+      ...(brand === "agents" ? { executableName: LEGACY_FORK_WINDOWS_EXECUTABLE_NAME } : {}),
     };
     if (signed && (yield* HostProcess.Platform) === "win32") {
       winConfig.azureSignOptions = yield* AzureTrustedSigningOptionsConfig;
@@ -3729,10 +3732,9 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     ...(macWebAuthn ? { t3codeWebAuthn: macWebAuthn } : {}),
     private: true,
     packageManager: rootPackageJson.packageManager,
-    description:
-      "T3 Code is an open-source desktop app for coding agents. Work with your existing agent subscriptions, review code changes, and run commands in your projects. Connect from desktop, web, or mobile to continue working remotely.",
+    description: `${APP_NAME} is an open-source desktop app for coding agents. Work with your existing agent subscriptions, review code changes, and run commands in your projects. Connect from desktop, web, or mobile to continue working remotely.`,
     license: "MIT",
-    homepage: "https://t3.codes",
+    homepage: "https://github.com/jayleaton/t3code",
     author: "T3 Tools",
     main: "apps/desktop/dist-electron/boot.cjs",
     build: yield* createBuildConfig(
@@ -4051,7 +4053,7 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
     Flag.optional,
   ),
 }).pipe(
-  Command.withDescription("Build a desktop artifact for T3 Code."),
+  Command.withDescription(`Build a desktop artifact for ${APP_NAME}.`),
   Command.withHandler((input) => Effect.flatMap(resolveBuildOptions(input), buildDesktopArtifact)),
 );
 

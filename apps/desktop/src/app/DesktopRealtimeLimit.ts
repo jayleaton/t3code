@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
 import { makeComponentLogger } from "./DesktopObservability.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const { logWarning } = makeComponentLogger("desktop-realtime-limit");
 
@@ -29,6 +30,6 @@ export const protectRealtimeLimit = Effect.fn("desktop.realtimeLimit.protect")(f
     .pipe(Effect.orElseSucceed(() => ""));
   if (parseRealtimeTimeoutHardLimit(limits) !== 0) return;
   yield* logWarning(
-    "T3 Code started with a realtime CPU limit of 0, so the kernel kills its backend and agents when a thread CPU timer fires. Start T3 Code from its systemd unit or a terminal, or install and enable rtkit.",
+    `${APP_NAME} started with a realtime CPU limit of 0, so the kernel kills its backend and agents when a thread CPU timer fires. Start ${APP_NAME} from its systemd unit or a terminal, or install and enable rtkit.`,
   );
 });

@@ -214,7 +214,7 @@
     "protects": "headless installs, updates and track switches use the fork's releases, never upstream's npm or install.sh",
     "test": "scripts/upstream-install-commands.test.ts",
     "title": "keeps upstream install commands out of user-facing fork code and docs",
-    "sha256": "d4049b2321e8acb667d5c68161a73ef29b31c0c0594c6de34150f8d288e09fbd",
+    "sha256": "0f8df916d0ccc4aac99ec4ea5d9e05bb4f8cf4cf610cbc6d5ecff9cb955024f6",
     "sources": ["packages/shared/src/cliRelease.ts"]
   },
   {
@@ -240,5 +240,29 @@
     "title": "reads %s from the fork's releases with its checked database migration",
     "sha256": "e41e02a2614e7f0ea79c3ddfd93928d64b0caf67027e3cfce739c2fdf6d17718",
     "sources": ["apps/server/src/service/npmRelease.ts"]
+  },
+  {
+    "fix": "#233",
+    "protects": "the fork ships as Ada and upstream syncs cannot bring T3 Code, T3 Agents, Theo, t3.codes or pingdotgg back into user-facing copy",
+    "test": "scripts/upstream-install-commands.test.ts",
+    "title": "keeps upstream brand names out of user-facing fork code and docs",
+    "sha256": "85d9b5d8a33ac522361b474782651de8799697cb0302250dba43220b233ef46c",
+    "sources": ["packages/shared/src/branding.ts"]
+  },
+  {
+    "fix": "#233",
+    "protects": "the fork ships as Ada and upstream syncs cannot bring T3 Code, T3 Agents, Theo, t3.codes or pingdotgg back into user-facing copy",
+    "test": "apps/mobile/src/lib/mobileBranding.test.ts",
+    "title": "names the fork's app Ada",
+    "sha256": "fc610c9f790b3001260202e853c975421f9080465e12d519d15c131ea07e8633",
+    "sources": ["apps/mobile/src/lib/mobileBranding.ts", "packages/shared/src/branding.ts"]
+  },
+  {
+    "fix": "#233",
+    "protects": "the fork ships as Ada and upstream syncs cannot bring T3 Code, T3 Agents, Theo, t3.codes or pingdotgg back into user-facing copy",
+    "test": "apps/mobile/src/lib/mobileBranding.test.ts",
+    "title": "shows no upstream name in the app",
+    "sha256": "f25c34c8d9f862713f1abc327e501ac71bb9ac80cedac2bd24d58603abaab3cb",
+    "sources": ["apps/mobile/src/lib/mobileBranding.ts"]
   }
 ]

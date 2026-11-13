@@ -16,6 +16,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Textarea } from "../ui/textarea";
 import { randomUUID } from "../../lib/utils";
 import { useAgentLibrary } from "../../hooks/useAgentLibrary";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const NEW_SKILL = "";
 
@@ -82,15 +83,15 @@ export function AgentSkillsEditor({
         <DialogPanel>
           <div className="flex flex-col gap-3 text-sm">
             <p>
-              Ask an agent to create or update skills using the T3 Agents MCP. It can save skills to
-              this shared library and assign them to the agents you choose.
+              Ask an agent to create or update skills using the {APP_NAME} MCP. It can save skills
+              to this shared library and assign them to the agents you choose.
             </p>
             <p className="rounded-lg bg-muted p-3 text-muted-foreground">
               Try: “Create a shared skill for reviewing pull requests and assign it to Randy.”
             </p>
             <p className="text-muted-foreground">
               {skills.length} shared {skills.length === 1 ? "skill" : "skills"} in your library.
-              Enable the T3 Agents MCP in your agent’s harness to get started.
+              Enable the {APP_NAME} MCP in your agent’s harness to get started.
             </p>
           </div>
           <details className="border-t pt-4">

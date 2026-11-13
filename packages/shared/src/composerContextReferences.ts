@@ -13,6 +13,7 @@ import {
 } from "@t3tools/contracts";
 
 import { replaceThreadLinks, threadLinkCandidates } from "./threadLinks.ts";
+import { APP_NAME } from "./branding.ts";
 
 const CONTEXT_PROTOCOL = "t3-context:";
 const COMPOSER_CONTEXT_HREF_PREFIX = `${CONTEXT_PROTOCOL}//v1/`;
@@ -373,7 +374,7 @@ function formatAgentProviderPayload(
     );
   } else {
     lines.push(
-      `The user picked this T3 agent in the composer, so this profileId is exact: to delegate to it, pass profileId ${JSON.stringify(record.profileId)} to delegate_task, t3_thread_launch or create_threads${record.environmentId ? " with this environmentId as the target" : ""}; do not search agents by name. ${noRun} If a tool refuses the profileId (unknown here, read-only, or not permitted for this thread), report that instead of picking another agent.`,
+      `The user picked this ${APP_NAME} agent in the composer, so this profileId is exact: to delegate to it, pass profileId ${JSON.stringify(record.profileId)} to delegate_task, t3_thread_launch or create_threads${record.environmentId ? " with this environmentId as the target" : ""}; do not search agents by name. ${noRun} If a tool refuses the profileId (unknown here, read-only, or not permitted for this thread), report that instead of picking another agent.`,
     );
   }
   return lines.join("\n");

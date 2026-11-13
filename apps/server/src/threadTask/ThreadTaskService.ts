@@ -67,6 +67,7 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ThreadTaskStore from "./ThreadTaskStore.ts";
 import { ThreadTaskTransport, type ThreadTaskRemoteRequest } from "./ThreadTaskTransport.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 /**
  * Who is acting. A thread caller comes from the authenticated MCP invocation;
@@ -1234,7 +1235,7 @@ export const make = Effect.gen(function* () {
     modeCeiling?: McpGatewayRelayEvent["modeCeiling"],
   ) =>
     transport === undefined
-      ? Effect.fail(unreachable(environmentId, "No connected T3 app relays to it."))
+      ? Effect.fail(unreachable(environmentId, `No connected ${APP_NAME} app relays to it.`))
       : transport
           .call(environmentId, request, modeCeiling)
           .pipe(Effect.mapError((reason) => unreachable(environmentId, reason)));
@@ -1755,7 +1756,7 @@ export const make = Effect.gen(function* () {
             state: "unreachable",
             tasks: 0,
             truncated: false,
-            error: "No connected T3 app reaches this environment.",
+            error: `No connected ${APP_NAME} app reaches this environment.`,
           });
         }
         entries.push({

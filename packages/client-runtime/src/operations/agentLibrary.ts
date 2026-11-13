@@ -22,6 +22,7 @@ import { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import { EnvironmentRpcUnavailableError, request } from "../rpc/client.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 type AgentLibraryInput = Parameters<typeof mergeAgentLibraries>[0][number];
 
@@ -542,7 +543,7 @@ export const syncAgentLibraryBeforeUse = Effect.fn("syncAgentLibraryBeforeUse")(
     ) {
       return yield* new EnvironmentRpcUnavailableError({
         environmentId,
-        message: "Update T3 on this machine to synchronize skill resources.",
+        message: `Update ${APP_NAME} on this machine to synchronize skill resources.`,
       });
     }
     if (
@@ -554,7 +555,7 @@ export const syncAgentLibraryBeforeUse = Effect.fn("syncAgentLibraryBeforeUse")(
     ) {
       return yield* new EnvironmentRpcUnavailableError({
         environmentId,
-        message: "Update T3 on this machine to use shared agent skills.",
+        message: `Update ${APP_NAME} on this machine to use shared agent skills.`,
       });
     }
     const pending = plan.targets[0];

@@ -21,6 +21,7 @@ import { Menu, MenuCheckboxItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { SettingsRow } from "./settingsLayout";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 /** Each connected server's own gateway, which runs there without a desktop app. */
 export function ServerAgentGatewaySettings({
@@ -106,7 +107,7 @@ function ServerAgentGatewayRow({
   return (
     <SettingsRow
       title={`Server gateway on ${label}`}
-      description="Runs on that server without the desktop app: MCP hosts on its machine drive this environment with the access below, and T3 Agents events and webhooks keep flowing."
+      description={`Runs on that server without the desktop app: MCP hosts on its machine drive this environment with the access below, and ${APP_NAME} events and webhooks keep flowing.`}
       status={`Status: ${agentGatewayStatusLabel(status)}${status.problem ? `. ${status.problem}` : ""}`}
       control={
         <Switch

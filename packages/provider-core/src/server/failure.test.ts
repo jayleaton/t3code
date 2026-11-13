@@ -117,7 +117,7 @@ it("says why T3 Code stopped the session under a running turn", () => {
   });
   assert.equal(
     makeProviderFailure({ cause: Cause.fail(cause) }).message,
-    "T3 Code stopped the provider session: Workspace changed. Retry the turn.",
+    "Ada stopped the provider session: Workspace changed. Retry the turn.",
   );
 });
 

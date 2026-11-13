@@ -431,7 +431,7 @@ export type OrchestratorMcpThreadListResult = typeof OrchestratorMcpThreadListRe
 const OrchestratorMcpThreadEnvironment = Schema.optional(
   EnvironmentId.annotate({
     description:
-      "Environment the thread runs on, as returned by t3_thread_launch or t3_list_environments. Omit for this environment. Another environment is reached through your connected T3 app.",
+      "Environment the thread runs on, as returned by t3_thread_launch or t3_list_environments. Omit for this environment. Another environment is reached through your connected Ada app.",
   }),
 );
 // Codex hides `minimum` and `maximum` from the model, so a value above the maximum clamps on
@@ -959,7 +959,7 @@ export const OrchestratorMcpRequestSecretInput = Schema.Struct({
   }),
   placeholder: Schema.optional(TrimmedNonEmptyString),
   delivery: Schema.optional(Schema.Literals(["secretRef", "file"])).annotate({
-    description: "secretRef (default) for a T3 tool; file for a command.",
+    description: "secretRef (default) for an Ada tool; file for a command.",
   }),
   value: Schema.optional(PastedSecretValue).annotate({
     description: "Pasted in this thread; no card.",

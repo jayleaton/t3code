@@ -41,6 +41,7 @@ import * as Membership from "../peer/Membership.ts";
 import * as PeerLinks from "../peer/PeerLinks.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { DESKTOP_APP_SUBJECT } from "../auth/PairingGrantStore.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const unavailable = (message: string) => new McpGatewayUnavailableError({ message });
 const decodeTaskError = Schema.decodeUnknownOption(ThreadTaskError);
@@ -201,7 +202,7 @@ export const make = Effect.gen(function* () {
                 pending.delete(id);
                 yield* Deferred.fail(
                   call.deferred,
-                  unavailable("The T3 app relaying this call disconnected."),
+                  unavailable(`The ${APP_NAME} app relaying this call disconnected.`),
                 );
               }
               yield* Queue.end(requests);
@@ -275,7 +276,7 @@ export const make = Effect.gen(function* () {
           Option.isSome(target) && target.value === "revoked"
             ? `${environmentId} was revoked from the network.`
             : member && host.relayer === "paired"
-              ? `${environmentId} is a member of the network; only this machine's own T3 app or an app of the network relays to it.`
+              ? `${environmentId} is a member of the network; only this machine's own ${APP_NAME} app or an app of the network relays to it.`
               : !member && host.relayer === "app"
                 ? `${environmentId} is not in the network, so an app of the network does not relay to it.`
                 : undefined;
@@ -407,12 +408,14 @@ export const make = Effect.gen(function* () {
         args: relayedArgs,
         ...(modeCeiling === undefined ? {} : { modeCeiling }),
       });
-      if (!offered) return yield* unavailable("The T3 app relaying this call disconnected.");
+      if (!offered)
+        return yield* unavailable(`The ${APP_NAME} app relaying this call disconnected.`);
       return yield* Deferred.await(deferred);
     }).pipe(
       Effect.timeoutOrElse({
         duration: timeout,
-        orElse: () => Effect.fail(unavailable("The T3 app relaying this call did not answer.")),
+        orElse: () =>
+          Effect.fail(unavailable(`The ${APP_NAME} app relaying this call did not answer.`)),
       }),
       Effect.ensuring(Effect.sync(() => pending.delete(invocationId))),
       Effect.mapError((error): AskFailure => ({
@@ -491,7 +494,7 @@ export const make = Effect.gen(function* () {
     const requirements = gatewayPortCallScopes(method, args);
     if (requirements === undefined) {
       return yield* unavailable(
-        `${method} names no environment whose T3 Agents access could be checked, so it is not relayed.`,
+        `${method} names no environment whose ${APP_NAME} gateway access could be checked, so it is not relayed.`,
       );
     }
     const evaluated = yield* evaluate(new Set(requirements.map((need) => need.environmentId)));
@@ -522,21 +525,22 @@ export const make = Effect.gen(function* () {
         );
       return yield* unavailable(
         hosts.size === 0
-          ? "No T3 app with T3 Agents enabled is connected to this environment."
+          ? `No ${APP_NAME} app with the ${APP_NAME} gateway enabled is connected to this environment.`
           : refusal !== undefined
             ? refusal
             : capped
               ? evaluated.ceilingNote!
               : unmet !== undefined
-                ? `No connected T3 app grants T3 Agents access to ${environmentIds.join(", ")}.`
-                : `No single connected T3 app grants the ${requirements.map(describeGatewayScopes).join("; ")} access ${method} needs on ${environmentIds.join(", ")}.`,
+                ? `No connected ${APP_NAME} app grants ${APP_NAME} gateway access to ${environmentIds.join(", ")}.`
+                : `No single connected ${APP_NAME} app grants the ${requirements.map(describeGatewayScopes).join("; ")} access ${method} needs on ${environmentIds.join(", ")}.`,
       );
     }
     // Omitted trailing arguments stay omitted rather than arriving as null.
     const sent = args.slice(0, args.findLastIndex((arg) => arg !== undefined) + 1);
     const relayedArgs = yield* Effect.try({
       try: () => toMcpGatewayRelayJson(sent) as ReadonlyArray<unknown>,
-      catch: () => unavailable(`The arguments of ${method} cannot be relayed to a T3 app.`),
+      catch: () =>
+        unavailable(`The arguments of ${method} cannot be relayed to an ${APP_NAME} app.`),
     });
     const reads = requirements.every(({ anyOf }) =>
       anyOf.every((set) => set.length === 1 && set[0] === "read"),
@@ -565,7 +569,7 @@ export const make = Effect.gen(function* () {
                 : Effect.fail(
                     failure.ran === "maybe" && !reads
                       ? unavailable(
-                          `The T3 app relaying ${method} took it but did not answer, so it may have run; it was not run again on another app.`,
+                          `The ${APP_NAME} app relaying ${method} took it but did not answer, so it may have run; it was not run again on another app.`,
                         )
                       : failure.error,
                   ),

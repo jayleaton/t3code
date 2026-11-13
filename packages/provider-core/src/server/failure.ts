@@ -16,6 +16,7 @@ import * as Schema from "effect/Schema";
 
 import * as IdAllocator from "./IdAllocator.ts";
 import type { ProviderAdapterFailureReason } from "./ProviderAdapter.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 export class ContextHandoffBudgetError extends Schema.TaggedError<ContextHandoffBudgetError>()(
   "ContextHandoffBudgetError",
@@ -50,7 +51,7 @@ export class ProviderSessionStoppedError extends Schema.TaggedError<ProviderSess
   { detail: Schema.String },
 ) {
   override get message(): string {
-    return `T3 Code stopped the provider session: ${this.detail} Retry the turn.`;
+    return `${APP_NAME} stopped the provider session: ${this.detail} Retry the turn.`;
   }
 }
 
@@ -155,8 +156,7 @@ function curatedCauseMessages(cause: unknown): {
         }
         case "ContextHandoffDeliveryUncertainError":
           return {
-            known:
-              "T3 could not confirm whether conversation history reached the provider. Retry the turn to recover the session.",
+            known: `${APP_NAME} could not confirm whether conversation history reached the provider. Retry the turn to recover the session.`,
             category: categoryMessage(),
           };
         case "ProviderAdapterProtocolError": {

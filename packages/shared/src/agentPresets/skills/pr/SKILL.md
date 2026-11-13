@@ -99,7 +99,7 @@ Re-read the finished body against the final diff and actual artifacts. Confirm t
 
 ## Attribution and license
 
-Adapted from Matt Pocock's `pr` at the pinned commit in frontmatter. The upstream credits Dex Horthy / HumanLayer's `show-me`; that credit is retained. T3 adaptation adds format precedence, evidence integrity, delivery ownership, and draft-and-stack CI discipline. Source links are provenance, not runtime dependencies. Retain these notices when redistributing this adaptation; they are not part of the generated PR body.
+Adapted from Matt Pocock's `pr` at the pinned commit in frontmatter. The upstream credits Dex Horthy / HumanLayer's `show-me`; that credit is retained. Ada adaptation adds format precedence, evidence integrity, delivery ownership, and draft-and-stack CI discipline. Source links are provenance, not runtime dependencies. Retain these notices when redistributing this adaptation; they are not part of the generated PR body.
 
 ### Matt Pocock — MIT notice
 

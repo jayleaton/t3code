@@ -1,17 +1,13 @@
-import { ANDROID_PLAY_STORE_URL, GITHUB_REPOSITORY_URL, IOS_APP_STORE_URL } from "./site";
+import { APP_NAME, APP_SLOGAN } from "@t3tools/shared/branding";
+import { GITHUB_REPOSITORY_URL } from "./site";
 
 export const SITE_ORIGIN = "https://t3.codes";
-export const SITE_NAME = "T3 Code";
-export const SITE_TAGLINE = "The open-source control plane for coding agents";
+export const SITE_NAME = APP_NAME;
+export const SITE_TAGLINE = APP_SLOGAN;
 
 // The canonical set of official properties. Search engines and AI answer engines read `sameAs`
 // to tie an entity to its real homes, which is the signal a look-alike domain cannot copy.
-export const OFFICIAL_PROFILES = [
-  GITHUB_REPOSITORY_URL,
-  IOS_APP_STORE_URL,
-  ANDROID_PLAY_STORE_URL,
-  "https://discord.gg/jn4EGJjrvv",
-] as const;
+export const OFFICIAL_PROFILES = [GITHUB_REPOSITORY_URL] as const;
 
 export type JsonLd = Record<string, unknown>;
 
@@ -24,10 +20,10 @@ export const absoluteUrl = (pathname: string): string => new URL(pathname, SITE_
 export const organizationJsonLd = (): JsonLd => ({
   "@type": "Organization",
   "@id": ORGANIZATION_ID,
-  name: "T3 Tools Inc",
+  name: SITE_NAME,
   url: SITE_ORIGIN,
   logo: absoluteUrl("/apple-touch-icon.png"),
-  sameAs: ["https://github.com/pingdotgg"],
+  sameAs: ["https://github.com/jayleaton"],
 });
 
 export const websiteJsonLd = (): JsonLd => ({
@@ -42,11 +38,11 @@ export const softwareJsonLd = (): JsonLd => ({
   "@type": "SoftwareApplication",
   "@id": SOFTWARE_ID,
   name: SITE_NAME,
-  description: `${SITE_NAME}. ${SITE_TAGLINE}.`,
+  description: `${SITE_NAME}. ${SITE_TAGLINE}`,
   url: SITE_ORIGIN,
   downloadUrl: absoluteUrl("/download"),
   applicationCategory: "DeveloperApplication",
-  operatingSystem: "macOS, Windows, Linux, iOS, Android",
+  operatingSystem: "macOS, Windows, Linux",
   license: "https://opensource.org/license/mit",
   isAccessibleForFree: true,
   offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },

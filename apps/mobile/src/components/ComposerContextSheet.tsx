@@ -45,9 +45,9 @@ function AgentContextFields(props: {
     props.environmentId,
   );
   const status = {
-    unknown: "T3 agent. Mentioning it runs nothing; ask in your message to delegate to it.",
+    unknown: `${MOBILE_APP_NAME} agent. Mentioning it runs nothing; ask in your message to delegate to it.`,
     unsupported: `Update ${MOBILE_APP_NAME} on this machine to mention agents.`,
-    available: "T3 agent. Mentioning it runs nothing; ask in your message to delegate to it.",
+    available: `${MOBILE_APP_NAME} agent. Mentioning it runs nothing; ask in your message to delegate to it.`,
     missing: "This agent was deleted or isn't on this machine.",
     "read-only": "Read-only agent: it can't run work.",
     elsewhere: "This agent runs only on other machines.",

@@ -239,7 +239,7 @@ describe("codexCardProvider", () => {
 });
 
 describe("welcomeOffersPhone", () => {
-  it("offers the phone only on the primary computer, and only when pairing is allowed", () => {
+  it("offers the phone only on the primary computer, when pairing is allowed and the app is listed", () => {
     const policy = (limits: ManagedPolicySummary["limits"]): ManagedPolicySummary => ({
       organization: "Acme",
       lockedSettings: [],
@@ -247,6 +247,7 @@ describe("welcomeOffersPhone", () => {
     });
     const offers = (input: Partial<Parameters<typeof welcomeOffersPhone>[0]>) =>
       welcomeOffersPhone({
+        hasStoreListing: true,
         isPrimary: true,
         canPair: true,
         policy: undefined,
@@ -257,5 +258,6 @@ describe("welcomeOffersPhone", () => {
     expect(offers({ canPair: false })).toBe(false);
     expect(offers({ policy: policy({ clients: ["desktop"] }) })).toBe(false);
     expect(offers({ isPrimary: false })).toBe(false);
+    expect(offers({ hasStoreListing: false })).toBe(false);
   });
 });

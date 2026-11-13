@@ -6,6 +6,7 @@ import { useEnvironmentAgents } from "~/state/agentProfiles";
 import { useEnvironmentIdentities } from "~/state/environments";
 import { ContextChip, ContextChipLabel } from "./ContextChip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 /**
  * Inline chip for a mentioned agent, in the composer and in sent messages. Resolves by
@@ -27,9 +28,9 @@ export function AgentContextChip(props: {
           .join(", ")
       : "";
   const detail = {
-    unknown: "T3 agent",
-    unsupported: "Update T3 Code on this machine to mention agents",
-    available: "T3 agent",
+    unknown: `${APP_NAME} agent`,
+    unsupported: `Update ${APP_NAME} on this machine to mention agents`,
+    available: `${APP_NAME} agent`,
     missing: "This agent was deleted or isn't on this machine",
     "read-only": "Read-only agent: it can't run work",
     elsewhere: `Agent runs only on ${machines}`,

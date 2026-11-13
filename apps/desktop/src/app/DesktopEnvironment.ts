@@ -20,6 +20,7 @@ import {
 import { resolveDesktopBaseDir, resolveDesktopStateDir } from "./DesktopStatePaths.ts";
 import { isNightlyDesktopVersion } from "../updates/updateChannels.ts";
 import type { OtlpProtocol } from "@t3tools/shared/observability";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 declare const __T3CODE_DESKTOP_BRAND__: string | undefined;
 const desktopBrand =
@@ -57,6 +58,8 @@ export class DesktopEnvironment extends Context.Service<
     readonly desktopSettingsPath: string;
     /** The agents brand publishes only nightlies, so a Stable track would never update. */
     readonly nightlyOnlyUpdates: boolean;
+    /** The agents brand shares its profile with the upstream app, which records no lock owner. */
+    readonly sharesProfileWithUpstream: boolean;
     readonly clientSettingsPath: string;
     readonly savedEnvironmentRegistryPath: string;
     readonly serverSettingsPath: string;
@@ -96,8 +99,6 @@ export class DesktopEnvironment extends Context.Service<
   }
 >()("@t3tools/desktop/app/DesktopEnvironment") {}
 
-const APP_BASE_NAME = "T3 Code";
-
 function resolveDesktopAppStageLabel(input: {
   readonly isDevelopment: boolean;
   readonly appVersion: string;
@@ -112,10 +113,9 @@ function resolveDesktopAppStageLabel(input: {
 export function resolveDesktopAppBranding(input: {
   readonly isDevelopment: boolean;
   readonly appVersion: string;
-  readonly brand?: string;
 }): DesktopAppBranding {
   const stageLabel = resolveDesktopAppStageLabel(input);
-  const baseName = (input.brand ?? desktopBrand) === "agents" ? "T3 Agents" : APP_BASE_NAME;
+  const baseName = APP_NAME;
   return {
     baseName,
     stageLabel,
@@ -183,7 +183,6 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const branding = resolveDesktopAppBranding({
     isDevelopment,
     appVersion: input.appVersion,
-    brand: input.brand ?? desktopBrand,
   });
   const displayName = branding.displayName;
   const stateDir = resolveDesktopStateDir({
@@ -214,6 +213,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     stateDir,
     desktopSettingsPath: path.join(stateDir, "desktop-settings.json"),
     nightlyOnlyUpdates: (input.brand ?? desktopBrand) === "agents",
+    sharesProfileWithUpstream: (input.brand ?? desktopBrand) === "agents",
     clientSettingsPath: path.join(stateDir, "client-settings.json"),
     savedEnvironmentRegistryPath: path.join(stateDir, "saved-environments.json"),
     serverSettingsPath: path.join(stateDir, "settings.json"),

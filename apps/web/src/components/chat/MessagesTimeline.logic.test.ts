@@ -23,6 +23,7 @@ import type { TurnDiffSummary } from "../../types";
 import { describe, expect, it } from "vite-plus/test";
 import { EnvironmentId, MessageId, RunId } from "@t3tools/contracts";
 import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
+import { resolveT3McpToolDefinition } from "@t3tools/shared/t3McpToolPresentation";
 import {
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
@@ -32,6 +33,7 @@ import {
   shouldCollapseUserMessage,
   resolveAssistantMessageCopyState,
   type MessagesTimelineRow,
+  threadReadLabelPrefix,
   workEntryDisplayLabel,
 } from "./MessagesTimeline.logic";
 
@@ -4722,5 +4724,16 @@ describe("shouldCollapseUserMessage", () => {
 
     expect(shouldCollapseUserMessage(`${citation} Can you expand on this?`)).toBe(false);
     expect(shouldCollapseUserMessage(`${citation} ${"More text. ".repeat(60)}`)).toBe(true);
+  });
+});
+
+describe("threadReadLabelPrefix", () => {
+  it("recognizes every label the thread-read tool shows", () => {
+    const definition = resolveT3McpToolDefinition("mcp__t3-code__t3_thread_read");
+    if (definition === null) throw new Error("thread-read tool is not registered");
+    const [action, running, completed, detail] = definition.labels;
+    for (const verb of [action, running, completed]) {
+      expect(threadReadLabelPrefix(`${verb} ${detail}`)).toBe(`${verb} thread`);
+    }
   });
 });

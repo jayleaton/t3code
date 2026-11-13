@@ -1,5 +1,6 @@
 import type { DesktopAppBranding } from "@t3tools/contracts";
 import { formatAppDisplayName } from "./branding.logic";
+import { APP_NAME, MOBILE_APP_STORE_LINKS } from "@t3tools/shared/branding";
 
 function readInjectedDesktopAppBranding(): DesktopAppBranding | null {
   if (typeof window === "undefined") {
@@ -20,7 +21,7 @@ export const HOSTED_APP_CHANNEL_LABEL =
  * Browser builds have no desktop bridge to ask, so the fork's Agents brand is
  * the default. Electron still overrides this through the injected branding.
  */
-const WEB_APP_BASE_NAME = "T3 Agents";
+const WEB_APP_BASE_NAME = APP_NAME;
 export const APP_BASE_NAME = injectedDesktopAppBranding?.baseName ?? WEB_APP_BASE_NAME;
 export const APP_STAGE_LABEL =
   injectedDesktopAppBranding?.stageLabel ??
@@ -30,6 +31,18 @@ export const APP_DISPLAY_NAME =
   injectedDesktopAppBranding?.displayName ??
   formatAppDisplayName({ baseName: APP_BASE_NAME, stageLabel: APP_STAGE_LABEL });
 export const APP_VERSION = import.meta.env.APP_VERSION || "0.0.0";
-export const DESKTOP_DOWNLOAD_URL = "https://t3.codes/download";
-// Redirects to the App Store or Google Play to match the phone that opens it.
-export const MOBILE_APP_URL = "https://t3.codes/mobile";
+export const DESKTOP_DOWNLOAD_URL = "https://github.com/jayleaton/t3code/releases";
+export const MOBILE_APP_STORES = [
+  {
+    platform: "ios" as const,
+    label: "iPhone and iPad",
+    store: "App Store",
+    url: MOBILE_APP_STORE_LINKS.ios,
+  },
+  {
+    platform: "android" as const,
+    label: "Android",
+    store: "Google Play",
+    url: MOBILE_APP_STORE_LINKS.android,
+  },
+].flatMap(({ url, ...store }) => (url === null ? [] : [{ ...store, url }]));

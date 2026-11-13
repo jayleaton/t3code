@@ -1,7 +1,7 @@
-# T3 Code Mobile
+# Ada Mobile
 
 > [!NOTE]
-> To install the released app from the App Store or Google Play, see [Mobile app](../../docs/user/install.md#mobile-app). This guide covers building it from source.
+> Ada's mobile app is not in the App Store or Google Play yet. For test builds, see [Mobile app](../../docs/user/install.md#mobile-app). This guide covers building it from source.
 
 ## Quickstart
 
@@ -10,9 +10,9 @@
 
 This app has three variants:
 
-- `development`: Expo dev client, installable side-by-side as `T3 Code Personal Dev`
-- `preview`: persistent internal preview build, installable side-by-side as `T3 Code Personal Preview`
-- `production`: store/release build as `T3 Code Personal`
+- `development`: Expo dev client, installable side-by-side as `Ada Dev`
+- `preview`: persistent internal preview build, installable side-by-side as `Ada Preview`
+- `production`: store/release build as `Ada`
 
 Run commands from `apps/mobile`.
 
@@ -149,13 +149,13 @@ The `personal-testflight` profile uses store distribution, the production bundle
 automatically incremented build numbers, and disabled OTA updates. Configure store provisioning
 for your Apple team and your App Store Connect app/submit credentials first.
 
-On the Mac running your existing T3 environment, generate a fresh reachable link with
+On the Mac running your existing Ada environment, generate a fresh reachable link with
 `t3 pair --tailscale` (use `--base-dir` if that server uses a different T3 home). Connect the
 phone to the same tailnet, open Environments → Add environment, scan the QR or paste the full
 link into Host, then tap Add environment. Host and pairing code can also be entered separately.
 A LAN IP works on the same network if the server's network access is enabled. Localhost does
 not point to your Mac. Stop/restart the app to reconnect with the saved server credential;
-Metro can remain off, but the T3 server must remain reachable.
+Metro can remain off, but the Ada server must remain reachable.
 
 Preview and production variants use Expo fingerprinting. Development clients below are for
 contributor workflows, not the standalone personal install.
