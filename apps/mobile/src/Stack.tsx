@@ -350,7 +350,7 @@ const SETTINGS_SCREENS = {
 // iOS 26 header morphing requires one UINavigationBar; nested stacks make the whole screen slide.
 const THREAD_LINKING_PREFIX = "threads/:environmentId/:threadId";
 
-function workspaceLocationFromState(state: NavigationState) {
+export function workspaceLocationFromState(state: NavigationState) {
   const routes = state.routes.filter((route) => !isWorkspaceOverlayRoute(route.name));
   const effectiveState =
     routes.length > 0 && routes.length !== state.routes.length

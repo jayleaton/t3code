@@ -35,6 +35,11 @@ import {
   startIncomingShareInbox,
 } from "./features/sharing/IncomingShareProvider";
 import {
+  installNotificationNavigation,
+  setNotificationPathname,
+} from "./features/notifications/notificationNavigation";
+import { installPushRegistration } from "./features/notifications/pushRegistration";
+import {
   installAppShortcuts,
   recordAppShortcutNavigationState,
 } from "./features/shortcuts/appShortcutsRuntime";
@@ -43,7 +48,7 @@ import {
   installAppearanceRuntime,
   useAppearancePreferences,
 } from "./features/settings/appearance/AppearancePreferencesProvider";
-import { RootStack, rootPathnameFromState } from "./Stack";
+import { RootStack, rootPathnameFromState, workspaceLocationFromState } from "./Stack";
 import { appAtomRegistry } from "./state/atom-registry";
 import { subscribeComposerDraftModelReconciliation } from "./state/use-composer-drafts";
 import { environmentThreadShells, threadEnvironment } from "./state/threads";
@@ -163,6 +168,7 @@ function handleNavigationStateChange(state: NavigationState | undefined): void {
   resolvePendingNewTaskPromptLink(state);
   resolvePendingThreadPromptLink(state);
   if (!state) return;
+  setNotificationPathname(workspaceLocationFromState(state).pathname);
   recordAppShortcutNavigationState(state);
   pruneNewTaskFlowStates(state);
   pruneNewTaskBranchCheckouts(state);
@@ -191,6 +197,8 @@ const appServiceDisposers = [
   installThreadOutboxDelivery(),
   installComposerAttachmentUploads(),
   startIncomingShareInbox(),
+  installNotificationNavigation(linkToAppPath),
+  installPushRegistration(),
   installAppShortcuts(linkToAppPath),
   installAppUpdateChecks(),
   installShowcaseCapture(rootPathnameFromState),

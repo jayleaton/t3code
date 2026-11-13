@@ -136,7 +136,8 @@ provisioning; the upstream Apple team and App Store Connect app binding are remo
 submission requires your own App Store Connect app record.
 
 The app pairs directly with a server, over your network or Tailscale, and persists its
-credential in SecureStore. It has no accounts, relay, or push notifications.
+credential in SecureStore. It has no accounts or relay; on iOS each server sends push notifications
+directly through Expo.
 
 For a standalone TestFlight app with embedded JavaScript and no Metro dependency:
 
