@@ -69,7 +69,7 @@ const OrchestratorMcpSchedule = Schema.Union([
   OrchestratorMcpScheduleFromJsonString,
 ]).annotate({
   description:
-    "Trigger: {type:'interval',everyMs}, {type:'fixed_time',timeOfDay,weekdays?}, {type:'cron',expression,timezone} for other calendar patterns, {type:'once',runAt}, or {type:'webhook'}.",
+    "Triggers: {type:'interval',everyMs}, {type:'fixed_time',timeOfDay,weekdays?}, {type:'cron',expression,timezone}, {type:'once',runAt}, {type:'webhook'}.",
 });
 
 const OrchestratorMcpTargetOptionsFromRecord = Schema.Record(
@@ -910,7 +910,7 @@ export const OrchestratorMcpListScheduledTasksInput = Schema.Struct({
     }),
   ),
   includeArchived: Schema.optional(
-    Schema.Boolean.annotate({ description: "Also list tasks archived for going stale." }),
+    Schema.Boolean.annotate({ description: "Include archived tasks." }),
   ),
 });
 export type OrchestratorMcpListScheduledTasksInput =
