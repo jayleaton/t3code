@@ -1,3 +1,4 @@
+import { APP_NAME, CLI_COMMAND } from "@t3tools/shared/branding";
 import {
   ServerSelfUpdateError,
   type ServerSelfUpdateCapability,
@@ -180,12 +181,12 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
         );
       }
       return yield* failWith(
-        "This server is managed by the T3 Code desktop app on its machine; update the desktop app to update it.",
+        `This server is managed by the ${APP_NAME} desktop app on its machine; update the desktop app to update it.`,
       );
     }
     if (capability === null) {
       return yield* failWith(
-        "Remote updates require the T3 Code background service. Run `t3 service install` on the server machine.",
+        `Remote updates require the ${APP_NAME} background service. Run \`${CLI_COMMAND} service install\` on the server machine.`,
       );
     }
 

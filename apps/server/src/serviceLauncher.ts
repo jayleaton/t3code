@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 // @effect-diagnostics globalTimers:off
 // The launcher must survive unloadable server versions; use Node built-ins without Effect.
+import { APP_NAME } from "@t3tools/shared/branding";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
@@ -1054,7 +1055,7 @@ export class Launcher {
     // recognise the migration history, and a refused trial rolls back to here.
     if (code === DATABASE_REFUSED_EXIT_CODE) {
       this.#idle(
-        "T3 Code did not open its database, which was left unchanged. Install the build that last opened it, or report the server log, then restart this service.",
+        `${APP_NAME} did not open its database, which was left unchanged. Install the build that last opened it, or report the server log, then restart this service.`,
       );
       return;
     }
@@ -1075,7 +1076,7 @@ export class Launcher {
       await discardDatabaseBackup(this.#baseDir, pending.id).catch(() => undefined);
       await this.#repointServiceUnit(next.activeVersion);
     }
-    this.#idle("Another T3 Code server owns this T3 home. Stop it, then restart this service.");
+    this.#idle(`Another ${APP_NAME} server owns this T3 home. Stop it, then restart this service.`);
   }
 
   /**
@@ -1118,7 +1119,7 @@ export class Launcher {
 export async function main(): Promise<void> {
   const baseDir = process.env.T3CODE_HOME?.trim();
   if (baseDir === undefined || baseDir === "") {
-    throw new Error("T3CODE_HOME is required by the T3 Code service launcher.");
+    throw new Error(`T3CODE_HOME is required by the ${APP_NAME} service launcher.`);
   }
   const environment = await readServiceEnvironment(baseDir);
   const statePath = NodePath.join(baseDir, "runtime", SERVICE_STATE_FILE);

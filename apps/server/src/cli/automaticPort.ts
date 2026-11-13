@@ -1,3 +1,4 @@
+import { APP_NAME } from "@t3tools/shared/branding";
 import * as NetService from "@t3tools/shared/Net";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -62,8 +63,7 @@ export const make = Effect.gen(function* () {
       if (!windows.has(port)) return port;
     }
     return yield* new CliError.UserError({
-      cause:
-        "Windows is already using every port T3 Code tried. Pass --port or set T3CODE_PORT to a port Windows is not using.",
+      cause: `Windows is already using every port ${APP_NAME} tried. Pass --port or set T3CODE_PORT to a port Windows is not using.`,
     });
   });
 });
