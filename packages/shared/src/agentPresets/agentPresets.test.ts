@@ -3,6 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import {
   agentSkillDigest,
+  mergeAgentLibraries,
   toAgentSkillStub,
   type AgentSkill,
   type McpGatewayProfile,
@@ -19,6 +20,7 @@ import {
   presetSkillConflicts,
   type AgentPresetSkill,
 } from "./agentPresets.ts";
+import { readAgentPresetSkillFiles } from "./agentPresetSkillFiles.ts";
 
 function readTree(root: string, directory: string): Record<string, string> {
   const base = NodePath.join(root, directory);
@@ -237,10 +239,8 @@ describe("addPresetSkills", () => {
 
 describe("defaultAgentSkills", () => {
   const root = import.meta.dirname;
-  const presets = decodeAgentPresets({
-    ...readTree(root, "presets"),
-    ...readTree(root, "skills"),
-  });
+  const skillFiles = readAgentPresetSkillFiles();
+  const presets = decodeAgentPresets({ ...readTree(root, "presets"), ...skillFiles });
   const now = "2026-11-12T00:00:00.000Z";
   const empty = {
     agentSkills: [],
@@ -250,7 +250,7 @@ describe("defaultAgentSkills", () => {
   };
 
   it("seeds a new library with stable ids that a preset install then reuses", () => {
-    const seeded = defaultAgentSkills(empty, presets, now);
+    const seeded = defaultAgentSkills(empty, skillFiles);
     expect(seeded.map((skill) => [skill.skillId, skill.name])).toEqual(
       DEFAULT_AGENT_SKILL_NAMES.map((name) => [`t3-default-${name}`, name]),
     );
@@ -262,16 +262,33 @@ describe("defaultAgentSkills", () => {
     expect(added.agentSkills.filter((skill) => skill.name === "t3-agents")).toHaveLength(1);
   });
 
+  it("seeds copies older than any edit or deletion, so another machine's library wins a merge", () => {
+    const [seeded] = defaultAgentSkills(empty, skillFiles);
+    const edited = { ...seeded!, content: "mine", revision: 2, updatedAt: now };
+    expect(
+      mergeAgentLibraries([
+        { ...empty, agentSkills: [seeded!] },
+        { ...empty, agentSkills: [edited] },
+      ]).agentSkills,
+    ).toEqual([edited]);
+    expect(
+      mergeAgentLibraries([
+        { ...empty, agentSkills: [seeded!] },
+        { ...empty, agentSkillDeletedAt: { [seeded!.skillId]: now } },
+      ]).agentSkills,
+    ).toEqual([]);
+  });
+
   it.each([
     [
       "an edited default",
-      { agentSkills: [{ ...defaultAgentSkills(empty, presets, now)[0]!, content: "mine" }] },
+      { agentSkills: [{ ...defaultAgentSkills(empty, skillFiles)[0]!, content: "mine" }] },
     ],
     ["a deleted default", { agentSkillDeletedAt: { "t3-default-t3-agents": now } }],
     ["an agent", { mcpGatewayProfiles: [{}] }],
     ["a deleted agent", { mcpGatewayProfileDeletedAt: { agent: now } }],
   ])("leaves a library holding %s alone", (_label, library) => {
-    expect(defaultAgentSkills({ ...empty, ...library }, presets, now)).toEqual([]);
+    expect(defaultAgentSkills({ ...empty, ...library }, skillFiles)).toEqual([]);
   });
 });
 

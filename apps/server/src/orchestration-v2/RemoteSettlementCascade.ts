@@ -17,6 +17,7 @@ import { McpGatewayBroker } from "../mcp/McpGatewayBroker.ts";
 import * as Membership from "../peer/Membership.ts";
 import * as PeerLinks from "../peer/PeerLinks.ts";
 import * as PeerMcpClient from "../peer/PeerMcpClient.ts";
+import * as TailnetDevices from "../peer/TailnetDevices.ts";
 import { EffectOutboxV2, SETTLED_EFFECT_RETENTION } from "./EffectOutbox.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import {
@@ -59,6 +60,7 @@ export const make = Effect.gen(function* () {
   const projections = yield* ProjectionStoreV2;
   const links = yield* PeerLinks.PeerLinks;
   const peers = yield* PeerMcpClient.PeerMcpClient;
+  const tailnetDevices = yield* Effect.serviceOption(TailnetDevices.TailnetDevices);
   const local = (yield* (yield* ServerEnvironment.ServerEnvironment).getDescriptor).environmentId;
   // Failed rows may wait from before a restart, so the first sweep looks.
   let waiting = true;
@@ -79,8 +81,12 @@ export const make = Effect.gen(function* () {
       Effect.map(([network, linked]) => [...network, ...linked].map((m) => m.environmentId)),
       Effect.orElseSucceed(() => []),
     );
+    // With full access itself, this machine renews a member session with any member.
+    const trusted = yield* fullAccess(local);
     for (const environmentId of members) {
-      if (environmentId !== local && (yield* fullAccess(environmentId))) targets.add(environmentId);
+      if (environmentId !== local && (trusted || (yield* fullAccess(environmentId)))) {
+        targets.add(environmentId);
+      }
     }
     if (yield* links.enabled) {
       for (const link of yield* links.stored.pipe(Effect.orElseSucceed(() => []))) {
@@ -137,13 +143,27 @@ export const make = Effect.gen(function* () {
   const pending = (error: { readonly message: string }) =>
     new RemoteSettlementPending({ message: error.message });
 
-  /** Whether this server's own link may settle chats there: only one paired with full access. */
+  /**
+   * Whether this server's own link may settle chats there: only one with full access. A member's
+   * link is minted at the access the roster gave this machine then, so a wider grant since takes
+   * a new handshake; a link paired by code is the user's choice and stays as it is.
+   */
   const linkSettles = Effect.fn("RemoteSettlementCascade.linkSettles")(function* (
     environmentId: EnvironmentId,
   ) {
     if (!(yield* links.enabled)) return false;
-    const link = yield* links.get(environmentId).pipe(Effect.orElseSucceed(() => Option.none()));
-    return Option.isSome(link) && link.value.access === "full-access";
+    const stored = links.get(environmentId).pipe(Effect.orElseSucceed(() => Option.none()));
+    const link = yield* stored;
+    if (Option.isSome(link) && link.value.access === "full-access") return true;
+    if (Option.isNone(tailnetDevices)) return false;
+    if (Option.isSome(link) && link.value.origin !== "tailnet") return false;
+    const access = yield* membership.accessOf(environmentId);
+    if (Option.isNone(access) || access.value === "revoked" || !(yield* fullAccess(local))) {
+      return false;
+    }
+    yield* tailnetDevices.value.refresh(environmentId);
+    const renewed = yield* stored;
+    return Option.isSome(renewed) && renewed.value.access === "full-access";
   });
 
   /** Settles over this server's link; false when the peer is too old to list remote parents. */

@@ -71,6 +71,19 @@ const decodeFailure = Schema.decodeUnknownOption(
   ),
 );
 
+/** A T3 Agents tool's refusal there, in the gateway's own envelope. */
+const decodeGatewayFailure = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({ error: Schema.Struct({ code: Schema.String, message: Schema.String }) }),
+  ),
+);
+const GATEWAY_FAILURE_CODES: Readonly<Record<string, OrchestratorMcpFailure["code"]>> = {
+  scope_required: "capability_denied",
+  thread_not_found: "thread_not_found",
+  invalid_input: "invalid_request",
+  unknown_environment: "invalid_request",
+};
+
 /** A peer link problem, as the agent that asked hears it. */
 const fromLinkError = (error: PeerLinkError) =>
   new OrchestratorMcpFailure({
@@ -235,16 +248,22 @@ const make = Effect.gen(function* () {
     if (body.result.isError === true) {
       // A refusal keeps the peer's own code, so the agent sees why it was refused.
       const refused = decodeFailure(text);
+      const gateway = decodeGatewayFailure(text);
       return Result.fail(
         refused._tag === "Some"
           ? new OrchestratorMcpFailure({
               code: refused.value.code,
               message: refused.value.message,
             })
-          : new OrchestratorMcpFailure({
-              code: "orchestration_error",
-              message: text || "The linked environment refused the call.",
-            }),
+          : gateway._tag === "Some"
+            ? new OrchestratorMcpFailure({
+                code: GATEWAY_FAILURE_CODES[gateway.value.error.code] ?? "orchestration_error",
+                message: gateway.value.error.message,
+              })
+            : new OrchestratorMcpFailure({
+                code: "orchestration_error",
+                message: text || "The linked environment refused the call.",
+              }),
       );
     }
     // Display text may be compacted for the model; peers consume the typed wire payload.

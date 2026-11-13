@@ -27,6 +27,7 @@ import {
 import * as Membership from "../peer/Membership.ts";
 import * as PeerLinks from "../peer/PeerLinks.ts";
 import * as PeerMcpClient from "../peer/PeerMcpClient.ts";
+import * as TailnetDevices from "../peer/TailnetDevices.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
@@ -73,12 +74,15 @@ interface World {
   linkReachable: boolean;
   /** The card as this machine's projections hold it now. */
   card: Partial<OrchestrationV2AppThread>;
+  /** Member handshakes this server ran again for the MacBook. */
+  refreshes: number;
 }
 
 const world = (): World => ({
   calls: [],
   reachable: true,
   linkReachable: true,
+  refreshes: 0,
   card: { id: card, settledOverride: "settled", settledAt, deletedAt: null },
 });
 
@@ -93,23 +97,40 @@ const makeLayer = (
     readonly app?: Readonly<Record<string, ReadonlyArray<GatewayScope>>> | false;
     /** This server's own link to the MacBook, at this access. */
     readonly link?: AuthMcpClientAccess;
+    /** The MacBook's own access in the network. */
+    readonly member?: TailnetDeviceAccess;
+    /** How that link was made. */
+    readonly origin?: "tailnet" | "paired";
+    /** The access a new member handshake with the MacBook links at. */
+    readonly handshake?: AuthMcpClientAccess;
     /** The linked MacBook runs a version whose thread list has no parentEnvironmentId. */
     readonly legacyPeer?: boolean;
   } = {},
 ) => {
-  const link = options.link;
+  let link =
+    options.link === undefined
+      ? undefined
+      : { environmentId: macBook, access: options.link, origin: options.origin ?? "tailnet" };
   const peerLinks = Layer.mock(PeerLinks.PeerLinks)({
     enabled: Effect.succeed(true),
-    stored: Effect.succeed(
-      link === undefined ? [] : [{ environmentId: macBook, access: link } as never],
-    ),
+    stored: Effect.sync(() => (link === undefined ? [] : [link as never])),
     get: (environmentId) =>
-      Effect.succeed(
+      Effect.sync(() =>
         link !== undefined && environmentId === macBook
-          ? Option.some({ environmentId: macBook, access: link } as never)
+          ? Option.some(link as never)
           : Option.none(),
       ),
     subscribeChanges: Effect.succeed(Stream.never),
+  });
+  const tailnetDevices = Layer.mock(TailnetDevices.TailnetDevices)({
+    refresh: (environmentId) =>
+      Effect.sync(() => {
+        if (environmentId !== macBook) return;
+        state.refreshes += 1;
+        if (options.handshake !== undefined) {
+          link = { environmentId: macBook, access: options.handshake, origin: "tailnet" };
+        }
+      }),
   });
   const peers = Layer.mock(PeerMcpClient.PeerMcpClient)({
     call: (input) =>
@@ -149,6 +170,11 @@ const makeLayer = (
         return Effect.succeed({ sequence: 1 } as never);
       }),
   });
+  // One instance, so the roster the broker writes is the one the cascade reads.
+  const dependencies = layerDependencies({
+    environmentId: devBox,
+    ...(options.self && { self: options.self }),
+  });
   const broker = Layer.effect(
     McpGatewayBroker,
     Effect.gen(function* () {
@@ -156,8 +182,12 @@ const makeLayer = (
       if (options.network === true) {
         const membership = yield* Membership.Membership;
         for (const environmentId of [devBox, macBook]) {
+          const access =
+            environmentId === devBox
+              ? (options.self ?? "full-access")
+              : (options.member ?? "full-access");
           yield* membership
-            .put({ environmentId, label: environmentId, nodeId: null, access: "full-access" })
+            .put({ environmentId, label: environmentId, nodeId: null, access })
             .pipe(Effect.orDie);
         }
       }
@@ -185,11 +215,12 @@ const makeLayer = (
         );
       return broker;
     }),
-  );
+  ).pipe(Layer.provide(dependencies));
   return Layer.mergeAll(
     broker,
     peerLinks,
     peers,
+    tailnetDevices,
     EffectOutbox.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
     Layer.mock(ServerEnvironment.ServerEnvironment)({
       getDescriptor: Effect.succeed({ environmentId: devBox } as never),
@@ -197,11 +228,7 @@ const makeLayer = (
     Layer.mock(ProjectionStoreV2)({
       getThread: () => Effect.succeed(state.card as OrchestrationV2AppThread),
     }),
-  ).pipe(
-    Layer.provideMerge(
-      layerDependencies({ environmentId: devBox, ...(options.self && { self: options.self }) }),
-    ),
-  );
+  ).pipe(Layer.provideMerge(dependencies));
 };
 
 /** The effect SettlementCascade queues once its local walk passed through `aged`. */
@@ -434,4 +461,61 @@ it.effect("a linked machine on an older version settles through the app instead"
     expect(targets(state.calls, "app")).toEqual(settledChildren);
     expect(targets(state.calls, "link")).toEqual([]);
   }).pipe(Effect.provide(layerWorker(state, { link: "full-access", legacyPeer: true })));
+});
+
+const headlessMembers: ReadonlyArray<{
+  readonly name: string;
+  readonly options: Parameters<typeof makeLayer>[1];
+  readonly settled: ReadonlyArray<string>;
+  readonly refreshes: number;
+}> = [
+  {
+    name: "a member whose stored link is limited settles over a renewed member session",
+    options: { link: "auto-accept-edits", handshake: "full-access" },
+    settled: settledChildren,
+    refreshes: 1,
+  },
+  {
+    name: "a member with no stored link settles over a new member session",
+    options: { handshake: "full-access" },
+    settled: settledChildren,
+    refreshes: 1,
+  },
+  {
+    name: "a member listed below full access settles over a renewed session when this machine has full access",
+    options: { member: "auto-accept-edits", link: "auto-accept-edits", handshake: "full-access" },
+    settled: settledChildren,
+    refreshes: 1,
+  },
+  {
+    name: "a member whose renewed session is still limited waits for an app",
+    options: { link: "auto-accept-edits", handshake: "auto-accept-edits" },
+    settled: [],
+    refreshes: 1,
+  },
+  {
+    name: "a member the roster gives this machine less than full access waits for an app",
+    options: { self: "auto-accept-edits", link: "auto-accept-edits", handshake: "full-access" },
+    settled: [],
+    refreshes: 0,
+  },
+  {
+    name: "a member paired by code below full access waits for an app",
+    options: { link: "auto-accept-edits", origin: "paired", handshake: "full-access" },
+    settled: [],
+    refreshes: 0,
+  },
+];
+
+it.effect.each(headlessMembers)("$name", (member) => {
+  const state = world();
+  return Effect.gen(function* () {
+    yield* queue("settle");
+    yield* (yield* EffectWorker.OrchestrationEffectWorkerV2).drain();
+    expect(targets(state.calls, "link")).toEqual(member.settled);
+    expect(state.refreshes).toBe(member.refreshes);
+    expect(yield* statusOf(`effect:settle-card:thread-settlement.remote:${macBook}`)).toBe(
+      member.settled.length > 0 ? "succeeded" : "failed",
+    );
+  }).pipe(Effect.provide(layerWorker(state, { network: true, app: false, ...member.options })));
 });

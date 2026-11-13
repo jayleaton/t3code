@@ -459,6 +459,10 @@
       "types": "./src/agentPresets/agentPresets.ts",
       "import": "./src/agentPresets/agentPresets.ts"
     },
+    "./agentPresetSkillFiles": {
+      "types": "./src/agentPresets/agentPresetSkillFiles.ts",
+      "import": "./src/agentPresets/agentPresetSkillFiles.ts"
+    },
     "./markdownFrontmatter": {
       "types": "./src/markdownFrontmatter.ts",
       "import": "./src/markdownFrontmatter.ts"
