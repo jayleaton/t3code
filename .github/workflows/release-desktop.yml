@@ -1008,4 +1008,6 @@ jobs:
         run: |
           $installers = @(Get-ChildItem release/Ada-*.exe)
           if ($installers.Count -ne 1) { throw 'Expected exactly one Agents installer.' }
-          ./scripts/test-agents-windows-installer.ps1 -Installer $installers[0].FullName -ProductName $env:PRODUCT_NAME
+          $names = node scripts/lib/windows-package-names.ts $env:PRODUCT_NAME '${{ inputs.brand }}' | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the Windows package names.' }
+          ./scripts/test-agents-windows-installer.ps1 -Installer $installers[0].FullName -ProductName $env:PRODUCT_NAME -ExecutableName $names.executable -UninstallerName $names.uninstaller

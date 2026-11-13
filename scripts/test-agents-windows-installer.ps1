@@ -1,7 +1,10 @@
 param(
   [Parameter(Mandatory = $true)][string]$Installer,
-  # Shortcuts and the uninstaller follow the product name; the exe stays pinned to 'T3 Agents.exe'.
-  [Parameter(Mandatory = $true)][string]$ProductName
+  # Shortcuts and the Apps entry follow the product name. The exe and uninstaller file names come
+  # from scripts/lib/windows-package-names.ts, the rule packaging uses.
+  [Parameter(Mandatory = $true)][string]$ProductName,
+  [Parameter(Mandatory = $true)][string]$ExecutableName,
+  [Parameter(Mandatory = $true)][string]$UninstallerName
 )
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'This destructive installer test is only for disposable GitHub runners.' }
@@ -34,7 +37,7 @@ function Get-Shortcuts([string]$Name) {
   }
 }
 function Assert-Installed {
-  $exe = Join-Path $agents 'T3 Agents.exe'
+  $exe = Join-Path $agents $ExecutableName
   if (!(Test-Path $exe)) { throw 'Agents executable missing from its separate directory.' }
   if ((Get-ItemProperty $installKey).InstallLocation.TrimEnd('\') -ne $agents) {
     throw 'Agents registered the wrong install directory.'
@@ -48,9 +51,18 @@ function Assert-Installed {
   Assert-OfficialPreserved
 }
 function Remove-Agents {
-  $uninstaller = Join-Path $agents "Uninstall $ProductName.exe"
+  # Settings > Apps runs the registered UninstallString, so it must name the installed uninstaller.
+  $registered = (Get-ItemProperty $uninstallKey).UninstallString
+  $uninstaller = Join-Path $agents $UninstallerName
+  if ($registered -notmatch '^"([^"]+)"' -or $Matches[1] -ne $uninstaller -or !(Test-Path $uninstaller)) {
+    throw "The Apps entry runs '$registered', not the installed '$uninstaller'."
+  }
   $process = Start-Process -FilePath $uninstaller -ArgumentList "/S _?=$agents" -PassThru -Wait
   if ($process.ExitCode -ne 0) { throw "Uninstaller failed: $($process.ExitCode)" }
+  if (Test-Path $uninstallKey) { throw 'Uninstalling left the Apps entry behind.' }
+  if (@(Get-Shortcuts $ProductName | Where-Object { Test-Path $_ }).Count -ne 0) {
+    throw 'Uninstalling left an Agents shortcut behind.'
+  }
   Assert-OfficialPreserved
 }
 function Install-And-Remove-Agents {
