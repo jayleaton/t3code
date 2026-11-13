@@ -6,7 +6,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { describe, expect, it, vi } from "@effect/vitest";
-import { connectGatewayBridge } from "@t3tools/client-runtime/gateway";
+import { connectGatewayBridge, type GatewayBridgeState } from "@t3tools/client-runtime/gateway";
 import { ThreadTaskError } from "@t3tools/contracts";
 import WebSocket, { WebSocketServer } from "ws";
 
@@ -814,7 +814,7 @@ describe("gateway bridge", () => {
 });
 
 describe("standby gateway runtime", () => {
-  type State = "connecting" | "running" | "degraded" | "disabled";
+  type State = GatewayBridgeState;
   function trackStates() {
     const seen: Array<State> = [];
     const waiters: Array<{ state: State; after: number; resolve: () => void }> = [];
@@ -858,7 +858,7 @@ describe("standby gateway runtime", () => {
     await appRunning;
 
     const standbyStates = trackStates();
-    const turnedAway = standbyStates.next("degraded");
+    const turnedAway = standbyStates.next("standby");
     const standby = connectGatewayBridge({
       port: runtimePort("headless"),
       url,
@@ -875,6 +875,8 @@ describe("standby gateway runtime", () => {
       const standbyServing = standbyStates.next("running");
       app.stop();
       await standbyServing;
+      // Retries while standing by stay quiet, so the host's status does not flicker.
+      expect(standbyStates.seen).toEqual(["connecting", "standby", "running"]);
       await expect(bridge.port.listEnvironments()).resolves.toEqual([
         { environmentId: "headless" },
       ]);

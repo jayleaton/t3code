@@ -503,6 +503,14 @@ on the desktop's machine, preserving existing servers, then reconnect OpenCode. 
 using `mcpServers` can use **Copy MCP config**. The copied configuration includes the bridge
 token and the desktop's state-file path.
 
+A server can also host its own gateway, without the desktop app: in the browser, on the desktop
+app for a connected server, or in mobile Settings → Maintenance → **Agent gateway**, turn on
+**Server gateway** for that environment. It covers only that environment, with the capabilities
+you choose in its access menu (read is always on), for MCP hosts on the server's machine and for
+T3 Agents webhooks. **Show token** gives the bridge token those hosts need; **Rotate token**
+replaces it and disconnects hosts using the old one. Changing these needs access management
+permission. A server run by the desktop app leaves its gateway to the app's own settings above.
+
 Enable access per environment and select **Save** to apply permission changes. Default access allows
 reading chats, creating threads, and sending messages. **Enable all environments** enables machines
 without removing their existing permissions; it does not grant every capability. Choose **All

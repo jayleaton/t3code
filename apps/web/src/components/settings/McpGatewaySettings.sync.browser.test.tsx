@@ -29,6 +29,9 @@ function gatewayStorage(): Disposable {
 
 it("keeps the gateway disabled and reports failed storage writes", async () => {
   using _storage = gatewayStorage();
+  using _bridge = stubGlobal("desktopBridge", {
+    getMcpGatewayLaunchConfig: () => ({ command: "t3", args: [], env: {} }),
+  });
   using _denied = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
     throw new Error("Storage denied");
   });

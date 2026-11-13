@@ -39,6 +39,7 @@ import {
 } from "../ui/menu";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./settingsLayout";
+import { ServerAgentGatewaySettings } from "./ServerAgentGatewaySettings";
 import {
   getMcpGatewayConfiguration,
   getMcpGatewayPort,
@@ -47,6 +48,7 @@ import {
   getMcpGatewayStatusSnapshot,
   MCP_GATEWAY_BASELINE_SCOPES,
   MCP_GATEWAY_CONFIGURABLE_SCOPES,
+  MCP_GATEWAY_SCOPE_LABELS,
   publishMcpGatewayStatus,
   subscribeMcpGatewayStatus,
   subscribeMcpGatewayStatusSnapshot,
@@ -58,24 +60,6 @@ import {
   setMcpGatewayToken,
   subscribeMcpGatewayConfiguration,
 } from "../../mcpGatewayState";
-
-/**
- * Least-privilege scopes applied by the machine-level `On` baseline. The
- * per-machine menu exposes the full v3 contract separately so additional
- * authority is never granted implicitly.
- */
-const SCOPE_LABELS: Record<GatewayScope, string> = {
-  read: "Read environments and threads",
-  create: "Create threads",
-  send: "Send messages",
-  control: "Control active work",
-  lifecycle: "Pause, retry, and restart work",
-  approval: "Review and decide approvals",
-  artifact: "Retrieve thread artifacts",
-  review: "Read and update code reviews",
-  admin: "Change repositories and access",
-  delivery: "Manage subscriptions and webhooks",
-};
 
 const ADVANCED_SCOPES = MCP_GATEWAY_CONFIGURABLE_SCOPES.filter(
   (scope) => !MCP_GATEWAY_BASELINE_SCOPES.includes(scope),
@@ -398,7 +382,7 @@ export function McpEnvironmentGrantMatrix({
                           );
                         }}
                       >
-                        {SCOPE_LABELS[scope] ?? scope}
+                        {MCP_GATEWAY_SCOPE_LABELS[scope] ?? scope}
                       </MenuCheckboxItem>
                     ))}
                   </MenuGroup>
@@ -421,7 +405,7 @@ export function McpEnvironmentGrantMatrix({
                           );
                         }}
                       >
-                        {SCOPE_LABELS[scope]}
+                        {MCP_GATEWAY_SCOPE_LABELS[scope]}
                       </MenuCheckboxItem>
                     ))}
                   </MenuGroup>
@@ -430,7 +414,7 @@ export function McpEnvironmentGrantMatrix({
             </div>
             {scopes.length > 0 ? (
               <div className="mt-2 text-xs text-muted-foreground">
-                {scopes.map((scope) => SCOPE_LABELS[scope] ?? scope).join(", ")}
+                {scopes.map((scope) => MCP_GATEWAY_SCOPE_LABELS[scope] ?? scope).join(", ")}
               </div>
             ) : null}
             {ceiling !== undefined ? (
@@ -580,8 +564,43 @@ export function McpGatewayOperationalStatus({
   );
 }
 
-/** The gateway's rows; Environments shows them in a fold. */
+function McpGatewayAgentsRow() {
+  return (
+    <SettingsRow
+      id="mcp-gateway-agents"
+      title="Agents"
+      description="MCP uses the shared Agents library for instructions, provider, model, and execution settings. Changes apply to new chats; existing chats keep their instructions."
+      control={
+        <Link to="/agents" className="text-sm underline underline-offset-4">
+          Manage agents
+        </Link>
+      }
+    />
+  );
+}
+
+/**
+ * The gateway's rows; Environments shows them in a fold. The desktop app hosts its own gateway
+ * for every granted environment; each server can also host one for itself, without the app.
+ */
 export function McpGatewaySettings() {
+  const [desktop] = useState(
+    () => (window.desktopBridge?.getMcpGatewayLaunchConfig?.() ?? null) !== null,
+  );
+  return desktop ? (
+    <>
+      <DesktopMcpGatewaySettings />
+      <ServerAgentGatewaySettings includeDesktopHosted={false} />
+    </>
+  ) : (
+    <>
+      <ServerAgentGatewaySettings includeDesktopHosted />
+      <McpGatewayAgentsRow />
+    </>
+  );
+}
+
+function DesktopMcpGatewaySettings() {
   const { environments, isReady: registryReady } = useEnvironments();
   const configuration = useSyncExternalStore(
     subscribeMcpGatewayConfiguration,
@@ -793,16 +812,7 @@ export function McpGatewaySettings() {
           }}
         />
       </SettingsRow>
-      <SettingsRow
-        id="mcp-gateway-agents"
-        title="Agents"
-        description="MCP uses the shared Agents library for instructions, provider, model, and execution settings. Changes apply to new chats; existing chats keep their instructions."
-        control={
-          <Link to="/agents" className="text-sm underline underline-offset-4">
-            Manage agents
-          </Link>
-        }
-      />
+      <McpGatewayAgentsRow />
       <SettingsRow
         title="External MCP hosts"
         description="Merge this into the MCP settings of assistants outside T3 Code on this computer, keeping existing servers, then reconnect. OpenCode uses ~/.config/opencode/opencode.jsonc. Includes your bridge token."

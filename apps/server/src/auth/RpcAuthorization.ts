@@ -95,6 +95,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverGetStorageCleanupReport]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetDatabaseStorage]: AuthOrchestrationReadScope,
   [WS_METHODS.peerLinksList]: AuthAccessReadScope,
+  [WS_METHODS.serverGetAgentGateway]: AuthAccessReadScope,
   [WS_METHODS.tailnetDevicesList]: AuthAccessReadScope,
   [WS_METHODS.subscribeTailnetDevices]: AuthAccessReadScope,
   [WS_METHODS.serverUpdateSettings]: AuthSettingsWriteScope,

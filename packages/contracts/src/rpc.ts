@@ -12,6 +12,10 @@ import {
 import { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 
 import {
+  AgentGatewaySettingError,
+  AgentGatewayStatus,
+  AgentGatewayToken,
+  AgentGatewayUpdateInput,
   McpGatewayConnectInput,
   McpGatewayRelayPreview,
   McpGatewayRelayEvent,
@@ -588,6 +592,10 @@ export const WS_METHODS = {
   serverGetStorageCleanupReport: "server.getStorageCleanupReport",
   serverGetDatabaseStorage: "server.getDatabaseStorage",
   serverReclaimDatabaseSpace: "server.reclaimDatabaseSpace",
+  serverGetAgentGateway: "server.getAgentGateway",
+  serverUpdateAgentGateway: "server.updateAgentGateway",
+  serverRevealAgentGatewayToken: "server.revealAgentGatewayToken",
+  serverRotateAgentGatewayToken: "server.rotateAgentGatewayToken",
   peerLinksList: "peerLinks.list",
   peerLinksLink: "peerLinks.link",
   peerLinksUnlink: "peerLinks.unlink",
@@ -933,6 +941,31 @@ const WsServerGetDatabaseStorageRpc = Rpc.make(WS_METHODS.serverGetDatabaseStora
 const WsServerReclaimDatabaseSpaceRpc = Rpc.make(WS_METHODS.serverReclaimDatabaseSpace, {
   payload: Schema.Struct({}),
   error: Schema.Union([DatabaseReclaimError, EnvironmentAuthorizationError]),
+});
+
+const WsServerGetAgentGatewayRpc = Rpc.make(WS_METHODS.serverGetAgentGateway, {
+  payload: Schema.Struct({}),
+  success: AgentGatewayStatus,
+  stream: true,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsServerUpdateAgentGatewayRpc = Rpc.make(WS_METHODS.serverUpdateAgentGateway, {
+  payload: AgentGatewayUpdateInput,
+  success: AgentGatewayStatus,
+  error: Schema.Union([AgentGatewaySettingError, EnvironmentAuthorizationError]),
+});
+
+const WsServerRevealAgentGatewayTokenRpc = Rpc.make(WS_METHODS.serverRevealAgentGatewayToken, {
+  payload: Schema.Struct({}),
+  success: AgentGatewayToken,
+  error: Schema.Union([AgentGatewaySettingError, EnvironmentAuthorizationError]),
+});
+
+const WsServerRotateAgentGatewayTokenRpc = Rpc.make(WS_METHODS.serverRotateAgentGatewayToken, {
+  payload: Schema.Struct({}),
+  success: AgentGatewayToken,
+  error: Schema.Union([AgentGatewaySettingError, EnvironmentAuthorizationError]),
 });
 
 const WsPeerLinksListRpc = Rpc.make(WS_METHODS.peerLinksList, {
@@ -2431,6 +2464,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetStorageCleanupReportRpc,
   WsServerGetDatabaseStorageRpc,
   WsServerReclaimDatabaseSpaceRpc,
+  WsServerGetAgentGatewayRpc,
+  WsServerUpdateAgentGatewayRpc,
+  WsServerRevealAgentGatewayTokenRpc,
+  WsServerRotateAgentGatewayTokenRpc,
   WsServerUpdateSettingsRpc,
   WsServerGetAgentSkillsRpc,
   WsServerMutateAgentLibraryRpc,

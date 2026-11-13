@@ -1289,7 +1289,10 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "mcp-gateway",
     title: "MCP Gateway",
     to: "/settings/connections",
-    searchTerms: ["model context protocol voice agent bridge companion"],
+    searchTerms: [
+      "model context protocol voice agent bridge companion",
+      "server gateway headless webhooks bridge token rotate",
+    ],
   },
   {
     id: "load-balancing",

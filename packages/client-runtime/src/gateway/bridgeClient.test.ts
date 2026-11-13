@@ -30,10 +30,13 @@ class FakeSocket implements GatewayBridgeSocket {
   closed = false;
   private readonly listeners = new Map<
     string,
-    Array<(event: { readonly data?: string }) => void>
+    Array<(event: { readonly data?: string; readonly code?: number }) => void>
   >();
 
-  addEventListener(type: string, listener: (event: { readonly data?: string }) => void): void {
+  addEventListener(
+    type: string,
+    listener: (event: { readonly data?: string; readonly code?: number }) => void,
+  ): void {
     const listeners = this.listeners.get(type) ?? [];
     listeners.push(listener);
     this.listeners.set(type, listeners);
@@ -60,8 +63,11 @@ class FakeSocket implements GatewayBridgeSocket {
     this.closed = true;
   }
 
-  emit(type: string, data?: string): void {
-    const event = data === undefined ? {} : { data };
+  emit(type: string, data?: string, code?: number): void {
+    const event = {
+      ...(data === undefined ? {} : { data }),
+      ...(code === undefined ? {} : { code }),
+    };
     for (const listener of this.listeners.get(type) ?? []) listener(event);
   }
 }
@@ -206,35 +212,45 @@ describe("gateway bridge client", () => {
     bridge.stop();
   });
 
-  it("never reports running when the server closes to reject configuration", async () => {
-    const socket = new FakeSocket();
-    const token = "test-token-123456789";
-    const onState = vi.fn();
-    const onStatusSnapshot = vi.fn();
-    const bridge = connectGatewayBridge({
-      port: unusedPort,
-      token,
-      url: "ws://127.0.0.1:47631",
-      createSocket: () => socket,
-      onState,
-      onStatusSnapshot,
-    });
-    const nonce = "f".repeat(64);
-    socket.emit("message", JSON.stringify({ type: "challenge", nonce }));
-    await socket.waitForSent(1);
-    socket.emit(
-      "message",
-      JSON.stringify({ type: "authenticated", proof: await proof(token, `server:${nonce}`) }),
-    );
-    await socket.waitForSent(2);
+  it.each([
+    { closedWith: "a plain close", code: undefined, state: "degraded" },
+    { closedWith: "an app holding the runtime (1013)", code: 1013, state: "standby" },
+  ])(
+    "never reports running when the server rejects configuration with $closedWith",
+    async ({ code, state }) => {
+      const socket = new FakeSocket();
+      const token = "test-token-123456789";
+      const onState = vi.fn();
+      const onStatusSnapshot = vi.fn();
+      const bridge = connectGatewayBridge({
+        port: unusedPort,
+        token,
+        url: "ws://127.0.0.1:47631",
+        createSocket: () => socket,
+        onState,
+        onStatusSnapshot,
+        standby: code !== undefined,
+      });
+      const nonce = "f".repeat(64);
+      socket.emit(
+        "message",
+        JSON.stringify({ type: "challenge", nonce, capabilities: { standby: true } }),
+      );
+      await socket.waitForSent(1);
+      socket.emit(
+        "message",
+        JSON.stringify({ type: "authenticated", proof: await proof(token, `server:${nonce}`) }),
+      );
+      await socket.waitForSent(2);
 
-    socket.emit("close");
+      socket.emit("close", undefined, code);
 
-    expect(onState.mock.calls).toEqual([["connecting"], ["degraded"]]);
-    expect(onStatusSnapshot).toHaveBeenLastCalledWith(null);
-    expect(bridge.requestStatus()).toBe(false);
-    bridge.stop();
-  });
+      expect(onState.mock.calls).toEqual([["connecting"], [state]]);
+      expect(onStatusSnapshot).toHaveBeenLastCalledWith(null);
+      expect(bridge.requestStatus()).toBe(false);
+      bridge.stop();
+    },
+  );
 
   it("validates status snapshots, refreshes explicitly, and clears live state on disconnect", async () => {
     const socket = new FakeSocket();

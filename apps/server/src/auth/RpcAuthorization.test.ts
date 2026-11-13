@@ -1,5 +1,6 @@
 import {
   AuthAccessReadScope,
+  AuthAccessWriteScope,
   AuthStandardClientScopes,
   AuthEnvironmentMaintainScope,
   AuthDiagnosticsReadScope,
@@ -50,6 +51,17 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.scheduledTasksRotateWebhookToken,
     ]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
+    }
+  });
+
+  it("keeps the agent gateway, which lets outside agents act here, behind access scopes", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverGetAgentGateway)).toBe(AuthAccessReadScope);
+    for (const method of [
+      WS_METHODS.serverUpdateAgentGateway,
+      WS_METHODS.serverRevealAgentGatewayToken,
+      WS_METHODS.serverRotateAgentGatewayToken,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthAccessWriteScope);
     }
   });
 
@@ -332,6 +344,11 @@ describe("settings mutation authorization", () => {
           patch: { secretProviders: { [SecretProviderId.make("personal")]: null } },
         }).pipe(Effect.flip),
       ).toMatchObject({ requiredPermission: AuthProvidersManageScope });
+      expect(
+        yield* client[WS_METHODS.serverUpdateSettings]({
+          patch: { agentGateway: { enabled: true, scopes: ["read", "admin"] } },
+        }).pipe(Effect.flip),
+      ).toMatchObject({ requiredPermission: AuthAccessWriteScope });
       expect(handled).toBe(false);
     }).pipe(Effect.scoped),
   );

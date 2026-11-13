@@ -35,6 +35,61 @@ export const GATEWAY_SCOPE_VALUES = [
 export const GatewayScope = Schema.Literals(GATEWAY_SCOPE_VALUES);
 export type GatewayScope = typeof GatewayScope.Type;
 
+/** Agents' access when a server first hosts the gateway: read threads and manage webhooks. */
+export const AGENT_GATEWAY_DEFAULT_SCOPES: ReadonlyArray<GatewayScope> = ["read", "delivery"];
+
+/** The server-hosted gateway: whether it runs and what outside agents may do in this environment. */
+export const AgentGatewaySettings = Schema.Struct({
+  enabled: Schema.Boolean,
+  scopes: Schema.Array(GatewayScope).check(Schema.isMaxLength(GATEWAY_SCOPE_VALUES.length)),
+});
+export type AgentGatewaySettings = typeof AgentGatewaySettings.Type;
+
+export const AgentGatewayUpdateInput = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  scopes: Schema.optionalKey(AgentGatewaySettings.fields.scopes),
+});
+export type AgentGatewayUpdateInput = typeof AgentGatewayUpdateInput.Type;
+
+export const AgentGatewayStatus = Schema.Struct({
+  /** `desktop`: the desktop app's own gateway serves this environment and the setting does not apply. */
+  host: Schema.Literals(["server", "desktop"]),
+  enabled: Schema.Boolean,
+  scopes: Schema.Array(GatewayScope),
+  /** The server's runtime connection to the gateway on its machine. */
+  state: Schema.Literals(["disabled", "connecting", "running", "standby", "degraded"]),
+  /** Why an enabled gateway is not running. */
+  problem: Schema.optionalKey(Schema.String),
+  /** The loopback port MCP launchers on the server's machine use. */
+  port: Schema.Number,
+});
+export type AgentGatewayStatus = typeof AgentGatewayStatus.Type;
+
+/** The bridge token MCP launchers on the server's machine authenticate with. */
+export const AgentGatewayToken = Schema.Struct({ token: Schema.String });
+export type AgentGatewayToken = typeof AgentGatewayToken.Type;
+
+export class AgentGatewaySettingError extends Schema.TaggedError<AgentGatewaySettingError>()(
+  "AgentGatewaySettingError",
+  {
+    reason: Schema.Literals(["desktop-hosted", "missing-read-scope", "token-file", "settings"]),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    switch (this.reason) {
+      case "desktop-hosted":
+        return "The desktop app hosts this environment's agent gateway. Change it in that app's settings.";
+      case "missing-read-scope":
+        return "Agents need the read scope to use the gateway.";
+      case "token-file":
+        return "Could not read or write ~/.config/t3code/mcp-gateway.env on the server.";
+      case "settings":
+        return "Could not save the agent gateway setting.";
+    }
+  }
+}
+
 const APP_READ_SCOPES: ReadonlyArray<AuthGrantScope> = [
   AuthOrchestrationReadScope,
   AuthFilesystemReadScope,

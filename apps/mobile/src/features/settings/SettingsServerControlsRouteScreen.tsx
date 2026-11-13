@@ -25,6 +25,7 @@ import { SettingsScreen } from "./components/SettingsScreen";
 import { useSettingsEnvironmentMenu } from "./components/SettingsEnvironmentFilterHeader";
 import { BranchNamingSettings } from "./components/BranchNamingSettings";
 import { DatabaseStorageNotice } from "./components/DatabaseStorageNotice";
+import { AgentGatewaySection } from "./components/AgentGatewaySection";
 import { ListChoiceRow as SettingsChoiceRow } from "../../components/ui/ListChoiceRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
@@ -530,6 +531,7 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     ))}
                   </SettingsSection>
                 ) : null}
+                {!projectSelected ? <AgentGatewaySection targets={selectedTargets} /> : null}
                 <SettingsSection title="Updates">
                   <SettingsSwitchRow
                     icon="arrow.clockwise"

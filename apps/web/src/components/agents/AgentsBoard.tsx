@@ -1,4 +1,5 @@
 import { AgentGatewayStatus } from "./AgentGatewayStatus";
+import { ServerAgentGatewayStatus } from "./ServerAgentGatewayStatus";
 import { AgentRunDragArea, LinkableAgentCard, SortableAgentThreads } from "./SortableAgentThreads";
 import { useClientSettings } from "../../hooks/useSettings";
 import { visibleAgentProviders } from "./agentModelCatalog";
@@ -302,7 +303,11 @@ export function AgentsBoard() {
             </button>
           )}
         </div>
-        <AgentGatewayStatus />
+        {window.desktopBridge?.getMcpGatewayLaunchConfig?.() ? (
+          <AgentGatewayStatus />
+        ) : (
+          <ServerAgentGatewayStatus />
+        )}
         <div className="agents-topbar-actions">
           <div className="agents-topbar-group">
             <button

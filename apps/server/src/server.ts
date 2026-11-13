@@ -772,7 +772,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(McpOAuth.layerMcpClientAuthenticator),
     ),
     // Fork: thread events reach T3 Agents webhooks without a desktop app.
-    HeadlessGatewayHost.layer,
+    HeadlessGatewayHost.layerRuntime,
   ).pipe(
     // Fork: T3 Agents tools run against this server's own RPC API.
     Layer.provide(LocalGatewayPort.layer),
@@ -1040,20 +1040,23 @@ const layerMakeServer = Layer.unwrap(
         ],
         { concurrency: "unbounded" },
       ).pipe(Effect.asVoid),
-    }).pipe(Layer.provideMerge(layerRuntimeDependencies), Layer.provide(layerLauncher));
-
-    const layerRoutes = HttpRouter.serve(
-      layerMakeRoutes.pipe(
-        Layer.provide(layerLauncher),
-        Layer.provide(
-          Layer.succeed(HeadlessGatewayHost.LauncherEnvironment, gatewayLauncherEnvironment),
+    }).pipe(
+      // One instance for the settings RPCs and the gateway runtime the routes start.
+      Layer.provideMerge(
+        HeadlessGatewayHost.layer.pipe(
+          Layer.provide(
+            Layer.succeed(HeadlessGatewayHost.LauncherEnvironment, gatewayLauncherEnvironment),
+          ),
         ),
       ),
-      {
-        disableLogger: !config.logWebSocketEvents,
-        routerConfig: HTTP_ROUTER_CONFIG,
-      },
-    ).pipe(
+      Layer.provideMerge(layerRuntimeDependencies),
+      Layer.provide(layerLauncher),
+    );
+
+    const layerRoutes = HttpRouter.serve(layerMakeRoutes.pipe(Layer.provide(layerLauncher)), {
+      disableLogger: !config.logWebSocketEvents,
+      routerConfig: HTTP_ROUTER_CONFIG,
+    }).pipe(
       withUntracedRequests,
       Layer.tap(() => Deferred.succeed(routesReady, undefined).pipe(Effect.orDie)),
     );

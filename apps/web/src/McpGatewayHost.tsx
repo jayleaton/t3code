@@ -141,6 +141,8 @@ export function McpGatewayHost({ router }: { readonly router: AppRouter }) {
         token: configuration.token,
         url: `ws://127.0.0.1:${configuration.port}`,
         onState: (state) => {
+          // Only a standby client (a headless server) is ever told to stand by.
+          if (state === "standby") return;
           publishMcpGatewayStatus(state);
           // Agents in granted environments' chats reach the other granted environments
           // through this app, under the same grants as the gateway.
