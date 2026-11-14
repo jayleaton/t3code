@@ -111,6 +111,11 @@ const dmSansFonts = {
   bold: "@expo-google-fonts/dm-sans/700Bold/DMSans_700Bold.ttf",
 } as const;
 
+const notificationsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
+  "expo-notifications",
+  { mode: APP_VARIANT === "development" ? "development" : "production" },
+];
+
 const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
   "expo-widgets",
   {
@@ -314,6 +319,8 @@ const config: ExpoConfig = {
     ...(isIosPersonalTeamBuild
       ? [sharingPlugin]
       : ["./plugins/withShareExtensionDisplayName.cjs", sharingPlugin]),
+    // Personal Teams cannot sign the push entitlement.
+    ...(isIosPersonalTeamBuild ? [] : [notificationsPlugin]),
     "expo-web-browser",
     [
       "expo-quick-actions",

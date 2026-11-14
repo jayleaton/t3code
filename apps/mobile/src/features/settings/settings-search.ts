@@ -20,7 +20,7 @@ const SETTINGS_SEARCH_TERMS = {
     "allow joining",
     "forget machine",
   ],
-  SettingsNotifications: ["push", "alerts", "live activity", "agent activity"],
+  SettingsNotifications: ["push", "alerts", "agent activity", "servers"],
   SettingsAppearance: [
     "theme",
     "dark mode",

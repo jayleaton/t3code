@@ -6,6 +6,7 @@ import {
   updateBearerConnection,
 } from "../../connection/onboarding";
 import { useWorkspaceEnvironments } from "../../state/workspace";
+import { unregisterPushBeforeRemoval } from "../notifications/pushRegistration";
 import { useAtomCommand } from "../../state/use-atom-command";
 
 export function useConnectionController() {
@@ -26,8 +27,10 @@ export function useConnectionController() {
       pairingUrl,
       ...(expectedEnvironmentId === undefined ? {} : { expectedEnvironmentId }),
     });
-  const removeEnvironment = (environmentId: EnvironmentId) =>
-    removeEnvironmentMutation(environmentId);
+  const removeEnvironment = async (environmentId: EnvironmentId) => {
+    await unregisterPushBeforeRemoval(environmentId);
+    return removeEnvironmentMutation(environmentId);
+  };
   const retryEnvironment = (environmentId: EnvironmentId) =>
     retryEnvironmentMutation(environmentId);
   const setEnvironmentEnabled = (environmentId: EnvironmentId, enabled: boolean) =>

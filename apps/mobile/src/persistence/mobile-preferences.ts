@@ -106,6 +106,8 @@ export interface Preferences {
   readonly mathRenderingEnabled?: boolean;
   readonly collapsedProjectGroups?: readonly string[];
   readonly dismissedDatabaseStorageNotices?: readonly string[];
+  /** Servers this phone asked not to send push notifications; every other server may. */
+  readonly pushNotificationsOffEnvironmentIds?: readonly string[];
   /** Parents (`environmentId:threadId`) whose child chats are open; all others start collapsed. */
   readonly expandedParentKeys?: readonly string[];
   /** Hardware-keyboard Return behavior in the composer. */
@@ -190,6 +192,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     mathRenderingEnabled?: boolean;
     collapsedProjectGroups?: readonly string[];
     dismissedDatabaseStorageNotices?: readonly string[];
+    pushNotificationsOffEnvironmentIds?: readonly string[];
     expandedParentKeys?: readonly string[];
     composerEnterBehavior?: ComposerEnterBehavior;
     followUpBehavior?: FollowUpBehavior;
@@ -288,6 +291,12 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     preferences.dismissedDatabaseStorageNotices = parsed.dismissedDatabaseStorageNotices.filter(
       (value): value is string => typeof value === "string",
     );
+  }
+  if (Array.isArray(parsed.pushNotificationsOffEnvironmentIds)) {
+    preferences.pushNotificationsOffEnvironmentIds =
+      parsed.pushNotificationsOffEnvironmentIds.filter(
+        (value): value is string => typeof value === "string",
+      );
   }
   if (parsed.composerEnterBehavior === "send" || parsed.composerEnterBehavior === "newline") {
     preferences.composerEnterBehavior = parsed.composerEnterBehavior;

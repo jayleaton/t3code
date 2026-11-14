@@ -34,3 +34,7 @@ export const loadRecentThreadShortcuts = () =>
 export const saveRecentThreadShortcuts = (
   threads: ReadonlyArray<MobileStorage.RecentThreadShortcut>,
 ) => runStorage((storage) => storage.saveRecentThreadShortcuts(threads));
+
+/** Stable per-install id; the same value backs this phone's client id on each server. */
+export const loadOrCreateInstallId = () =>
+  runStorage((storage) => storage.loadOrCreateAgentAwarenessDeviceId);
