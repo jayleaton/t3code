@@ -63,7 +63,7 @@ export const THEME_CSS_HOOKS = [
 export const THEME_GUIDE = [
   `Themes restyle ${APP_NAME} on web and desktop. Mobile does not use them.`,
   "",
-  "Colors: `canvas` and `accent` (hex) derive a full palette. `colors` overrides single roles, and `variants.light` or `variants.dark` does that for the other appearance. Prefer colors over CSS.",
+  "Colors: `canvas` and `accent` (hex) derive a full palette. To change the accent or background, set both; without them the palette starts from a stock pink one, not the current look. `colors` overrides single roles on top, and `variants.light` or `variants.dark` does that for the other appearance. Prefer colors over CSS.",
   `Roles: ${THEME_COLOR_ROLES.join(", ")}.`,
   "",
   "CSS: `css` applies after the app's styles. Use `.dark` or `:root:not(.dark)` for one appearance.",
@@ -78,5 +78,5 @@ export const THEME_GUIDE = [
   ...THEME_CSS_HOOKS.map((hook) => `- ${hook.selector}: ${hook.styles}`),
   "",
   "You cannot see the result. Make small changes, then ask the user how it looks.",
-  "To undo, set a built-in theme: t3-chat, grove, ocean, ember, or iris.",
+  "To undo, set `t3-code` for the default look, or a built-in theme: t3-chat, grove, ocean, ember, or iris.",
 ].join("\n");
