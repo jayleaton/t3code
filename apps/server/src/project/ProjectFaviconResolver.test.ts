@@ -387,6 +387,8 @@ it.layer(layerTest)("ProjectFaviconResolverLive", (it) => {
           expect(gate.trackedRoots()).toBe(0);
 
           yield* writeTextFile(root, "favicon.png", "png");
+          // A missing root stays cached briefly; a finished clone invalidates it.
+          yield* resolver.invalidate(root);
           expect(yield* resolver.resolvePath(root)).toBe(path.join(root, "favicon.png"));
           expect(gate.trackedRoots()).toBe(0);
         }

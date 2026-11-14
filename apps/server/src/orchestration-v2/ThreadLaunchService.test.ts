@@ -1475,17 +1475,25 @@ it.effect("keeps an agent's instructions and skills out of its thread events", (
         ...(yield* Stream.runCollect(eventSink.readByCommandId({ commandId: visitId }))),
       ].map((stored) => stored.event);
       const threadEvents = events.flatMap((event) =>
-        event.type === "thread.created" || event.type === "thread.visited" ? [event] : [],
+        event.type === "thread.created" || event.type === "thread.visit-recorded" ? [event] : [],
       );
       assert.deepEqual(
         threadEvents.map((event) => event.type),
-        ["thread.created", "thread.visited"],
+        ["thread.created", "thread.visit-recorded"],
       );
       for (const event of threadEvents) {
-        assert.isBelow(Buffer.byteLength(yield* encodeThreadJson(event.payload)), 2_000);
+        const json =
+          event.type === "thread.created"
+            ? yield* encodeThreadJson(event.payload)
+            : JSON.stringify(event.payload);
+        assert.isBelow(Buffer.byteLength(json), 2_000);
       }
 
-      const contentHash = threadEvents[0]?.payload.profileSnapshot?.contentHash;
+      const created = threadEvents[0];
+      const contentHash =
+        created?.type === "thread.created"
+          ? created.payload.profileSnapshot?.contentHash
+          : undefined;
       assert.isDefined(contentHash);
       const content = yield* projectionStore.getProfileSnapshotContent(contentHash!);
       assert.deepEqual(Option.getOrUndefined(content), { systemPrompt, skills });
