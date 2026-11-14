@@ -204,6 +204,16 @@ export const layer = McpToolAccess.toLayer(
       ),
       t3_thread_read: McpToolAccess.reads((input) =>
         Effect.gen(function* () {
+          if (
+            input.tail === true &&
+            (input.beforePosition !== undefined || input.afterPosition !== undefined)
+          ) {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message:
+                "tail reads the newest items, so it cannot be combined with beforePosition or afterPosition. Omit tail.",
+            });
+          }
           const remote = yield* remoteTarget(input.environmentId);
           if (remote !== undefined) return yield* RemoteThreads.readThread(remote, input);
           const scope = yield* McpInvocationContext.McpInvocationContext;

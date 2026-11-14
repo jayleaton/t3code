@@ -3399,6 +3399,7 @@ const make = Effect.gen(function* () {
       const maxChars = input.maxCharsPerItem ?? DEFAULT_THREAD_ITEM_MAX_CHARS;
       // Client callers (the CLI, older linked environments) page forward from a cursorless read.
       const newestFirst =
+        input.tail === true ||
         input.beforePosition !== undefined ||
         (input.afterPosition === undefined && scope.thread !== undefined);
       const timeline = yield* threadManagement

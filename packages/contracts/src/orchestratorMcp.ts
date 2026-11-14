@@ -477,6 +477,8 @@ export const OrchestratorMcpThreadReadInput = Schema.Struct({
   view: Schema.optional(Schema.Literals(["messages", "activity"])),
   afterPosition: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(-1))),
   beforePosition: Schema.optional(NonNegativeInt),
+  /** Deprecated: the newest `limit` items, the default. Kept for callers written before beforePosition. */
+  tail: Schema.optional(Schema.Boolean),
   limit: Schema.optional(clampedPositiveInt(100)).annotate({ description: "Max 100." }),
   runLimit: Schema.optional(clampedPositiveInt(50)).annotate({ description: "Max 50." }),
   maxCharsPerItem: Schema.optional(clampedPositiveInt(20_000)).annotate({

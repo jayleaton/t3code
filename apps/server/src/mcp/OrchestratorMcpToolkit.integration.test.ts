@@ -777,6 +777,22 @@ describe("orchestrator MCP toolkit", () => {
           afterRead.subagents.find((task) => task.id === queuedFollowup.taskId)?.completionDelivery
             ?.state,
         ).toBe("acknowledged");
+        // Listener prompts written before beforePosition still send `tail`.
+        const tailRead = yield* invoke(
+          "t3_thread_read",
+          { threadId: delegated.childThreadId, limit: 1, tail: true },
+          { ...invocation, thread: undefined },
+        );
+        expect(tailRead.isError).not.toBe(true);
+        expect(
+          (yield* decodeThreadRead(tailRead.structuredContent)).items.map((item) => item.position),
+        ).toEqual([Math.max(...firstPage.items.map((item) => item.position))]);
+        const tailWithCursor = yield* invoke("t3_thread_read", {
+          threadId: delegated.childThreadId,
+          tail: true,
+          afterPosition: 0,
+        });
+        expect(tailWithCursor.isError).toBe(true);
 
         const messageReadsBeforeCapabilities = messageReads.length;
         const tableReadsBeforeCapabilities = projectionTableReads.length;
