@@ -48,8 +48,8 @@ A new service answers only on this machine. Other devices reach it once you
 choose the local network in `ada up` (or run `ada up --lan`, which sets
 `T3CODE_LAN=true` in `service.env`). It then listens on your local network and
 Tailscale addresses. It still does not answer on public addresses. Anyone on the
-same network can reach the port, so a pairing code is all that keeps them out. The
-hosted web app at app.t3.codes needs an HTTPS address, such as
+same network can reach the port, so a pairing code is all that keeps them out. A
+web app served over HTTPS needs an HTTPS address for the service, such as
 [Tailscale HTTPS](./remote-access.md#tailscale-https), because browsers block plain
 HTTP from an HTTPS page.
 

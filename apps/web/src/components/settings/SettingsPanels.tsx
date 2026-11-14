@@ -55,7 +55,11 @@ import {
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { isElectron } from "../../env";
-import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
+import {
+  buildHostedChannelSelectionUrl,
+  configuredHostedAppUrl,
+  type HostedAppChannel,
+} from "../../hostedPairing";
 import {
   readAppearanceModePreference,
   readThemeHalves,
@@ -74,7 +78,7 @@ import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { ThreadTitleInstructionsSettings } from "./ThreadTitleInstructionsSettings";
 import { SnoozePresetsRow } from "./SnoozePresetsSettings";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
-import { usageDataNotice, usePrimaryManagedPolicy } from "../../state/managedPolicy";
+import { USAGE_DATA_NOTICE, usePrimaryManagedPolicy } from "../../state/managedPolicy";
 import {
   getCustomModelOptionsByInstance,
   resolveAppModelSelectionState,
@@ -186,7 +190,8 @@ function AboutVersionSection() {
     hasDesktopBridge && primaryPolicy?.limits?.updates?.allowNightly === false
       ? primaryPolicy.organization
       : undefined;
-  const selectedHostedAppChannel = hasDesktopBridge ? null : HOSTED_APP_CHANNEL;
+  const selectedHostedAppChannel =
+    hasDesktopBridge || configuredHostedAppUrl() === null ? null : HOSTED_APP_CHANNEL;
   // A switch that failed part way leaves this app or a server on the other track.
   // With its updater off, a switch cannot move this app, so it is not counted.
   const appOffTrack =
@@ -420,9 +425,8 @@ function AboutVersionSection() {
               value={selectedHostedAppChannel}
               onValueChange={(value) => {
                 if (value === selectedHostedAppChannel) return;
-                window.location.assign(
-                  buildHostedChannelSelectionUrl({ channel: value as HostedAppChannel }),
-                );
+                const url = buildHostedChannelSelectionUrl({ channel: value as HostedAppChannel });
+                if (url !== null) window.location.assign(url);
               }}
             >
               <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Update track">
@@ -2395,10 +2399,7 @@ export function AboutSettingsPanel() {
       </SettingsSection>
 
       <SettingsSection id="legal" title="Legal">
-        <SettingsRow
-          {...searchableSetting("usage-data")}
-          description={usageDataNotice(primaryPolicy)}
-        />
+        <SettingsRow {...searchableSetting("usage-data")} description={USAGE_DATA_NOTICE} />
         <SettingsRow
           {...searchableSetting("license")}
           description={`The license ${APP_NAME}'s source code is released under.`}

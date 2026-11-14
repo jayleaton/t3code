@@ -44,7 +44,7 @@ describe("parsePairingUrl", () => {
   it("reads hosted pairing links into backend host fields", () => {
     expect(
       parsePairingUrl(
-        "https://app.t3.codes/pair?host=https%3A%2F%2Fdesktop.tailnet.ts.net%2F#token=pairing-token",
+        "https://hosted.example/pair?host=https%3A%2F%2Fdesktop.tailnet.ts.net%2F#token=pairing-token",
       ),
     ).toEqual({
       host: "https://desktop.tailnet.ts.net",
@@ -72,7 +72,7 @@ describe("mobile pairing address validation", () => {
   it("validates the backend inside a hosted pairing link", () => {
     expect(() =>
       validateMobilePairingUrl(
-        "https://app.t3.codes/pair?host=http%3A%2F%2Flocalhost%3A3773#token=secret",
+        "https://hosted.example/pair?host=http%3A%2F%2Flocalhost%3A3773#token=secret",
       ),
     ).toThrow("Localhost points to this phone");
   });

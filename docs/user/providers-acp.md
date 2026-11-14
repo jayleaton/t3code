@@ -42,7 +42,7 @@ without expanding shell expressions.
 ## Where agents run
 
 Registry agents always run on the machine that hosts your Ada server. That stays true when you
-connect through `app.t3.codes` or from another device.
+connect from a browser or from another device.
 
 Agents install under `tools/<agent-id>/<version>/` inside Ada home. Ada verifies SHA-256 when the Registry entry
 provides one; entries without a checksum retain the Registry's HTTPS distribution guarantee.

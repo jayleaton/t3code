@@ -15,7 +15,6 @@ Official builds come from ${absoluteUrl("/download")} and ${GITHUB_REPOSITORY_UR
 ## Official links
 
 - [Download ${APP_NAME}](${absoluteUrl("/download")}): macOS, Windows, and Linux installers
-- [Web app](https://app.t3.codes): connect to an ${APP_NAME} server from a browser
 - [Source code](${GITHUB_REPOSITORY_URL}): the MIT-licensed repository
 - [Releases](${GITHUB_REPOSITORY_URL}/releases): release builds and changelogs
 

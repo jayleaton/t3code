@@ -84,15 +84,8 @@ const BRAND_ALLOWLIST: ReadonlyArray<BrandAllowance> = [
     why: "Names the upstream app the fork installs beside, so copy about it can say so.",
   },
   // Functional endpoints the fork still uses. Renaming them would break the feature, not rebrand it.
-  { file: /./, text: "app.t3.codes", why: "Hosted web client and its thread links." },
-  { file: /./, text: "ingest.t3.codes", why: "Telemetry endpoint the server reports to." },
   { file: /./, text: "t3.codes/schema/t3.json", why: "Published t3.json schema URL." },
-  {
-    file: /^apps\/server\/src\/provider\/ModelManifest\.ts$/,
-    text: "raw.githubusercontent.com/pingdotgg/t3code",
-    why: "Model manifest the server downloads.",
-  },
-  // Legal: the privacy policy and terms cover the upstream telemetry the fork still sends.
+  // Legal: upstream's privacy policy and terms, which the marketing site still carries.
   {
     file: /^apps\/marketing\/src\/pages\/(?:privacy-policy|terms-of-service|security-policy|legal)\.astro$/,
     why: "Legal text is not ours to rewrite.",

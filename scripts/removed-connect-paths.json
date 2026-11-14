@@ -1,5 +1,5 @@
 {
-  "note": "T3 Connect was removed from this fork. On an upstream sync, resolve modify/delete conflicts on these paths by deleting them; scripts/check-removed-connect.ts fails if any returns.",
+  "note": "T3 Connect, upstream product analytics and mobile crash reporting were removed from this fork. On an upstream sync, resolve modify/delete conflicts on these paths by deleting them; scripts/check-removed-connect.ts fails if any returns, or if shipped code names an upstream analytics host, key or hosted app again.",
   "paths": [
     ".github/scripts/relay-state-output.test.cjs",
     ".github/workflows/deploy-relay.yml",
@@ -22,6 +22,7 @@
     "apps/mobile/src/features/connection/LinkedEnvironmentsSection.tsx",
     "apps/mobile/src/features/connection/environmentSections.test.ts",
     "apps/mobile/src/features/connection/environmentSections.ts",
+    "apps/mobile/src/features/observability",
     "apps/mobile/src/features/observability/tracing.test.ts",
     "apps/mobile/src/features/observability/tracing.ts",
     "apps/mobile/src/features/settings/SettingsAuthRouteScreen.tsx",
@@ -42,6 +43,7 @@
     "apps/server/src/guest",
     "apps/server/src/relay",
     "apps/server/src/scheduledTasks/RelayDeliveryProof.ts",
+    "apps/server/src/telemetry",
     "apps/web/src/cloud",
     "apps/web/src/components/chat/guestShareAvailability.ts",
     "apps/web/src/components/chat/guestShareDialogState.ts",
@@ -62,6 +64,7 @@
     "apps/web/src/routes/connect.tsx",
     "apps/web/src/routes/guest.tsx",
     "apps/web/src/state/relay.ts",
+    "docs/internals/product-analytics.md",
     "docs/internals/t3-connect.md",
     "docs/operations/android-notifications.md",
     "docs/operations/connect-setup.md",
@@ -79,6 +82,7 @@
     "packages/contracts/src/relayClient.ts",
     "packages/shared/src/connectAuth.test.ts",
     "packages/shared/src/connectAuth.ts",
+    "packages/shared/src/hostedApp.ts",
     "packages/shared/src/mobileSourceMaps.ts",
     "packages/shared/src/relayAuth.test.ts",
     "packages/shared/src/relayAuth.ts",
@@ -90,6 +94,8 @@
     "packages/shared/src/relayTracing.ts",
     "packages/shared/src/relayUrl.test.ts",
     "packages/shared/src/relayUrl.ts",
+    "packages/shared/src/telemetryId.test.ts",
+    "packages/shared/src/telemetryId.ts",
     "patches/@alchemy.run__test@2.0.0-beta.85.patch",
     "patches/@clerk__expo-native-components@0.4.0.patch"
   ]

@@ -49,17 +49,34 @@ export function managedPolicyPath(platform: NodeJS.Platform): string {
 
 // Unknown keys may be restrictions from a newer release; refusing them keeps a file this
 // build cannot fully enforce from looking enforced.
-const decodeDocumentJsonExit = Schema.decodeUnknownExit(
-  Schema.fromJsonString(ManagedPolicyDocument),
-  { onExcessProperty: "error" },
-);
 const decodeDocumentExit = Schema.decodeUnknownExit(ManagedPolicyDocument, {
   onExcessProperty: "error",
 });
+const decodeJsonExit = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
+
+// Limits for features since removed: dropped before the strict decode, so a deployed policy
+// keeps loading. Being permissive is safe because nothing they restricted exists any more.
+const RETIRED_LIMITS = new Set(["telemetry"]);
+const withoutRetiredLimits = (document: unknown): unknown => {
+  if (typeof document !== "object" || document === null || !("limits" in document)) {
+    return document;
+  }
+  const { limits } = document;
+  if (typeof limits !== "object" || limits === null || Array.isArray(limits)) return document;
+  return {
+    ...document,
+    limits: Object.fromEntries(Object.entries(limits).filter(([key]) => !RETIRED_LIMITS.has(key))),
+  };
+};
+
+const decodeDocumentValueExit = (raw: unknown) => {
+  const parsed = typeof raw === "string" ? decodeJsonExit(raw) : Exit.succeed(raw);
+  return Exit.isSuccess(parsed) ? decodeDocumentExit(withoutRetiredLimits(parsed.value)) : parsed;
+};
 
 /** Decode a policy from JSON text, or from a value a profile already parsed. */
 const decodeDocument = (path: string, raw: unknown) => {
-  const decoded = typeof raw === "string" ? decodeDocumentJsonExit(raw) : decodeDocumentExit(raw);
+  const decoded = decodeDocumentValueExit(raw);
   if (Exit.isSuccess(decoded)) return Effect.succeed(decoded.value);
   const error = Cause.squash(decoded.cause);
   // The schema message names the offending key, e.g. `Expected no excess property at ["limits"]`.
@@ -112,7 +129,6 @@ export const WINDOWS_POLICY_VALUES = {
   Settings: { type: "json", path: ["settings"] },
   MaxRuntimeMode: { type: "string", path: ["limits", "maxRuntimeMode"] },
   WebhookTasks: { type: "boolean", path: ["limits", "webhookTasks"] },
-  Telemetry: { type: "boolean", path: ["limits", "telemetry"] },
   BrowserCookieImport: { type: "boolean", path: ["limits", "browserCookieImport"] },
   ProviderInstances: { type: "json", path: ["limits", "providers", "instances"] },
   UpdatesMode: { type: "string", path: ["limits", "updates", "mode"] },
@@ -125,7 +141,7 @@ export const WINDOWS_POLICY_VALUES = {
 
 // Values older templates wrote for features since removed: accepted and ignored, so a deployed
 // Group Policy keeps loading. Not in the template any more.
-const RETIRED_WINDOWS_POLICY_VALUES = new Set(["connect"]);
+const RETIRED_WINDOWS_POLICY_VALUES = new Set(["connect", "telemetry"]);
 
 /** Subkeys of checkboxes: every value set to 1 is one entry of the list at `path`. */
 export const WINDOWS_POLICY_LISTS = {
@@ -353,7 +369,6 @@ const run = Effect.fnUntraced(
   Effect.timeout(Duration.seconds(10)),
 );
 
-const decodeJsonExit = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 type PolicyRegistryValue = RegistryValue & {
   /** The list subkey the value sits in, or "" for the policy key itself. */
   readonly key: string;

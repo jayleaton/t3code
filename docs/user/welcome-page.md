@@ -8,7 +8,7 @@ and the phone app. Only an agent is needed to start chatting.
 To see the page again, go to **Settings → About → Welcome page** and select
 **Open**. Direct links, such as Settings, open normally before setup is done.
 
-The hosted app at app.t3.codes does not open the page. With no computer connected,
+A hosted web app does not open the page. With no computer connected,
 it asks you to add one with a pairing link. The computer must be reachable from that
 browser at an HTTPS address, such as its [Tailscale HTTPS](./remote-access.md#tailscale-https)
 address. To add more computers later, use **Settings → Environments**.

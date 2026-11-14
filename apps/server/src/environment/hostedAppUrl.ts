@@ -1,4 +1,3 @@
-import { DEFAULT_HOSTED_APP_URL } from "@t3tools/shared/hostedApp";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -32,8 +31,9 @@ function validateHostedAppUrl(value: string) {
   }
 }
 
+/** A hosted web app is opt-in: without it, thread links stay `t3-thread://` links. */
 export const hostedAppUrlConfig = Config.NonEmptyString("T3CODE_HOSTED_APP_URL").pipe(
-  Config.withDefault(DEFAULT_HOSTED_APP_URL),
   Config.map((value) => value.trim()),
   Config.mapEffect(validateHostedAppUrl),
+  Config.option,
 );

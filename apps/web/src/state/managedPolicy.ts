@@ -31,12 +31,7 @@ export function firstManagedDenial(
   return undefined;
 }
 
-/** What usage-data notices say; a policy can only turn product analytics off. */
-export function usageDataNotice(policy: ManagedPolicySummary | undefined): string {
-  return policy?.limits?.telemetry === false
-    ? `${policy.organization} turned off anonymous usage data.`
-    : `${APP_NAME} doesn't collect usage data unless you turn it on with T3CODE_TELEMETRY_ENABLED.`;
-}
+export const USAGE_DATA_NOTICE = `${APP_NAME} doesn't collect usage data.`;
 
 export interface ManagedInstanceLocks {
   /** Keys inside the instance's `config` users cannot change. */

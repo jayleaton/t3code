@@ -33,7 +33,7 @@ Ada drives Claude through Anthropic's Agent SDK. This is a known bug on Anthropi
 
 ## How do I use Ada remotely?
 
-Your agents run wherever Ada runs: your desktop, a server, a VPS. You connect to it from anywhere. Run `ada up` on that machine, then pair over your LAN or Tailscale. [app.t3.codes](https://app.t3.codes) is the web client. [Remote access](./remote-access.md)
+Your agents run wherever Ada runs: your desktop, a server, a VPS. You connect to it from anywhere. Run `ada up` on that machine, then pair over your LAN or Tailscale. [Remote access](./remote-access.md)
 
 ## How do I use Ada on my phone?
 
@@ -59,7 +59,7 @@ No. Ada is a serious developer tool. Locally runnable models are not capable of 
 
 ## Does my code go to Ada servers?
 
-No. Your code and prompts go from your machine to your provider (Anthropic, OpenAI, etc.), not to us. Your devices connect straight to your machine over your LAN or Tailscale. Ada doesn't collect usage data unless you turn it on with `T3CODE_TELEMETRY_ENABLED=true`. [Product usage data](./telemetry.md)
+No. Your code and prompts go from your machine to your provider (Anthropic, OpenAI, etc.), not to us. Your devices connect straight to your machine over your LAN or Tailscale. Ada doesn't collect usage data. [Usage data and diagnostics](./telemetry.md)
 
 ## Worktrees are eating my disk. How do I clean them up?
 

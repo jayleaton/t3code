@@ -1,26 +1,8 @@
-# Product usage data
+# Usage data and diagnostics
 
-Ada doesn't collect usage data unless you turn it on with `T3CODE_TELEMETRY_ENABLED=true`.
-When it is on, the server sends product usage events to the endpoint at `ingest.t3.codes`,
-associated with a hashed account or installation identifier. To count how many installations one person
-uses, the server also sends hashed account identifiers: your OpenAI and
-Claude accounts when you are signed in, and a random identifier for each device that connects. The endpoint keeps a copy of each
-event and forwards events to PostHog. Events include the provider, model, reasoning effort,
-permission mode, turn and request results, duration, release channel, and token counts when
-available. Child-agent token counts are reported separately from the main agent's. Model names
-are sent only when they appear in a provider's public model list.
-
-Product events do not include prompts, responses, file contents, authentication tokens, conversation IDs,
-raw provider events, or child-agent output.
-
-## Turn it on
-
-To send product events from the server, set `T3CODE_TELEMETRY_ENABLED=true` in its
-environment before starting it. An administrator can keep them off in the server and desktop
-app with a [managed policy](./managed-policy.md#other-capabilities), which a variable cannot override.
-
-The desktop app reads `T3CODE_TELEMETRY_ENABLED` from your shell profile (for example `~/.zshrc`) on macOS and
-Linux, so export it there and restart the app. On Windows, set it as a user environment variable.
+Ada doesn't collect product usage data. It has no analytics or crash reporting, and nothing on your
+machines reports to the upstream project. Diagnostics leave a server only when you send
+them to your own receiver.
 
 ## Export diagnostics to your own receiver
 
