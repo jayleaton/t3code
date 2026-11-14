@@ -58,23 +58,26 @@ const DEV_ASSETS = {
   androidAdaptiveBackgroundImage: "./assets/agents/android-dev-icon-background.png",
 } as const;
 
+// Apple rejects a bare "Ada" home-screen name as taken (ITMS-90129).
+const HOME_SCREEN_NAME = `${APP_NAME} Agents`;
+
 const VARIANT_CONFIG = {
   development: {
-    appName: `${APP_NAME} Dev`,
+    appName: `${HOME_SCREEN_NAME} Dev`,
     scheme: "t3code-personal-dev",
     iosBundleIdentifier: "com.jayleaton.t3code.dev",
     androidPackage: "com.jayleaton.t3code.dev",
     assets: DEV_ASSETS,
   },
   preview: {
-    appName: `${APP_NAME} Preview`,
+    appName: `${HOME_SCREEN_NAME} Preview`,
     scheme: "t3code-personal-preview",
     iosBundleIdentifier: "com.jayleaton.t3code.preview",
     androidPackage: "com.jayleaton.t3code.preview",
     assets: AGENTS_ASSETS,
   },
   production: {
-    appName: APP_NAME,
+    appName: HOME_SCREEN_NAME,
     scheme: "t3code-personal",
     iosBundleIdentifier: "com.jayleaton.t3code",
     androidPackage: "com.jayleaton.t3code",
