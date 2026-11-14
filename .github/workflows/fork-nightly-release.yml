@@ -337,7 +337,21 @@ jobs:
       - name: Publish complete update atomically
         run: |
           set -euo pipefail
-          printf 'Community fork build from `%s`. T3 Connect is not included; this is not an official T3 release.\n' "$RELEASE_COMMIT" > "$RUNNER_TEMP/release-notes.md"
+          # The update popover renders these bullets; it drops headings and footer paragraphs.
+          previous_tag="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // ""')"
+          notes=""
+          if [[ -n "$previous_tag" ]]; then
+            notes="$(gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+              -f tag_name="v$VERSION" -f target_commitish="$RELEASE_COMMIT" -f previous_tag_name="$previous_tag" \
+              --jq .body \
+              | sed -nE 's#^\* (.+) by @[^ ]+ in https://github\.com/[^ ]+/pull/([0-9]+)$#\1 (\#\2)#p' \
+              | sed -E 's/^[a-z]+(\([^)]*\))?!?: //' \
+              | awk '{ print "- " toupper(substr($0, 1, 1)) substr($0, 2) }')"
+          fi
+          if [[ -z "$notes" ]]; then
+            notes="- Maintenance build of Ada from \`${RELEASE_COMMIT:0:10}\`."
+          fi
+          printf '%s\n' "$notes" > "$RUNNER_TEMP/release-notes.md"
           gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --target "$RELEASE_COMMIT" --title "Ada Nightly $VERSION" --notes-file "$RUNNER_TEMP/release-notes.md" --prerelease --draft
           gh release upload "v$VERSION" release-assets/* --repo "$GITHUB_REPOSITORY"
           gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
