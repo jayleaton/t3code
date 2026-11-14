@@ -181,6 +181,8 @@ import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementService.ts";
+import * as PushNotifier from "./push/PushNotifier.ts";
+import * as PushRegistrations from "./push/PushRegistrations.ts";
 import * as ThreadTaskService from "./threadTask/ThreadTaskService.ts";
 import * as ThreadTaskTransport from "./threadTask/ThreadTaskTransport.ts";
 import * as IdleCompactionService from "./orchestration-v2/IdleCompactionService.ts";
@@ -559,6 +561,11 @@ const layerIdleCompactionWorker = Layer.effectDiscard(
   IdleCompactionService.make.pipe(Effect.flatMap((service) => service.start())),
 ).pipe(Layer.provide(ProjectionStoreV2.layer));
 
+// Fork: pushes straight to registered phones through Expo.
+const layerPushNotifierWorker = Layer.effectDiscard(
+  PushNotifier.make.pipe(Effect.flatMap((service) => service.start())),
+).pipe(Layer.provide(PushRegistrations.layer));
+
 const layerThreadPullRequestWorker = Layer.effectDiscard(
   ThreadPullRequestService.make.pipe(Effect.flatMap((service) => service.start())),
 ).pipe(Layer.provide(layerPullRequestService));
@@ -619,6 +626,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Layer.provide(layerServerRestart),
   ),
   layerThreadPullRequestWorker,
+  layerPushNotifierWorker,
   WorktreeReclamation.layer.pipe(
     Layer.provide(ProjectionStoreV2.layer),
     Layer.provide(ProcessRunner.layer),
