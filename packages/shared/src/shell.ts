@@ -1100,3 +1100,20 @@ export function pathSetupCommand(input: PathSetupInput): string | undefined {
     ? `mkdir -p ${setup.file.slice(0, setup.file.lastIndexOf("/"))} && ${append}`
     : append;
 }
+
+/**
+ * `path` as a command to paste: bare when it is plainly safe, else a literal the shell never expands.
+ * POSIX shells get single quotes; Windows gets PowerShell's `& '...'`, which needs `&` to run a quoted
+ * path and also closes single quotes at typographic quotes, so those are doubled too.
+ */
+export function shellCommandPath(path: string, platform: NodeJS.Platform): string {
+  if (platform === "win32") {
+    return /^[\w:\\.-]+$/.test(path)
+      ? path
+      : `& '${path.replace(/['\u2018\u2019\u201A\u201B]/g, "$&$&")}'`;
+  }
+  return /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path.replaceAll("'", `'"'"'`)}'`;
+}
+
+/** Whether {@link shellCommandPath} wrote PowerShell's `& '...'`, which cmd.exe cannot run. */
+export const powerShellOnly = (command: string) => command.startsWith("& '");

@@ -1,4 +1,9 @@
-import type { EnvironmentId, ManagedPolicySummary, ProviderDriverKind } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ManagedPolicySummary,
+  ProviderDriverKind,
+  ServerConfig,
+} from "@t3tools/contracts";
 import { APP_NAME } from "@t3tools/shared/branding";
 
 import { useServerConfigs } from "./entities";
@@ -31,11 +36,30 @@ export function firstManagedDenial(
   return undefined;
 }
 
-/** What usage-data notices say; a policy can only turn product analytics off. */
-export function usageDataNotice(policy: ManagedPolicySummary | undefined): string {
-  return policy?.limits?.telemetry === false
-    ? `${policy.organization} turned off anonymous usage data.`
-    : `${APP_NAME} doesn't collect usage data unless you turn it on with T3CODE_TELEMETRY_ENABLED.`;
+/**
+ * What usage-data notices say. Only a server that reports `telemetryEnabled` can promise opt-in:
+ * older servers omit it and send by default. A policy can only turn product analytics off.
+ */
+export function usageDataNotice(
+  config: Pick<ServerConfig, "managedPolicy" | "telemetryEnabled"> | undefined,
+): string {
+  const policy = config?.managedPolicy;
+  if (policy?.limits?.telemetry === false) {
+    return `${policy.organization} turned off anonymous usage data.`;
+  }
+  switch (config?.telemetryEnabled) {
+    case false:
+      return `${APP_NAME} doesn't collect usage data unless you turn it on with T3CODE_TELEMETRY_ENABLED.`;
+    case true:
+      return "This server sends anonymous usage data because T3CODE_TELEMETRY_ENABLED is on.";
+    default:
+      return "This server may send anonymous usage data. Update it, or set T3CODE_TELEMETRY_ENABLED=false on it.";
+  }
+}
+
+export function useUsageDataNotice(environmentId: EnvironmentId | null | undefined): string {
+  const serverConfigs = useServerConfigs();
+  return usageDataNotice(environmentId == null ? undefined : serverConfigs.get(environmentId));
 }
 
 export interface ManagedInstanceLocks {

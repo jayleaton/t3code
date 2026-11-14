@@ -14,6 +14,7 @@ import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
+import * as DesktopCliCommand from "../app/DesktopCliCommand.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
@@ -149,6 +150,7 @@ function layerPool(
           updateCancellations: Stream.empty,
         }),
         DesktopBrowserHost.layer,
+        Layer.mock(DesktopCliCommand.DesktopCliCommand)({}),
         Layer.succeed(DesktopBackendConfiguration.DesktopBackendConfiguration, {
           resolvePrimary: Effect.die("unexpected primary config resolve"),
           resolvePrimaryLabel: Ref.get(labelRef),

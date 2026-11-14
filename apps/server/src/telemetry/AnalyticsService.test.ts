@@ -229,10 +229,13 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
         respondWithStatus(204),
         Effect.gen(function* () {
           const analytics = yield* AnalyticsService.AnalyticsService;
+          assert.isFalse(yield* analytics.enabled);
           delete env.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING;
+          assert.isFalse(yield* analytics.enabled);
           yield* analytics.record("test.shell-unset");
           yield* analytics.flush;
           env.T3CODE_TELEMETRY_ENABLED = "true";
+          assert.isTrue(yield* analytics.enabled);
           yield* analytics.record("test.shell-opted-in");
           yield* analytics.flush;
         }),
