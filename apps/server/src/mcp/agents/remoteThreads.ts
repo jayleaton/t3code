@@ -371,6 +371,7 @@ export const readThread = Effect.fn("remoteThreads.readThread")(function* (
   };
   let items: OrchestratorMcpRemoteThreadReadResult["items"];
   let hasMore: boolean;
+  let earlierPosition: number | null = null;
   if (input.itemId !== undefined) {
     // Messages stand in for timeline items here, so an itemId names a message.
     const itemId: string = input.itemId;
@@ -384,10 +385,18 @@ export const readThread = Effect.fn("remoteThreads.readThread")(function* (
     const afterPosition = input.afterPosition ?? -1;
     const limit = input.limit ?? DEFAULT_READ_LIMIT;
     const after = messages.filter(({ position }) => position > afterPosition);
-    items = (input.tail === true ? after.slice(-limit) : after.slice(0, limit)).map((entry) =>
-      item(entry, 0),
-    );
-    hasMore = after.length > limit;
+    // Like a local read: the newest page unless the caller pages forward with afterPosition.
+    if (input.beforePosition !== undefined || input.afterPosition === undefined) {
+      const beforePosition = input.beforePosition ?? Number.POSITIVE_INFINITY;
+      const before = after.filter(({ position }) => position < beforePosition);
+      const page = before.slice(Math.max(0, before.length - limit));
+      items = page.map((entry) => item(entry, 0));
+      hasMore = after.length > before.length;
+      earlierPosition = before.length > page.length ? (page[0]?.position ?? null) : null;
+    } else {
+      items = after.slice(0, limit).map((entry) => item(entry, 0));
+      hasMore = after.length > limit;
+    }
   }
   const latestRun = thread.runs.at(-1);
   return {
@@ -429,6 +438,7 @@ export const readThread = Effect.fn("remoteThreads.readThread")(function* (
     items,
     nextPosition: items.at(-1)?.position ?? null,
     hasMore,
+    earlierPosition,
   };
 });
 

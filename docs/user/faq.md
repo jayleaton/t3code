@@ -6,7 +6,7 @@ No. A harness is what turns an LLM into an agent: it gives the model tools, a wa
 
 Chef = LLM. Kitchen = harness. Ada = the restaurant that lets you bring whatever kitchen you want. Our MCP is a cookbook we hand the kitchen, but the chef won't open it unless you tell them to :)
 
-Bring your own: Claude Code, Codex, Cursor, Grok Build, OpenCode, Google Antigravity, Pi, or Muse Code. [Provider setup](./install.md#providers)
+Bring your own: Claude Code, Codex, Cursor, Grok Build, OpenCode, Google Antigravity, Kiro, Pi, Muse Code, or fx. [Provider setup](./install.md#providers)
 
 ## Why use Ada instead of Claude Code or the Codex app?
 
@@ -29,7 +29,7 @@ Nothing. There's no way to pay us to use Ada. You bring your own sub. It is free
 
 ## Why is my Claude 5-hour limit draining so fast?
 
-Ada drives Claude through Anthropic's Agent SDK. This is a known bug on Anthropic's side: all Agent SDK usage drains your 5h limits faster than using Claude Code directly. It does not affect weekly limits. It has been reported to Anthropic.
+It shouldn't anymore. Ada drives Claude through Anthropic's Agent SDK, and Anthropic's 5h meter used to charge Agent SDK usage about 1.7x more than using Claude Code directly. Weekly limits were never affected. Current versions drain your 5h limit at the same rate as Claude Code. Still seeing it? [Update Ada](./updating.md) on the machine that runs your agents.
 
 ## How do I use Ada remotely?
 

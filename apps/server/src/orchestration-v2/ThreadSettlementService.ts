@@ -211,6 +211,19 @@ export const make = Effect.gen(function* () {
       const settledAtMs =
         thread.settledAt == null ? null : DateTime.toEpochMillis(thread.settledAt);
       if (settledAtMs === null || settleActionRunAt.get(threadId) === settledAtMs) return;
+      // The parent's worktree belongs to the parent; shared-worktree children
+      // skip duplicate cleanup there.
+      if (
+        thread.lineage.relationshipToParent === "subagent" &&
+        thread.lineage.parentThreadId !== null
+      ) {
+        const parent = yield* projections.getThread(thread.lineage.parentThreadId).pipe(
+          Effect.catchTags({
+            ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
+          }),
+        );
+        if (parent?.worktreePath === worktreePath) return;
+      }
       const run = yield* projectScripts.runForThread({
         threadId,
         projectId: thread.projectId,

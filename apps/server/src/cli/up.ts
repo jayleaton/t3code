@@ -24,7 +24,7 @@ import * as CliService from "./service.ts";
 interface Setup {
   readonly service: BootService.BootServiceStatus;
   readonly lan: boolean;
-  /** An installed service with no T3CODE_LAN keeps the old default: on. */
+  /** An installed service with no T3CODE_LAN or T3CODE_HOST keeps the old default: on. */
   readonly lanFromOldDefault: boolean;
   readonly host: string | undefined;
 }
@@ -42,7 +42,7 @@ const readSetup = Effect.fn("cli.up.read_setup")(function* () {
   return {
     service,
     lan: Option.getOrElse(lan, () => servesThisHome),
-    lanFromOldDefault: Option.isNone(lan) && servesThisHome,
+    lanFromOldDefault: Option.isNone(lan) && servesThisHome && entries.T3CODE_HOST === undefined,
     host: entries.T3CODE_HOST,
   } satisfies Setup;
 });

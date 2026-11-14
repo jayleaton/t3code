@@ -1,11 +1,18 @@
-import { cliInstallCommand } from "@t3tools/shared/cliRelease";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import {
+  DESKTOP_UPDATE_IN_PROGRESS_MARKER_FILE,
+  DESKTOP_UPDATE_IN_PROGRESS_TTL_MS,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FiberHandle from "effect/FiberHandle";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -17,7 +24,9 @@ import { ChildProcessSpawner } from "effect/process";
 
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
+import * as DesktopHomeOwner from "./DesktopHomeOwner.ts";
 import * as DesktopCliCommand from "../app/DesktopCliCommand.ts";
+import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
@@ -27,11 +36,14 @@ import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
-import { APP_NAME, CLI_COMMAND, LEGACY_CLI_COMMAND } from "@t3tools/shared/branding";
-import { powerShellOnly } from "@t3tools/shared/shell";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const { logWarning: logBackendPoolWarning } =
   DesktopObservability.makeComponentLogger("desktop-backend-pool");
+
+const decodeServerRuntime = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Struct({ pid: Schema.Number, port: Schema.Number })),
+);
 
 export type BackendInstanceId = DesktopBackendManager.BackendInstanceId;
 export const BackendInstanceId = DesktopBackendManager.BackendInstanceId;
@@ -106,21 +118,11 @@ type UnregisterAction =
   | { readonly _tag: "Close"; readonly entry: ActiveRegisteredInstance };
 
 /** What to do when another server holds this home; `command` is one that runs this app's CLI. */
-const stateDirOwnedDetail = (command: string | undefined, platform: NodeJS.Platform) => {
-  const run = (subcommand: string) =>
-    command === undefined ? `\`${subcommand}\`` : `\`${command} ${subcommand}\``;
-  const where =
-    command === undefined
-      ? ` Run these commands with your ${APP_NAME} CLI (\`${CLI_COMMAND}\`, or legacy \`${LEGACY_CLI_COMMAND}\`).`
-      : powerShellOnly(command)
-        ? " Run these commands in PowerShell."
-        : "";
-  return `Another ${APP_NAME} server, such as the background service, is using this data directory, or an older background service is set up for it.${where} Stop that server or try ${run("update")}. If the older launcher cannot update, run ${run("service uninstall")} and optionally reinstall with ${run("service install")} from a current CLI. If the CLI is missing or outdated, install it with \`${cliInstallCommand(platform === "win32" ? "win32" : "posix")}\`, and pass \`--base-dir\` with the service's ${APP_NAME} home to each command. Then reopen ${APP_NAME}. You can also set a separate T3CODE_HOME and pair with the running server.`;
-};
-
 export const layer = Layer.effect(
   DesktopBackendPool,
   Effect.gen(function* () {
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    const fileSystem = yield* FileSystem.FileSystem;
     const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
     const cliCommand = yield* DesktopCliCommand.DesktopCliCommand;
     const desktopWindow = yield* DesktopWindow.DesktopWindow;
@@ -131,6 +133,44 @@ export const layer = Layer.effect(
     // Parent instance scopes to the pool so shutdown runs stop finalizers before the OS kills backends.
     const layerScope = yield* Scope.Scope;
     const factoryContext = yield* Effect.context<BackendInstanceFactoryRequirements>();
+    const homeOwnerContext = yield* Effect.context<
+      FileSystem.FileSystem | Path.Path | DesktopEnvironment.DesktopEnvironment
+    >();
+
+    const updateMarkerPath = environment.path.join(
+      environment.baseDir,
+      "runtime",
+      DESKTOP_UPDATE_IN_PROGRESS_MARKER_FILE,
+    );
+    const serverRuntimePath = environment.path.join(environment.stateDir, "server-runtime.json");
+    // The server publishes its runtime after HTTP readiness. Until then an SSH launcher
+    // finds nothing to adopt, so dropping the marker earlier lets it start a competing server.
+    const releaseUpdateMarker = Effect.fn("desktop.backendPool.releaseUpdateMarker")(function* (
+      httpBaseUrl: URL,
+      pid: number,
+    ) {
+      const marker = yield* fileSystem.readFileString(updateMarkerPath).pipe(Effect.option);
+      if (Option.isNone(marker)) {
+        return;
+      }
+      yield* fileSystem.readFileString(serverRuntimePath).pipe(
+        Effect.flatMap(decodeServerRuntime),
+        Effect.map((runtime) => runtime.pid === pid && runtime.port === Number(httpBaseUrl.port)),
+        Effect.orElseSucceed(() => false),
+        Effect.repeat({
+          until: (published) => published,
+          schedule: Schedule.spaced(Duration.millis(100)),
+        }),
+        Effect.timeoutOption(Duration.millis(DESKTOP_UPDATE_IN_PROGRESS_TTL_MS)),
+      );
+      // A later update may have replaced the marker; that handoff is not ours to end.
+      const current = yield* fileSystem.readFileString(updateMarkerPath).pipe(Effect.option);
+      if (Option.isSome(current) && current.value === marker.value) {
+        yield* fileSystem.remove(updateMarkerPath, { force: true }).pipe(Effect.ignore);
+      }
+    });
+    // One wait at a time: each run's shutdown or readiness ends the previous run's wait.
+    const updateMarkerWait = yield* FiberHandle.make<void>();
 
     // Persist fatal Windows fallbacks; transient transport failures must preserve the user's WSL preference.
     const handlePrimaryPreflightFailure = Effect.fn("desktop.backendPool.primaryPreflightFailed")(
@@ -178,8 +218,9 @@ export const layer = Layer.effect(
       label: configuration.resolvePrimaryLabel,
       configResolve: configuration.resolvePrimary,
       // Absorb window errors so readiness can reset restartAttempt.
-      onReady: (httpBaseUrl) =>
-        desktopWindow.handleBackendReady(httpBaseUrl).pipe(
+      onReady: (httpBaseUrl, pid) =>
+        FiberHandle.run(updateMarkerWait, releaseUpdateMarker(httpBaseUrl, pid)).pipe(
+          Effect.andThen(desktopWindow.handleBackendReady(httpBaseUrl)),
           // Only once the main window exists, so the recovery window never closes into nothing.
           Effect.andThen(SubscriptionRef.set(primaryBackendStartup, { _tag: "Ready" })),
           Effect.catch((error) =>
@@ -190,14 +231,20 @@ export const layer = Layer.effect(
         ),
       onStartupFailure: (failure) =>
         SubscriptionRef.set(primaryBackendStartup, { _tag: "Failing", ...failure }),
-      onShutdown: () => desktopWindow.handleBackendNotReady,
+      onShutdown: () =>
+        FiberHandle.clear(updateMarkerWait).pipe(
+          Effect.andThen(desktopWindow.handleBackendNotReady),
+        ),
       onPreflightFailed: handlePrimaryPreflightFailure,
       onStateDirOwned: Effect.fn("DesktopBackendPool.onStateDirOwned")(function* () {
         const platform = yield* HostProcess.Platform;
         const command = DesktopCliCommand.runnableCliCommand(yield* cliCommand.state, platform);
+        const owner = yield* DesktopHomeOwner.readLiveHomeOwner().pipe(
+          Effect.provideContext(homeOwnerContext),
+        );
         yield* electronDialog.showErrorBox(
           `This ${APP_NAME} home is unavailable`,
-          stateDirOwnedDetail(command, platform),
+          DesktopHomeOwner.homeOwnedMessage(owner, command, platform),
         );
         yield* electronApp.quit;
       }),

@@ -4,7 +4,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { type EnvironmentId, TRIAGE_PROMPT_FILE_NAME } from "@t3tools/contracts";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { useRouter } from "@tanstack/react-router";
 
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
@@ -21,9 +21,6 @@ import { APP_NAME, CLI_COMMAND, LEGACY_CLI_COMMAND } from "@t3tools/shared/brand
  * program's there, so it is guidance, never a command to copy.
  */
 export const TRIAGE_CLI_GUIDANCE = `run triage with ${APP_NAME}'s CLI (${CLI_COMMAND}, or legacy ${LEGACY_CLI_COMMAND})`;
-
-/** A draft is a triage draft while its message still links the playbook file. */
-export const isTriagePrompt = (prompt: string) => prompt.includes(`[${TRIAGE_PROMPT_FILE_NAME}](`);
 
 /**
  * In-app `ada triage`: the server writes the session files and starts cloning

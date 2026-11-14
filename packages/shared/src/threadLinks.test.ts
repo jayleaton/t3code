@@ -218,4 +218,26 @@ describe("hosted thread links", () => {
       "https://hosted.example/threads/e/t1",
     );
   });
+
+  it("leaves a thread link that is part of another link or escaped as written", () => {
+    const thread = "t3-thread://v2/there/t1";
+    const relabeled = `[There](${thread})`;
+    const title = titlesIn({ there: { t1: "There" } });
+    for (const [markdown, expected] of [
+      [`[Example](https://example.com/?next=${thread})`],
+      [`[${thread}](<https://example.com/a b> "Title")`],
+      [
+        `[a](https://example.com/x_(y)) [old](${thread})`,
+        `[a](https://example.com/x_(y)) ${relabeled}`,
+      ],
+      [`[[[ [old](${thread})`, `[[[ ${relabeled}`],
+      [`\\\\[old](${thread})`, `\\\\${relabeled}`],
+      [`\\[old](${thread}) \\<${thread}>`],
+    ] as const) {
+      expect(relabelThreadLinks(markdown, local, title)).toBe(expected ?? markdown);
+      expect(threadLinkRefs(markdown, local)).toEqual(
+        expected === undefined ? [] : [ref("there", "t1")],
+      );
+    }
+  });
 });

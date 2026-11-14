@@ -1,6 +1,11 @@
 import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import {
+  DATABASE_MIGRATION_PROGRESS_MESSAGE,
+  DATABASE_MIGRATIONS_FINISHED_MESSAGE,
+  DATABASE_MIGRATIONS_STARTED_MESSAGE,
+} from "@t3tools/shared/databaseMigrationLog";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 import { FORK_MIGRATIONS_TABLE, splitLegacyForkLedger } from "./splitLegacyForkLedger.ts";
 
@@ -86,6 +91,16 @@ import Migration0078 from "./Migrations/078_DropOrchestrationEventCorrelationInd
 import Migration0079 from "./Migrations/079_DelegatedRecoveryIndexes.ts";
 import Migration0080 from "./Migrations/080_ScheduledTaskThreadMode.ts";
 import Migration0081 from "./Migrations/081_ProjectionMessageSearchText.ts";
+import Migration0082 from "./Migrations/082_TurnItemConversationIndex.ts";
+import Migration0083 from "./Migrations/083_CommandReadIndexes.ts";
+import Migration0084 from "./Migrations/084_LastExecutedRunIndex.ts";
+import Migration0085 from "./Migrations/085_TurnItemCounts.ts";
+import Migration0086 from "./Migrations/086_QueuedTurnInputIndex.ts";
+import Migration0087 from "./Migrations/087_ProjectionProjectsCustomTitle.ts";
+import Migration0088 from "./Migrations/088_TurnItemTypeStatusIndex.ts";
+import Migration0089 from "./Migrations/089_ShellThreadReadIndexes.ts";
+import Migration0090 from "./Migrations/090_AuthConnectDevices.ts";
+import Migration0091 from "./Migrations/091_AuthConnectDeniedRequests.ts";
 
 import ForkMigration001 from "./Migrations/fork/001_AgentProfileAndPullRequestCompatibility.ts";
 import ForkMigration002 from "./Migrations/fork/002_RepairAgentUpgradeSchema.ts";
@@ -194,6 +209,16 @@ const migrationEntries = [
   [79, "DelegatedRecoveryIndexes", Migration0079],
   [80, "ScheduledTaskThreadMode", Migration0080],
   [81, "ProjectionMessageSearchText", Migration0081],
+  [82, "TurnItemConversationIndex", Migration0082],
+  [83, "CommandReadIndexes", Migration0083],
+  [84, "LastExecutedRunIndex", Migration0084],
+  [85, "TurnItemCounts", Migration0085],
+  [86, "QueuedTurnInputIndex", Migration0086],
+  [87, "ProjectionProjectsCustomTitle", Migration0087],
+  [88, "TurnItemTypeStatusIndex", Migration0088],
+  [89, "ShellThreadReadIndexes", Migration0089],
+  [90, "AuthConnectDevices", Migration0090],
+  [91, "AuthConnectDeniedRequests", Migration0091],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -291,6 +316,24 @@ const schedule: ReadonlyArray<readonly [Ledger, number]> = [
 
 const FIRST_V2_MIGRATION_ID = 55;
 
+export function skippedV2Migrations(
+  recorded: ReadonlyArray<{ readonly id: number; readonly name: string }>,
+  throughId?: number,
+): string[] {
+  const latestRecordedId = Math.max(0, ...recorded.map((row) => row.id));
+  const recordedNames = new Map(recorded.map((row) => [row.id, row.name]));
+  return migrationManifest.flatMap(([id, name]) => {
+    if (
+      id < FIRST_V2_MIGRATION_ID ||
+      id > latestRecordedId ||
+      (throughId !== undefined && id > throughId)
+    )
+      return [];
+    const recordedName = recordedNames.get(id);
+    return recordedName === name ? [] : [`${id}_${name} (recorded: ${recordedName ?? "nothing"})`];
+  });
+}
+
 // Migrators skip ids up to the highest recorded; reject collisions that would skip V2 schema.
 const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function* (
   throughId?: number,
@@ -304,19 +347,11 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
     readonly migration_id: number;
     readonly name: string;
   }>`SELECT migration_id, name FROM effect_sql_migrations`;
+  const skipped = skippedV2Migrations(
+    recorded.map((row) => ({ id: row.migration_id, name: row.name })),
+    throughId,
+  );
   const latestRecordedId = Math.max(0, ...recorded.map((row) => row.migration_id));
-  const recordedNames = new Map(recorded.map((row) => [row.migration_id, row.name]));
-  const skipped = migrationEntries.flatMap(([id, name]) => {
-    if (
-      id < FIRST_V2_MIGRATION_ID ||
-      id > latestRecordedId ||
-      (throughId !== undefined && id > throughId)
-    )
-      return [];
-    const recordedName = recordedNames.get(id);
-    if (recordedName === name) return [];
-    return [`${id}_${name} (recorded: ${recordedName ?? "nothing"})`];
-  });
   if (skipped.length === 0) return;
   return yield* new Migrator.MigrationError({
     kind: "BadState",
@@ -376,6 +411,8 @@ export const hasPendingMigrations = Effect.fn("hasPendingMigrations")(function* 
   );
 });
 
+const run = Migrator.make({});
+
 export interface RunMigrationsOptions {
   /** Stop after this upstream migration, before fork migrations that follow it. */
   readonly toMigrationInclusive?: number | undefined;
@@ -391,6 +428,8 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
   toForkMigrationInclusive,
 }: RunMigrationsOptions = {}) {
+  // The desktop waits past its readiness budget until the finished line follows this one.
+  if (yield* hasPendingMigrations()) yield* Effect.log(DATABASE_MIGRATIONS_STARTED_MESSAGE);
   const target: readonly [Ledger, number] | undefined =
     toForkMigrationInclusive !== undefined
       ? ["fork", toForkMigrationInclusive]
@@ -428,15 +467,28 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     upstream: yield* latestRecordedId("upstream"),
     fork: yield* latestRecordedId("fork"),
   };
+  const existingDatabase = latest.upstream > 0;
+  const pending: Array<readonly [Ledger, number, string]> = [];
   for (const [ledger, through] of steps) {
-    const pending = ledgers[ledger].entries.some(([id]) => id > latest[ledger] && id <= through);
-    if (!pending) continue;
-    const ran = yield* Migrator.make({})({
-      loader: makeMigrationLoader(ledger, through),
-      table: ledgers[ledger].table,
-    });
-    executed[ledger].push(...ran);
-    latest[ledger] = Math.max(latest[ledger], ...ran.map(([id]) => id));
+    for (const [id, name] of ledgers[ledger].entries) {
+      if (id > latest[ledger] && id <= through) pending.push([ledger, id, name]);
+    }
+    latest[ledger] = Math.max(latest[ledger], through);
+  }
+  // One transaction per migration: an index build on a large database can take minutes, and a
+  // restart then resumes after the last finished migration instead of rolling all of them back.
+  for (const [index, [ledger, id, name]] of pending.entries()) {
+    if (existingDatabase) {
+      yield* Effect.log(DATABASE_MIGRATION_PROGRESS_MESSAGE).pipe(
+        Effect.annotateLogs({
+          migration: `${ledger === "fork" ? "fork/" : ""}${id}_${name}`,
+          progress: `${index + 1} of ${pending.length}`,
+        }),
+      );
+    }
+    executed[ledger].push(
+      ...(yield* run({ loader: makeMigrationLoader(ledger, id), table: ledgers[ledger].table })),
+    );
   }
 
   const migrations = [
@@ -445,7 +497,7 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   ];
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")
-    : Effect.log("Migrations ran successfully").pipe(Effect.annotateLogs({ migrations }));
+    : Effect.log(DATABASE_MIGRATIONS_FINISHED_MESSAGE).pipe(Effect.annotateLogs({ migrations }));
 
   const divergent: Array<string> = [];
   for (const ledger of ["upstream", "fork"] as const) {

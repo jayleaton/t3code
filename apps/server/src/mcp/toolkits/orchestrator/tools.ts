@@ -50,6 +50,7 @@ import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
 import * as PeerLinkRequests from "../../../peer/PeerLinkRequests.ts";
 import * as PeerLinks from "../../../peer/PeerLinks.ts";
 import * as TailnetDevices from "../../../peer/TailnetDevices.ts";
+import * as RemoteDelegation from "../../../peer/RemoteDelegation.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
@@ -60,8 +61,13 @@ const dependencies = [
   ThreadManagementService.ThreadManagementService,
   OrchestratorMcpService.OrchestratorMcpService,
 ];
-// A send to another environment mints its retry key when the caller passes none.
-const sendDependencies = [...dependencies, SecureRandom.SecureRandom];
+// A send to another environment mints its retry key when the caller passes none, and may
+// record a follow-up to a remote task.
+const sendDependencies = [
+  ...dependencies,
+  SecureRandom.SecureRandom,
+  RemoteDelegation.RemoteDelegation,
+];
 /** Listing this environment's links. */
 const linkDependencies = [...dependencies, PeerForwarding.PeerForwarding];
 /** Making and forgetting links. */
@@ -162,7 +168,11 @@ const BackgroundWaitTool = Tool.make("t3_background_wait", {
   failure: OrchestratorMcpFailure,
   failureMode: "return",
   dependencies,
-}).annotate(Tool.Title, "Wait on background work");
+})
+  .annotate(Tool.Title, "Wait on background work")
+  // Only marks which tasks keep the thread Working; Claude Plan mode blocks tools without this.
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
 
 const ScheduleTaskTool = Tool.make("schedule_task", {
   description:
@@ -244,7 +254,7 @@ const ThreadListTool = Tool.make("t3_thread_list", {
   .annotate(Tool.Idempotent, true);
 
 const ThreadReadTool = Tool.make("t3_thread_read", {
-  description: `Read durable state and a paginated timeline from any ${APP_NAME} thread in this environment, or pass environmentId for a thread on another environment (gateway connections support messages view over the latest 500 messages; linked environments support the full read; the result carries environmentId). The default messages view returns user messages, assistant messages, and proposed plans; activity returns all summarized timeline items. Reading an untruncated terminal assistant result from this thread's direct app-owned helper acknowledges its automatic completion delivery. Continue with afterPosition=nextPosition, or pass tail=true for the latest items. Recover long item text with itemId and textOffset=nextTextOffset until nextTextOffset is null; offsets count UTF-16 code units. The thread also reports its snooze state and, in pullRequests, every linked pull request; linkedPullRequest is a legacy single link and can be null while pullRequests still has entries. To link a thread for the user, write \`[title](t3-thread://v1/<threadId>)\` with the threadId exactly as returned, not URL-encoded; ${APP_NAME} shows the thread's current title.`,
+  description: `Read durable state and a paginated timeline from any ${APP_NAME} thread in this environment, or pass environmentId for a thread on another environment (gateway connections support messages view over the latest 500 messages; linked environments support the full read; the result carries environmentId). The default messages view returns user messages, assistant messages, and proposed plans; activity returns all summarized timeline items. Reading an untruncated terminal assistant result from this thread's direct app-owned helper acknowledges its automatic completion delivery. Items come newest first; for older ones pass beforePosition=earlierPosition, or read from the start with afterPosition=-1 and continue with afterPosition=nextPosition. Recover long item text with itemId and textOffset=nextTextOffset until nextTextOffset is null; offsets count UTF-16 code units. The thread also reports its snooze state and, in pullRequests, every linked pull request; linkedPullRequest is a legacy single link and can be null while pullRequests still has entries. To link a thread for the user, write \`[title](t3-thread://v1/<threadId>)\` with the threadId exactly as returned, not URL-encoded; ${APP_NAME} shows the thread's current title.`,
   parameters: OrchestratorMcpThreadReadInput,
   success: OrchestratorMcpThreadReadResult,
   failure: OrchestratorMcpFailure,

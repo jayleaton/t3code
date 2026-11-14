@@ -19,10 +19,15 @@ vi.mock(import("@effect/atom-react"), async (original) => ({
 }));
 vi.mock("../../hooks/useThreadVisitedMigration", () => ({ useThreadVisitedMigration: () => {} }));
 vi.mock("../../state/server", () => ({ primaryServerKeybindingsAtom: {}, serverEnvironment: {} }));
-vi.mock("../../hooks/useSettings", () => ({
-  useLegacySidebarEnabled: () => false,
-  useEnvironmentIdentificationMode: () => "none",
-}));
+vi.mock("../../hooks/useSettings", async () => {
+  const { DEFAULT_CLIENT_SETTINGS } = await import("@t3tools/contracts");
+  return {
+    useLegacySidebarEnabled: () => false,
+    useEnvironmentIdentificationMode: () => "none",
+    useClientSettings: <T,>(select?: (settings: typeof DEFAULT_CLIENT_SETTINGS) => T) =>
+      select ? select(DEFAULT_CLIENT_SETTINGS) : DEFAULT_CLIENT_SETTINGS,
+  };
+});
 vi.mock("../../state/entities", () => ({
   useProjects: () => [],
   useThreadShell: () => ({}),

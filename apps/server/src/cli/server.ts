@@ -9,6 +9,7 @@ import * as Schema from "effect/Schema";
 import { Command, GlobalFlag } from "effect/cli";
 import * as CliError from "effect/cli/CliError";
 
+import { awaitServiceLauncherStop } from "../service/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
 import { awaitLauncherLoss } from "../launcherWatch.ts";
 import * as DatabaseMaintenance from "../persistence/DatabaseMaintenance.ts";
@@ -18,13 +19,6 @@ import * as AutomaticPort from "./automaticPort.ts";
 import { type CliServerFlags, resolveServerConfig, sharedServerCommandFlags } from "./config.ts";
 
 const encodeCommand = Schema.encodeEffect(Schema.fromJsonString(Schema.String));
-
-// The desktop launcher reads this process's stdout and stderr. Once it is gone,
-// every log write fails, and Node turns an unhandled stream error into a crash
-// that skips shutdown and leaves the ownership lock and runtime record behind.
-function ignoreClosedLauncherPipe(error: NodeJS.ErrnoException): void {
-  if (error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") throw error;
-}
 
 const runServerCommand = Effect.fn("server.runServerCommand")(function* (
   flags: CliServerFlags,
@@ -54,9 +48,13 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
       }),
   );
   yield* ServerShutdown.enforceShutdownDeadline(Deferred.await(shutdownStarted));
-  const run = runServer.pipe(
-    Effect.provideService(ServerConfig.ServerConfig, config),
-    Effect.provideService(ServerShutdown.ShutdownStarted, Deferred.await(shutdownStarted)),
+  const run = Effect.raceFirst(
+    runServer.pipe(
+      Effect.provideService(ServerConfig.ServerConfig, config),
+      Effect.provideService(ServerShutdown.ShutdownStarted, Deferred.await(shutdownStarted)),
+    ),
+    awaitServiceLauncherStop().pipe(Effect.andThen(Effect.interrupt)),
+  ).pipe(
     // Settings' Reclaim stops the server; repair once the database is closed, before the restart.
     Effect.ensuring(
       DatabaseMaintenance.runRequestedReclaim(config.dbPath).pipe(
@@ -65,10 +63,6 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
     ),
   );
   if (config.mode !== "desktop" || config.desktopBootstrapToken === undefined) return yield* run;
-  yield* Effect.sync(() => {
-    process.stdout.on("error", ignoreClosedLauncherPipe);
-    process.stderr.on("error", ignoreClosedLauncherPipe);
-  });
   return yield* Effect.raceFirst(
     run,
     awaitLauncherLoss().pipe(
@@ -108,15 +102,21 @@ export const startCommand = Command.make("start", { ...sharedServerCommandFlags 
   Command.withHandler((flags) => runServerCommand(flags, { rejectRunningServer: true })),
 );
 
-export const serveCommand = Command.make("serve", { ...sharedServerCommandFlags }).pipe(
+// Serve never bootstraps a project, so it does not offer the flag that asks for one.
+const { autoBootstrapProjectFromCwd: _, ...serveCommandFlags } = sharedServerCommandFlags;
+
+export const serveCommand = Command.make("serve", serveCommandFlags).pipe(
   Command.withShortDescription(`Run ${APP_NAME} in this terminal, with no browser.`),
   Command.withDescription(
     `Run ${APP_NAME} in this terminal without opening a browser, and print pairing details. The background service runs this. To set up access from your other devices, run \`${CLI_COMMAND} up\`.`,
   ),
   Command.withHandler((flags) =>
-    runServerCommand(flags, {
-      startupPresentation: "headless",
-      forceAutoBootstrapProjectFromCwd: false,
-    }),
+    runServerCommand(
+      { ...flags, autoBootstrapProjectFromCwd: Option.none() },
+      {
+        startupPresentation: "headless",
+        forceAutoBootstrapProjectFromCwd: false,
+      },
+    ),
   ),
 );

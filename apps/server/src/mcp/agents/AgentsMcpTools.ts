@@ -82,7 +82,7 @@ const agentsTool = (name: string) =>
   Tool.make(name, {
     description: DEPRECATED_SCHEDULE_TOOLS[name] ?? specOf(name)[0],
     parameters: Schema.Record(Schema.String, Schema.Unknown),
-    success: Schema.instanceOf(McpSchema.CallToolResult),
+    success: McpSchema.CallToolResult,
     failure: OrchestratorMcpFailure,
     failureMode: "return",
     dependencies: [

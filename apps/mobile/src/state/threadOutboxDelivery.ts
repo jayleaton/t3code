@@ -687,6 +687,12 @@ export function createThreadOutboxDelivery(): {
   // Existing-thread turns the server accepted but whose outbox removal has
   // not landed; the next pass retries only the removal, never the send.
   const acknowledgedExistingThreadMessageIds = new Set<MessageId>();
+  // Revision and workspace each new task's launch carried. Launch replays by command id, so an
+  // unedited task whose reply was lost is resent in that workspace, not handed back.
+  const launchedCreations = new Map<
+    MessageId,
+    { readonly revision: number; readonly workspace: QueuedThreadCreation }
+  >();
   // Targets the shell may have left out hold their thread family until they leave the queue, so
   // the row stays readable through dispatch.
   const familyMounts = new Map<MessageId, () => void>();
@@ -913,6 +919,7 @@ export function createThreadOutboxDelivery(): {
         createdAt: queuedMessage.createdAt,
         dispatchMode: queuedMessage.dispatchMode ?? "start",
         ...(queuedMessage.freshContext ? { freshContext: true } : {}),
+        resendAfterSocketLoss: false,
       },
     });
     if (AsyncResult.isFailure(deliveryResult) && !hasAccess()) return true;
@@ -1024,7 +1031,10 @@ export function createThreadOutboxDelivery(): {
     );
     if (!hasAccess()) return true;
     let workspace = creation;
-    if (creation.pullRequestReference) {
+    const launched = launchedCreations.get(persistedMessage.messageId);
+    if (launched?.revision === deliveryRevision) {
+      workspace = launched.workspace;
+    } else if (creation.pullRequestReference) {
       const checkout = await runDeliveryCommand(gitEnvironment.preparePullRequestThread, {
         environmentId: queuedMessage.environmentId,
         input: { cwd: projectCwd, reference: creation.pullRequestReference, mode: "worktree" },
@@ -1054,6 +1064,7 @@ export function createThreadOutboxDelivery(): {
         startFromOrigin: false,
       };
     }
+    launchedCreations.set(persistedMessage.messageId, { revision: deliveryRevision, workspace });
     const deliveryResult = await runDeliveryCommand(threadEnvironment.startTurn, {
       environmentId: queuedMessage.environmentId,
       input: buildProjectThreadStartTurnInput({
@@ -1155,6 +1166,11 @@ export function createThreadOutboxDelivery(): {
     for (const messageId of acknowledgedExistingThreadMessageIds) {
       if (!queuedMessageIds.has(messageId)) {
         acknowledgedExistingThreadMessageIds.delete(messageId);
+      }
+    }
+    for (const messageId of launchedCreations.keys()) {
+      if (!queuedMessageIds.has(messageId)) {
+        launchedCreations.delete(messageId);
       }
     }
     for (const [messageId, release] of familyMounts) {
@@ -1259,9 +1275,13 @@ export function createThreadOutboxDelivery(): {
           );
         }
       }
+      const resendLaunch =
+        creation !== undefined &&
+        launchedCreations.get(messageId)?.revision === threadOutboxRevision(messageId);
       const deliveryAction = resolveThreadOutboxDeliveryAction({
         isCreation: creation !== undefined,
-        threadExists: thread !== undefined,
+        // A resend goes through the same gates as the first launch.
+        threadExists: thread !== undefined && !resendLaunch,
         shellStatus,
         environmentConnected: environment?.connectionState === "connected",
         ...(familyRead === undefined ? {} : { familyRead }),
@@ -1358,7 +1378,7 @@ export function createThreadOutboxDelivery(): {
           );
           const liveDeliveryAction = resolveThreadOutboxDeliveryAction({
             isCreation: creation !== undefined,
-            threadExists: liveThread !== undefined,
+            threadExists: liveThread !== undefined && !resendLaunch,
             shellStatus,
             environmentConnected: environment?.connectionState === "connected",
             threadBusy: threadRuntimeIsActive(liveThread?.runtime),
@@ -1370,7 +1390,7 @@ export function createThreadOutboxDelivery(): {
         }
         return deliveryAction === "remove"
           ? creation !== undefined
-            ? // After restart, always recover delivered creations; lost in-memory state cannot distinguish edits from duplicate payloads.
+            ? // Edited since launch, or launched before a restart that lost the revision: hand it back.
               recoverEditedCreationAfterDelivery(nextQueuedMessage)
             : removeQueuedMessage("[thread-outbox] failed to remove message for a missing thread")
           : creation !== undefined

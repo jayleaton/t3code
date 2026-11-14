@@ -29,6 +29,7 @@ import * as PeerLinkRequests from "../../peer/PeerLinkRequests.ts";
 import * as Membership from "../../peer/Membership.ts";
 import * as PeerLinks from "../../peer/PeerLinks.ts";
 import * as PeerMcpClient from "../../peer/PeerMcpClient.ts";
+import * as RemoteDelegation from "../../peer/RemoteDelegation.ts";
 import * as TailnetDevices from "../../peer/TailnetDevices.ts";
 import * as ThreadLaunch from "../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
@@ -359,11 +360,17 @@ const makeLayer = (
     }),
     Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({}),
     Layer.mock(ThreadMetadataMcpService.ThreadMetadataMcpService)({}),
-    Layer.mock(Project.ProjectService)({}),
+    Layer.mock(Project.ProjectService)({
+      getById: (projectId) =>
+        Effect.succeedSome({ id: projectId, workspaceRoot: "/projects/local" } as never),
+    }),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
     Layer.mock(GitVcsDriver.GitVcsDriver)({}),
     Layer.mock(DocumentText.DocumentText)({}),
     Layer.mock(PeerForwarding.PeerForwarding)({}),
+    Layer.mock(RemoteDelegation.RemoteDelegation)({
+      followUp: (_scope, _environmentId, _request, sent) => Effect.succeed(sent),
+    }),
     Layer.mock(PeerLinkRequests.PeerLinkRequests)({}),
     Layer.mock(PeerLinks.PeerLinks)({ get: () => Effect.succeedNone }),
     Layer.mock(TailnetDevices.TailnetDevices)({}),
@@ -741,7 +748,7 @@ it.effect("launch, create, delegate, send, and wait reject parameters they do no
     const refused = yield* mcp
       .callTool({ name: "t3_thread_launch", arguments: { title: "x", machine: "macbook" } })
       .pipe(Effect.provideService(McpSchema.McpServerClient, mcpClient), Effect.flip);
-    expect(refused.message).toContain("excess property");
+    expect(refused.message).toContain('Unknown argument "machine"');
     expect(record.launches).toEqual([]);
   }).pipe(
     Effect.provide(

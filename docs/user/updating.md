@@ -103,10 +103,9 @@ For a host running the AppImage-based systemd unit, run
 `t3-headless-update install <version>` instead; see
 [Headless Linux host](../operations/headless-linux.md).
 
-A background service installed by an older release refuses **Update server**
-until you update it once on the host and let that update restart it. If you
-decline the restart, the service can stay down after a crash or reboot until you
-run `ada service restart`.
+If you decline the restart for a background service installed by an older
+release, the service can stay down after a crash or reboot until you run
+`ada service restart`.
 
 ## If an update fails
 
