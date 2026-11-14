@@ -1769,6 +1769,8 @@ export const layerWsRpc = (
           ...(serverSettings.managedPolicy === undefined
             ? {}
             : { managedPolicy: serverSettings.managedPolicy }),
+          // Ada has no usage-data sender; clients still warn about older servers that do.
+          telemetryEnabled: false,
           shellResumeCompletionMarker: true,
           shellThreadFamilies: true,
           threadLinkMetadata: true,

@@ -12,20 +12,15 @@ import { currentClientMetadata } from "~/connection/platform";
 import { projectEnvironment } from "~/state/projects";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { writeTextToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { useScratchProject } from "./useScratchProject";
-import { APP_NAME } from "@t3tools/shared/branding";
+import { APP_NAME, CLI_COMMAND, LEGACY_CLI_COMMAND } from "@t3tools/shared/branding";
 
-export const TRIAGE_CLI_COMMAND = "ada triage";
-
-const copyTriageCliCommand = () =>
-  writeTextToClipboard(TRIAGE_CLI_COMMAND, "command").catch(() =>
-    toastManager.add({
-      type: "error",
-      title: `Could not copy. Type ${TRIAGE_CLI_COMMAND} instead.`,
-    }),
-  );
+/**
+ * How to run triage on a machine whose install this client cannot see. Either name may be another
+ * program's there, so it is guidance, never a command to copy.
+ */
+export const TRIAGE_CLI_GUIDANCE = `run triage with ${APP_NAME}'s CLI (${CLI_COMMAND}, or legacy ${LEGACY_CLI_COMMAND})`;
 
 /** A draft is a triage draft while its message still links the playbook file. */
 export const isTriagePrompt = (prompt: string) => prompt.includes(`[${TRIAGE_PROMPT_FILE_NAME}](`);
@@ -49,11 +44,8 @@ export function useStartTriage() {
       stackedThreadToast({
         type: "error",
         title: "Could not start triage",
-        description: `${description} Run ${TRIAGE_CLI_COMMAND} in a terminal on that machine instead.`,
+        description: `${description} Instead, open a terminal on that machine and ${TRIAGE_CLI_GUIDANCE}.`,
         timeout: 0,
-        actionProps: { children: "Copy command", onClick: () => void copyTriageCliCommand() },
-        // "Copy command" is the copy that helps here, not the error text.
-        data: { hideCopyButton: true },
       }),
     );
   const failWith = (
