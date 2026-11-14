@@ -243,7 +243,7 @@ jobs:
             # A client EAS built before this job existed; expired ones are gone.
             link="$(eas build:list --platform android --build-profile preview:dev --runtime-version "$hash" --status finished --limit 5 --json --non-interactive \
               | sed -n '/^\[/,$p' \
-              | jq -r --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '[.[] | select((.expirationDate // "9999") > $now)][0] | select(. != null) | "https://expo.dev/accounts/pingdotgg/projects/t3-code/builds/\(.id)"')"
+              | jq -r --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '[.[] | select((.expirationDate // "9999") > $now)][0] | select(. != null) | "https://expo.dev/accounts/jayleaton/projects/t3-code-personal/builds/\(.id)"')"
           fi
           echo "link=$link" >> "$GITHUB_OUTPUT"
           if [ -z "$link" ]; then echo "build=true" >> "$GITHUB_OUTPUT"; fi

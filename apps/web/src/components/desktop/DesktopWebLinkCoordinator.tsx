@@ -17,6 +17,7 @@ import { openFileInPreview, openUrlInPreview } from "../../browser/openFileInPre
 import { isPreviewAvailableFor } from "../../browser/previewRuntime";
 import { requestConfirmDialog } from "../../confirmDialog";
 import { connectPairing } from "../../connection/onboarding";
+import { configuredHostedAppUrl } from "../../hostedPairing";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
@@ -206,7 +207,7 @@ export function DesktopWebLinkCoordinator() {
       await pairFromLink(pairingUrl);
       return;
     }
-    const appPath = promptLinkAppPath(url);
+    const appPath = promptLinkAppPath(url, configuredHostedAppUrl());
     if (appPath !== null) {
       await router.navigate({ href: appPath });
       return;

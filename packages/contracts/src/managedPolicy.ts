@@ -76,8 +76,6 @@ export const ManagedPolicyLimits = Schema.Struct({
   /** Clients the server accepts. Without `remote`, nothing off this machine can pair. */
   clients: Schema.optionalKey(Schema.NonEmptyArray(ManagedPolicyClient)),
   webhookTasks: Schema.optionalKey(Schema.Boolean),
-  /** Can only turn product analytics off, never force it on. */
-  telemetry: Schema.optionalKey(Schema.Boolean),
   browserCookieImport: Schema.optionalKey(Schema.Boolean),
   providers: Schema.optionalKey(ManagedProviderLimits),
   updates: Schema.optionalKey(ManagedUpdatesPolicy),
@@ -91,7 +89,6 @@ export const ManagedPolicySummaryLimits = Schema.Struct({
   maxRuntimeMode: Schema.optionalKey(RuntimeMode),
   clients: Schema.optionalKey(Schema.NonEmptyArray(ManagedPolicyClient)),
   webhookTasks: Schema.optionalKey(Schema.Boolean),
-  telemetry: Schema.optionalKey(Schema.Boolean),
   browserCookieImport: Schema.optionalKey(Schema.Boolean),
   providers: Schema.optionalKey(
     Schema.Struct({

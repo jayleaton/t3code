@@ -37,21 +37,17 @@ export function firstManagedDenial(
 }
 
 /**
- * What usage-data notices say. Only a server that reports `telemetryEnabled` can promise opt-in:
- * older servers omit it and send by default. A policy can only turn product analytics off.
+ * What usage-data notices say. This server never sends any; older servers report `telemetryEnabled`,
+ * or omit it and may send by default.
  */
 export function usageDataNotice(
-  config: Pick<ServerConfig, "managedPolicy" | "telemetryEnabled"> | undefined,
+  config: Pick<ServerConfig, "telemetryEnabled"> | undefined,
 ): string {
-  const policy = config?.managedPolicy;
-  if (policy?.limits?.telemetry === false) {
-    return `${policy.organization} turned off anonymous usage data.`;
-  }
   switch (config?.telemetryEnabled) {
     case false:
-      return `${APP_NAME} doesn't collect usage data unless you turn it on with T3CODE_TELEMETRY_ENABLED.`;
+      return `${APP_NAME} doesn't collect usage data.`;
     case true:
-      return "This server sends anonymous usage data because T3CODE_TELEMETRY_ENABLED is on.";
+      return "This server sends anonymous usage data because T3CODE_TELEMETRY_ENABLED is on. Update it to stop.";
     default:
       return "This server may send anonymous usage data. Update it, or set T3CODE_TELEMETRY_ENABLED=false on it.";
   }

@@ -20,9 +20,8 @@ export { shouldBundleCliDependency };
 
 const repoEnv = loadRepoEnv();
 const buildVersion = repoEnv.APP_VERSION?.trim() || packageJson.version;
-// Sent with every analytics event. Release workflows set it for pingdotgg/t3code
-// builds only, so local builds and forks report "dev". A typo fails the build
-// instead of mislabeling events.
+// Release workflows set it for official builds only, so local builds and forks
+// report "dev". A typo fails the build instead of mislabeling the release.
 const TELEMETRY_CHANNELS = ["stable", "nightly", "preview", "dev"];
 const telemetryChannel = process.env.T3CODE_TELEMETRY_CHANNEL?.trim() || "dev";
 if (!TELEMETRY_CHANNELS.includes(telemetryChannel)) {

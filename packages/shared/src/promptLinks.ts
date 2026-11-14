@@ -1,4 +1,3 @@
-import { DEFAULT_HOSTED_APP_URL } from "./hostedApp.ts";
 import { APP_NAME } from "./branding.ts";
 
 export const PROMPT_LINK_MAX_PROMPT_LENGTH = 8_000;
@@ -169,9 +168,9 @@ export function buildNewThreadLink(input: {
   readonly repository?: PromptLinkRepository | null;
   readonly provider?: string | null;
   readonly model?: string | null;
-  readonly origin?: string;
+  readonly origin: string;
 }): string {
-  const url = new URL("/new", input.origin ?? DEFAULT_HOSTED_APP_URL);
+  const url = new URL("/new", input.origin);
   url.searchParams.set("prompt", input.prompt);
   if (input.repository) {
     url.searchParams.set("repo", `${input.repository.owner}/${input.repository.name}`);
@@ -184,10 +183,7 @@ export function buildNewThreadLink(input: {
 const APP_SCHEME = /^t3code(?:-[a-z]+)?:$/;
 const THREAD_PATH = /^\/([^/]+)\/([^/]+)\/?$/;
 
-export function promptLinkAppPath(
-  value: string,
-  hostedAppUrl: string = DEFAULT_HOSTED_APP_URL,
-): string | null {
+export function promptLinkAppPath(value: string, hostedAppUrl?: string | null): string | null {
   if (!URL.canParse(value)) return null;
   const url = new URL(value);
   if (APP_SCHEME.test(url.protocol)) {
@@ -197,7 +193,8 @@ export function promptLinkAppPath(
     const thread = url.host === "threads" ? THREAD_PATH.exec(url.pathname) : null;
     return thread ? `/${thread[1]}/${thread[2]}${url.search}` : null;
   }
-  if (!URL.canParse(hostedAppUrl) || url.origin !== new URL(hostedAppUrl).origin) return null;
+  if (!hostedAppUrl || !URL.canParse(hostedAppUrl) || url.origin !== new URL(hostedAppUrl).origin)
+    return null;
   if (url.pathname === "/new") return `/new${url.search}`;
   // The web app's own thread route is a link only with a prompt, so reloading a tab never asks.
   const thread = url.pathname.startsWith("/threads/")

@@ -63,8 +63,7 @@ import {
 import type { ToolCallVisibility } from "@t3tools/contracts/settings";
 import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitations";
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
-import { hostedThreadLink, parseThreadLinkHref } from "@t3tools/shared/threadLinks";
-import { PROMPT_LINK_MAX_PROMPT_LENGTH } from "@t3tools/shared/promptLinks";
+import { formatThreadLink, parseThreadLinkHref } from "@t3tools/shared/threadLinks";
 import {
   parseComposerContextHref,
   collectComposerContextReferences,
@@ -169,10 +168,8 @@ import { attachmentVideoPreviewSource } from "../../lib/videoPreviewSource";
 import { CopyTextButton } from "./CopyTextButton";
 import { getReviewSectionIdForCheckpoint } from "../review/reviewModel";
 import { setReviewSelectedSectionId } from "../review/reviewState";
-import { Menu } from "../../components/ui/Menu";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
 import { useBarInset, useContentTopInset } from "../../components/ui/useBarInset";
-import { copyPromptLink } from "../prompt-links/prompt-link-actions";
 import { parseReviewCommentMessageSegments } from "../review/reviewCommentSelection";
 import {
   ReviewCommentCard,
@@ -348,16 +345,12 @@ export interface ThreadFeedProps {
   readonly onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
 }
 
-const USER_MESSAGE_COPY_MENU_ACTIONS = [
-  { id: "copy-prompt-link", title: "Copy prompt link", image: "link" },
-];
-
 function UserMessageCopyButton(props: {
   readonly text: string;
   readonly onCopy: (() => Promise<void>) | undefined;
   readonly tintColor: ColorValue;
 }) {
-  const button = (
+  return (
     <CopyTextButton
       accessibilityLabel="Copy message"
       text={props.text}
@@ -366,19 +359,6 @@ function UserMessageCopyButton(props: {
       buttonSize={28}
       iconSize={13}
     />
-  );
-  const linkText = replaceComposerContextReferences(props.text, (reference) => reference.label);
-  if (linkText.length > PROMPT_LINK_MAX_PROMPT_LENGTH) return button;
-  return (
-    <Menu
-      actions={USER_MESSAGE_COPY_MENU_ACTIONS}
-      onPressAction={({ nativeEvent }) => {
-        if (nativeEvent.event === "copy-prompt-link") void copyPromptLink(linkText);
-      }}
-      shouldOpenOnLongPress
-    >
-      {button}
-    </Menu>
   );
 }
 
@@ -3034,7 +3014,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       const thread = resolveLinkedThread(href);
       if (thread) {
         if (actionId === "open-thread") onMarkdownLinkPress(href);
-        else if (actionId === "copy-thread-link") copyTextWithHaptic(hostedThreadLink(thread));
+        else if (actionId === "copy-thread-link") copyTextWithHaptic(formatThreadLink(thread));
         return;
       }
       const target = resolveFileChipTarget(href, props.workspaceRoot);

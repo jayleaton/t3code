@@ -21,7 +21,6 @@ import {
   type NavigationState,
 } from "@react-navigation/native";
 import { pipe } from "effect/Function";
-import { DEFAULT_HOSTED_APP_URL } from "@t3tools/shared/hostedApp";
 
 import { RegistryContext } from "@effect/atom-react";
 import { ProjectChipIconRasterizer } from "./native/ProjectChipIconImages";
@@ -131,7 +130,6 @@ const appLinking = {
     "t3code-personal://",
     "t3code-personal-dev://",
     "t3code-personal-preview://",
-    DEFAULT_HOSTED_APP_URL,
   ],
   config: { initialRouteName: "Home" },
   filter: shouldHandleAppLink,
