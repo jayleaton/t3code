@@ -53,7 +53,7 @@ AppImage-based systemd unit can keep following
 | Start the server and open the web app            | `ada`                                                                    |
 | Start the server without a browser               | `ada serve`                                                              |
 | Use it from your other devices                   | `ada up` ([details](./remote-access.md))                                 |
-| Keep it running in the background (macOS, Linux) | `ada service install` ([details](./background-service.md))               |
+| Keep it running in the background                | `ada service install` ([details](./background-service.md))               |
 | Move to the newest release                       | `ada update`, or `ada update <version>`                                  |
 | Reclaim database space                           | `ada doctor` ([details](./background-service.md#reclaim-database-space)) |
 | Remove it again                                  | `ada uninstall`                                                          |
@@ -140,6 +140,13 @@ Pass a path, such as `ada app ../my-project`, to open another directory. It requ
 the desktop app, so a standalone server or an SSH session is not enough. If the
 command cannot reach the app, start or update the desktop app and try again.
 
+### Drop a folder on the sidebar
+
+Drag one or more folders from Finder, Explorer, or your file manager onto the
+sidebar. Each one opens as a project on this computer, the same as `ada app`.
+Files dropped on a thread still attach to that thread. Browsers do not share
+folder paths, so in the web app use **Add project** instead.
+
 ## Mobile app
 
 Ada's mobile app is not in the App Store or Google Play yet. The phone connects
@@ -195,9 +202,14 @@ installer you used. Ada runs `mise upgrade`
 only for a tool your mise config requests as `latest` when the provider's binary
 path is a mise shim or under the tool's `installs/<tool>/latest` link; update a
 pinned version, or a path into one version's directory, through mise yourself.
+Update a CLI installed with Nix through Nix.
 Cursor and Antigravity update with Ada. Homebrew and Chocolatey installs
 compare against the version their package manager offers, which can trail the
 npm release; update Claude installed with Chocolatey through Chocolatey.
+
+The managed runtimes for Antigravity and for Codex connected through ChatGPT
+first install the release Ada tested. When Ada finds a newer compatible
+release, their setup in **Settings → Providers** offers an update.
 
 Add another provider instance for a separate account or configuration. Each
 instance can have its own environment variables, such as API keys or a custom
@@ -209,11 +221,52 @@ For provider-specific setup and accounts, see [Codex](./providers-codex.md),
 [Antigravity](./providers-antigravity.md), [Kiro](./providers-kiro.md),
 [Pi](./providers-pi.md), [Muse Code](./providers-muse.md), and [fx](./providers-fx.md).
 
+### Provider check timeouts
+
+If a provider works in its CLI but Ada reports a timeout while checking it,
+allow more time in the Ada server's environment. For example, give Codex and
+Claude readiness checks 60 seconds:
+
+```bash
+T3CODE_CODEX_PROBE_TIMEOUT_MS=60000 T3CODE_CLAUDE_PROBE_TIMEOUT_MS=60000 ada serve
+```
+
+For a remote environment, set these on the machine running the Ada server.
+Keep them in your launcher or service configuration to retain them across
+updates, then restart the server. For systemd, add
+`Environment=T3CODE_CODEX_PROBE_TIMEOUT_MS=60000` under `[Service]` in a service
+override, reload systemd, and restart the service. Provider instances can also
+set their own overrides in Settings → Providers.
+
+Each variable extends that provider's readiness-probe deadlines; a phase whose
+default is already longer keeps its default. Providers with several phases can
+take longer than one deadline in total. Values must be whole milliseconds no
+greater than 2147483647; unset or invalid values keep the defaults.
+
+| Provider            | Environment variable                   |
+| ------------------- | -------------------------------------- |
+| Codex               | `T3CODE_CODEX_PROBE_TIMEOUT_MS`        |
+| Claude              | `T3CODE_CLAUDE_PROBE_TIMEOUT_MS`       |
+| Cursor              | `T3CODE_CURSOR_PROBE_TIMEOUT_MS`       |
+| Antigravity         | `T3CODE_ANTIGRAVITY_PROBE_TIMEOUT_MS`  |
+| Grok                | `T3CODE_GROK_PROBE_TIMEOUT_MS`         |
+| Kiro                | `T3CODE_KIRO_PROBE_TIMEOUT_MS`         |
+| fx                  | `T3CODE_FX_PROBE_TIMEOUT_MS`           |
+| Pi                  | `T3CODE_PI_PROBE_TIMEOUT_MS`           |
+| Muse Code           | `T3CODE_MUSE_PROBE_TIMEOUT_MS`         |
+| OpenCode            | `T3CODE_OPENCODE_PROBE_TIMEOUT_MS`     |
+| ACP Registry agents | `T3CODE_ACP_REGISTRY_PROBE_TIMEOUT_MS` |
+
+Longer deadlines also take longer to report a stalled check. These overrides
+cover readiness and discovery, including OpenCode server startup. Usage and
+config enrichment retain their own shorter limits. Turn execution, package
+installation, update checks, and shutdown limits keep their existing behavior.
+
 ## Next steps
 
 - [Working with threads](./thread-sidebar.md): start tasks and organize parallel work.
 - [Permission modes](./permission-modes.md): choose when agents ask before acting.
 - [Remote access](./remote-access.md): connect from another device.
-- [Running in the background](./background-service.md): keep a Linux or macOS host available.
+- [Running in the background](./background-service.md): keep a host available.
 - [Updating Ada](./updating.md): update the app and connected servers.
 - [Managed policy](./managed-policy.md): configure Ada for everyone on a machine.

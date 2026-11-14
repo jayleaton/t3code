@@ -68,6 +68,7 @@ import { webhookAddress } from "@t3tools/client-runtime/webhook-address";
 import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { usePreparedConnection } from "../../state/session";
 import { buildModelOptions } from "../../lib/modelOptions";
+import { withImplicitFastModeSelection } from "../../lib/providerOptions";
 import { useProjects, useEnvironmentServerConfig } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -97,9 +98,7 @@ import { useScheduledTaskDestinationLabel, useScheduledTaskEditor } from "./sche
 import {
   discardScheduledTaskEditor,
   markScheduledTaskEditorSaved,
-  scheduledTaskEditorSessionAtom,
 } from "./scheduled-task-editor-state";
-import { appAtomRegistry } from "../../state/atom-registry";
 import {
   formatNextScheduledTaskRun,
   formatScheduledTaskArchive,
@@ -690,8 +689,6 @@ function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }
   const voiceInput = useVoiceInputController({
     ownerKey,
     label: editor?.draft.title.trim() || title,
-    subscribeToDraftChanges: (onChange) =>
-      appAtomRegistry.subscribe(scheduledTaskEditorSessionAtom, onChange),
     selection,
     readDraftMessage: () => {
       const current = readEditor();
@@ -947,6 +944,7 @@ function TaskForm({
       schedule,
       enabled: draft.enabled,
       ...routing,
+      modelSelection: withImplicitFastModeSelection(routing.modelSelection, config?.providers ?? []),
       workspaceStrategy:
         draft.workspace === "root"
           ? { type: "root" }

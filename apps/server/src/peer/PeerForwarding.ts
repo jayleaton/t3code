@@ -106,15 +106,14 @@ const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
 
   /**
-   * The caller's own limits, which travel with every forwarded call: the peer sees only the
+   * The caller's own limits and thread, which travel with every forwarded call: the peer sees only the
    * link's credential, so a caller that may not control threads here is refused here. Work a
    * link started never uses this environment's links, since the peer would see this
    * environment's session instead of that link, and its fence could not hold.
    */
-  const callerLimits = (scope: Scope) =>
+  const forwardingCaller = (scope: Scope) =>
     readCaller().pipe(
       Effect.tap((caller) => assertNotLinked(caller, "use this environment's links")),
-      Effect.map((caller) => caller.limits),
       Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
       Effect.provideService(ThreadManagement.ThreadManagementService, threads),
     );
@@ -139,7 +138,7 @@ const make = Effect.gen(function* () {
     environmentId: EnvironmentId,
     params: unknown,
   ) {
-    const limits = yield* callerLimits(scope);
+    const { caller, limits } = yield* forwardingCaller(scope);
     const encoded = (yield* Schema.encodeUnknownEffect(parameters as Schema.Encoder<unknown>)(
       params,
     ).pipe(Effect.mapError(unavailable))) as Record<string, unknown>;
@@ -155,20 +154,28 @@ const make = Effect.gen(function* () {
       args.clientRequestId = yield* scopedRequestId(scope.requestNamespace, args.clientRequestId);
     }
     // The peer sees only the link session, so a launch names its calling thread to nest under.
-    if (toolName === "t3_thread_launch" && scope.thread !== undefined && !args.delegatedFrom) {
-      const threadId = scope.thread.threadId;
-      const shell = yield* threads.getThreadShell(threadId).pipe(Effect.orElseSucceed(() => null));
+    if (toolName === "t3_thread_launch" && caller !== undefined && !args.delegatedFrom) {
       args.delegatedFrom = {
         environmentId: scope.environmentId,
-        threadId,
-        title: shell?.title ?? threadId,
+        threadId: caller.id,
+        title: caller.title,
       };
     }
+    // So a message sent there names the thread that sent it, even to a client that cannot reach here.
+    const sender =
+      caller === undefined
+        ? undefined
+        : {
+            environmentId: scope.environmentId,
+            threadId: caller.id,
+            title: caller.title,
+          };
     return yield* peers.call({
       environmentId,
       tool: toolName,
       arguments: args,
       limits,
+      ...(sender === undefined ? {} : { sender }),
       success: success as Schema.Decoder<A>,
     });
   });
@@ -292,7 +299,7 @@ const make = Effect.gen(function* () {
 
   const listLinks: PeerForwarding["Service"]["links"] = Effect.fn("PeerForwarding.listLinks")(
     function* (scope) {
-      yield* callerLimits(scope);
+      yield* forwardingCaller(scope);
       yield* requireEnabled;
       const listed = yield* links.list.pipe(
         Effect.mapError(

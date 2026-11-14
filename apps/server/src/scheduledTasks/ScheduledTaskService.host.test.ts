@@ -59,6 +59,7 @@ const environmentLayer = (
                 : null,
             ),
           sendToThread: (input) => onSend(input).pipe(Effect.as({} as never)),
+          getThreadRecords: () => Effect.succeed({ runs: [], messages: [] } as never),
         }),
       ),
     ),

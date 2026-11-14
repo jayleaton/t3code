@@ -154,7 +154,7 @@ describe("DesktopWslBackend", () => {
       assert.equal(startCount, 1);
       assert.deepEqual(yield* backend.lastPreflightError, refusal);
 
-      yield* clearFailure(new URL("http://127.0.0.1:41773"));
+      yield* clearFailure(new URL("http://127.0.0.1:41773"), 123);
       assert.deepEqual(yield* backend.lastPreflightError, Option.none());
       const recordDatabaseRefusal = spec.onDatabaseRefused;
       if (recordDatabaseRefusal === undefined) throw new Error("Expected database callback");
@@ -165,7 +165,7 @@ describe("DesktopWslBackend", () => {
       );
       yield* backend.reconcile;
       assert.equal(startCount, 1);
-      yield* clearFailure(new URL("http://127.0.0.1:41773"));
+      yield* clearFailure(new URL("http://127.0.0.1:41773"), 123);
       yield* recordOwnershipFailure();
       const settings = yield* DesktopAppSettings.DesktopAppSettings;
       yield* settings.setWslDistro("Debian");

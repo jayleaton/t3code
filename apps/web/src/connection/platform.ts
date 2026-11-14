@@ -141,6 +141,24 @@ const layerWakeups = Wakeups.layer({
             }),
         ).pipe(Effect.asVoid),
       ),
+      // A window left visible beside another app never fires visibilitychange when refocused.
+      Stream.callback<"application-focused">((queue) =>
+        Effect.acquireRelease(
+          Effect.sync(() => {
+            const listener = () => {
+              if (document.visibilityState === "visible") {
+                Queue.offerUnsafe(queue, "application-focused");
+              }
+            };
+            window.addEventListener("focus", listener);
+            return listener;
+          }),
+          (listener) =>
+            Effect.sync(() => {
+              window.removeEventListener("focus", listener);
+            }),
+        ).pipe(Effect.asVoid),
+      ),
       networkPathChanges,
     ],
     { concurrency: "unbounded" },

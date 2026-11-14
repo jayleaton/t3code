@@ -10,7 +10,7 @@ import {
 import * as Cause from "effect/Cause";
 import { AsyncResult, type Atom } from "effect/reactivity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { QueuedThreadMessage } from "./thread-outbox-model";
+import { threadOutboxRetryDelayMs, type QueuedThreadMessage } from "./thread-outbox-model";
 
 const state = vi.hoisted(() => ({
   draftText: "Keep this draft separate",
@@ -41,7 +41,7 @@ const state = vi.hoisted(() => ({
   },
   config: {
     shellThreadFamilies: false,
-    providers: [{ instanceId: "codex", driver: "codex" }],
+    providers: [{ instanceId: "codex", driver: "codex", models: [] }],
     environment: { capabilities: {} },
   },
 }));

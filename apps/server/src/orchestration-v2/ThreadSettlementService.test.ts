@@ -785,6 +785,51 @@ it.effect("runs the settle script once per settlement, only in the thread's own 
   ),
 );
 
+it.effect("skips the settle script for a subagent in its parent's worktree", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const settled = { settledOverride: "settled" as const, settledAt: at(0) };
+      const parent = shell({ id: ThreadId.make("parent"), ...settled, worktreePath: "/wt/parent" });
+      const subagent = (id: string, worktreePath: string) =>
+        shell({
+          id: ThreadId.make(id),
+          ...settled,
+          worktreePath,
+          lineage: {
+            parentThreadId: parent.id,
+            relationshipToParent: "subagent",
+            rootThreadId: parent.id,
+          },
+        });
+      const shared = subagent("shared-subagent", "/wt/parent");
+      const own = subagent("own-subagent", "/wt/own");
+      const fixture = yield* makeHarness({
+        threads: [parent, shared, own],
+        existingWorktreePaths: ["/wt/parent", "/wt/own"],
+      });
+      yield* Effect.gen(function* () {
+        const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+        yield* fixture.start(service);
+        for (const thread of [shared, own]) {
+          yield* Queue.offer(fixture.events, {
+            type: "thread.settled",
+            id: EventId.make(`settled:${thread.id}`),
+            threadId: thread.id,
+            occurredAt: at(0),
+            payload: { ...thread, lastVisitedAt: thread.lastVisitedAt ?? null },
+          });
+        }
+        // Events run in order, so the first run belongs to the second event
+        // only if the shared-worktree child was skipped. Both still close.
+        assert.equal(yield* Queue.take(fixture.closedIdle), shared.id);
+        assert.equal(yield* Queue.take(fixture.closedIdle), own.id);
+        assert.equal((yield* Queue.take(fixture.scriptRuns)).threadId, own.id);
+      }).pipe(Effect.provide(fixture.layer));
+    }),
+  ),
+);
+
 it.effect("an unsettled card gets a full new idle period on the sweep clock", () =>
   Effect.scoped(
     Effect.gen(function* () {
