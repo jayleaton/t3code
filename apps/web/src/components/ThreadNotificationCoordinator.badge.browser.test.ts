@@ -52,9 +52,6 @@ vi.mock(import("../state/threads"), async (original) => {
     environmentThreadShells: {
       ...actual.environmentThreadShells,
       pendingSubagentRequestsAtom: (() => noRequestsAtom) as never,
-      get delegatedUnderParentAtom() {
-        return noDelegatedAtom as never;
-      },
     },
   };
 });
@@ -82,7 +79,6 @@ let registry: AtomRegistry.AtomRegistry;
 const shellAtom = Atom.family((_id: string) => Atom.make<unknown>(null));
 const environmentIdsAtom = Atom.make<ReadonlyArray<string>>([]);
 const noRequestsAtom = Atom.make(new Map());
-const noDelegatedAtom = Atom.make<ReadonlySet<string>>(new Set<string>());
 state.shells = { set: (id, value) => registry.set(shellAtom(id), value) };
 
 class TestNotification extends EventTarget {
@@ -393,3 +389,38 @@ it.each([false, true])(
     expect(TestNotification.sent.map(({ title }) => title)).toEqual(["Thread completed"]);
   },
 );
+
+it("notifies only for top-level threads, never for their children", async () => {
+  await using app = setup();
+  app.start();
+  const snapshot = (overrides: Partial<typeof thread>) => ({
+    status: "live",
+    snapshot: Option.some({
+      threads: [
+        toV2ThreadShell({ ...thread, ...overrides, id: "root", title: "Root" }),
+        {
+          ...toV2ThreadShell({ ...thread, ...overrides, id: "child", title: "Child" }),
+          parentThreadId: "root",
+          parentRelationship: "child",
+        },
+        {
+          ...toV2ThreadShell({ ...thread, ...overrides, id: "delegated", title: "Delegated" }),
+          delegatedFrom: { environmentId: "elsewhere", threadId: "parent", title: "Parent" },
+        },
+      ],
+    }),
+  });
+  state.shells.set("one", snapshot({}));
+  state.shells.set("one", snapshot({ hasPendingUserInput: true }));
+  state.shells.set(
+    "one",
+    snapshot({
+      latestTurn: { turnId: "turn", state: "completed", completedAt: "2026-09-13T07:00:01.000Z" },
+    }),
+  );
+  expect(TestNotification.sent.map(({ title, options }) => [title, options.body])).toEqual([
+    ["Input needed", "Root"],
+    ["Thread completed", "Root"],
+  ]);
+  expect(state.badge).toHaveBeenLastCalledWith(1);
+});

@@ -74,6 +74,21 @@ export function isShownUnderParent(
   );
 }
 
+/**
+ * Whether a thread has a parent of any kind: a child chat, a subagent, a side chat,
+ * or a task a linked environment delegated here. A fork starts a new top-level thread.
+ */
+export function hasParentThread(
+  thread: Parameters<typeof isSubagentThread>[0] &
+    Pick<OrchestrationV2ThreadShell, "delegatedFrom">,
+): boolean {
+  return (
+    !isListedThread(thread) ||
+    threadParentRelationship(thread) !== null ||
+    thread.delegatedFrom != null
+  );
+}
+
 /** Provider-native
     subagents ask on their parent, so they are skipped. */
 function subagentRequest(thread: OrchestrationV2ThreadShell): PendingSubagentRequest | null {

@@ -3,7 +3,7 @@ import {
   type PendingSubagentRequest,
   presentThreadShell,
 } from "@t3tools/client-runtime/state/models";
-import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
+import { hasParentThread } from "@t3tools/client-runtime/state/threads";
 import type { AnyRouter } from "@tanstack/react-router";
 import { threadKey } from "@t3tools/client-runtime/state/entities";
 import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
@@ -229,18 +229,10 @@ export function startThreadNotifications(
     const subagentRequests = registry.get(
       environmentThreadShells.pendingSubagentRequestsAtom(environmentId),
     );
-    const delegatedUnderParent = registry.get(environmentThreadShells.delegatedUnderParentAtom);
     const changed: Array<[NotificationState | undefined, NotificationState]> = [];
     for (const rawThread of threads) {
-      if (
-        isShownUnderParent(
-          { environmentId, threadId: rawThread.id },
-          rawThread,
-          delegatedUnderParent,
-        )
-      ) {
-        continue;
-      }
+      // Children reach the user through their parent, which asks or finishes for them.
+      if (hasParentThread(rawThread)) continue;
       const prior = previous.get(rawThread.id);
       const subagentRequest = subagentRequests.get(rawThread.id) ?? null;
       if (
@@ -327,14 +319,9 @@ export function startThreadNotifications(
       environmentThreadShells.pendingSubagentRequestsAtom(environmentId),
       reobserve,
     );
-    const unsubscribeDelegated = registry.subscribe(
-      environmentThreadShells.delegatedUnderParentAtom,
-      reobserve,
-    );
     entry.unsubscribe = () => {
       unsubscribeShell();
       unsubscribeRequests();
-      unsubscribeDelegated();
       entry.gate.clear();
     };
     return entry;
