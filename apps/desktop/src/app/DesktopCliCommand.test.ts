@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { expect, it } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -496,4 +496,34 @@ it.layer(NodeServices.layer)("DesktopCliCommand", (it) => {
       expect(beside.registry).toMatchObject({ path: "C:\\Tools", writes: 0 });
     }),
   );
+});
+
+describe("runnableCliCommand", () => {
+  const state = {
+    supported: true,
+    installedPath: "/home/me/.local/bin/t3",
+    onPath: true,
+    launcherPath: "/home/me/My Home/.t3/bin/t3",
+  } as const;
+  it.each([
+    { name: "our ada on PATH", state: { ...state, command: "ada" }, expected: "ada" },
+    {
+      name: "another ada in the alias's place",
+      state: { ...state, command: "t3", aliasBlockedBy: "/home/me/.local/bin/ada" },
+      expected: "t3",
+    },
+    { name: "a desktop build that links only t3", state, expected: "t3" },
+    {
+      name: "a command off PATH",
+      state: { ...state, onPath: false, command: "ada" },
+      expected: "'/home/me/My Home/.t3/bin/t3'",
+    },
+    {
+      name: "no launcher",
+      state: { ...state, onPath: false, installedPath: null, launcherPath: null },
+      expected: undefined,
+    },
+  ])("names $name", ({ state, expected }) => {
+    expect(DesktopCliCommand.runnableCliCommand(state, "linux")).toBe(expected);
+  });
 });

@@ -30,8 +30,7 @@ The desktop app includes the `ada` command; see [The `ada` command](./install.md
   },
   "limits": {
     "maxRuntimeMode": "auto-accept-edits",
-    "clients": ["desktop", "local-browser"],
-    "telemetry": false
+    "clients": ["desktop", "local-browser"]
   }
 }
 ```
@@ -168,7 +167,6 @@ A few settings need care:
     "clients": ["desktop"],
     "webhookTasks": false,
     "browserCookieImport": false,
-    "telemetry": false,
     "providers": {
       "allowedDrivers": ["claudeAgent", "codex"],
       "instances": {
@@ -217,7 +215,7 @@ The limit decides which modes Ada asks the provider for. It is not a sandbox; se
 
 - `desktop`: as the desktop app's own server.
 - `local-browser`: as a server only browsers on this machine reach, such as a plain `ada`.
-- `remote`: reachable from phones, other computers, and app.t3.codes over the network.
+- `remote`: reachable from phones, other computers, and browsers over the network.
 
 `remote` is the line that matters. A server reachable from the network also accepts browsers on
 this machine, and the two local kinds differ only in how Ada was started. On machines with the
@@ -248,8 +246,6 @@ so restart Ada after that.
   but do not run, and cannot be turned back on. Users can still edit or delete them.
 - `browserCookieImport: false`: users cannot import cookies from another browser into Ada's
   browser.
-- `telemetry: false`: the server and desktop app send no [product usage data](./telemetry.md). A
-  policy cannot turn it on.
 
 ### Providers
 

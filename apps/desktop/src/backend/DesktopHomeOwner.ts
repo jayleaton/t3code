@@ -8,8 +8,9 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import { APP_NAME, CLI_COMMAND } from "@t3tools/shared/branding";
+import { APP_NAME, CLI_COMMAND, LEGACY_CLI_COMMAND } from "@t3tools/shared/branding";
 import { cliInstallCommand } from "@t3tools/shared/cliRelease";
+import { powerShellOnly } from "@t3tools/shared/shell";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { BACKEND_QUIT_STOP_TIMEOUT } from "./DesktopBackendManager.ts";
@@ -92,21 +93,32 @@ export const readLiveHomeOwner = Effect.fn("DesktopHomeOwner.readLiveHomeOwner")
   );
 });
 
+/** `command` is the runnable CLI from DesktopCliCommand; without one the copy names the CLI generically. */
 export const homeOwnedMessage = (
   owner: Option.Option<HomeOwner>,
-  platform: NodeJS.Platform = process.platform,
-): string =>
-  Option.match(owner, {
+  command: string | undefined,
+  platform: NodeJS.Platform,
+): string => {
+  const run = (subcommand: string) =>
+    command === undefined ? `\`${subcommand}\`` : `\`${command} ${subcommand}\``;
+  const where =
+    command === undefined
+      ? ` Run these commands with your ${APP_NAME} CLI (\`${CLI_COMMAND}\`, or legacy \`${LEGACY_CLI_COMMAND}\`).`
+      : powerShellOnly(command)
+        ? " Run these commands in PowerShell."
+        : "";
+  return Option.match(owner, {
     onNone: () =>
-      `Another ${APP_NAME} server, such as the background service, is using this data directory, or an older background service is set up for it. Stop that server or try \`${CLI_COMMAND} update\`. If the older launcher cannot update, run \`${CLI_COMMAND} service uninstall\` and optionally reinstall with \`${CLI_COMMAND} service install\` from a current CLI. If \`${CLI_COMMAND}\` is missing or outdated, install it with \`${cliInstallCommand(platform === "win32" ? "win32" : "posix")}\`, and pass \`--base-dir\` with the service's ${APP_NAME} home to each command. Then reopen ${APP_NAME}. You can also set a separate T3CODE_HOME and pair with the running server.`,
+      `Another ${APP_NAME} server, such as the background service, is using this data directory, or an older background service is set up for it.${where} Stop that server or try ${run("update")}. If the older launcher cannot update, run ${run("service uninstall")} and optionally reinstall with ${run("service install")} from a current CLI. If the CLI is missing or outdated, install it with \`${cliInstallCommand(platform === "win32" ? "win32" : "posix")}\`, and pass \`--base-dir\` with the service's ${APP_NAME} home to each command. Then reopen ${APP_NAME}. You can also set a separate T3CODE_HOME and pair with the running server.`,
     onSome: (owner) => {
       const kind = owner.serviceManaged
         ? `The ${APP_NAME} background service`
-        : `Another ${APP_NAME} server (for example \`${CLI_COMMAND} serve\`, or one started over SSH)`;
+        : `Another ${APP_NAME} server (for example ${run("serve")}, or one started over SSH)`;
       const version = owner.serverVersion ? `, version ${owner.serverVersion}` : "";
       const stop = owner.serviceManaged
-        ? `Stop it with \`${CLI_COMMAND} service uninstall\`, passing \`--base-dir\` with this ${APP_NAME} home`
+        ? `Stop it with ${run("service uninstall")}, passing \`--base-dir\` with this ${APP_NAME} home`
         : `If an ${APP_NAME} app on another machine started it over SSH, that app restarts it: remove or disconnect that SSH environment there, or quit that app. Then stop the server`;
-      return `${kind} is using this ${APP_NAME} home (PID ${owner.pid}, port ${owner.port}${version}). ${stop}, and reopen ${APP_NAME}. You can also set a separate T3CODE_HOME and pair with the running server.`;
+      return `${kind} is using this ${APP_NAME} home (PID ${owner.pid}, port ${owner.port}${version}).${where} ${stop}, and reopen ${APP_NAME}. You can also set a separate T3CODE_HOME and pair with the running server.`;
     },
   });
+};

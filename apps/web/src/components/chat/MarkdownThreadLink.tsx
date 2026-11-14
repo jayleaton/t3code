@@ -1,6 +1,7 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import {
   formatHostedThreadLink,
+  formatThreadLink,
   guessThreadLinkRef,
   threadLinkCandidates,
   type ThreadLink,
@@ -61,11 +62,16 @@ export function MarkdownThreadLink(props: {
   }
   const ref = resolved?.ref ?? writtenRef;
   const title = resolved?.metadata.title.trim() || props.label || "Thread";
+  const hostedAppUrl = configuredHostedAppUrl();
   return (
     <ThreadContextChip
       record={{ ...ref, title }}
       projectId={resolved?.metadata.projectId ?? null}
-      copyMarkdown={formatHostedThreadLink(ref, title, configuredHostedAppUrl())}
+      copyMarkdown={
+        hostedAppUrl
+          ? formatHostedThreadLink(ref, title, hostedAppUrl)
+          : formatThreadLink(ref, title)
+      }
     />
   );
 }

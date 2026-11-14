@@ -79,7 +79,7 @@ describe("DesktopHomeOwner.readLiveHomeOwner", () => {
         Option.some({ pid: process.pid, port: 3790, serverVersion: "1.2.3" }),
       );
       assert.include(
-        DesktopHomeOwner.homeOwnedMessage(owner),
+        DesktopHomeOwner.homeOwnedMessage(owner, "ada", "darwin"),
         `PID ${process.pid}, port 3790, version 1.2.3`,
       );
     }),

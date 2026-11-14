@@ -205,6 +205,7 @@ const layerDesktopAppActivation = DesktopAppActivation.layer.pipe(
 );
 
 const layerDesktopBackend = DesktopBackendPool.layer.pipe(
+  Layer.provideMerge(DesktopCliCommand.layer),
   Layer.provideMerge(DesktopAppIdentity.layer),
   Layer.provideMerge(DesktopBackendConfiguration.layer),
   Layer.provideMerge(DesktopWslEnvironment.layer),
@@ -228,7 +229,6 @@ const layerDesktopApplication = Layer.mergeAll(
   DesktopWebLinks.layer,
   DesktopApplicationMenu.layer,
   DesktopLinuxUrlHandler.layer,
-  DesktopCliCommand.layer,
 ).pipe(
   Layer.provideMerge(layerDesktopSnapShot),
   Layer.provideMerge(

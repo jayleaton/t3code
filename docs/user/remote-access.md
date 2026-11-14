@@ -173,7 +173,8 @@ If that port is already in use, choose another with
 
 ### Hosted web app
 
-[app.t3.codes](https://app.t3.codes) needs an HTTPS endpoint. It connects directly
+Ada does not use a hosted web app unless one is set up. A hosted web app, served
+over HTTPS, needs an HTTPS endpoint. It connects directly
 to your server; a hosted pairing link does not make an unreachable backend
 reachable or convert HTTP to HTTPS.
 
@@ -328,7 +329,7 @@ is for machines outside the network. A machine in the network is switched off
 here or forgotten from the network instead.
 
 A phone that is not on your tailnet shows network machines as **Can't reach from
-this phone**. On app.t3.codes, a machine reachable only over plain HTTP shows
+this phone**. On a hosted web app, a machine reachable only over plain HTTP shows
 **Can't reach from this browser**. Open the app from a machine on your network,
 or use Tailscale HTTPS.
 

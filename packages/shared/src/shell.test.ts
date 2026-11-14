@@ -40,6 +40,8 @@ import {
   withPathDirectoryListings,
   type WindowsShellEnvironmentReader,
   XcodeGitLocation,
+  shellCommandPath,
+  powerShellOnly,
 } from "./shell.ts";
 
 const decodeDesktopHostMessage = Schema.decodeUnknownSync(DesktopHostTelemetryMessage);
@@ -1239,5 +1241,31 @@ describe("pathSetupCommand", () => {
     expect(
       pathSetup({ ...setup, platform: "linux", configHome: "/home/theo/my cfg" }),
     ).toBeUndefined();
+  });
+});
+
+describe("shellCommandPath", () => {
+  it.each([
+    ["/home/me/.t3/runtime/versions/1.0.0/t3", "linux", "/home/me/.t3/runtime/versions/1.0.0/t3"],
+    ["/home/me/My Apps/t3", "linux", "'/home/me/My Apps/t3'"],
+    ["/home/$workspace/t3", "linux", "'/home/$workspace/t3'"],
+    ["/home/`id`/t3", "darwin", "'/home/`id`/t3'"],
+    [`/home/a"b/O'Neil/t3`, "linux", `'/home/a"b/O'"'"'Neil/t3'`],
+    ["C:\\Users\\Me\\t3.exe", "win32", "C:\\Users\\Me\\t3.exe"],
+    ["C:\\Users\\Jo O'Neil\\$env:x\\t3.exe", "win32", "& 'C:\\Users\\Jo O''Neil\\$env:x\\t3.exe'"],
+    ["C:\\Users\\Jo\u2019s `t3`\\t3.exe", "win32", "& 'C:\\Users\\Jo\u2019\u2019s `t3`\\t3.exe'"],
+  ] as const)("writes %s as a literal for %s", (path, platform, expected) => {
+    expect(shellCommandPath(path, platform)).toBe(expected);
+    // Only the quoted Windows form needs PowerShell; a bare path also runs in cmd.exe.
+    expect(powerShellOnly(expected)).toBe(expected.startsWith("& "));
+  });
+
+  it("round-trips through a POSIX shell without expansion", () => {
+    const path = `/srv/a b/$HOME/\`echo x\`/"q"/it's`;
+    const echoed = NodeChildProcess.execFileSync("/bin/sh", [
+      "-c",
+      `printf %s ${shellCommandPath(path, "linux")}`,
+    ]);
+    expect(echoed.toString()).toBe(path);
   });
 });

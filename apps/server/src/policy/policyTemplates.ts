@@ -97,7 +97,7 @@ const policies = (): ReadonlyArray<Policy> => [
         kind: "checkbox",
         list: "Clients",
         name: "remote",
-        label: "Remote: phones, other computers, app.t3.codes",
+        label: "Remote: phones, other computers, browsers",
         defaultChecked: false,
       },
     ],
@@ -113,12 +113,6 @@ const policies = (): ReadonlyArray<Policy> => [
     title: "Allow importing browser cookies",
     help: `Disabled stops users from importing cookies from another browser into ${APP_NAME}'s browser.`,
     toggle: "BrowserCookieImport",
-  },
-  {
-    id: "Telemetry",
-    title: "Allow usage data",
-    help: `Disabled stops ${APP_NAME} from sending product usage data. Enabled cannot turn them on for a user who turned them off.`,
-    toggle: "Telemetry",
   },
   {
     id: "AllowedDrivers",

@@ -207,10 +207,6 @@
       "types": "./src/dpopCommon.ts",
       "import": "./src/dpopCommon.ts"
     },
-    "./telemetryId": {
-      "types": "./src/telemetryId.ts",
-      "import": "./src/telemetryId.ts"
-    },
     "./oauthScope": {
       "types": "./src/oauthScope.ts",
       "import": "./src/oauthScope.ts"
@@ -226,10 +222,6 @@
     "./cliArgs": {
       "types": "./src/cliArgs.ts",
       "import": "./src/cliArgs.ts"
-    },
-    "./hostedApp": {
-      "types": "./src/hostedApp.ts",
-      "import": "./src/hostedApp.ts"
     },
     "./symlink": {
       "types": "./src/symlink.ts",

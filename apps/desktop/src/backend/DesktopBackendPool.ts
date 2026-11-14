@@ -1,3 +1,4 @@
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   DESKTOP_UPDATE_IN_PROGRESS_MARKER_FILE,
   DESKTOP_UPDATE_IN_PROGRESS_TTL_MS,
@@ -24,6 +25,7 @@ import { ChildProcessSpawner } from "effect/process";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopHomeOwner from "./DesktopHomeOwner.ts";
+import * as DesktopCliCommand from "../app/DesktopCliCommand.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
@@ -115,12 +117,14 @@ type UnregisterAction =
   | { readonly _tag: "Wait"; readonly done: Deferred.Deferred<void> }
   | { readonly _tag: "Close"; readonly entry: ActiveRegisteredInstance };
 
+/** What to do when another server holds this home; `command` is one that runs this app's CLI. */
 export const layer = Layer.effect(
   DesktopBackendPool,
   Effect.gen(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const fileSystem = yield* FileSystem.FileSystem;
     const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+    const cliCommand = yield* DesktopCliCommand.DesktopCliCommand;
     const desktopWindow = yield* DesktopWindow.DesktopWindow;
     const electronDialog = yield* ElectronDialog.ElectronDialog;
     const electronApp = yield* ElectronApp.ElectronApp;
@@ -232,17 +236,18 @@ export const layer = Layer.effect(
           Effect.andThen(desktopWindow.handleBackendNotReady),
         ),
       onPreflightFailed: handlePrimaryPreflightFailure,
-      onStateDirOwned: () =>
-        DesktopHomeOwner.readLiveHomeOwner().pipe(
-          Effect.flatMap((owner) =>
-            electronDialog.showErrorBox(
-              `This ${APP_NAME} home is unavailable`,
-              DesktopHomeOwner.homeOwnedMessage(owner),
-            ),
-          ),
+      onStateDirOwned: Effect.fn("DesktopBackendPool.onStateDirOwned")(function* () {
+        const platform = yield* HostProcess.Platform;
+        const command = DesktopCliCommand.runnableCliCommand(yield* cliCommand.state, platform);
+        const owner = yield* DesktopHomeOwner.readLiveHomeOwner().pipe(
           Effect.provideContext(homeOwnerContext),
-          Effect.andThen(electronApp.quit),
-        ),
+        );
+        yield* electronDialog.showErrorBox(
+          `This ${APP_NAME} home is unavailable`,
+          DesktopHomeOwner.homeOwnedMessage(owner, command, platform),
+        );
+        yield* electronApp.quit;
+      }),
       onDatabaseRefused: () =>
         electronDialog
           .showErrorBox(

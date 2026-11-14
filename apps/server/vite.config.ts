@@ -25,7 +25,8 @@ const serverManifestPath = NodePath.join(import.meta.dirname, "package.json");
 const buildVersion =
   repoEnv.APP_VERSION?.trim() ||
   resolveTaggedSourceVersion(NodePath.join(import.meta.dirname, "../.."), packageJson.version);
-// Official release workflows set the telemetry channel; local builds and forks use "dev".
+// Release workflows set it for official builds only, so local builds and forks
+// report "dev". A typo fails the build instead of mislabeling the release.
 const TELEMETRY_CHANNELS = ["stable", "nightly", "preview", "dev"];
 const telemetryChannel = process.env.T3CODE_TELEMETRY_CHANNEL?.trim() || "dev";
 if (!TELEMETRY_CHANNELS.includes(telemetryChannel)) {

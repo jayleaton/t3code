@@ -213,12 +213,17 @@ const startLocalBackend = Effect.gen(function* () {
     !(yield* DesktopHomeOwner.awaitHomeOwnershipRelease())
   ) {
     const owner = yield* DesktopHomeOwner.readLiveHomeOwner();
+    const platform = yield* HostProcess.Platform;
+    const command = DesktopCliCommand.runnableCliCommand(
+      yield* (yield* DesktopCliCommand.DesktopCliCommand).state,
+      platform,
+    );
     yield* logBootstrapWarning(`bootstrap found another server owning the ${APP_NAME} home`, {
       owner: Option.getOrNull(owner),
     });
     yield* (yield* ElectronDialog.ElectronDialog).showErrorBox(
       `This ${APP_NAME} home is unavailable`,
-      DesktopHomeOwner.homeOwnedMessage(owner),
+      DesktopHomeOwner.homeOwnedMessage(owner, command, platform),
     );
     yield* (yield* ElectronApp.ElectronApp).quit;
     return false;

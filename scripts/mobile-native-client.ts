@@ -1,6 +1,7 @@
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { CLI_RELEASE_REPOSITORY } from "@t3tools/shared/cliRelease";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { isCommandAvailable, resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Clock from "effect/Clock";
@@ -860,7 +861,7 @@ const buildOnBlacksmith = Effect.fn("nativeClient.buildOnBlacksmith")(
     if (environment.GITHUB_ACTIONS === "true" || environment.T3_NATIVE_CLIENT_BUILD === "local")
       return false;
     if (!(yield* isCommandAvailable("gh"))) return false;
-    const repository = environment.T3_NATIVE_CLIENT_REPOSITORY ?? "pingdotgg/t3code";
+    const repository = environment.T3_NATIVE_CLIENT_REPOSITORY ?? CLI_RELEASE_REPOSITORY;
     const { repo } = yield* roots;
     const sha = yield* command("git", ["rev-parse", "HEAD"], false, repo);
     const pushed = yield* command(
