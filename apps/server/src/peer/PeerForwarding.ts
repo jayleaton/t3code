@@ -240,7 +240,7 @@ const make = Effect.gen(function* () {
             ? {}
             : { returnOnQuestion: input.returnOnQuestion }),
         },
-      );
+      ).pipe(Effect.map((waited) => ({ ...waited, environmentId })));
       const result = reportUnreachable
         ? yield* piece.pipe(
             Effect.catchIf(isTransient, (error) =>

@@ -698,7 +698,8 @@ export const OrchestratorMcpThreadWaitInput = Schema.Struct({
 export type OrchestratorMcpThreadWaitInput = typeof OrchestratorMcpThreadWaitInput.Type;
 
 export const OrchestratorMcpThreadWaitResult = Schema.Struct({
-  environmentId: EnvironmentId,
+  /** Absent from servers that predate multi-environment waits; forwarders fill in their target. */
+  environmentId: Schema.optional(EnvironmentId),
   threadId: ThreadId,
   runId: Schema.NullOr(RunId),
   status: OrchestratorMcpThreadStatus,
