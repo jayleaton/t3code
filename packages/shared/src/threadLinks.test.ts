@@ -226,7 +226,10 @@ describe("hosted thread links", () => {
     for (const [markdown, expected] of [
       [`[Example](https://example.com/?next=${thread})`],
       [`[${thread}](<https://example.com/a b> "Title")`],
-      [`[a](https://example.com/x_(y)) [old](${thread})`, `[a](https://example.com/x_(y)) ${relabeled}`],
+      [
+        `[a](https://example.com/x_(y)) [old](${thread})`,
+        `[a](https://example.com/x_(y)) ${relabeled}`,
+      ],
       [`[[[ [old](${thread})`, `[[[ ${relabeled}`],
       [`\\\\[old](${thread})`, `\\\\${relabeled}`],
       [`\\[old](${thread}) \\<${thread}>`],

@@ -13,7 +13,6 @@ import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlError from "effect/sql/SqlError";
 import * as Statement from "effect/sql/Statement";
-import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as Stream from "effect/Stream";
 import type * as Tracer from "effect/Tracer";
@@ -780,8 +779,10 @@ it.effect("keeps checkpointing in the worker after a transient lock", () =>
         });
       });
       // Each write passes the checkpoint threshold; the first three checks hit the lock.
-      const writes = Effect.forEach(Array.from({ length: 6 }), () =>
-        sql`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000)
+      const writes = Effect.forEach(
+        Array.from({ length: 6 }),
+        () =>
+          sql`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000)
           INSERT INTO pages SELECT randomblob(4000) FROM n`,
       );
       yield* Effect.all([checkpointed, writes], { concurrency: 2 });

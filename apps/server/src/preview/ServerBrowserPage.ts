@@ -511,8 +511,7 @@ export const captureViewport = async (
         reject(
           new ServerBrowserOperationError({
             tag: "PreviewAutomationExecutionError",
-            message:
-              `The browser is not producing screenshot frames. For a desktop tab, show or restore the ${APP_NAME} window and try again.`,
+            message: `The browser is not producing screenshot frames. For a desktop tab, show or restore the ${APP_NAME} window and try again.`,
           }),
         ),
       SCREENSHOT_TIMEOUT_MS,

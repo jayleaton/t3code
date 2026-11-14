@@ -944,7 +944,10 @@ function TaskForm({
       schedule,
       enabled: draft.enabled,
       ...routing,
-      modelSelection: withImplicitFastModeSelection(routing.modelSelection, config?.providers ?? []),
+      modelSelection: withImplicitFastModeSelection(
+        routing.modelSelection,
+        config?.providers ?? [],
+      ),
       workspaceStrategy:
         draft.workspace === "root"
           ? { type: "root" }

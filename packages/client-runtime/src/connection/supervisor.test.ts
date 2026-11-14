@@ -1794,32 +1794,36 @@ describe("EnvironmentSupervisor routes", () => {
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
-  it.effect("retries instead of waiting on a LAN route that stayed silent after another failed", () =>
-    Effect.gen(function* () {
-      const checkingLan = yield* Deferred.make<void>();
-      const attempted: string[] = [];
-      const harness = yield* makeHarness({
-        checkRoute: (route) =>
-          isRemote(route.target)
-            ? Effect.succeed("unchecked")
-            : Deferred.succeed(checkingLan, undefined).pipe(
-                Effect.andThen(Effect.sleep("2500 millis")),
-                Effect.as("silent" as const),
-              ),
-        prepare: (_attempt, target) => {
-          attempted.push(connectionRouteId(target));
-          return isRemote(target) ? Effect.fail(transient("Remote socket closed.")) : Effect.never;
-        },
-      });
-      const supervisor = yield* EnvironmentSupervisor.make(LAN_THEN_REMOTE_ENTRY, {
-        initiallyDesired: true,
-      }).pipe(Effect.provide(harness.dependencies));
+  it.effect(
+    "retries instead of waiting on a LAN route that stayed silent after another failed",
+    () =>
+      Effect.gen(function* () {
+        const checkingLan = yield* Deferred.make<void>();
+        const attempted: string[] = [];
+        const harness = yield* makeHarness({
+          checkRoute: (route) =>
+            isRemote(route.target)
+              ? Effect.succeed("unchecked")
+              : Deferred.succeed(checkingLan, undefined).pipe(
+                  Effect.andThen(Effect.sleep("2500 millis")),
+                  Effect.as("silent" as const),
+                ),
+          prepare: (_attempt, target) => {
+            attempted.push(connectionRouteId(target));
+            return isRemote(target)
+              ? Effect.fail(transient("Remote socket closed."))
+              : Effect.never;
+          },
+        });
+        const supervisor = yield* EnvironmentSupervisor.make(LAN_THEN_REMOTE_ENTRY, {
+          initiallyDesired: true,
+        }).pipe(Effect.provide(harness.dependencies));
 
-      yield* Deferred.await(checkingLan);
-      yield* TestClock.adjust("2500 millis");
-      yield* awaitState(supervisor.state, (state) => state.phase === "backoff");
-      expect(attempted).toEqual([REMOTE_TARGET.connectionId]);
-    }).pipe(Effect.provide(TestClock.layer())),
+        yield* Deferred.await(checkingLan);
+        yield* TestClock.adjust("2500 millis");
+        yield* awaitState(supervisor.state, (state) => state.phase === "backoff");
+        expect(attempted).toEqual([REMOTE_TARGET.connectionId]);
+      }).pipe(Effect.provide(TestClock.layer())),
   );
 
   it.effect("skips a silent LAN route and connects over a remote route", () =>

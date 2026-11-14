@@ -234,7 +234,13 @@ export class ThreadLaunchService extends Context.Service<
 
 const isThreadLaunchError = Schema.is(ThreadLaunchError);
 
-const WORKTREE_LAUNCH_STAGES = ["fetch", "checkout", "submodules", "setup-script", "agent"] as const;
+const WORKTREE_LAUNCH_STAGES = [
+  "fetch",
+  "checkout",
+  "submodules",
+  "setup-script",
+  "agent",
+] as const;
 
 function failureDetail(error: unknown): string {
   if (isThreadLaunchError(error)) {

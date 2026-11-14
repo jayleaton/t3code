@@ -2719,7 +2719,13 @@ const main = Effect.gen(function* () {
     ];
     bases.set(
       key,
-      yield* buildFor(role, device === "true", browser === "true", links === "true", agents === "true"),
+      yield* buildFor(
+        role,
+        device === "true",
+        browser === "true",
+        links === "true",
+        agents === "true",
+      ),
     );
   }
   const baseFor = (testCase: McpToolUseCase) => bases.get(baseKey(testCase)) ?? base;

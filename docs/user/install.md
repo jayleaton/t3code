@@ -48,15 +48,15 @@ can update ([details](./background-service.md)). Hosts that already run the
 AppImage-based systemd unit can keep following
 [Headless Linux host](../operations/headless-linux.md).
 
-| Task                                             | Command                                                                  |
-| ------------------------------------------------ | ------------------------------------------------------------------------ |
-| Start the server and open the web app            | `ada`                                                                    |
-| Start the server without a browser               | `ada serve`                                                              |
-| Use it from your other devices                   | `ada up` ([details](./remote-access.md))                                 |
-| Keep it running in the background                | `ada service install` ([details](./background-service.md))               |
-| Move to the newest release                       | `ada update`, or `ada update <version>`                                  |
-| Reclaim database space                           | `ada doctor` ([details](./background-service.md#reclaim-database-space)) |
-| Remove it again                                  | `ada uninstall`                                                          |
+| Task                                  | Command                                                                  |
+| ------------------------------------- | ------------------------------------------------------------------------ |
+| Start the server and open the web app | `ada`                                                                    |
+| Start the server without a browser    | `ada serve`                                                              |
+| Use it from your other devices        | `ada up` ([details](./remote-access.md))                                 |
+| Keep it running in the background     | `ada service install` ([details](./background-service.md))               |
+| Move to the newest release            | `ada update`, or `ada update <version>`                                  |
+| Reclaim database space                | `ada doctor` ([details](./background-service.md#reclaim-database-space)) |
+| Remove it again                       | `ada uninstall`                                                          |
 
 Run `ada help` or `ada --help` for the full reference. To start in a new working
 directory, use an explicit path such as `ada ./my-project`. A bare directory name

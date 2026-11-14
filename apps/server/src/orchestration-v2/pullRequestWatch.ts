@@ -163,7 +163,11 @@ export function evaluatePullRequestWatch(
       owedChecks = owed;
       if (passedNow && (!passed || gateGrew)) {
         if (!checksBaseline) {
-          changes.push({ kind: "checks-passed", count: gate.length, required: required.length > 0 });
+          changes.push({
+            kind: "checks-passed",
+            count: gate.length,
+            required: required.length > 0,
+          });
         }
         owedChecks =
           required.length > 0

@@ -32,12 +32,14 @@ import * as OrchestratorHandlers from "../../apps/server/src/mcp/toolkits/orches
 import { OrchestratorToolkit } from "../../apps/server/src/mcp/toolkits/orchestrator/tools.ts";
 import * as CommandReceiptStore from "../../apps/server/src/orchestration-v2/CommandReceiptStore.ts";
 import * as Orchestrator from "../../apps/server/src/orchestration-v2/Orchestrator.ts";
+import * as ProjectionStore from "../../apps/server/src/orchestration-v2/ProjectionStore.ts";
 import * as ProviderSessionManager from "../../apps/server/src/orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadManagementService from "../../apps/server/src/orchestration-v2/ThreadManagementService.ts";
 import * as PeerForwarding from "../../apps/server/src/peer/PeerForwarding.ts";
 import * as PeerLinkRequests from "../../apps/server/src/peer/PeerLinkRequests.ts";
 import * as PeerLinks from "../../apps/server/src/peer/PeerLinks.ts";
 import * as RemoteDelegation from "../../apps/server/src/peer/RemoteDelegation.ts";
+import * as TailnetDevices from "../../apps/server/src/peer/TailnetDevices.ts";
 import * as SqlitePersistence from "../../apps/server/src/persistence/Sqlite.ts";
 import * as ServerSettings from "../../apps/server/src/serverSettings.ts";
 
@@ -84,6 +86,7 @@ export const makeBackgroundWait = Effect.fn("evaluateMcpToolUse.makeBackgroundWa
             get: () => Effect.succeedSome(runtime),
           }),
           ServerSettings.layerTest(),
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
           CommandReceiptStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
         ),
       ),
@@ -106,6 +109,7 @@ export const makeBackgroundWait = Effect.fn("evaluateMcpToolUse.makeBackgroundWa
       Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
       Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
       Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
+      Layer.provide(Layer.mock(TailnetDevices.TailnetDevices)({})),
     ),
   );
   type Entry = Parameters<McpServer.McpServer["Service"]["addTool"]>[0];

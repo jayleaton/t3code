@@ -110,7 +110,7 @@ function backgroundWorkKindHoldsCompletion(kind: PendingBackgroundWorkTask["kind
 
 const PULL_REQUEST_WATCH_TASK_ID = "pull-request-watch:";
 
-export const isPullRequestWatchTask = (task: Pick<PendingBackgroundWorkTask, "taskId">) =>
+const isPullRequestWatchTask = (task: Pick<PendingBackgroundWorkTask, "taskId">) =>
   task.taskId.startsWith(PULL_REQUEST_WATCH_TASK_ID);
 
 /**

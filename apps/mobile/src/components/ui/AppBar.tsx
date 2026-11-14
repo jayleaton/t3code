@@ -119,10 +119,7 @@ export function AppBar(props: AppBarProps) {
         optionsVersion={[props.optionsVersion, compactSearch ? menu : undefined]}
         options={{
           headerShown: true,
-          headerBackVisible:
-            props.onClose === undefined &&
-            splitBack === null &&
-            !listBeside,
+          headerBackVisible: props.onClose === undefined && splitBack === null && !listBeside,
           title: props.title,
           unstable_headerSubtitle: props.subtitle || undefined,
           ...(props.matchSearchSurface

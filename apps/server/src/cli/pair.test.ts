@@ -494,10 +494,7 @@ describe("t3 pair", () => {
           assert.isTrue(Exit.isFailure(exit));
           if (Exit.isFailure(exit)) {
             assert.include(String(Cause.squash(exit.cause)), "T3CODE_VERSION=0.0.45 sh");
-            assert.include(
-              String(Cause.squash(exit.cause)),
-              `ada pair --base-dir ${baseDir}`,
-            );
+            assert.include(String(Cause.squash(exit.cause)), `ada pair --base-dir ${baseDir}`);
           }
         }),
       "127.0.0.1",

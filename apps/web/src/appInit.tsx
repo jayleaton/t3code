@@ -188,7 +188,8 @@ function startDocumentTitle(router: AppRouter): void {
   // The draft store changes on every keystroke; only a new open thread matters here.
   const updateOpenThread = () => {
     const next = readOpenThreadRef(router);
-    if ((next && scopedThreadKey(next)) === (openThreadRef && scopedThreadKey(openThreadRef))) return;
+    if ((next && scopedThreadKey(next)) === (openThreadRef && scopedThreadKey(openThreadRef)))
+      return;
     openThreadRef = next;
     watchOpenThread();
     write();

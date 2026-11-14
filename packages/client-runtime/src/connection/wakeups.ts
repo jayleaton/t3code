@@ -26,15 +26,6 @@ export function shouldResubscribeAfterWakeup(reason: ConnectionWakeup): boolean 
   return isApplicationActiveWakeup(reason);
 }
 
-// A brief app switch (the mobile probe) does not justify listing the whole account again.
-export function shouldRelistAccountAfterWakeup(reason: ConnectionWakeup): boolean {
-  return (
-    reason === "application-active" ||
-    reason === "application-active-long" ||
-    reason === "application-focused"
-  );
-}
-
 // Focus fires on every window switch; any wakeup would arm a running probe's silent-socket check.
 export function reachesConnectionSupervisor(reason: ConnectionWakeup): boolean {
   return reason !== "application-focused";

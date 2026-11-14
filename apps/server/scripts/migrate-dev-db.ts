@@ -228,11 +228,9 @@ const rootIsVisible = (sql: SqlClient.SqlClient) => sql`
 const COPY_CHUNK_ROWIDS = 1000;
 
 /**
- * Rows written while the copy runs may be partly copied. Those belong to
- * running threads, which the prune step drops. The server imports V1 threads
- * at boot and the copy keeps only threads with V2 rows, so the legacy guard
- * refuses sources whose unimported threads would vanish silently (see
- * LegacyV1ThreadImporter.pendingThreadCount).
+ * Rows written mid-copy belong to running threads, which the prune drops. The copy keeps only
+ * threads with V2 rows, so the legacy guard refuses sources whose unimported V1 threads would
+ * vanish (see LegacyV1ThreadImporter.pendingThreadCount).
  */
 const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath: string) {
   const sql = yield* SqlClient.SqlClient;
