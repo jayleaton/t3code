@@ -264,5 +264,13 @@
     "title": "shows no upstream name in the app",
     "sha256": "f25c34c8d9f862713f1abc327e501ac71bb9ac80cedac2bd24d58603abaab3cb",
     "sources": ["apps/mobile/src/lib/mobileBranding.ts"]
+  },
+  {
+    "fix": "#245",
+    "protects": "Ada sends nothing to upstream analytics, crash reporting or its hosted app, and upstream syncs cannot bring them back",
+    "test": "scripts/check-removed-connect.test.ts",
+    "title": "reports upstream analytics, crash reporting and hosted-app defaults in shipped code only",
+    "sha256": "be6a27c930fba332a719554b583de6807677caa25314f9e0e9cc5c567fcac6d7",
+    "sources": ["scripts/check-removed-connect.ts", "scripts/removed-connect-paths.json"]
   }
 ]
