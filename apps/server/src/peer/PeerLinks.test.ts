@@ -1,3 +1,4 @@
+import { APP_NAME } from "@t3tools/shared/branding";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - The HTTPS test server needs certificate bytes.
 import * as NodeFS from "node:fs";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - A peer with a certificate this machine does not trust.
@@ -814,7 +815,7 @@ it.live("linking an address with nothing listening says so, unlike one that is n
         a.links.link({ url, pairingCode: "unused", access: "auto" }).pipe(Effect.flip);
       expect((yield* linking(closed)).message).toBe(`${closed} did not answer (ECONNREFUSED).`);
       expect((yield* linking(notT3)).message).toBe(
-        `${notT3} answered, but not as a T3 Code environment this version understands.`,
+        `${notT3} answered with HTTP 404, but not as an ${APP_NAME} environment this version understands.`,
       );
       expect(yield* a.links.list).toEqual([]);
     }),

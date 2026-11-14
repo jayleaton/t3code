@@ -755,9 +755,8 @@ it.layer(NodeServices.layer)("DesktopLinuxUrlHandler theme icons", (it) => {
       assert.include(launcher!.content, `Icon=${iconPath}`);
       assert.include(launcher!.content, "StartupWMClass=t3agents");
       assert.notInclude(launcher!.content, "NoDisplay=true");
-      assert.deepEqual(recorded.copies, [
-        { source: "/tmp/.mount_T3/resources/icon.png", destination: iconPath },
-      ]);
+      assert.deepEqual(recorded.copies, []);
+      assert.deepEqual(recorded.icons, [{ path: iconPath, bytes: [...ICON_BYTES] }]);
       assert.deepEqual(recorded.commands.find((command) => command.command === "gio")?.args, [
         "set",
         "-t",

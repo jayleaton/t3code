@@ -314,12 +314,11 @@ const layerThreadTaskProvided = ThreadTaskService.layer.pipe(
 const layerScheduledTaskProvided = ScheduledTaskService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
-      layerProjectService,
       layerThreadLaunchProvided,
       layerThreadManagementProvided,
       layerManagedProjectFoldersProvided,
       layerSecretRequestsProvided,
-    ),
+    ).pipe(Layer.provideMerge(layerProjectService)),
   ),
 );
 const layerScratchThreadPromotionProvided = ScratchThreadPromotion.layer.pipe(

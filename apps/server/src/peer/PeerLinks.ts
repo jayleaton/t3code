@@ -218,9 +218,13 @@ const probeFailure = (
       code === undefined ? `${origin} did not answer.` : `${origin} did not answer (${code}).`,
     );
   }
+  const status =
+    HttpClientError.isHttpClientError(error) && "response" in error.reason
+      ? ` with HTTP ${error.reason.response.status}`
+      : "";
   return new PeerLinkError({
     reason: "not_a_t3_environment",
-    message: `${origin} answered, but not as an ${APP_NAME} environment this version understands.`,
+    message: `${origin} answered${status}, but not as an ${APP_NAME} environment this version understands.`,
   });
 };
 
