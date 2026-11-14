@@ -46,7 +46,7 @@ delegate_task {
 }
 ```
 
-Record the listener's `taskId` against the child in the pipeline table. A listener can still end without the run ending (a repeated connection error, or the 8-hour cap), so a wake means "look", not "the child stopped". The sweep decides. Fallback model: `codex` / `gpt-5.6-luna` / `reasoningEffort: low` (also proven). Ada caps one MCP tool call at 65 minutes, so the listener re-waits hourly itself. Captain is not woken unless a wait errors or the 8-hour cap is reached.
+Record the listener's `taskId` against the child in the pipeline table. A listener can still end without the run ending (a repeated connection error, or the 8-hour cap), so a wake means "look", not "the child stopped". The sweep decides. Listeners always run on Claude Haiku 5.5; there is no fallback model. If Haiku is unavailable, tell the user. Ada caps one MCP tool call at 65 minutes, so the listener re-waits hourly itself. Captain is not woken unless a wait errors or the 8-hour cap is reached.
 
 ## Wake: sweep everything, then act
 
